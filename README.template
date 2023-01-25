@@ -3,8 +3,6 @@
 
 Automate trivial tasks in Pixel Starships Mobile Starategy Sci-Fi MMORPG
 
-[![ {{ current.version }} ](https://github.com/{{ repository.name }}/blob/main/pixelbot.png)](https://github.com/{{ repository.name }}/blob/main/pixelbot.png)
-
 # Requirements
 
 `pip3 install xmltodict`
