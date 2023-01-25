@@ -1,11 +1,12 @@
 <!---
 This file is auto-generate by a github hook please modify README.template if you don't want to loose your work
 -->
-# raelldottin/tachikoma 1.0.0-6-gcb68325
+# raelldottin/tachikoma 1.0.0-4-g7a3d22a
 [![GitHub Metrics Updates](https://github.com/raelldottin/tachikoma/actions/workflows/daily-run.yml/badge.svg)](https://github.com/raelldottin/tachikoma/actions/workflows/dail-run.yml)
+
 Automate trivial tasks in Pixel Starships Mobile Starategy Sci-Fi MMORPG
 
-[![ 1.0.0-6-gcb68325 ](https://github.com/raelldottin/tachikoma/blob/main/pixelbot.png)](https://github.com/raelldottin/tachikoma/blob/main/pixelbot.png)
+[![ 1.0.0-4-g7a3d22a ](https://github.com/raelldottin/tachikoma/blob/main/pixelbot.png)](https://github.com/raelldottin/tachikoma/blob/main/pixelbot.png)
 
 # Requirements
 
