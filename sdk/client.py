@@ -543,6 +543,7 @@ class Client(object):
                     if (research["@ResearchState"] != "Researching") and (research["@ResearchState"] != "Completed"):
                         pass
                 for room in shipData["ShipService"]["GetShipByUserId"]["Ship"]["Rooms"]["Room"]:
+                    r = requests.Response()
                     roomId = room["@RoomId"]
                     roomStatus = room["@RoomStatus"]
                     roomDesignId = room["@RoomDesignId"]
@@ -576,9 +577,12 @@ class Client(object):
                                 print(f"Upgradng {roomName} to {upgradeRoomName}.")
                                 url = f"https://api.pixelstarships.com/RoomService/UpgradeRoom2?roomId={roomId}&upgradeRoomDesignId={upgradeRoomDesignId}&accessToken={self.accessToken}"
                                 time.sleep(random.uniform(5.0, 10.0))
-                                self.request(url, "POST")
+                                r = self.request(url, "POST")
                                 roomName = ""
                                 upgradeRoomName = ""
+                    if "errorMessage=" in r.text:
+                        print("You have reached the maximum number of concurrent constructions allowed.")
+                        break
             return True
 
     def listUpgradingRooms(self):
