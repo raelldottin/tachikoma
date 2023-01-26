@@ -1,5 +1,6 @@
 # {{ repository.name }} {{ current.version }}
 [![Daily Automated Actions](https://github.com/raelldottin/tachikoma/actions/workflows/daily-run.yml/badge.svg?event=schedule)](https://github.com/raelldottin/tachikoma/actions/workflows/daily-run.yml)
+
 Automate trivial tasks in Pixel Starships Mobile Starategy Sci-Fi MMORPG
 
 # Requirements
