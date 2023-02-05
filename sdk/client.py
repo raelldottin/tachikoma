@@ -590,7 +590,6 @@ class Client(object):
             shipData = self.getShipByUserId()
             roomDesigns = self.listRoomDesigns()
             if shipData and roomDesigns:
-                pprint(shipDate)
                 for room in shipData["ShipService"]["GetShipByUserId"]["Ship"]["Rooms"]["Room"]:
                     if room["@RoomStatus"] == "Upgrading":
                         for roomDesignData in roomDesigns['RoomService']['ListRoomDesigns']['RoomDesigns']['RoomDesign']:
