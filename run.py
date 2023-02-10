@@ -1,5 +1,3 @@
-from sdk.client import Client
-from sdk.device import Device
 import sys
 import time
 import random
@@ -7,6 +5,8 @@ from configparser import ConfigParser
 import smtplib
 from email.message import Message
 import argparse
+from sdk.client import Client
+from sdk.device import Device
 
 
 class LogFile:
@@ -34,9 +34,7 @@ def email_logfile(filename, client, email=None, password=None, recipient=None):
         pass
     else:
         config = ConfigParser()
-        config.read(
-            "./config.secrets"
-        )
+        config.read("./config.secrets")
 
         try:
             email = config.get("MAIL_CONFIG", "SENDER_EMAIL")
