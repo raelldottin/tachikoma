@@ -1,11 +1,12 @@
-import xmltodict
-import requests
 import urllib.parse
 import time
 import datetime
 import random
 import sys
+import collections
 from pprint import pprint
+import xmltodict
+import requests
 from .security import (
     ChecksumCreateDevice,
     ChecksumTimeForDate,
@@ -72,9 +73,9 @@ class Client(object):
 
         info = d["UserService"]["UserLogin"]["User"]
         print(
-           "Your Pixel Starhips username is {} with {} as its registered email address.".format(
-               info["@Name"], info["@Email"]
-           )
+            "Your Pixel Starhips username is {} with {} as its registered email address.".format(
+                info["@Name"], info["@Email"]
+            )
         )
         userId = d["UserService"]["UserLogin"]["@UserId"]
         try:
@@ -538,11 +539,17 @@ class Client(object):
             shipData = self.getShipByUserId()
             roomDesigns = self.listRoomDesigns()
             if shipData:
-# Implement upgrading of research items
-                for research in shipData['ShipService']['GetShipByUserId']['Ship']['Researches']['Research']:
-                    if (research["@ResearchState"] != "Researching") and (research["@ResearchState"] != "Completed"):
+                # Implement upgrading of research items
+                for research in shipData["ShipService"]["GetShipByUserId"]["Ship"][
+                    "Researches"
+                ]["Research"]:
+                    if (research["@ResearchState"] != "Researching") and (
+                        research["@ResearchState"] != "Completed"
+                    ):
                         pass
-                for room in shipData["ShipService"]["GetShipByUserId"]["Ship"]["Rooms"]["Room"]:
+                for room in shipData["ShipService"]["GetShipByUserId"]["Ship"]["Rooms"][
+                    "Room"
+                ]:
                     r = requests.Response()
                     roomId = room["@RoomId"]
                     roomStatus = room["@RoomStatus"]
@@ -551,29 +558,49 @@ class Client(object):
                     upgradeRoomDesignId = ""
                     upgradeRoomName = ""
 
-                    for roomDesignData in roomDesigns['RoomService']['ListRoomDesigns']['RoomDesigns']['RoomDesign']:
-                        if roomDesignId == roomDesignData['@RoomDesignId']:
-                            roomName = ''.join(roomDesignData['@RoomName'])
-                        if roomDesignId == roomDesignData['@UpgradeFromRoomDesignId']:
-                            upgradeRoomDesignId = roomDesignData['@RoomDesignId']
-                            upgradeRoomName = ''.join(roomDesignData['@RoomName'])
-                            cost = roomDesignData['@PriceString'].split(":")
-                            url = "https://api.pixelstarships.com/RoomService/CollectAllResources?itemType=None&collectDate={}&accessToken={}".format( "{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime()), self.accessToken,)
+                    for roomDesignData in roomDesigns["RoomService"]["ListRoomDesigns"][
+                        "RoomDesigns"
+                    ]["RoomDesign"]:
+                        if roomDesignId == roomDesignData["@RoomDesignId"]:
+                            roomName = "".join(roomDesignData["@RoomName"])
+                        if roomDesignId == roomDesignData["@UpgradeFromRoomDesignId"]:
+                            upgradeRoomDesignId = roomDesignData["@RoomDesignId"]
+                            upgradeRoomName = "".join(roomDesignData["@RoomName"])
+                            cost = roomDesignData["@PriceString"].split(":")
+                            url = "https://api.pixelstarships.com/RoomService/CollectAllResources?itemType=None&collectDate={}&accessToken={}".format(
+                                "{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime()),
+                                self.accessToken,
+                            )
                             r = self.request(url, "POST")
                             d = xmltodict.parse(r.content, xml_attribs=True)
                             try:
-                                self.credits = d["RoomService"]["CollectResources"]["User"]["@Credits"]
+                                self.credits = d["RoomService"]["CollectResources"][
+                                    "User"
+                                ]["@Credits"]
                             except:
                                 pass
-                            self.mineralTotal = d['RoomService']['CollectResources']['Items']['Item'][0]['@Quantity']
-                            self.gasTotal = d['RoomService']['CollectResources']['Items']['Item'][1]['@Quantity']
-                            if (cost[0] == "mineral") and (int(cost[1]) > int(self.mineralTotal)):
+                            self.mineralTotal = d["RoomService"]["CollectResources"][
+                                "Items"
+                            ]["Item"][0]["@Quantity"]
+                            self.gasTotal = d["RoomService"]["CollectResources"][
+                                "Items"
+                            ]["Item"][1]["@Quantity"]
+                            if (cost[0] == "mineral") and (
+                                int(cost[1]) > int(self.mineralTotal)
+                            ):
                                 continue
 
-                            if (cost[0] == "gas") and (int(cost[1]) > int(self.gasTotal)):
+                            if (cost[0] == "gas") and (
+                                int(cost[1]) > int(self.gasTotal)
+                            ):
                                 continue
 
-                            if roomName and upgradeRoomName and (roomStatus != "Upgrading") and upgradeRoomDesignId != '0':
+                            if (
+                                roomName
+                                and upgradeRoomName
+                                and (roomStatus != "Upgrading")
+                                and upgradeRoomDesignId != "0"
+                            ):
                                 print(f"Upgradng {roomName} to {upgradeRoomName}.")
                                 url = f"https://api.pixelstarships.com/RoomService/UpgradeRoom2?roomId={roomId}&upgradeRoomDesignId={upgradeRoomDesignId}&accessToken={self.accessToken}"
                                 time.sleep(random.uniform(5.0, 10.0))
@@ -581,7 +608,9 @@ class Client(object):
                                 roomName = ""
                                 upgradeRoomName = ""
                     if "errorMessage=" in r.text:
-                        print("You have reached the maximum number of concurrent constructions allowed.")
+                        print(
+                            "You have reached the maximum number of concurrent constructions allowed."
+                        )
                         break
             return True
 
@@ -590,11 +619,17 @@ class Client(object):
             shipData = self.getShipByUserId()
             roomDesigns = self.listRoomDesigns()
             if shipData and roomDesigns:
-                for room in shipData["ShipService"]["GetShipByUserId"]["Ship"]["Rooms"]["Room"]:
+                for room in shipData["ShipService"]["GetShipByUserId"]["Ship"]["Rooms"][
+                    "Room"
+                ]:
                     if room["@RoomStatus"] == "Upgrading":
-                        for roomDesignData in roomDesigns['RoomService']['ListRoomDesigns']['RoomDesigns']['RoomDesign']:
-                            if room["@RoomDesignId"] == roomDesignData['@RoomDesignId']:
-                                print(f"{''.join(roomDesignData['@RoomName'])} is currently being upgraded.")
+                        for roomDesignData in roomDesigns["RoomService"][
+                            "ListRoomDesigns"
+                        ]["RoomDesigns"]["RoomDesign"]:
+                            if room["@RoomDesignId"] == roomDesignData["@RoomDesignId"]:
+                                print(
+                                    f"{''.join(roomDesignData['@RoomName'])} is currently being upgraded."
+                                )
             return True
         return False
 
@@ -632,8 +667,10 @@ class Client(object):
             d = self.getLatestVersion()
             if d:
                 print("Restocking ammo, androids, crafts, modules, and charges.")
-                self.clientDateTime = "{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime())
-                ammoCategories=["Ammo", "Android", "Craft", "Module", "Charge"]
+                self.clientDateTime = "{0:%Y-%m-%dT%H:%M:%S}".format(
+                    DotNet.validDateTime()
+                )
+                ammoCategories = ["Ammo", "Android", "Craft", "Module", "Charge"]
                 for ammoCategory in ammoCategories:
                     url = f"http://api.pixelstarships.com/RoomService/RebuildAmmo2?ammoCategory={ammoCategory}&clientDateTime={self.clientDateTime}&checksum={self.checksum}&accessToken={self.accessToken}"
                     r = self.request(url, "POST")
@@ -642,18 +679,30 @@ class Client(object):
                     return d
         return False
 
-    def  listAllCharactersOfUser(self):
+    def listAllCharactersOfUser(self):
         if self.user.isAuthorized:
             d = self.getLatestVersion()
             if d:
                 character_list = []
-                self.clientDateTime = "{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime())
+                fatigue_characters = collections.defaultdict(str)
+                self.clientDateTime = "{0:%Y-%m-%dT%H:%M:%S}".format(
+                    DotNet.validDateTime()
+                )
                 url = f"http://api.pixelstarships.com/CharacterService/ListAllCharactersOfUser?accessToken={self.accessToken}&clientDateTime={self.clientDateTime}"
                 r = self.request(url, "GET")
                 d = xmltodict.parse(r.content, xml_attribs=True)
-                for character in d['CharacterService']['ListAllCharactersOfUser']['Characters']['Character']:
-                    character_list.append(character['@CharacterName'])
+                for character in d["CharacterService"]["ListAllCharactersOfUser"][
+                    "Characters"
+                ]["Character"]:
+                    character_list.append(character["@CharacterName"])
+                    if int(character["@Fatigue"]) > 0:
+                        fatigue_characters[character["@CharacterName"]] = character[
+                            "@Fatigue"
+                        ]
                 print(f"List of characters on your ship: {', '.join(character_list)}")
+                print("Lisf ot fatigue characters on your ship:")
+                for key, value in fatigue_characters.items():
+                    print(f"{key} has {value} fatigue.")
                 return True
         return False
 
