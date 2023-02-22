@@ -148,28 +148,28 @@ def main():
                 client = authenticate(device, email, password)
 
         while client:
-            time.sleep(random.uniform(5.0, 10.0))
+            # time.sleep(random.uniform(5.0, 10.0))
             client.heartbeat()
-            time.sleep(random.uniform(0.1, 1.0))
+            # time.sleep(random.uniform(0.1, 1.0))
             client.grabFlyingStarbux(random.randint(1, 2))
-            time.sleep(random.uniform(5.0, 10.0))
+            # time.sleep(random.uniform(5.0, 10.0))
 
             if client.freeStarbuxToday >= 10:
                 client.listAllCharactersOfUser()
-                time.sleep(random.uniform(5.0, 10.0))
+                # time.sleep(random.uniform(5.0, 10.0))
                 client.rebuildAmmo()
-                time.sleep(random.uniform(5.0, 10.0))
+                # time.sleep(random.uniform(5.0, 10.0))
                 client.rushResearchOrConstruction()
-                time.sleep(random.uniform(5.0, 10.0))
+                # time.sleep(random.uniform(5.0, 10.0))
                 client.upgradeResearchorRoom()
-                time.sleep(random.uniform(5.0, 10.0))
+                # time.sleep(random.uniform(5.0, 10.0))
                 if client.collectDailyReward():
                     print("You've collected the daily reward from the dropship.")
                 else:
                     print(
                         "You've already collected the daily reward from the dropship."
                     )
-                time.sleep(random.uniform(5.0, 10.0))
+                # time.sleep(random.uniform(5.0, 10.0))
 
                 # if client.collectMiningDrone(11638355):
                 #    print("Collected a mine drone.")
@@ -191,7 +191,7 @@ def main():
                 # time.sleep(random.uniform(5.0, 10.0))
 
                 client.collectAllResources()
-                time.sleep(random.uniform(5.0, 10.0))
+                # time.sleep(random.uniform(5.0, 10.0))
                 client.listActiveMarketplaceMessages()
                 print(
                     f"A total of {client.freeStarbuxToday} free starbux was collected today."
