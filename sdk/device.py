@@ -5,14 +5,14 @@ import os
 class Device(object):
 
     name = "Android"
-    key = None
+    key = ""
     refreshToken = None
     languageKey = "en"
     DB = "./.device"
     authentication_string = None
 
     def __init__(
-        self, name="DeviceTypeMac", key=None, language="en", authentication_string=None
+        self, name="DeviceTypeAndroid", key=None, language="en", authentication_string=None
     ):
 
         if not key:
