@@ -1,7 +1,7 @@
 <!---
 This file is auto-generate by a github hook please modify README.template if you don't want to loose your work
 -->
-# raelldottin/tachikoma 1.0.0-30
+# raelldottin/tachikoma 1.0.0-32
 [![Daily Automated Actions](https://github.com/raelldottin/tachikoma/actions/workflows/daily-run.yml/badge.svg?event=schedule)](https://github.com/raelldottin/tachikoma/actions/workflows/daily-run.yml)
 
 Automate trivial tasks in Pixel Starships Mobile Starategy Sci-Fi MMORPG
