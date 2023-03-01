@@ -21,7 +21,7 @@ from sdk.device import Device
 
 DEFAULT_TIMEOUT = 5  # seconds
 ONE_MINUTE = 60
-MAX_CALLS_PER_MINUTE = 5
+MAX_CALLS_PER_MINUTE = 15 
 
 
 @sleep_and_retry
@@ -544,12 +544,10 @@ class Client(object):
             if "You already collected this reward" in r.text:
                 self.dailyRewardTimestamp = time.time()
                 self.dailyReward = 1
-                print(f"[{self.info['@User']}] You have already collected the daily reward from the dropship.")
+                print(f"[{self.info['@Name']}] You have already collected the daily reward from the dropship.")
 
 
-            d = xmltodict.parse(r.content, xml_attribs=True)
-            print(d)
-            print(f"[{self.info['@User']}] You have collected the daily reward from the dropship.")
+            print(f"[{self.info['@Name']}] You have collected the daily reward from the dropship.")
             return True
         return False
 
@@ -588,8 +586,7 @@ class Client(object):
     def grabFlyingStarbux(self, quantity):
 
         if (
-            self.user.isAuthorized
-            and self.freeStarbuxToday < 10
+            self.freeStarbuxToday < 10
             and self.freeStarbuxTodayTimestamp + 180 < time.time()
         ):
             t = DotNet.validDateTime()
@@ -606,15 +603,10 @@ class Client(object):
             )
             r = self.request(url, "POST")
 
-            if "Email=" not in r.text:
-                print(f'[{self.info["@Name"]}] Attempting to reauthorized access token.')
-                self.quickReload()
-                return False
-
             self.freeStarbuxToday = int(
                 r.text.split('FreeStarbuxReceivedToday="')[1].split('"')[0]
             )
-            print(f'[{self.info["@Name"]}] You\'ve collected a total of {self.freeStarbuxToday} starbux today.')
+            #print(f'[{self.info["@Name"]}] You\'ve collected a total of {self.freeStarbuxToday} starbux today.')
             self.freeStarbuxTodayTimestamp = time.time()
 
             return True
