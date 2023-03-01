@@ -544,10 +544,10 @@ class Client(object):
             if "You already collected this reward" in r.text:
                 self.dailyRewardTimestamp = time.time()
                 self.dailyReward = 1
-                print(f"[{self.info['@User']}] You have already collected the daily reward from the dropship.")
+                print(f"[{self.info['@Name']}] You have already collected the daily reward from the dropship.")
 
 
-            print(f"[{self.info['@User'] if '@User' in self.info else ''}] You have collected the daily reward from the dropship.")
+            print(f"[{self.info['@Name']}] You have collected the daily reward from the dropship.")
             return True
         return False
 
