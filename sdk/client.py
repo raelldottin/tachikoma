@@ -21,7 +21,7 @@ from sdk.device import Device
 
 DEFAULT_TIMEOUT = 5  # seconds
 ONE_MINUTE = 60
-MAX_CALLS_PER_MINUTE = 5
+MAX_CALLS_PER_MINUTE = 15 
 
 
 @sleep_and_retry
