@@ -5,6 +5,7 @@ import sys
 import collections
 import xmltodict
 import requests
+import random
 from requests.adapters import HTTPAdapter
 from urllib3.util import Retry
 from requests.adapters import HTTPAdapter
@@ -47,6 +48,7 @@ class User(object):
     name = None
     isAuthorized = False
     clientDateTime = 0
+    lastHeartBeat = datetime.datetime.utcnow()
 
     def __init__(self, id, name, lastHeartBeat, isAuthorized):
         self.id = id
@@ -122,10 +124,8 @@ class Client(object):
             r = self.session.request(
                 method, url, headers=self.headers, data=data)
 
-        if hasattr(self, 'user') and self.user.lastHeartBeat and self.user.isAuthorized:
-            elapsed = datetime.datetime.now() - self.user.lastHeartBeat
-            if elapsed.seconds > 60:
-                self.heartbeat()
+        if hasattr(self, 'user') and divmod((datetime.datetime.utcnow() - self.user.lastHeartBeat).seconds, 60)[0] != 0:
+            self.heartbeat()
 
 
         return r
@@ -134,7 +134,12 @@ class Client(object):
 
         d = xmltodict.parse(r.content, xml_attribs=True)
 
+        # heartbeat should only be sent after 60 seconds of network inactivity with the server
+        # we need perform date comparison to verify that 60 seconds has not elapsed
+        LastHeartBeat = datetime.datetime.strptime(d["UserService"]["UserLogin"]["User"]["@LastHeartBeatDate"], "%Y-%m-%dT%H:%M:%S")
         self.info = d["UserService"]["UserLogin"]["User"]
+
+        print(f'[{self.info["@Name"]}] Authenticated...')
         userId = d["UserService"]["UserLogin"]["@UserId"]
         if "@Credits" in d["UserService"]["UserLogin"]["User"]:
             self.credits = int(
@@ -150,7 +155,6 @@ class Client(object):
             myName = "guest"
         else:
             myName = d["UserService"]["UserLogin"]["User"]["@Name"]
-            LastHeartBeat = datetime.datetime.strptime(d["UserService"]["UserLogin"]["User"]["@LastHeartBeatDate"], "%Y-%m-%dT%H:%M:%S")
         
         if "FreeStarbuxReceivedToday" in r.text:
             self.freeStarbuxToday = int(
@@ -165,6 +169,8 @@ class Client(object):
             LastHeartBeat,
             self.device.refreshToken,
         )
+
+        self.info = d["UserService"]["UserLogin"]["User"]
 
     def getAccessToken(self):
 
@@ -189,6 +195,7 @@ class Client(object):
         )
 
         r = self.request(url, "POST")
+        d = xmltodict.parse(r.content, xml_attribs=True)
         if not r or r.status_code != 200:
             print("[getAccessToken]", "failed with data:", r.text)
             return None
@@ -209,6 +216,7 @@ class Client(object):
         return True
 
     def quickReload(self):
+        print("Performing quick reload")
         self.accessToken = None
         self.getAccessToken()
 
@@ -282,7 +290,7 @@ class Client(object):
                 return False
 
             if "refreshToken" not in r.text:
-                print("[login] failed to acquire refreshToken with th reason", r.text)
+                print("[login] failed to acquire refreshToken with the reason", r.text)
                 return False
 
             self.device.refreshTokenAcquire(r.text.split('refreshToken="')[1].split('"')[0])
@@ -430,20 +438,13 @@ class Client(object):
         return False
 
     def pusherAuth(self):
-        if self.user.isAuthorized:
-            url = f"https://api.pixelstarships.com/UserService/PusherAuth?accessToken={self.accessToken}"
-            r = self.request(url, "POST")
-            self.auth = xmltodict.parse(r.content, xml_attribs=True)
-            return True
-        return False
+        url = f"https://api.pixelstarships.com/UserService/PusherAuth?accessToken={self.accessToken}"
+        self.request(url, "POST")
 
     def listSystemMessagesForUser3(self, fromMessageId=0, take=10000):
-        if self.user.isAuthorized:
-            url = f"https://api.pixelstarships.com/MessageService/ListSystemMessagesForUser3?fromMessageId={fromMessageId}&take={take}&accessToken={self.accessToken}"
-            r = self.request(url, "POST")
-            self.systemMessagesForUser = xmltodict.parse(r.content, xml_attribs=True)
-            return True
-        return False
+        url = f"https://api.pixelstarships.com/MessageService/ListSystemMessagesForUser3?fromMessageId={fromMessageId}&take={take}&accessToken={self.accessToken}"
+        r = self.request(url, "POST")
+        self.systemMessagesForUser = xmltodict.parse(r.content, xml_attribs=True)
 
     def listFriends(self, userId=0):
         if self.user.isAuthorized:
@@ -590,8 +591,7 @@ class Client(object):
             return True
         return False
 
-    def grabFlyingStarbux(self, quantity):
-
+    def grabFlyingStarbux(self):
         if (
             self.freeStarbuxToday < 10
             and self.freeStarbuxTodayTimestamp + 180 < time.time()
@@ -600,8 +600,7 @@ class Client(object):
 
             url = (
                 self.baseUrl
-                + "AddStarbux2?quantity={}&clientDateTime={}&checksum={}&accessToken={}".format(
-                    quantity,
+                + "AddStarbux2?quantity={}&clientDateTime={}&checksum={}&accessToken={}".format(random.randint(1, 2),
                     "{0:%Y-%m-%dT%H:%M:%S}".format(t),
                     ChecksumTimeForDate(DotNet.get_time())
                     + ChecksumPasswordWithString(self.accessToken),
@@ -609,11 +608,13 @@ class Client(object):
                 )
             )
             r = self.request(url, "POST")
+            d = xmltodict.parse(r.content, xml_attribs=True)
+            if 'UserService' not in d:
+                self.quickReload()
+                return False
+            self.freeStarbuxToday = int(d['UserService']['AddStarbux']['User']['@FreeStarbuxReceivedToday'])
 
-            self.freeStarbuxToday = int(
-                r.text.split('FreeStarbuxReceivedToday="')[1].split('"')[0]
-            )
-            #print(f'[{self.info["@Name"]}] You\'ve collected a total of {self.freeStarbuxToday} starbux today.')
+            print(f'[{self.info["@Name"]}] You have collected a total of {self.freeStarbuxToday} starbux today.')
             self.freeStarbuxTodayTimestamp = time.time()
 
             return True
@@ -621,34 +622,38 @@ class Client(object):
 
     # Determine the boost gauge before attempting to speed up a room
     def speedUpResearchUsingBoostGauge(self, researchId, researchDesignId):
-        url = f"https://api.pixelstarships.com/ResearchService/SpeedUpResearchUsingBoostGauge?researchId={researchId}&accessToken={self.accessToken}&clientDateTime={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}"
-
-        self.listAllResearchDesigns()
-        d = self.allResearchDesigns
-        if not d:
+        self.listAllResearchDesigns2()
+        if not self.allResearchDesigns:
             return False
-        for i in d["ResearchService"]["ListAllResearchDesigns"]["ResearchDesigns"][
+        for i in self.allResearchDesigns["ResearchService"]["ListAllResearchDesigns"]["ResearchDesigns"][
             "ResearchDesign"
         ]:
             if i["@ResearchDesignId"] == researchDesignId:
-                print(
-                    f"[{self.info['@Name']}] Speeding up research for {''.join(i['@ResearchName'])}."
-                )
-                self.request(url, "POST")
-                return True
+                url = f"https://api.pixelstarships.com/ResearchService/SpeedUpResearchUsingBoostGauge?researchId={researchId}&accessToken={self.accessToken}&clientDateTime={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}"
+                r = self.request(url, "POST")
+                if '@errorMessage' in r.text:
+                    print(f"[{self.info['@Name']}] Failed to speed up research for {''.join(i['@ResearchName'])}.")
+                    return False
+                else:
+                    print(f"[{self.info['@Name']}] Speeding up research for {''.join(i['@ResearchName'])}.")
+                    return True
+        return False
 
     # Determine the boost gauge before attempting to speed up a room
     def speedUpRoomConstructionUsingBoostGauge(self, roomId, roomDesignId):
-        if self.user.isAuthorized:
-            url = f"https://api.pixelstarships.com/RoomService/SpeedUpRoomConstructionUsingBoostGauge?roomId={roomId}&clientDateTime={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}&accessToken={self.accessToken}"
-            print(f"{url=}")
-            if not self.roomDesigns:
-             return False
-            for i in self.roomDesigns["RoomService"]["ListRoomDesigns"]["RoomDesigns"]["RoomDesign"]:
-                if i["@RoomDesignId"] == roomDesignId:
+        self.listRoomDesigns2()
+        if not self.roomDesigns:
+            return False
+        for i in self.roomDesigns["RoomService"]["ListRoomDesigns"]["RoomDesigns"]["RoomDesign"]:
+            if i["@RoomDesignId"] == roomDesignId:
+                url = f"https://api.pixelstarships.com/RoomService/SpeedUpRoomConstructionUsingBoostGauge?roomId={roomId}&clientDateTime={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}&accessToken={self.accessToken}"
+                r = self.request(url, "POST")
+                if 'errorMessage' in r.text:
+                    print(f"[{self.info['@Name']}] Failed to speed contruction for {''.join(i['@RoomName'])}.")
+                    return False
+                else:
                     print(f"[{self.info['@Name']}] Speeding up contruction for {''.join(i['@RoomName'])}.")
-                    self.request(url, "POST")
-                    return True
+                return True
         return False
 
     def rushResearchOrConstruction(self):
@@ -789,8 +794,12 @@ class Client(object):
                     print(f'[{self.info["@Name"]}] Restocking all ammo items.')
                 else:
                     print(f'[{self.info["@Name"]}] Restocking {ammoCategory.lower()} items.')
-                url = f'http://api.pixelstarships.com/RoomService/RebuildAmmo2?ammoCategory={ammoCategory}&clientDateTime={self.clientDateTime}&checksum={self.checksum}&accessToken={self.accessToken}'
-                self.request(url, "POST")
+                ts = "{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime())
+                checksum = ChecksumEmailAuthorize(self.device.key, self.info['@Email'], ts, self.accessToken, self.checksum)
+                url = f'http://api.pixelstarships.com/RoomService/RebuildAmmo2?ammoCategory={ammoCategory}&clientDateTime={ts}&checksum={checksum}&accessToken={self.accessToken}'
+                print(f"{url=}")
+                r = self.request(url, "POST")
+                d = xmltodict.parse(r.content, xml_attribs=True)
             return True
         return False
 
@@ -809,15 +818,20 @@ class Client(object):
                     "@Fatigue"
                 ]
             if character_list:
-                print(f"[{self.info['@Name']}]: List of characters on your ship: {', '.join(character_list)}")
+                print(f"[{self.info['@Name']}] List of characters on your ship: {', '.join(character_list)}")
             if fatigue_characters:
-                print(f"[{self.info['@Name']}]: List ot fatigue characters on your ship: {', '.join(f'{key} has {value} fatigue' for key, value in fatigue_characters.items())}.")
+                print(f"[{self.info['@Name']}] List ot fatigue characters on your ship: {', '.join(f'{key} has {value} fatigue' for key, value in fatigue_characters.items())}.")
             return True
         return False
-
     @ sleep_and_retry
     @ limits(calls=MAX_CALLS_PER_MINUTE, period=ONE_MINUTE)
     def heartbeat(self):
+        if divmod((datetime.datetime.utcnow() - self.user.lastHeartBeat).seconds, 60)[0] == 0:
+            return False
+
+        if not self.accessToken:
+            self.quickReload()
+
         url = (
             self.baseUrl
             + "HeartBeat4?clientDateTime={}&checksum={}&accessToken={}".format(
@@ -831,9 +845,12 @@ class Client(object):
         d = xmltodict.parse(r.content, xml_attribs=True)
 
         if "errorMessage" in r.text:
-            d = xmltodict.parse(r.content, xml_attribs=True)
             print(f"[{self.info['@Name']}] {d}")
             return False
 
-        if hasattr(d, 'UserService') and d['UserService']['HeartBeat']['@success'] == 'true':
-            self.user.lastHeartBeat = datetime.datetime.now()
+        if 'UserService' in d and d['UserService']['HeartBeat']['@success'] == 'true':
+            self.user.lastHeartBeat = datetime.datetime.utcnow()
+            print(f"[{self.info['@Name']}] Successful sent heartbeat.")
+            return True
+
+        return False
