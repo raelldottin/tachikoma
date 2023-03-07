@@ -63,6 +63,7 @@ def email_logfile(filename, client, email=None, password=None, recipient=None):
         session.ehlo()
         session.login(email, password)
         data = f"Subject: {subject} \n {message}"
+        session.ehlo()
         session.sendmail(email, recipient, data)
         session.quit()
     except Exception as e:
@@ -154,40 +155,17 @@ def main():
 
 
         while client:
-            # time.sleep(random.uniform(5.0, 10.0))
-            client.heartbeat()
-            client.grabFlyingStarbux(random.randint(1, 2))
+            client.grabFlyingStarbux()
             if client.freeStarbuxToday >= 10:
                 client.getCrewInfo()
-                # Check if the ammo needs to be restock before attempting to restock the ammo
-                client.rebuildAmmo()
                 client.rushResearchOrConstruction()
                 client.upgradeResearchorRoom()
                 client.collectDailyReward()
-
-                # if client.collectMiningDrone(11638355):
-                #    print("Collected a mine drone.")
-                # time.sleep(random.uniform(5.0, 10.0))
-                # if client.collectMiningDrone(11638356):
-                #    print("Collected a mine drone.")
-                # time.sleep(random.uniform(5.0, 10.0))
-                # if client.collectMiningDrone(11638362):
-                #    print("Collected a mine drone.")
-                # time.sleep(random.uniform(5.0, 10.0))
-                # if client.placeMiningDrone("299", "1651"):
-                #    print("Successfully placed mining drone.")
-                # time.sleep(random.uniform(5.0, 10.0))
-                # if client.placeMiningDrone("299", "1651"):
-                #    print("Successfully placed mining drone.")
-                # time.sleep(random.uniform(5.0, 10.0))
-                # if client.placeMiningDrone("299", "1651"):
-                #    print("Successfully placed mining drone.")
-                # time.sleep(random.uniform(5.0, 10.0))
-
                 client.collectAllResources()
                 client.listActiveMarketplaceMessages()
                 client.infoBux()
                 client.listUpgradingRooms()
+                print(f'[{client.info["@Name"]}] Finished...')
                 break
     if (
         type(args.email) == list
