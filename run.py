@@ -158,13 +158,14 @@ def main():
             client.grabFlyingStarbux()
             if client.freeStarbuxToday >= 10:
                 client.getCrewInfo()
-                client.rushResearchOrConstruction()
-                client.upgradeResearchorRoom()
+                client.upgradeResearches()
+                client.upgradeRooms()
                 client.collectDailyReward()
-                client.collectAllResources()
                 client.listActiveMarketplaceMessages()
+                client.getMessages()
                 client.infoBux()
                 client.listUpgradingRooms()
+                client.getResourceTotals()
                 print(f'[{client.info["@Name"]}] Finished...')
                 break
     if (
