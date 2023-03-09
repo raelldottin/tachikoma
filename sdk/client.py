@@ -6,6 +6,7 @@ import collections
 import xmltodict
 import requests
 import random
+import collections
 from requests.adapters import HTTPAdapter
 from urllib3.util import Retry
 from requests.adapters import HTTPAdapter
@@ -109,7 +110,7 @@ class Client(object):
 
     @ sleep_and_retry
     @ limits(calls=MAX_CALLS_PER_MINUTE, period=ONE_MINUTE)
-    def request(self, url, method="", data=None):
+    def request(self, url, method, data=None):
         r = self.session.request(method, url, headers=self.headers, data=data)
 
         if "errorMessage" in r.text:
@@ -126,7 +127,6 @@ class Client(object):
 
         if hasattr(self, 'user') and divmod((datetime.datetime.utcnow() - self.user.lastHeartBeat).seconds, 60)[0] != 0:
             self.heartbeat()
-
 
         return r
 
@@ -171,6 +171,8 @@ class Client(object):
         )
 
         self.info = d["UserService"]["UserLogin"]["User"]
+        self.credits = d["UserService"]["UserLogin"]["User"]['@Credits']
+
 
     def getAccessToken(self):
 
@@ -202,7 +204,6 @@ class Client(object):
 
         if "errorCode" in r.text:
             print("[getAccessToken]", "got an error with data:", r.text)
-            #sys.exit(1)
             return None
 
         self.parseUserLoginData(r)
@@ -216,7 +217,6 @@ class Client(object):
         return True
 
     def quickReload(self):
-        print("Performing quick reload")
         self.accessToken = None
         self.getAccessToken()
 
@@ -398,12 +398,9 @@ class Client(object):
         return False
 
     def listAllResearches(self):
-        if self.user.isAuthorized:
-            url = f"https://api.pixelstarships.com/ResearchService/ListAllResearches?accessToken={self.accessToken}&clientDateTime={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}"
-            r = self.request(url, "GET")
-            self.allResearches = xmltodict.parse(r.content, xml_attribs=True)
-            return True
-        return False
+        url = f"https://api.pixelstarships.com/ResearchService/ListAllResearches?accessToken={self.accessToken}&clientDateTime={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}"
+        r = self.request(url, "GET")
+        self.allResearches = xmltodict.parse(r.content, xml_attribs=True)
 
     def listItemsOfAShip(self):
         if self.user.isAuthorized:
@@ -422,12 +419,12 @@ class Client(object):
         return False
 
     def listAllCharactersOfUser(self):
-        if self.user.isAuthorized:
-            url = f"https://api.pixelstarships.com/CharacterService/ListAllCharactersOfUser?accessToken={self.accessToken}&clientDateTime={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}"
-            r = self.request(url, "GET")
-            self.allCharactersOfUser = xmltodict.parse(r.content, xml_attribs=True)
-            return True
-        return False
+        url = f"https://api.pixelstarships.com/CharacterService/ListAllCharactersOfUser?accessToken={self.accessToken}&clientDateTime={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}"
+        r = self.request(url, "GET")
+        self.allCharactersOfUser = xmltodict.parse(r.content, xml_attribs=True)
+        if 'CharacterService' not in self.allCharactersOfUser:
+            return False
+        return True
 
     def listAllRoomActionsOfShip(self):
         if self.user.isAuthorized:
@@ -443,7 +440,7 @@ class Client(object):
 
     def listSystemMessagesForUser3(self, fromMessageId=0, take=10000):
         url = f"https://api.pixelstarships.com/MessageService/ListSystemMessagesForUser3?fromMessageId={fromMessageId}&take={take}&accessToken={self.accessToken}"
-        r = self.request(url, "POST")
+        r = self.request(url, "GET")
         self.systemMessagesForUser = xmltodict.parse(r.content, xml_attribs=True)
 
     def listFriends(self, userId=0):
@@ -508,31 +505,25 @@ class Client(object):
         print(f"[{self.info['@Name']}] You have a total of {self.credits} starbux.")
 
     def collectAllResources(self):
-        if self.user.isAuthorized and self.rssCollectedTimestamp + 120 < time.time():
-            url = "https://api.pixelstarships.com/RoomService/CollectAllResources?itemType=None&collectDate={}&accessToken={}".format(
-                "{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime()),
-                self.accessToken,
-            )
-            r = self.request(url, "POST")
-            d = xmltodict.parse(r.content, xml_attribs=True)
-            if "errorMessage=" in r.text:
-                return False
+        url = "https://api.pixelstarships.com/RoomService/CollectAllResources?itemType=None&collectDate={}&accessToken={}".format(
+            "{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime()),
+            self.accessToken,
+        )
+        r = self.request(url, "POST")
+        d = xmltodict.parse(r.content, xml_attribs=True)
+        if "RoomService" not in d:
+            return False
+        self.mineralTotal = d["RoomService"]["CollectResources"]["Items"]["Item"][0]["@Quantity"]
+        self.gasTotal = d["RoomService"]["CollectResources"]["Items"]["Item"][1]["@Quantity"]
 
-            try:
-                self.credits = d["RoomService"]["CollectResources"]["User"]["@Credits"]
-            except:
-                pass
+        if "User" in d["RoomService"]["CollectResources"]:
+            self.credits = d["RoomService"]["CollectResources"]["User"]["@Credits"]
 
-            self.rssCollectedTimestamp = time.time()
+        self.rssCollectedTimestamp = time.time()
 
-            print(
-                f'[{self.info["@Name"]}] There is a total of {d["RoomService"]["CollectResources"]["Items"]["Item"][0]["@Quantity"]} minerals on your ship.'
-            )
-            print(
-                f'[{self.info["@Name"]}] There is a total of {d["RoomService"]["CollectResources"]["Items"]["Item"][1]["@Quantity"]} gas on your ship.'
-            )
-            return True
-        return False
+    def getResourceTotals(self):
+        print(f'[{self.info["@Name"]}] There is a total of {self.mineralTotal} minerals on your ship.')
+        print(f'[{self.info["@Name"]}] There is a total of {self.gasTotal} gas on your ship.')
 
     def collectDailyReward(self):
         self.dailyRewardArgument = self.todayLiveOps["LiveOpsService"]["GetTodayLiveOps"]["LiveOps"]["@DailyRewardArgument"]
@@ -591,10 +582,15 @@ class Client(object):
             return True
         return False
 
+    def collectReward2(self, messageId):
+        url = f"https://api.pixelstarships.com/MessageService/CollectReward2?messageId={messageId}&clientDateTime={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}&checksum={ChecksumTimeForDate(DotNet.get_time()) + ChecksumPasswordWithString(self.accessToken)}&accessToken={self.accessToken}"
+        self.request(url, "POST")
+
     def grabFlyingStarbux(self):
         if (
             self.freeStarbuxToday < 10
             and self.freeStarbuxTodayTimestamp + 180 < time.time()
+            and self.accessToken
         ):
             t = DotNet.validDateTime()
 
@@ -674,106 +670,111 @@ class Client(object):
         print(f'[{self.info["@Name"]}] There are no rooms or research to speed up.')
         return False
 
-    def upgradeResearchorRoom(self):
-        if self.user.isAuthorized:
-            self.getShipByUserId()
-            shipByUserId = self.shipByUserId
-            roomDesigns = self.roomDesigns
-            if shipByUserId:
-                # Implement upgrading of research items
-                for research in shipByUserId["ShipService"]["GetShipByUserId"]["Ship"][
-                    "Researches"
-                ]["Research"]:
-                    if (research["@ResearchState"] != "Researching") and (
-                        research["@ResearchState"] != "Completed"
-                    ):
-                        pass
-                for room in shipByUserId["ShipService"]["GetShipByUserId"]["Ship"]["Rooms"][
-                    "Room"
-                ]:
-                    roomId = room["@RoomId"]
-                    roomStatus = room["@RoomStatus"]
-                    roomDesignId = room["@RoomDesignId"]
-                    roomName = ""
-                    upgradeRoomDesignId = ""
-                    upgradeRoomName = ""
+    def upgradeResearches(self):
+        self.listAllResearches()
+        self.listAllResearchDesigns2()
+        upgradeList = []
+        rootDesigns = collections.defaultdict(list)
+        designExceptionList = []
+        rootDesignExceptionList = []
+        researchingFlag = False
+        for research in self.allResearches['ResearchService']['ListAllResearches']['Researches']['Research']:
+            for design in self.allResearchDesigns['ResearchService']['ListAllResearchDesigns']['ResearchDesigns']['ResearchDesign']:
+                if research['@ResearchDesignId'] == design['@ResearchDesignId'] and design['@ResearchDesignId'] not in designExceptionList:
+                    if research['@ResearchState'] == 'Researching':
+                        print(f"[{self.info['@Name']}] {''.join(design['@ResearchName'])} is currently being researched.")
+                        researchingFlag = True
+                    designExceptionList.append(design['@ResearchDesignId'])
+        for design in self.allResearchDesigns['ResearchService']['ListAllResearchDesigns']['ResearchDesigns']['ResearchDesign']:
+            if design['@ResearchDesignId'] not in designExceptionList and design['@RootResearchDesignId'] not in rootDesignExceptionList:
+                rootDesigns[design['@RootResearchDesignId']].append(design)
+                upgradeList.append([design['@ResearchDesignId'], design['@GasCost'], design['@StarbuxCost'], design['@ResearchName']])
+                rootDesignExceptionList.append(design['@RootResearchDesignId'])
+        self.collectAllResources()
+        if not researchingFlag:
+            for researchItem in upgradeList:
+                if int(researchItem[1]) > 0 and int(researchItem[1]) < int(self.gasTotal):
+                    if self.addResearch(researchItem[0]):
+                        print(f"[{self.info['@Name']}] Beginning research for {researchItem[3]}")
+                        researchingFlag = True
+                    break
 
-                    for roomDesignData in roomDesigns["RoomService"]["ListRoomDesigns"][
-                        "RoomDesigns"
-                    ]["RoomDesign"]:
-                        if roomDesignId == roomDesignData["@RoomDesignId"]:
-                            roomName = "".join(roomDesignData["@RoomName"])
-                        if roomDesignId == roomDesignData["@UpgradeFromRoomDesignId"]:
-                            upgradeRoomDesignId = roomDesignData["@RoomDesignId"]
-                            upgradeRoomName = "".join(
-                                roomDesignData["@RoomName"])
-                            cost = roomDesignData["@PriceString"].split(":")
-                            url = "https://api.pixelstarships.com/RoomService/CollectAllResources?itemType=None&collectDate={}&accessToken={}".format(
-                                "{0:%Y-%m-%dT%H:%M:%S}".format(
-                                    DotNet.validDateTime()),
-                                self.accessToken,
-                            )
+    def upgradeRooms(self):
+        if not self.roomDesigns:
+            self.listRoomDesigns2()
+        roomDesigns = self.roomDesigns
+        self.listUpgradingRooms()
+        self.getShipByUserId()
+        shipByUserId = self.shipByUserId
+        if shipByUserId:
+            for room in shipByUserId["ShipService"]["GetShipByUserId"]["Ship"]["Rooms"][
+                "Room"
+            ]:
+                roomId = room["@RoomId"]
+                roomStatus = room["@RoomStatus"]
+                roomDesignId = room["@RoomDesignId"]
+                roomName = ""
+                upgradeRoomDesignId = ""
+                upgradeRoomName = ""
+
+                for roomDesignData in roomDesigns["RoomService"]["ListRoomDesigns"][
+                    "RoomDesigns"
+                ]["RoomDesign"]:
+                    if roomDesignId == roomDesignData["@RoomDesignId"]:
+                        roomName = "".join(roomDesignData["@RoomName"])
+                    if roomDesignId == roomDesignData["@UpgradeFromRoomDesignId"]:
+                        upgradeRoomDesignId = roomDesignData["@RoomDesignId"]
+                        upgradeRoomName = "".join(
+                            roomDesignData["@RoomName"])
+                        cost = roomDesignData["@PriceString"].split(":")
+                        if (cost[0] == "mineral") and (
+                            int(cost[1]) > int(self.mineralTotal)
+                        ):
+                            continue
+
+                        if (cost[0] == "gas") and (
+                            int(cost[1]) > int(self.gasTotal)
+                        ):
+                            continue
+
+                        if (
+                            roomName
+                            and upgradeRoomName
+                            and (roomStatus != "Upgrading")
+                            and upgradeRoomDesignId != "0"
+                        ):
+                            print(
+                                f'[{self.info["@Name"]}] Upgradng {roomName} to {upgradeRoomName}.')
+                            url = f'https://api.pixelstarships.com/RoomService/UpgradeRoom2?roomId={roomId}&upgradeRoomDesignId={upgradeRoomDesignId}&accessToken={self.accessToken}'
                             r = self.request(url, "POST")
-                            d = xmltodict.parse(r.content, xml_attribs=True)
-                            if "RoomService" not in d:
-                                continue
-                            self.mineralTotal = d["RoomService"]["CollectResources"][
-                                "Items"
-                            ]["Item"][0]["@Quantity"]
-                            self.gasTotal = d["RoomService"]["CollectResources"][
-                                "Items"
-                            ]["Item"][1]["@Quantity"]
-                            if (cost[0] == "mineral") and (
-                                int(cost[1]) > int(self.mineralTotal)
-                            ):
-                                continue
-
-                            if (cost[0] == "gas") and (
-                                int(cost[1]) > int(self.gasTotal)
-                            ):
-                                continue
-
-                            if (
-                                roomName
-                                and upgradeRoomName
-                                and (roomStatus != "Upgrading")
-                                and upgradeRoomDesignId != "0"
-                            ):
+                            roomName = ""
+                            upgradeRoomName = ""
+                            if "concurrent" in r.text:
                                 print(
-                                    f'[{self.info["@Name"]}] Upgradng {roomName} to {upgradeRoomName}.')
-                                url = f'https://api.pixelstarships.com/RoomService/UpgradeRoom2?roomId={roomId}&upgradeRoomDesignId={upgradeRoomDesignId}&accessToken={self.accessToken}'
-                                # time.sleep(random.uniform(5.0, 10.0))
-                                r = self.request(url, "POST")
-                                roomName = ""
-                                upgradeRoomName = ""
-                                if "concurrent" in r.text:
-                                    print(
-                                        f'[{self.info["@Name"]}] You have reached the maximum number of concurrent constructions allowed.'
-                                    )
-                                    break
-            return True
+                                    f'[{self.info["@Name"]}] You have reached the maximum number of concurrent constructions allowed.'
+                                )
+                                break
+                            self.collectAllResources()
+        return True
 
     def listUpgradingRooms(self):
-        if self.user.isAuthorized:
-            self.getShipByUserId()
-            shipByUserId = self.shipByUserId
-            roomDesigns = self.roomDesigns
-            if shipByUserId and roomDesigns:
-                if "ShipService" not in shipByUserId:
-                    print(f"{shipByUserId=}")
-                for room in shipByUserId["ShipService"]["GetShipByUserId"]["Ship"]["Rooms"][
-                    "Room"
-                ]:
-                    if room["@RoomStatus"] == "Upgrading":
-                        for roomDesignData in roomDesigns["RoomService"][
-                            "ListRoomDesigns"
-                        ]["RoomDesigns"]["RoomDesign"]:
-                            if room["@RoomDesignId"] == roomDesignData["@RoomDesignId"]:
-                                print(
-                                    f"[{self.info['@Name']}] {''.join(roomDesignData['@RoomName'])} is currently being upgraded."
-                                )
-            return True
-        return False
+        self.getShipByUserId()
+        shipByUserId = self.shipByUserId
+        roomDesigns = self.roomDesigns
+        if shipByUserId and roomDesigns:
+            if "ShipService" not in shipByUserId:
+                print(f"{shipByUserId=}")
+            for room in shipByUserId["ShipService"]["GetShipByUserId"]["Ship"]["Rooms"][
+                "Room"
+            ]:
+                if room["@RoomStatus"] == "Upgrading":
+                    for roomDesignData in roomDesigns["RoomService"][
+                        "ListRoomDesigns"
+                    ]["RoomDesigns"]["RoomDesign"]:
+                        if room["@RoomDesignId"] == roomDesignData["@RoomDesignId"]:
+                            print(
+                                f"[{self.info['@Name']}] {''.join(roomDesignData['@RoomName'])} is currently being upgraded."
+                            )
 
 
     def listAllResearchDesigns2(self):
@@ -781,6 +782,14 @@ class Client(object):
             url = f"https://api.pixelstarships.com/ResearchService/ListAllResearchDesigns2?languageKey={self.device.languageKey}&designVersion={self.latestVersion['SettingService']['GetLatestSetting']['Setting']['@ResearchDesignVersion']}"
             r = self.request(url, "GET")
             self.allResearchDesigns = xmltodict.parse(r.content, xml_attribs=True)
+
+    def addResearch(self, researchDesignId):
+        url = f"https://api.pixelstarships.com/ResearchService/AddResearch?researchDesignId={researchDesignId}&accessToken={self.accessToken}&clientDateTime={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}"
+        r = self.request(url, "POST")
+        if "errorMessage" in r.text:
+            return False
+        else:
+            return True
 
     def rebuildAmmo(self):
         if self.user.isAuthorized:
@@ -823,6 +832,37 @@ class Client(object):
                 print(f"[{self.info['@Name']}] List ot fatigue characters on your ship: {', '.join(f'{key} has {value} fatigue' for key, value in fatigue_characters.items())}.")
             return True
         return False
+
+    def getMessages(self):
+        self.listSystemMessagesForUser3()
+        if not self.systemMessagesForUser['MessageService']['ListSystemMessagesForUser']['Messages']:
+            return True
+        elif isinstance(self.systemMessagesForUser['MessageService']['ListSystemMessagesForUser']['Messages']['Message'], dict):
+            message = self.systemMessagesForUser['MessageService']['ListSystemMessagesForUser']['Messages']['Message']
+            if '@ActivityArgument' in message and message['@ActivityArgument'] != 'None':
+                print(f"[{self.info['@Name']}] {message['@Message']}{''.join([' ', message['@ActivityArgument'].split(':')[1]])}{''.join([' ', message['@ActivityArgument'].split(':')[0]])} is collectable.")
+                if message['@ActivityArgument'].split(':')[0] not in ['gas', 'mineral']:
+                    self.collectReward2(message['@MessageId'])
+            else:
+                print(f"[{self.info['@Name']}] {message['@Message']}")
+        elif isinstance(self.systemMessagesForUser['MessageService']['ListSystemMessagesForUser']['Messages']['Message'], list):
+            for message in self.systemMessagesForUser['MessageService']['ListSystemMessagesForUser']['Messages']['Message']:
+                if message['@ActivityArgument'] != 'None':
+                    print(f"[{self.info['@Name']}] {message['@Message']}{''.join([' ', message['@ActivityArgument'].split(':')[1]])}{''.join([' ', message['@ActivityArgument'].split(':')[0]])} is collectable.")
+                    if message['@ActivityArgument'].split(':')[0] not in ['gas', 'mineral']:
+                        self.collectReward2(message['@MessageId'])
+                else:
+                    print(f"[{self.info['@Name']}] {message['@Message']}")
+
+    def listFinishTasks(self):
+        self.listTasksOfAUser()
+        self.listAllTaskDesigns2()
+        for task in self.tasksOfAUser['TaskService']['ListTasksOfAUser']['Tasks']['Task']:
+            if task['@Collected'] == 'true':
+                for taskDesign in self.allTaskDesigns['TaskService']['ListAllTaskDesigns']['TaskDesigns']['TaskDesign']:
+                    if taskDesign['@TaskDesignId'] == task['@TaskDesignId']:
+                        print(f"[{self.info['@Name']}] Completed task to {taskDesign['@Description']}.")
+
     @ sleep_and_retry
     @ limits(calls=MAX_CALLS_PER_MINUTE, period=ONE_MINUTE)
     def heartbeat(self):
