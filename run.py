@@ -1,46 +1,41 @@
 import sys
-import random
+import getpass
 from configparser import ConfigParser
 import smtplib
-from email.message import Message
+from email.message import EmailMessage
 import argparse
+import logging
+import io
 from sdk.client import Client
 from sdk.device import Device
 
 
-class LogFile:
-    def __init__(self, filename):
-        try:
-            self.out_file = open(filename, "w")
-        except:
-            self.out_file = open("collectrss.log", "w")
-        self.old_stdout = sys.stdout
-        sys.stdout = self
+logfilepath = "tachikoma.log"
+log_catpure_string = io.StringIO()
 
-    def write(self, text):
-        self.old_stdout.write(text)
-        self.out_file.write(text)
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, type, value, traceback):
-        sys.stdout = self.old_stdout
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.FileHandler(logfilepath),
+        logging.StreamHandler(sys.stdout),
+        logging.StreamHandler(log_catpure_string),
+    ],
+)
 
 
 def email_logfile(filename, client, email=None, password=None, recipient=None):
     if email and password and recipient:
         pass
     else:
-        config = ConfigParser()
-        config.read("./config.secrets")
-
         try:
+            config = ConfigParser()
+            config.read("./config.secrets")
             email = config.get("MAIL_CONFIG", "SENDER_EMAIL")
             password = config.get("MAIL_CONFIG", "SENDER_PASSWD")
             recipient = config.get("MAIL_CONFIG", "RECIPIENT_EMAIL")
         except:
-            print(
+            logging.exception(
                 "Unable to email log file because email authentication is not properly setup."
             )
             return None
@@ -49,12 +44,19 @@ def email_logfile(filename, client, email=None, password=None, recipient=None):
         with open(filename, "rb") as f:
             logs = f.read()
     except:
-        with open("collectrss.log", "rb") as f:
+        with open(logfilepath, "rb") as f:
             logs = f.read()
 
-    message = Message()
-    message.set_payload(logs)
-    subject = f"Pixel Starships Automation Log: {client.user.name}"
+    if not logs:
+        return False
+
+    logs = log_catpure_string.getvalue()
+    subject = f"Pixel Starships Automation Log: {client.user.name if hasattr(client, 'user') else ''}"
+    message = EmailMessage()
+    message["from"] = email
+    message["to"] = recipient
+    message["subject"] = subject
+    message.set_content(logs)
 
     try:
         session = smtplib.SMTP("smtp.gmail.com", 587)
@@ -62,25 +64,24 @@ def email_logfile(filename, client, email=None, password=None, recipient=None):
         session.starttls()
         session.ehlo()
         session.login(email, password)
-        data = f"Subject: {subject} \n {message}"
         session.ehlo()
-        session.sendmail(email, recipient, data)
+        session.send_message(message)
         session.quit()
-    except Exception as e:
-        print(e)
+    except:
+        logging.exception("Exception occurred", exc_info=True)
+    log_catpure_string.close()
 
 
 def authenticate(device, email=None, password=None):
     client = Client(device=device)
 
     if device.refreshToken:
-        # print("# This device is already authorized, no need to input credentials.")
         if client.login():
             return client
         return False
 
     if not client.login(email=email, password=password):
-        print("[authenticate]", "failed to login")
+        logging.warning("[authenticate]", "failed to login")
         return False
 
     return client
@@ -127,47 +128,80 @@ def main():
         help="recipient for the email log",
     )
     args = parser.parse_args()
-    logfilepath = "./collectrss.log"
-    with LogFile(logfilepath):
-        if type(args.auth) == list:
-            device = Device(language="en", authentication_string=args.auth[0])
-        else:
-            device = Device(language="en")
 
-        client = None
+    # Commented code sends each outputed line as an email
+    # email = ""
+    # password = ""
+    # recipient = ""
+    # credentials = ()
+    # secure = ()
 
-        if device.refreshToken:
+    # if (
+    #    type(args.email) == list
+    #    and type(args.password) == list
+    #    and type(args.recipient) == list
+    # ):
+    #    email=args.email[0]
+    #    password=args.password[0]
+    #    recipient=args.recipient[0]
+    # else:
+    #    try:
+    #        config = ConfigParser()
+    #        config.read("./config.secrets")
+    #        email = config.get("MAIL_CONFIG", "SENDER_EMAIL")
+    #        password = config.get("MAIL_CONFIG", "SENDER_PASSWD")
+    #        recipient = config.get("MAIL_CONFIG", "RECIPIENT_EMAIL")
+    #    except:
+    #        logging.exception(
+    #            "Unable to email log file because email configuration is not properly setup.")
+    #        return None
+
+    # subject = "Pixel Starships Automation Log"
+    # credentials = (email, password)
+    # mail_handler =  SMTPHandler(mailhost=("smtp.gmail.com", 587), fromaddr=email, toaddrs=[recipient,], subject=subject, credentials=credentials, secure=secure)
+    # mail_handler.setLevel(logging.INFO)
+    # log = logging.getLogger()
+    # log.addHandler(mail_handler)
+
+    if type(args.auth) == list:
+        device = Device(language="en", authentication_string=args.auth[0])
+    else:
+        device = Device(language="en")
+
+    client = None
+
+    if device.refreshToken:
+        client = authenticate(device)
+        if client:
+            client.getLatestVersion3()
+            client.getTodayLiveOps2()
+            client.listAllDesigns4()
+    else:
+        decide = input("Input G to login as guest. Input A to login as user : ")
+        if decide == "G":
             client = authenticate(device)
-            if client:
-                client.getLatestVersion3()
-                client.getTodayLiveOps2()
-                client.listRoomDesigns2()
-
-
         else:
-            decide = input("Input G to login as guest. Input A to login as user : ")
-            if decide == "G":
-                client = authenticate(device)
-            else:
-                email = input("Enter email: ")
-                password = input("Enter password: ")
-                client = authenticate(device, email, password)
+            email = input("Enter email: ")
+            password = getpass.getpass("Enter password: ")
+            client = authenticate(device, email, password)
 
-
-        while client:
-            client.grabFlyingStarbux()
-            if client.freeStarbuxToday >= 10:
-                client.getCrewInfo()
-                client.upgradeResearches()
-                client.upgradeRooms()
-                client.collectDailyReward()
-                client.listActiveMarketplaceMessages()
-                client.getMessages()
-                client.infoBux()
-                client.listUpgradingRooms()
-                client.getResourceTotals()
-                print(f'[{client.info["@Name"]}] Finished...')
-                break
+    while client:
+        client.grabFlyingStarbux()
+        if client.freeStarbuxToday >= 10:
+            client.collectTaskReward()
+            client.getCrewInfo()
+            client.upgradeCharacters()
+            client.upgradeResearches()
+            client.upgradeRooms()
+            client.collectDailyReward()
+            client.listActiveMarketplaceMessages()
+            client.getMessages()
+            client.infoBux()
+            client.listUpgradingRooms()
+            client.manageTraining()
+            client.getResourceTotals()
+            logging.info(f'[{client.info["@Name"]}] Finished...')
+            break
     if (
         type(args.email) == list
         and type(args.password) == list
