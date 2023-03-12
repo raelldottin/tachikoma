@@ -2,10 +2,8 @@ venv
 .profiles
 .device
 __pycache__
-collectrss.err
-collectrss.out
 collectrss.sh
-UserService-AddStarbux.txt
-collectrss.log
+*.log
+*.app
 config.secrets
 Makefile
