@@ -12,7 +12,7 @@ class Device(object):
     authentication_string = None
 
     def __init__(
-        self, name="DeviceTypeAndroid", key=None, language="en", authentication_string=None
+        self, name="Android", key=None, language="en", authentication_string=None
     ):
 
         if not key:
