@@ -703,7 +703,7 @@ class Client(object):
                 #logging.info(f"\n{datetime.datetime.utcnow()=}\n{trainingEndDate=}\n{(datetime.datetime.utcnow() - trainingEndDate).seconds=}\n{(trainingEndDate - datetime.datetime.utcnow()).seconds=}")
                 if (
                     percent < 1
-                    and int(character["@Fatigue"]) < 2
+                    and int(character["@Fatigue"]) < 4
                     and not trainingEndDate
                 ):
                     logging.info(
@@ -713,7 +713,7 @@ class Client(object):
                 elif (
                     percent > 0
                     and percent < 51
-                    and int(character["@Fatigue"]) < 2
+                    and int(character["@Fatigue"]) < 4
                     and trainingEndDate < datetime.datetime.utcnow()
                 ):
                     if (characterDesign["@SpecialAbilityType"] in characterAbilities):
@@ -726,7 +726,7 @@ class Client(object):
                 elif (
                     percent > 50
                     and percent < 65
-                    and int(character["@Fatigue"]) < 2
+                    and int(character["@Fatigue"]) < 4
                     and trainingEndDate < datetime.datetime.utcnow()
                 ):
                     logging.info(
@@ -735,7 +735,7 @@ class Client(object):
                 elif (
                     percent > 64
                     and percent < 72
-                    and int(character["@Fatigue"]) < 2
+                    and int(character["@Fatigue"]) < 4
                     and trainingEndDate < datetime.datetime.utcnow()
                 ):
                     logging.info(
@@ -744,7 +744,7 @@ class Client(object):
                 elif (
                     percent > 71
                     and percent < 74
-                    and int(character["@Fatigue"]) < 2
+                    and int(character["@Fatigue"]) < 4
                     and trainingEndDate < datetime.datetime.utcnow()
                 ):
                     logging.info(
@@ -753,7 +753,7 @@ class Client(object):
                 elif (
                     percent > 73
                     and percent < 85
-                    and int(character["@Fatigue"]) < 2
+                    and int(character["@Fatigue"]) < 4
                     and trainingEndDate < datetime.datetime.utcnow()
                 ):
                     logging.info(
@@ -762,7 +762,7 @@ class Client(object):
                 elif (
                     percent > 84
                     and percent < 90
-                    and int(character["@Fatigue"]) < 2
+                    and int(character["@Fatigue"]) < 4
                     and trainingEndDate < datetime.datetime.utcnow()
                 ):
                     logging.info(
@@ -778,7 +778,7 @@ class Client(object):
 
                 if (
                     trainingEndDate < datetime.datetime.utcnow()
-                    and int(character["@Fatigue"]) < 2
+                    and int(character["@Fatigue"]) < 4
                     and trainingName
                 ):
                     for design in self.trainingDesigns["TrainingDesign"]:
