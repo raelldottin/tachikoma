@@ -451,7 +451,10 @@ class Client(object):
     def getTrainingUpdate(self, characterId):
         url = f"{self.baseUrl}/TrainingService/GetTrainingUpdate?characterId={characterId}&accessToken={self.accessToken}"
         r = self.request(url, "POST")
+        if 'errorMessage' in r.text:
+            return False
         self.trainingUpdate = xmltodict.parse(r.content, xml_attribs=True)
+        return True
 
     def listAllDesigns4(self):
         if not self.latestVersion:
@@ -611,7 +614,6 @@ class Client(object):
 
     def addTraining(self, trainingDesignId, characterId):
         url = f"{self.baseUrl}/TrainingService/AddTraining?trainingDesignId={trainingDesignId}&characterId={characterId}&trainingStartDate={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}&accessToken={self.accessToken}"
-        print(f"{url=}")
         r = self.request(url, "POST")
         if "errorMessage" in r.text:
             return False
@@ -646,6 +648,8 @@ class Client(object):
             "ListAllCharactersOfUser"
         ]["Characters"]["Character"]:
             room = {}
+            design = {}
+            trainingName = ""
             for room in self.roomsViaAccessToken["RoomService"][
                 "ListRoomsViaAccessToken"
             ]["Rooms"]["Room"]:
@@ -694,41 +698,36 @@ class Client(object):
                 )
                 trainingDesignId = ""
                 design = {}
+                if trainingEndDate < datetime.datetime.utcnow():
+                    logging.debug(f"[{self.info['@Name']}] {character['@CharacterName']} has {percent} training percentage in {self.roomName} with ability {characterDesign['@SpecialAbilityType']}, {character['@Fatigue']} fatigue, and {(datetime.datetime.utcnow() - trainingEndDate).seconds} seconds to complete training.")
+                #logging.info(f"\n{datetime.datetime.utcnow()=}\n{trainingEndDate=}\n{(datetime.datetime.utcnow() - trainingEndDate).seconds=}\n{(trainingEndDate - datetime.datetime.utcnow()).seconds=}")
                 if (
                     percent < 1
-                    and character["@TrainingData"]
                     and int(character["@Fatigue"]) < 2
+                    and not trainingEndDate
                 ):
                     logging.info(
                         f"[{self.info['@Name']}] Use Blue (T2) primary training for {character['@CharacterName']} in {self.roomName} with {character['@Fatigue']} fatigue and {(datetime.datetime.utcnow() - trainingEndDate).seconds} seconds to complete training."
                     )
+
                 elif (
                     percent > 0
                     and percent < 51
                     and int(character["@Fatigue"]) < 2
-                    and (datetime.datetime.utcnow() - trainingEndDate).seconds
-                    < 1
-                    and (trainingEndDate - datetime.datetime.utcnow()).seconds
-                    < 1
+                    and trainingEndDate < datetime.datetime.utcnow()
                 ):
-                    for design in self.trainingDesigns["TrainingDesign"]:
-                        if (
-                            design["@TrainingName"]
-                            == "Read Expert Weapon Theory"
-                            and characterDesign["@SpecialAbilityType"]
-                            in characterAbilities
-                        ):
-                            trainingDesignId = design["@TrainingDesignId"]
-                            break
+                    if (characterDesign["@SpecialAbilityType"] in characterAbilities):
+                        trainingName = "Read Expert Weapon Theory"
+                    elif characterDesign["@SpecialAbilityType"] == "AddReload":
+                        trainingName = "Steam Yoga"
                     logging.info(
-                        f"[{self.info['@Name']}]\nNow first: {(datetime.datetime.utcnow() - trainingEndDate).seconds}\nTraining Date First: {(trainingEndDate - datetime.datetime.utcnow()).seconds}\n{'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}\n{character}\nUse Green (T1) {design['@TrainingName']} primary training for {character['@CharacterName']} in {self.roomName} with ability {characterDesign['@SpecialAbilityType']}, {character['@Fatigue']} fatigue, and {(datetime.datetime.utcnow() - trainingEndDate).seconds} seconds to complete training."
+                        f"[{self.info['@Name']}] Use Green (T1) {trainingName} primary training for {character['@CharacterName']} in {self.roomName} with ability {characterDesign['@SpecialAbilityType']}, {character['@Fatigue']} fatigue, and {(datetime.datetime.utcnow() - trainingEndDate).seconds} seconds to complete training."
                     )
                 elif (
                     percent > 50
                     and percent < 65
                     and int(character["@Fatigue"]) < 2
-                    and (datetime.datetime.utcnow() - trainingEndDate).seconds
-                    < 1
+                    and trainingEndDate < datetime.datetime.utcnow()
                 ):
                     logging.info(
                         f"[{self.info['@Name']}] Use Blue (T2) primary training for {character['@CharacterName']} in {self.roomName} with {character['@Fatigue']} fatigue and {(datetime.datetime.utcnow() - trainingEndDate).seconds} seconds to complete training."
@@ -737,8 +736,7 @@ class Client(object):
                     percent > 64
                     and percent < 72
                     and int(character["@Fatigue"]) < 2
-                    and (datetime.datetime.utcnow() - trainingEndDate).seconds
-                    < 1
+                    and trainingEndDate < datetime.datetime.utcnow()
                 ):
                     logging.info(
                         f"[{self.info['@Name']}] Use Yellow (T3) primary training for {character['@CharacterName']} in {self.roomName} with {character['@Fatigue']} fatigue and {(datetime.datetime.utcnow() - trainingEndDate).seconds} seconds to complete training."
@@ -747,8 +745,7 @@ class Client(object):
                     percent > 71
                     and percent < 74
                     and int(character["@Fatigue"]) < 2
-                    and (datetime.datetime.utcnow() - trainingEndDate).seconds
-                    < 1
+                    and trainingEndDate < datetime.datetime.utcnow()
                 ):
                     logging.info(
                         f"[{self.info['@Name']}] Use Green (T1) secondary training for {character['@CharacterName']} in {self.roomName} with {character['@Fatigue']} fatigue and {(datetime.datetime.utcnow() - trainingEndDate).seconds} seconds to complete training."
@@ -757,8 +754,7 @@ class Client(object):
                     percent > 73
                     and percent < 85
                     and int(character["@Fatigue"]) < 2
-                    and (datetime.datetime.utcnow() - trainingEndDate).seconds
-                    < 1
+                    and trainingEndDate < datetime.datetime.utcnow()
                 ):
                     logging.info(
                         f"[{self.info['@Name']}] Use Blue (T2) secondary training for {character['@CharacterName']} in {self.roomName} with {character['@Fatigue']} fatigue and {(datetime.datetime.utcnow() - trainingEndDate).seconds} seconds to complete training."
@@ -767,8 +763,7 @@ class Client(object):
                     percent > 84
                     and percent < 90
                     and int(character["@Fatigue"]) < 2
-                    and (datetime.datetime.utcnow() - trainingEndDate).seconds
-                    < 1
+                    and trainingEndDate < datetime.datetime.utcnow()
                 ):
                     logging.info(
                         f"[{self.info['@Name']}] Use Yellow (T3) secondary training for {character['@CharacterName']} in {self.roomName} with {character['@Fatigue']} fatigue and {(datetime.datetime.utcnow() - trainingEndDate).seconds} seconds to complete training."
@@ -782,11 +777,21 @@ class Client(object):
                 )
 
                 if (
-                    (datetime.datetime.utcnow() - trainingEndDate).seconds < 1
-                    and (trainingEndDate - datetime.datetime.utcnow()).seconds
-                    < 1
+                    trainingEndDate < datetime.datetime.utcnow()
                     and int(character["@Fatigue"]) < 2
+                    and trainingName
                 ):
+                    for design in self.trainingDesigns["TrainingDesign"]:
+                        if design["@TrainingName"] == trainingName:
+                            trainingDesignId = design["@TrainingDesignId"]
+                            break
+
+                    #print(f"{(trainingEndDate < datetime.datetime.utcnow())=}")
+                    #print(f"{'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())=}")
+                    #print(f"{'{0:%Y-%m-%dT%H:%M:%S}'.format(datetime.datetime.utcnow())=}")
+                    #print(f"{'{0:%Y-%m-%dT%H:%M:%S}'.format(trainingEndDate)=}")
+                    #print(f"{character['@TrainingEndDate']=}")
+                    #print(f"{design=}")
                     logging.debug(
                         f"[{self.info['@Name']}] {character['@CharacterName']} in {self.roomName} with ability {characterDesign['@SpecialAbilityType']}, {character['@Fatigue']} fatigue, and {(datetime.datetime.utcnow() - trainingEndDate).seconds} seconds to complete training."
                     )
@@ -800,7 +805,6 @@ class Client(object):
                         logging.info(
                             f"[{self.info['@Name']}] Starting training {design['@TrainingName']} for {character['@CharacterName']} in {self.roomName} with ability {characterDesign['@SpecialAbilityType']}, {character['@Fatigue']} fatigue."
                         )
-                    print(f"{character=}")
 
     def getCharacterRooms(self):
         if not self.allCharactersOfUser:
@@ -1083,10 +1087,20 @@ class Client(object):
             and self.freeStarbuxTodayTimestamp + 180 < time.time()
             and self.accessToken
         ):
-            if self.freeStarbuxToday == 9:
-                quantity = 1
+            print(f"[{self.info['@Name']}] {self.freeStarbuxToday=}")
+            quantity = 0
+            if self.freeStarbuxToday > 0 and self.freeStarbuxToday < 10:
+                quantity = 10 - self.freeStarbuxToday
+            elif self.freeStarbuxToday == 0:
+                quantity = random.randint(1, 10)
+                while quantity + self.freeStarbuxToday > 11:
+                    quantity = random.randint(1, 9)
             else:
-                quantity = random.randint(1, 2)
+                logging.info(
+                    f'[{self.info["@Name"]}] You have collected a total of {self.freeStarbuxToday} starbux today.'
+                )
+                return True
+            print(f"[{self.info['@Name']}] {quantity=}")
             self.AddStarbux2(quantity)
             if "UserService" not in self.starbux:
                 self.quickReload()
@@ -1133,15 +1147,7 @@ class Client(object):
         if not self.roomDesigns:
             self.listAllDesigns4()
 
-        for i in self.roomDesigns:
-            from pprint import pprint
-
-            pprint(i)
-
-        raise SystemExit("DEUBUGGING")
-        for i in self.roomDesigns["RoomService"]["ListRoomDesigns"][
-            "RoomDesigns"
-        ]["RoomDesign"]:
+        for i in self.roomDesigns["RoomDesign"]:
             if i["@RoomDesignId"] == roomDesignId:
                 url = f"https://api.pixelstarships.com/RoomService/SpeedUpRoomConstructionUsingBoostGauge?roomId={roomId}&clientDateTime={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}&accessToken={self.accessToken}"
                 r = self.request(url, "POST")
