@@ -77,6 +77,7 @@ class Client(object):
     accessToken = None
     checksum = None
     freeStarbuxToday = 0
+    freeStarbuxMax = 10 
     freeStarbuxTodayTimestamp = 0
     dailyReward = 0
     dailyRewardTimestamp = 0
@@ -685,11 +686,7 @@ class Client(object):
                     ):
                         break
 
-                trainingEndDate = datetime.datetime.utcnow()
-                if character["@TrainingData"]:
-                    trainingEndDate = datetime.datetime.strptime(
-                        character["@TrainingEndDate"], "%Y-%m-%dT%H:%M:%S"
-                    )
+                trainingEndDate = datetime.datetime.strptime(character["@TrainingEndDate"], "%Y-%m-%dT%H:%M:%S")
 
                 logging.debug(
                     f"Total: {count=} {characterDesign['@TrainingCapacity']=} {count / int(characterDesign['@TrainingCapacity']) * 100}"
@@ -701,7 +698,6 @@ class Client(object):
                 design = {}
                 if trainingEndDate < datetime.datetime.utcnow():
                     logging.debug(f"[{self.info['@Name']}] {character['@CharacterName']} has {percent} training percentage in {self.roomName} with ability {characterDesign['@SpecialAbilityType']}, {character['@Fatigue']} fatigue, and {(datetime.datetime.utcnow() - trainingEndDate).seconds} seconds to complete training.")
-                #logging.info(f"\n{datetime.datetime.utcnow()=}\n{trainingEndDate=}\n{(datetime.datetime.utcnow() - trainingEndDate).seconds=}\n{(trainingEndDate - datetime.datetime.utcnow()).seconds=}")
                 if (
                     percent < 1
                     and int(character["@Fatigue"]) < fatigueMax
@@ -722,8 +718,9 @@ class Client(object):
                     elif characterDesign["@SpecialAbilityType"] == "AddReload":
                         trainingName = "Steam Yoga"
                     logging.info(
-                        f"[{self.info['@Name']}] Use Green (T1) {trainingName} primary training for {character['@CharacterName']} in {self.roomName} with ability {characterDesign['@SpecialAbilityType']}, {character['@Fatigue']} fatigue, and {(datetime.datetime.utcnow() - trainingEndDate).seconds} seconds to complete training."
+                        f"[{self.info['@Name']}] Use Green (T1) {trainingName} primary training for {character['@CharacterName']} in {self.roomName} with ability {characterDesign['@SpecialAbilityType']}, {character['@Fatigue']} fatigue, {trainingEndDate < datetime.datetime.utcnow()} time logic, and {(datetime.datetime.utcnow() - trainingEndDate).seconds} seconds to complete training."
                     )
+                    logging.debug(f"\n{datetime.datetime.utcnow()=}\n{trainingEndDate=}\n{(datetime.datetime.utcnow() - trainingEndDate).seconds=}\n{(trainingEndDate - datetime.datetime.utcnow()).seconds=}")
                 elif (
                     percent > 50
                     and percent < 65
@@ -1083,17 +1080,16 @@ class Client(object):
         self.starbux = xmltodict.parse(r.content, xml_attribs=True)
 
     def grabFlyingStarbux(self):
-        freeStarbuxMax = 10 
         if (
-            self.freeStarbuxToday < freeStarbuxMax
+            self.freeStarbuxToday < self.freeStarbuxMax
             and self.freeStarbuxTodayTimestamp + 180 < time.time()
             and self.accessToken
         ):
             logging.debug(f"[{self.info['@Name']}] {self.freeStarbuxToday=}")
             quantity = 0
-            if self.freeStarbuxToday < freeStarbuxMax:
+            if self.freeStarbuxToday < self.freeStarbuxMax:
                 quantity = random.randint(1, 5)
-                while quantity + self.freeStarbuxToday > freeStarbuxMax:
+                while quantity + self.freeStarbuxToday > self.freeStarbuxMax:
                     quantity = random.randint(1, 5)
             else:
                 logging.info(
