@@ -1083,25 +1083,24 @@ class Client(object):
         self.starbux = xmltodict.parse(r.content, xml_attribs=True)
 
     def grabFlyingStarbux(self):
+        freeStarbuxMax = 10 
         if (
-            self.freeStarbuxToday < 10
+            self.freeStarbuxToday < freeStarbuxMax
             and self.freeStarbuxTodayTimestamp + 180 < time.time()
             and self.accessToken
         ):
-            print(f"[{self.info['@Name']}] {self.freeStarbuxToday=}")
+            logging.debug(f"[{self.info['@Name']}] {self.freeStarbuxToday=}")
             quantity = 0
-            if self.freeStarbuxToday > 0 and self.freeStarbuxToday < 10:
-                quantity = 10 - self.freeStarbuxToday
-            elif self.freeStarbuxToday == 0:
-                quantity = random.randint(1, 10)
-                while quantity + self.freeStarbuxToday > 11:
-                    quantity = random.randint(1, 9)
+            if self.freeStarbuxToday < freeStarbuxMax:
+                quantity = random.randint(1, 5)
+                while quantity + self.freeStarbuxToday > freeStarbuxMax:
+                    quantity = random.randint(1, 5)
             else:
                 logging.info(
                     f'[{self.info["@Name"]}] You have collected a total of {self.freeStarbuxToday} starbux today.'
                 )
                 return True
-            print(f"[{self.info['@Name']}] {quantity=}")
+            logging.debug(f"[{self.info['@Name']}] {quantity=}")
             self.AddStarbux2(quantity)
             if "UserService" not in self.starbux:
                 self.quickReload()
