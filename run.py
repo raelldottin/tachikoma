@@ -62,9 +62,7 @@ def email_logfile(filename, client, email=None, password=None, recipient=None):
         session = smtplib.SMTP("smtp.gmail.com", 587)
         session.ehlo()
         session.starttls()
-        session.ehlo()
         session.login(email, password)
-        session.ehlo()
         session.send_message(message)
         session.quit()
     except:
@@ -187,7 +185,7 @@ def main():
 
     while client:
         client.grabFlyingStarbux()
-        if client.freeStarbuxToday >= 10:
+        if client.freeStarbuxToday >= client.freeStarbuxMax:
             client.collectTaskReward()
             client.getCrewInfo()
             client.upgradeCharacters()
