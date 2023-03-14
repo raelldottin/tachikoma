@@ -77,6 +77,7 @@ class Client(object):
     accessToken = None
     checksum = None
     freeStarbuxToday = 0
+    freeStarbuxMax = 10 
     freeStarbuxTodayTimestamp = 0
     dailyReward = 0
     dailyRewardTimestamp = 0
@@ -644,6 +645,7 @@ class Client(object):
                 return False
 
         characterAbilities = ["ProtectRoom", "Freeze"]
+        fatigueMax = 5
         for character in self.allCharactersOfUser["CharacterService"][
             "ListAllCharactersOfUser"
         ]["Characters"]["Character"]:
@@ -684,11 +686,7 @@ class Client(object):
                     ):
                         break
 
-                trainingEndDate = datetime.datetime.utcnow()
-                if character["@TrainingData"]:
-                    trainingEndDate = datetime.datetime.strptime(
-                        character["@TrainingEndDate"], "%Y-%m-%dT%H:%M:%S"
-                    )
+                trainingEndDate = datetime.datetime.strptime(character["@TrainingEndDate"], "%Y-%m-%dT%H:%M:%S")
 
                 logging.debug(
                     f"Total: {count=} {characterDesign['@TrainingCapacity']=} {count / int(characterDesign['@TrainingCapacity']) * 100}"
@@ -700,10 +698,9 @@ class Client(object):
                 design = {}
                 if trainingEndDate < datetime.datetime.utcnow():
                     logging.debug(f"[{self.info['@Name']}] {character['@CharacterName']} has {percent} training percentage in {self.roomName} with ability {characterDesign['@SpecialAbilityType']}, {character['@Fatigue']} fatigue, and {(datetime.datetime.utcnow() - trainingEndDate).seconds} seconds to complete training.")
-                #logging.info(f"\n{datetime.datetime.utcnow()=}\n{trainingEndDate=}\n{(datetime.datetime.utcnow() - trainingEndDate).seconds=}\n{(trainingEndDate - datetime.datetime.utcnow()).seconds=}")
                 if (
                     percent < 1
-                    and int(character["@Fatigue"]) < 4
+                    and int(character["@Fatigue"]) < fatigueMax
                     and not trainingEndDate
                 ):
                     logging.info(
@@ -713,7 +710,7 @@ class Client(object):
                 elif (
                     percent > 0
                     and percent < 51
-                    and int(character["@Fatigue"]) < 4
+                    and int(character["@Fatigue"]) < fatigueMax
                     and trainingEndDate < datetime.datetime.utcnow()
                 ):
                     if (characterDesign["@SpecialAbilityType"] in characterAbilities):
@@ -721,12 +718,13 @@ class Client(object):
                     elif characterDesign["@SpecialAbilityType"] == "AddReload":
                         trainingName = "Steam Yoga"
                     logging.info(
-                        f"[{self.info['@Name']}] Use Green (T1) {trainingName} primary training for {character['@CharacterName']} in {self.roomName} with ability {characterDesign['@SpecialAbilityType']}, {character['@Fatigue']} fatigue, and {(datetime.datetime.utcnow() - trainingEndDate).seconds} seconds to complete training."
+                        f"[{self.info['@Name']}] Use Green (T1) {trainingName} primary training for {character['@CharacterName']} in {self.roomName} with ability {characterDesign['@SpecialAbilityType']}, {character['@Fatigue']} fatigue, {trainingEndDate < datetime.datetime.utcnow()} time logic, and {(datetime.datetime.utcnow() - trainingEndDate).seconds} seconds to complete training."
                     )
+                    logging.debug(f"\n{datetime.datetime.utcnow()=}\n{trainingEndDate=}\n{(datetime.datetime.utcnow() - trainingEndDate).seconds=}\n{(trainingEndDate - datetime.datetime.utcnow()).seconds=}")
                 elif (
                     percent > 50
                     and percent < 65
-                    and int(character["@Fatigue"]) < 4
+                    and int(character["@Fatigue"]) < fatigueMax
                     and trainingEndDate < datetime.datetime.utcnow()
                 ):
                     logging.info(
@@ -735,7 +733,7 @@ class Client(object):
                 elif (
                     percent > 64
                     and percent < 72
-                    and int(character["@Fatigue"]) < 4
+                    and int(character["@Fatigue"]) < fatigueMax
                     and trainingEndDate < datetime.datetime.utcnow()
                 ):
                     logging.info(
@@ -744,7 +742,7 @@ class Client(object):
                 elif (
                     percent > 71
                     and percent < 74
-                    and int(character["@Fatigue"]) < 4
+                    and int(character["@Fatigue"]) < fatigueMax
                     and trainingEndDate < datetime.datetime.utcnow()
                 ):
                     logging.info(
@@ -753,7 +751,7 @@ class Client(object):
                 elif (
                     percent > 73
                     and percent < 85
-                    and int(character["@Fatigue"]) < 4
+                    and int(character["@Fatigue"]) < fatigueMax
                     and trainingEndDate < datetime.datetime.utcnow()
                 ):
                     logging.info(
@@ -762,7 +760,7 @@ class Client(object):
                 elif (
                     percent > 84
                     and percent < 90
-                    and int(character["@Fatigue"]) < 4
+                    and int(character["@Fatigue"]) < fatigueMax
                     and trainingEndDate < datetime.datetime.utcnow()
                 ):
                     logging.info(
@@ -778,7 +776,7 @@ class Client(object):
 
                 if (
                     trainingEndDate < datetime.datetime.utcnow()
-                    and int(character["@Fatigue"]) < 4
+                    and int(character["@Fatigue"]) < fatigueMax
                     and trainingName
                 ):
                     for design in self.trainingDesigns["TrainingDesign"]:
@@ -1083,24 +1081,22 @@ class Client(object):
 
     def grabFlyingStarbux(self):
         if (
-            self.freeStarbuxToday < 10
+            self.freeStarbuxToday < self.freeStarbuxMax
             and self.freeStarbuxTodayTimestamp + 180 < time.time()
             and self.accessToken
         ):
-            print(f"[{self.info['@Name']}] {self.freeStarbuxToday=}")
+            logging.debug(f"[{self.info['@Name']}] {self.freeStarbuxToday=}")
             quantity = 0
-            if self.freeStarbuxToday > 0 and self.freeStarbuxToday < 10:
-                quantity = 10 - self.freeStarbuxToday
-            elif self.freeStarbuxToday == 0:
-                quantity = random.randint(1, 10)
-                while quantity + self.freeStarbuxToday > 11:
-                    quantity = random.randint(1, 9)
+            if self.freeStarbuxToday < self.freeStarbuxMax:
+                quantity = random.randint(1, 5)
+                while quantity + self.freeStarbuxToday > self.freeStarbuxMax:
+                    quantity = random.randint(1, 5)
             else:
                 logging.info(
                     f'[{self.info["@Name"]}] You have collected a total of {self.freeStarbuxToday} starbux today.'
                 )
                 return True
-            print(f"[{self.info['@Name']}] {quantity=}")
+            logging.debug(f"[{self.info['@Name']}] {quantity=}")
             self.AddStarbux2(quantity)
             if "UserService" not in self.starbux:
                 self.quickReload()
