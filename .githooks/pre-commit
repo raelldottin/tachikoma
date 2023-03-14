@@ -1,11 +1,17 @@
 #!/bin/bash
 
-# https://www.viget.com/articles/two-ways-to-share-git-hooks-with-your-team/
 # Set the git hooks path
 # git config core.hooksPath .githooks
+if [[ -z "$(git config core.hooksPath)" ]]; then
+  git config core.hooksPath .githooks
+fi
 
 # Set your git tags
 # git tag -a "0.0.1"
+if [[ -z "$(git describe | grep -Eio '([0-9]+\.)+[0-9]+')" ]]; then
+  git tag -a "0.0.1" -m "version 0.0.1"
+fi
+
 
 # run from the root of the repo
 git config current.version "$(git describe | grep -Eio '([0-9]+\.)+[0-9]+')"
