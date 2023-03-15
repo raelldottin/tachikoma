@@ -644,7 +644,7 @@ class Client(object):
                 return False
 
         characterAbilities = ["ProtectRoom", "Freeze"]
-        fatigueMax = 10 
+        fatigueMax = 5
         for character in self.allCharactersOfUser["CharacterService"][
             "ListAllCharactersOfUser"
         ]["Characters"]["Character"]:
@@ -696,6 +696,10 @@ class Client(object):
                 trainingDesignId = ""
                 design = {}
                 if trainingEndDate < datetime.datetime.utcnow():
+                    if self.finishTraining(character["@CharacterId"]):
+                        logging.info(
+                            f"[{self.info['@Name']}] Completed training for {character['@CharacterName']} in {self.roomName} with ability {characterDesign['@SpecialAbilityType']}, {character['@Fatigue']} fatigue, and {(datetime.datetime.utcnow() - trainingEndDate).seconds} seconds to complete training."
+                        )
                     logging.debug(f"[{self.info['@Name']}] {character['@CharacterName']} has {percent} training percentage in {self.roomName} with ability {characterDesign['@SpecialAbilityType']}, {character['@Fatigue']} fatigue, and {(datetime.datetime.utcnow() - trainingEndDate).seconds} seconds to complete training.")
                 if (
                     percent < 1
@@ -792,10 +796,6 @@ class Client(object):
                     logging.debug(
                         f"[{self.info['@Name']}] {character['@CharacterName']} in {self.roomName} with ability {characterDesign['@SpecialAbilityType']}, {character['@Fatigue']} fatigue, and {(datetime.datetime.utcnow() - trainingEndDate).seconds} seconds to complete training."
                     )
-                    if self.finishTraining(character["@CharacterId"]):
-                        logging.info(
-                            f"[{self.info['@Name']}] Completed training for {character['@CharacterName']} in {self.roomName} with ability {characterDesign['@SpecialAbilityType']}, {character['@Fatigue']} fatigue, and {(datetime.datetime.utcnow() - trainingEndDate).seconds} seconds to complete training."
-                        )
                     if self.addTraining(
                         trainingDesignId, character["@CharacterId"]
                     ):
