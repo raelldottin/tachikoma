@@ -154,6 +154,7 @@ def main():
         if client.freeStarbuxToday >= client.freeStarbuxMax:
             client.collectTaskReward()
             client.getCrewInfo()
+            client.rushResearchOrConstruction()
             client.upgradeCharacters()
             client.upgradeResearches()
             client.upgradeRooms()
@@ -161,7 +162,6 @@ def main():
             client.listActiveMarketplaceMessages()
             client.getMessages()
             client.infoBux()
-            client.listUpgradingRooms()
             client.manageTraining()
             client.getResourceTotals()
             logging.info(f'[{client.info["@Name"]}] Finished...')
