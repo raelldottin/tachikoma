@@ -127,40 +127,6 @@ def main():
     )
     args = parser.parse_args()
 
-    # Commented code sends each outputed line as an email
-    # email = ""
-    # password = ""
-    # recipient = ""
-    # credentials = ()
-    # secure = ()
-
-    # if (
-    #    type(args.email) == list
-    #    and type(args.password) == list
-    #    and type(args.recipient) == list
-    # ):
-    #    email=args.email[0]
-    #    password=args.password[0]
-    #    recipient=args.recipient[0]
-    # else:
-    #    try:
-    #        config = ConfigParser()
-    #        config.read("./config.secrets")
-    #        email = config.get("MAIL_CONFIG", "SENDER_EMAIL")
-    #        password = config.get("MAIL_CONFIG", "SENDER_PASSWD")
-    #        recipient = config.get("MAIL_CONFIG", "RECIPIENT_EMAIL")
-    #    except:
-    #        logging.exception(
-    #            "Unable to email log file because email configuration is not properly setup.")
-    #        return None
-
-    # subject = "Pixel Starships Automation Log"
-    # credentials = (email, password)
-    # mail_handler =  SMTPHandler(mailhost=("smtp.gmail.com", 587), fromaddr=email, toaddrs=[recipient,], subject=subject, credentials=credentials, secure=secure)
-    # mail_handler.setLevel(logging.INFO)
-    # log = logging.getLogger()
-    # log.addHandler(mail_handler)
-
     if type(args.auth) == list:
         device = Device(language="en", authentication_string=args.auth[0])
     else:
@@ -188,6 +154,7 @@ def main():
         if client.freeStarbuxToday >= client.freeStarbuxMax:
             client.collectTaskReward()
             client.getCrewInfo()
+            client.rushResearchOrConstruction()
             client.upgradeCharacters()
             client.upgradeResearches()
             client.upgradeRooms()
@@ -195,7 +162,6 @@ def main():
             client.listActiveMarketplaceMessages()
             client.getMessages()
             client.infoBux()
-            client.listUpgradingRooms()
             client.manageTraining()
             client.getResourceTotals()
             logging.info(f'[{client.info["@Name"]}] Finished...')
