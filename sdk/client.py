@@ -195,27 +195,15 @@ class Client(object):
 
         r = self.request(url, "POST")
         d = xmltodict.parse(r.content, xml_attribs=True)
-        logging.debug(f"{d=}")
-        if not r or r.status_code != 200:
-            logging.error(f"[getAccessToken] failed with data: {r.text}")
-            self.accessToken = ""
-            return False
-
-        if "errorCode" in r.text:
-            logging.error(f"[getAccessToken] got an error with data: {r.text}")
-            self.accessToken = ""
-            return False
-
-        self.parseUserLoginData(r)
-
-        if "accessToken" not in r.text:
-            logging.error(
-                f"[getAccessToken] got no accessToken with data: {r.text}"
-            )
+        if (not r or r.status_code != 200) or ("errorCode" in r.text) or ("accessToken" not in r.text):
+            logging.error(f"{d}")
             self.accessToken = ""
             return False
 
         self.accessToken = r.text.split('accessToken="')[1].split('"')[0]
+        if not self.parseUserLoginData(r):
+            return False
+
         return True
 
     def quickReload(self):
@@ -224,12 +212,11 @@ class Client(object):
 
     def login(self, email=None, password=None):
         if not self.getAccessToken():
-            logging.error("[login] failed to get access token")
-            return None
+            return False
 
         # double check if something goes wrong
         if not self.accessToken:
-            return None
+            return False
 
         # authorization just fine with refreshToken, we're in da house
         if self.device.refreshToken and self.accessToken:
@@ -245,7 +232,6 @@ class Client(object):
             self.device.key, email, ts, self.accessToken, self.salt
         )
 
-        #        self.checksum = checksum
 
         # if refreshToken was used we get acquire session without credentials
         if self.device.refreshToken:
@@ -256,9 +242,10 @@ class Client(object):
                 logging.error(
                     "[login] failed to authenticate with refreshToken:", r.text
                 )
-                return None
+                return False
 
-            self.parseUserLoginData(r)
+            if not self.parseUserLoginData(r):
+                return False
 
         else:
             self.email = urllib.parse.quote(email)
@@ -271,7 +258,6 @@ class Client(object):
                     "[login] failed to authorize with credentials with the reason:",
                     r.text,
                 )
-                sys.exit(1)
                 return False
 
             if "refreshToken" not in r.text:
@@ -422,6 +408,7 @@ class Client(object):
         r = self.request(url, "GET")
         self.allCharactersOfUser = xmltodict.parse(r.content, xml_attribs=True)
         if "CharacterService" not in self.allCharactersOfUser:
+            logging.error(f"Failed to get list of characters on the ship.")
             return False
         return True
 
@@ -622,7 +609,6 @@ class Client(object):
     def manageTraining(self):
         if not hasattr(self, "allCharactersOfUser"):
             if not self.listAllCharactersOfUser():
-                logging.error("Failed to get list of characters on the ship.")
                 return False
 
         if not hasattr(self, "allCharacterDesigns"):
@@ -644,7 +630,7 @@ class Client(object):
                 return False
 
         characterAbilities = ["ProtectRoom", "Freeze"]
-        fatigueMax = 10
+        fatigueMax = 15
         for character in self.allCharactersOfUser["CharacterService"][
             "ListAllCharactersOfUser"
         ]["Characters"]["Character"]:
@@ -787,12 +773,6 @@ class Client(object):
                             trainingDesignId = design["@TrainingDesignId"]
                             break
 
-                    #print(f"{(trainingEndDate < datetime.datetime.utcnow())=}")
-                    #print(f"{'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())=}")
-                    #print(f"{'{0:%Y-%m-%dT%H:%M:%S}'.format(datetime.datetime.utcnow())=}")
-                    #print(f"{'{0:%Y-%m-%dT%H:%M:%S}'.format(trainingEndDate)=}")
-                    #print(f"{character['@TrainingEndDate']=}")
-                    #print(f"{design=}")
                     logging.debug(
                         f"[{self.info['@Name']}] {character['@CharacterName']} in {self.roomName} with ability {characterDesign['@SpecialAbilityType']}, {character['@Fatigue']} fatigue, and {(datetime.datetime.utcnow() - trainingEndDate).seconds} seconds to complete training."
                     )
@@ -804,15 +784,11 @@ class Client(object):
                         )
 
     def getCharacterRooms(self):
-        if not self.allCharactersOfUser:
-            self.listAllCharactersOfUser()
+        if not hasattr(self, 'allCharactersOfUser'):
+            if not self.listAllCharactersOfUser():
+                return False
 
-        if "CharacterService" not in self.allCharactersOfUser:
-            return False
-
-        for character in self.allCharactersOfUser["CharacterService"][
-            "ListAllCharactersOfUser"
-        ]["Characters"]["Character"]:
+        for character in self.allCharactersOfUser["CharacterService"]["ListAllCharactersOfUser"]["Characters"]["Character"]:
             self.getRoomName(character["@RoomId"], character["@RoomDesignId"])
             if self.roomName != "":
                 logging.info(
@@ -826,6 +802,12 @@ class Client(object):
             self.allCharacterDesigns = xmltodict.parse(
                 r.content, xml_attribs=True
             )
+            if "CharacterService" not in self.allCharacterDesigns:
+                logging.error(f"[{self.info['@Name']}] CharacterService data not avaialble.")
+                return False
+            return True
+        return False
+
 
     def upgradeCharacter(self, characterId):
         url = f"{self.baseUrl}/CharacterService/UpgradeCharacter?characterId={characterId}&accessToken={self.accessToken}"
@@ -896,6 +878,11 @@ class Client(object):
         self.systemMessagesForUser = xmltodict.parse(
             r.content, xml_attribs=True
         )
+        if 'MessageService' not in self.systemMessagesForUser:
+            logging.error("MessageService data unavailable.")
+            return False
+
+        return True
 
     def listFriends(self, userId=0):
         if self.user.isAuthorized:
@@ -1116,9 +1103,10 @@ class Client(object):
 
     # Determine the boost gauge before attempting to speed up a room
     def speedUpResearchUsingBoostGauge(self, researchId, researchDesignId):
-        self.listAllResearchDesigns2()
-        if not self.allResearchDesigns:
-            return False
+        if not hasattr(self, 'allResearchDesigns'):
+            if not self.listAllResearchDesigns2():
+                return False
+
         for i in self.allResearchDesigns["ResearchService"][
             "ListAllResearchDesigns"
         ]["ResearchDesigns"]["ResearchDesign"]:
@@ -1159,7 +1147,9 @@ class Client(object):
         return False
 
     def rushResearchOrConstruction(self):
-        self.getShipByUserId()
+        if not hasattr(self, 'shipByUserId'):
+            self.getShipByUserId()
+
         if "ShipService" in self.shipByUserId:
             for i in self.shipByUserId["ShipService"]["GetShipByUserId"][
                 "Ship"
@@ -1321,6 +1311,10 @@ class Client(object):
             self.allResearchDesigns = xmltodict.parse(
                 r.content, xml_attribs=True
             )
+            if 'ResearchService' not in self.allResearchDesigns:
+                return False
+
+            return True
 
     def addResearch(self, researchDesignId):
         url = f"https://api.pixelstarships.com/ResearchService/AddResearch?researchDesignId={researchDesignId}&researchStartDate={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}&accessToken={self.accessToken}"
@@ -1388,7 +1382,8 @@ class Client(object):
         return True
 
     def getMessages(self):
-        self.listSystemMessagesForUser3()
+        if not self.listSystemMessagesForUser3():
+            return False
         if not self.systemMessagesForUser["MessageService"][
             "ListSystemMessagesForUser"
         ]["Messages"]:
@@ -1402,9 +1397,11 @@ class Client(object):
             message = self.systemMessagesForUser["MessageService"][
                 "ListSystemMessagesForUser"
             ]["Messages"]["Message"]
+            print(f"{message=}")
             if (
                 "@ActivityArgument" in message
                 and message["@ActivityArgument"] != "None"
+                and message["@ActivityArgument"] != ""
             ):
                 logging.info(
                     f"[{self.info['@Name']}] {message['@Message']}{''.join([' ', message['@ActivityArgument'].split(':')[1]])}{''.join([' ', message['@ActivityArgument'].split(':')[0]])} is collectable."
