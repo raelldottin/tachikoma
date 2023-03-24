@@ -1397,7 +1397,6 @@ class Client(object):
             message = self.systemMessagesForUser["MessageService"][
                 "ListSystemMessagesForUser"
             ]["Messages"]["Message"]
-            print(f"{message=}")
             if (
                 "@ActivityArgument" in message
                 and message["@ActivityArgument"] != "None"
@@ -1422,7 +1421,7 @@ class Client(object):
             for message in self.systemMessagesForUser["MessageService"][
                 "ListSystemMessagesForUser"
             ]["Messages"]["Message"]:
-                if message["@ActivityArgument"] != "None":
+                if message["@ActivityArgument"] != "None" and message["@ActivityArgument"] != "":
                     logging.info(
                         f"[{self.info['@Name']}] {message['@Message']}{''.join([' ', message['@ActivityArgument'].split(':')[1]])}{''.join([' ', message['@ActivityArgument'].split(':')[0]])} is collectable."
                     )
