@@ -68,6 +68,7 @@ def email_logfile(filename, client, email=None, password=None, recipient=None):
     except:
         logging.exception("Exception occurred", exc_info=True)
     log_catpure_string.close()
+    return True
 
 
 def authenticate(device, email=None, password=None):
@@ -79,7 +80,7 @@ def authenticate(device, email=None, password=None):
         return False
 
     if not client.login(email=email, password=password):
-        logging.warning("[authenticate]", "failed to login")
+        logging.warning("[authenticate] failed to login")
         return False
 
     return client
@@ -141,7 +142,8 @@ def main():
             client.getTodayLiveOps2()
             client.listAllDesigns4()
     else:
-        decide = input("Input G to login as guest. Input A to login as user : ")
+        decide = input(
+            "Input G to login as guest. Input A to login as user : ")
         if decide == "G":
             client = authenticate(device)
         else:
