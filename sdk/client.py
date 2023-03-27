@@ -1,7 +1,6 @@
 import urllib.parse
 import time
 import datetime
-import sys
 import collections
 import xmltodict
 import requests
@@ -77,7 +76,7 @@ class Client(object):
     accessToken = None
     checksum = None
     freeStarbuxToday = 0
-    freeStarbuxMax = 10 
+    freeStarbuxMax = 10
     freeStarbuxTodayTimestamp = 0
     dailyReward = 0
     dailyRewardTimestamp = 0
@@ -232,7 +231,6 @@ class Client(object):
             self.device.key, email, ts, self.accessToken, self.salt
         )
 
-
         # if refreshToken was used we get acquire session without credentials
         if self.device.refreshToken:
             url = f"{self.baseUrl}/UserService/UserEmailPasswordAuthorize2?clientDateTime={ts}&checksum={self.checksum}&deviceKey={self.device.key}&accessToken={self.accessToken}&refreshToken={self.device.refreshToken}"
@@ -267,7 +265,8 @@ class Client(object):
                 )
                 return False
 
-            self.device.refreshTokenAcquire(r.text.split('refreshToken="')[1].split('"')[0])
+            self.device.refreshTokenAcquire(
+                r.text.split('refreshToken="')[1].split('"')[0])
 
             if 'RequireReload="True"' in r.text:
                 return self.quickReload()
@@ -412,7 +411,7 @@ class Client(object):
             return False
         return True
 
-    def getRoomName(self, roomId, roomDesignId):
+    def getRoomName(self, roomDesignId):
         if not hasattr(self, "roomDesigns"):
             self.listAllDesigns4()
             if "RoomDesign" not in self.roomDesigns:
@@ -630,7 +629,7 @@ class Client(object):
                 return False
 
         characterAbilities = ["ProtectRoom", "Freeze"]
-        fatigueMax = 15
+        fatigueMax = 25
         for character in self.allCharactersOfUser["CharacterService"][
             "ListAllCharactersOfUser"
         ]["Characters"]["Character"]:
@@ -642,7 +641,7 @@ class Client(object):
             ]["Rooms"]["Room"]:
                 if character["@RoomId"] == room["@RoomId"]:
                     break
-            self.getRoomName(character["@RoomId"], room["@RoomDesignId"])
+            self.getRoomName(room["@RoomDesignId"])
             if "Academy" in self.roomName or "GYM" in self.roomName:
                 stats = [
                     "@HpImprovement",
@@ -671,7 +670,8 @@ class Client(object):
                     ):
                         break
 
-                trainingEndDate = datetime.datetime.strptime(character["@TrainingEndDate"], "%Y-%m-%dT%H:%M:%S")
+                trainingEndDate = datetime.datetime.strptime(
+                    character["@TrainingEndDate"], "%Y-%m-%dT%H:%M:%S")
 
                 logging.debug(
                     f"Total: {count=} {characterDesign['@TrainingCapacity']=} {count / int(characterDesign['@TrainingCapacity']) * 100}"
@@ -709,7 +709,8 @@ class Client(object):
                     logging.info(
                         f"[{self.info['@Name']}] Use Green (T1) {trainingName} primary training for {character['@CharacterName']} in {self.roomName} with ability {characterDesign['@SpecialAbilityType']}, {character['@Fatigue']} fatigue, {trainingEndDate < datetime.datetime.utcnow()} time logic, and {(datetime.datetime.utcnow() - trainingEndDate).seconds} seconds to complete training."
                     )
-                    logging.debug(f"\n{datetime.datetime.utcnow()=}\n{trainingEndDate=}\n{(datetime.datetime.utcnow() - trainingEndDate).seconds=}\n{(trainingEndDate - datetime.datetime.utcnow()).seconds=}")
+                    logging.debug(
+                        f"\n{datetime.datetime.utcnow()=}\n{trainingEndDate=}\n{(datetime.datetime.utcnow() - trainingEndDate).seconds=}\n{(trainingEndDate - datetime.datetime.utcnow()).seconds=}")
                 elif (
                     percent > 50
                     and percent < 65
@@ -789,7 +790,7 @@ class Client(object):
                 return False
 
         for character in self.allCharactersOfUser["CharacterService"]["ListAllCharactersOfUser"]["Characters"]["Character"]:
-            self.getRoomName(character["@RoomId"], character["@RoomDesignId"])
+            self.getRoomName(character["@RoomDesignId"])
             if self.roomName != "":
                 logging.info(
                     f"[{self.info['@Name']}] {character['@CharacterName']} is located in {self.roomName}."
@@ -803,11 +804,11 @@ class Client(object):
                 r.content, xml_attribs=True
             )
             if "CharacterService" not in self.allCharacterDesigns:
-                logging.error(f"[{self.info['@Name']}] CharacterService data not avaialble.")
+                logging.error(
+                    f"[{self.info['@Name']}] CharacterService data not avaialble.")
                 return False
             return True
         return False
-
 
     def upgradeCharacter(self, characterId):
         url = f"{self.baseUrl}/CharacterService/UpgradeCharacter?characterId={characterId}&accessToken={self.accessToken}"
@@ -1360,24 +1361,25 @@ class Client(object):
 
     def getCrewInfo(self):
         character_list = []
-        fatigue_characters = collections.defaultdict(str)
+        fatigue_characters = []
         self.listAllCharactersOfUser()
 
         for character in self.allCharactersOfUser["CharacterService"][
             "ListAllCharactersOfUser"
         ]["Characters"]["Character"]:
+
             character_list.append(character["@CharacterName"])
             if int(character["@Fatigue"]) > 0:
-                fatigue_characters[character["@CharacterName"]] = character[
-                    "@Fatigue"
-                ]
+                fatigue_characters.append("".join(
+                    [character["@CharacterName"], " has ", character["@Fatigue"], " fatigue"]))
         if character_list:
             logging.info(
                 f"[{self.info['@Name']}] List of characters on your ship: {', '.join(character_list)}"
             )
         if fatigue_characters:
             logging.info(
-                f"[{self.info['@Name']}] List ot fatigue characters on your ship: {', '.join(f'{key} has {value} fatigue' for key, value in fatigue_characters.items())}."
+                f"[{self.info['@Name']}] List ot fatigue characters on your ship: {', '.join(fatigue_characters)}."
+
             )
         return True
 
@@ -1431,9 +1433,11 @@ class Client(object):
                     ]:
                         self.collectReward2(message["@MessageId"])
                 else:
+                    self.collectReward2(message["@MessageId"])
                     logging.info(
                         f"[{self.info['@Name']}] {message['@Message']}"
                     )
+        return True
 
     def listFinishTasks(self):
         self.listTasksOfAUser()
