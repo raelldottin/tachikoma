@@ -670,8 +670,10 @@ class Client(object):
                     ):
                         break
 
-                trainingEndDate = datetime.datetime.strptime(
-                    character["@TrainingEndDate"], "%Y-%m-%dT%H:%M:%S")
+                logging.warning(f"{character['@TrainingEndDate']=}")
+                if character["@TrainingEndDate"]:
+                    trainingEndDate = datetime.datetime.strptime(
+                        character["@TrainingEndDate"], "%Y-%m-%dT%H:%M:%S")
 
                 logging.debug(
                     f"Total: {count=} {characterDesign['@TrainingCapacity']=} {count / int(characterDesign['@TrainingCapacity']) * 100}"
@@ -706,6 +708,9 @@ class Client(object):
                         trainingName = "Read Expert Weapon Theory"
                     elif characterDesign["@SpecialAbilityType"] == "AddReload":
                         trainingName = "Steam Yoga"
+                    else:
+                        trainingName = "Read Expert Weapon Theory"
+
                     logging.info(
                         f"[{self.info['@Name']}] Use Green (T1) {trainingName} primary training for {character['@CharacterName']} in {self.roomName} with ability {characterDesign['@SpecialAbilityType']}, {character['@Fatigue']} fatigue, {trainingEndDate < datetime.datetime.utcnow()} time logic, and {(datetime.datetime.utcnow() - trainingEndDate).seconds} seconds to complete training."
                     )
