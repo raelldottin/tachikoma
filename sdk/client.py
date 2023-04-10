@@ -629,7 +629,7 @@ class Client(object):
                 return False
 
         characterAbilities = ["ProtectRoom", "Freeze"]
-        fatigueMax = 25
+        fatigueMax = 33
         for character in self.allCharactersOfUser["CharacterService"][
             "ListAllCharactersOfUser"
         ]["Characters"]["Character"]:
@@ -670,7 +670,7 @@ class Client(object):
                     ):
                         break
 
-                logging.warning(f"{character['@TrainingEndDate']=}")
+                logging.debug(f"{character['@TrainingEndDate']=}")
                 if character["@TrainingEndDate"]:
                     trainingEndDate = datetime.datetime.strptime(
                         character["@TrainingEndDate"], "%Y-%m-%dT%H:%M:%S")
@@ -688,7 +688,7 @@ class Client(object):
                         logging.info(
                             f"[{self.info['@Name']}] Completed training for {character['@CharacterName']} in {self.roomName} with ability {characterDesign['@SpecialAbilityType']}, {character['@Fatigue']} fatigue, and {(datetime.datetime.utcnow() - trainingEndDate).seconds} seconds to complete training."
                         )
-                    logging.debug(f"[{self.info['@Name']}] {character['@CharacterName']} has {percent} training percentage in {self.roomName} with ability {characterDesign['@SpecialAbilityType']}, {character['@Fatigue']} fatigue, and {(datetime.datetime.utcnow() - trainingEndDate).seconds} seconds to complete training.")
+                    logging.warning(f"[{self.info['@Name']}] {character['@CharacterName']} has {percent} training percentage in {self.roomName} with ability {characterDesign['@SpecialAbilityType']}, {character['@Fatigue']} fatigue, and {(datetime.datetime.utcnow() - trainingEndDate).seconds} seconds to complete training.")
                 if (
                     percent < 1
                     and int(character["@Fatigue"]) < fatigueMax
@@ -726,6 +726,8 @@ class Client(object):
                         trainingName = "Weapons Summit"
                     elif characterDesign["@SpecialAbilityType"] == "AddReload":
                         trainingName = "Crew vs Wild"
+                    else:
+                        trainingName = "Weapons Summit"
                     logging.info(
                         f"[{self.info['@Name']}] Use Blue (T2) primary training for {character['@CharacterName']} in {self.roomName} with {character['@Fatigue']} fatigue and {(datetime.datetime.utcnow() - trainingEndDate).seconds} seconds to complete training."
                     )
@@ -739,6 +741,8 @@ class Client(object):
                         trainingName = "Weapons PHD"
                     elif characterDesign["@SpecialAbilityType"] == "AddReload":
                         trainingName = "Space Marine"
+                    else:
+                        trainingName = "Weapons PHD"
                     logging.info(
                         f"[{self.info['@Name']}] Use Yellow (T3) primary training for {character['@CharacterName']} in {self.roomName} with {character['@Fatigue']} fatigue and {(datetime.datetime.utcnow() - trainingEndDate).seconds} seconds to complete training."
                     )
@@ -765,6 +769,8 @@ class Client(object):
                         trainingName = "Muscle Beach"
                     elif characterDesign["@SpecialAbilityType"] == "AddReload":
                         trainingName = "Muscle Beach"
+                    else:
+                        trainingName = "Muscle Beach"
                     logging.info(
                         f"[{self.info['@Name']}] Use Blue (T2) secondary training for {character['@CharacterName']} in {self.roomName} with {character['@Fatigue']} fatigue and {(datetime.datetime.utcnow() - trainingEndDate).seconds} seconds to complete training."
                     )
@@ -778,7 +784,8 @@ class Client(object):
                         trainingName = "Olympic Weightlifting"
                     elif characterDesign["@SpecialAbilityType"] == "AddReload":
                         trainingName = "Olympic Weightlifting"
-
+                    else:
+                        trainingName = "Olympic Weightlifting"
                     logging.info(
                         f"[{self.info['@Name']}] Use Yellow (T3) secondary training for {character['@CharacterName']} in {self.roomName} with {character['@Fatigue']} fatigue and {(datetime.datetime.utcnow() - trainingEndDate).seconds} seconds to complete training."
                     )
