@@ -629,7 +629,7 @@ class Client(object):
                 return False
 
         characterAbilities = ["ProtectRoom", "Freeze"]
-        fatigueMax = 33
+        fatigueMax = 48
         for character in self.allCharactersOfUser["CharacterService"][
             "ListAllCharactersOfUser"
         ]["Characters"]["Character"]:
@@ -685,16 +685,22 @@ class Client(object):
                 design = {}
                 if trainingEndDate < datetime.datetime.utcnow():
                     if self.finishTraining(character["@CharacterId"]):
-                        logging.info(
+                        logging.debug(
                             f"[{self.info['@Name']}] Completed training for {character['@CharacterName']} in {self.roomName} with ability {characterDesign['@SpecialAbilityType']}, {character['@Fatigue']} fatigue, and {(datetime.datetime.utcnow() - trainingEndDate).seconds} seconds to complete training."
                         )
                     logging.warning(f"[{self.info['@Name']}] {character['@CharacterName']} has {percent} training percentage in {self.roomName} with ability {characterDesign['@SpecialAbilityType']}, {character['@Fatigue']} fatigue, and {(datetime.datetime.utcnow() - trainingEndDate).seconds} seconds to complete training.")
                 if (
                     percent < 1
                     and int(character["@Fatigue"]) < fatigueMax
-                    and not trainingEndDate
                 ):
-                    logging.info(
+                    if (characterDesign["@SpecialAbilityType"] in characterAbilities):
+                        trainingName = "Read Expert Weapon Theory"
+                    elif characterDesign["@SpecialAbilityType"] == "AddReload":
+                        trainingName = "Steam Yoga"
+                    else:
+                        trainingName = "Read Expert Weapon Theory"
+
+                    logging.debug(
                         f"[{self.info['@Name']}] Use Blue (T2) primary training for {character['@CharacterName']} in {self.roomName} with {character['@Fatigue']} fatigue and {(datetime.datetime.utcnow() - trainingEndDate).seconds} seconds to complete training."
                     )
 
@@ -711,7 +717,7 @@ class Client(object):
                     else:
                         trainingName = "Read Expert Weapon Theory"
 
-                    logging.info(
+                    logging.debug(
                         f"[{self.info['@Name']}] Use Green (T1) {trainingName} primary training for {character['@CharacterName']} in {self.roomName} with ability {characterDesign['@SpecialAbilityType']}, {character['@Fatigue']} fatigue, {trainingEndDate < datetime.datetime.utcnow()} time logic, and {(datetime.datetime.utcnow() - trainingEndDate).seconds} seconds to complete training."
                     )
                     logging.debug(
@@ -728,7 +734,7 @@ class Client(object):
                         trainingName = "Crew vs Wild"
                     else:
                         trainingName = "Weapons Summit"
-                    logging.info(
+                    logging.debug(
                         f"[{self.info['@Name']}] Use Blue (T2) primary training for {character['@CharacterName']} in {self.roomName} with {character['@Fatigue']} fatigue and {(datetime.datetime.utcnow() - trainingEndDate).seconds} seconds to complete training."
                     )
                 elif (
@@ -743,7 +749,7 @@ class Client(object):
                         trainingName = "Space Marine"
                     else:
                         trainingName = "Weapons PHD"
-                    logging.info(
+                    logging.debug(
                         f"[{self.info['@Name']}] Use Yellow (T3) primary training for {character['@CharacterName']} in {self.roomName} with {character['@Fatigue']} fatigue and {(datetime.datetime.utcnow() - trainingEndDate).seconds} seconds to complete training."
                     )
                 elif (
@@ -756,7 +762,7 @@ class Client(object):
                         trainingName = "Bench Press"
                     elif characterDesign["@SpecialAbilityType"] == "AddReload":
                         trainingName = "Bench Press"
-                    logging.info(
+                    logging.debug(
                         f"[{self.info['@Name']}] Use Green (T1) secondary training for {character['@CharacterName']} in {self.roomName} with {character['@Fatigue']} fatigue and {(datetime.datetime.utcnow() - trainingEndDate).seconds} seconds to complete training."
                     )
                 elif (
@@ -771,7 +777,7 @@ class Client(object):
                         trainingName = "Muscle Beach"
                     else:
                         trainingName = "Muscle Beach"
-                    logging.info(
+                    logging.debug(
                         f"[{self.info['@Name']}] Use Blue (T2) secondary training for {character['@CharacterName']} in {self.roomName} with {character['@Fatigue']} fatigue and {(datetime.datetime.utcnow() - trainingEndDate).seconds} seconds to complete training."
                     )
                 elif (
@@ -786,7 +792,7 @@ class Client(object):
                         trainingName = "Olympic Weightlifting"
                     else:
                         trainingName = "Olympic Weightlifting"
-                    logging.info(
+                    logging.debug(
                         f"[{self.info['@Name']}] Use Yellow (T3) secondary training for {character['@CharacterName']} in {self.roomName} with {character['@Fatigue']} fatigue and {(datetime.datetime.utcnow() - trainingEndDate).seconds} seconds to complete training."
                     )
 
