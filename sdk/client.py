@@ -629,7 +629,7 @@ class Client(object):
                 return False
 
         characterAbilities = ["ProtectRoom", "Freeze"]
-        fatigueMax = 48
+        fatigueMax = 1
         for character in self.allCharactersOfUser["CharacterService"][
             "ListAllCharactersOfUser"
         ]["Characters"]["Character"]:
@@ -683,7 +683,7 @@ class Client(object):
                 )
                 trainingDesignId = ""
                 design = {}
-                if trainingEndDate < datetime.datetime.utcnow():
+                if trainingEndDate < datetime.datetime.utcnow() or (trainingEndDate < datetime.datetime.utcnow() - datetime.timedelta(days=1)):
                     if self.finishTraining(character["@CharacterId"]):
                         logging.debug(
                             f"[{self.info['@Name']}] Completed training for {character['@CharacterName']} in {self.roomName} with ability {characterDesign['@SpecialAbilityType']}, {character['@Fatigue']} fatigue, and {(datetime.datetime.utcnow() - trainingEndDate).seconds} seconds to complete training."
@@ -691,7 +691,8 @@ class Client(object):
                     logging.warning(f"[{self.info['@Name']}] {character['@CharacterName']} has {percent} training percentage in {self.roomName} with ability {characterDesign['@SpecialAbilityType']}, {character['@Fatigue']} fatigue, and {(datetime.datetime.utcnow() - trainingEndDate).seconds} seconds to complete training.")
                 if (
                     percent < 1
-                    and int(character["@Fatigue"]) < fatigueMax
+                    and (int(character["@Fatigue"]) < fatigueMax
+                    or trainingEndDate < datetime.datetime.utcnow() - datetime.timedelta(days=1))
                 ):
                     if (characterDesign["@SpecialAbilityType"] in characterAbilities):
                         trainingName = "Read Expert Weapon Theory"
@@ -707,7 +708,8 @@ class Client(object):
                 elif (
                     percent > 0
                     and percent < 51
-                    and int(character["@Fatigue"]) < fatigueMax
+                    and (int(character["@Fatigue"]) < fatigueMax
+                    or trainingEndDate < datetime.datetime.utcnow() - datetime.timedelta(days=1))
                     and trainingEndDate < datetime.datetime.utcnow()
                 ):
                     if (characterDesign["@SpecialAbilityType"] in characterAbilities):
@@ -725,7 +727,8 @@ class Client(object):
                 elif (
                     percent > 50
                     and percent < 65
-                    and int(character["@Fatigue"]) < fatigueMax
+                    and (int(character["@Fatigue"]) < fatigueMax
+                    or trainingEndDate < datetime.datetime.utcnow() - datetime.timedelta(days=1))
                     and trainingEndDate < datetime.datetime.utcnow()
                 ):
                     if (characterDesign["@SpecialAbilityType"] in characterAbilities):
@@ -740,7 +743,8 @@ class Client(object):
                 elif (
                     percent > 64
                     and percent < 72
-                    and int(character["@Fatigue"]) < fatigueMax
+                    and (int(character["@Fatigue"]) < fatigueMax
+                    or trainingEndDate < datetime.datetime.utcnow() - datetime.timedelta(days=1))
                     and trainingEndDate < datetime.datetime.utcnow()
                 ):
                     if (characterDesign["@SpecialAbilityType"] in characterAbilities):
@@ -755,7 +759,8 @@ class Client(object):
                 elif (
                     percent > 71
                     and percent < 74
-                    and int(character["@Fatigue"]) < fatigueMax
+                    and (int(character["@Fatigue"]) < fatigueMax
+                    or trainingEndDate < datetime.datetime.utcnow() - datetime.timedelta(days=1))
                     and trainingEndDate < datetime.datetime.utcnow()
                 ):
                     if (characterDesign["@SpecialAbilityType"] in characterAbilities):
@@ -768,8 +773,9 @@ class Client(object):
                 elif (
                     percent > 73
                     and percent < 85
-                    and int(character["@Fatigue"]) < fatigueMax
-                    and trainingEndDate < datetime.datetime.utcnow()
+                    and ((int(character["@Fatigue"]) < fatigueMax
+                    or trainingEndDate < datetime.datetime.utcnow() - datetime.timedelta(days=1))
+                    and trainingEndDate < datetime.datetime.utcnow())
                 ):
                     if (characterDesign["@SpecialAbilityType"] in characterAbilities):
                         trainingName = "Muscle Beach"
@@ -783,7 +789,8 @@ class Client(object):
                 elif (
                     percent > 84
                     and percent < 90
-                    and int(character["@Fatigue"]) < fatigueMax
+                    and (int(character["@Fatigue"]) < fatigueMax
+                    or trainingEndDate < datetime.datetime.utcnow() - datetime.timedelta(days=1))
                     and trainingEndDate < datetime.datetime.utcnow()
                 ):
                     if (characterDesign["@SpecialAbilityType"] in characterAbilities):
@@ -805,7 +812,8 @@ class Client(object):
 
                 if (
                     trainingEndDate < datetime.datetime.utcnow()
-                    and int(character["@Fatigue"]) < fatigueMax
+                    and (int(character["@Fatigue"]) < fatigueMax
+                    or trainingEndDate < datetime.datetime.utcnow() - datetime.timedelta(days=1))
                     and trainingName
                 ):
                     for design in self.trainingDesigns["TrainingDesign"]:
