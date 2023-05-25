@@ -1,11 +1,11 @@
 name: Daily Automated Actions
 on:
   schedule:
-    - cron: '0 * * * *'
+    - cron: '0 1,13 * * *'
 
 jobs:
   daily-run:
-    name: 'Runs every hour'
+    name: 'Runs twice a day'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
