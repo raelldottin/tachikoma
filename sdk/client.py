@@ -122,9 +122,7 @@ class Client(object):
             )
             self.user.isAuthorized = False
             self.quickReload()
-            r = self.session.request(
-                method, url, headers=self.headers, data=data
-            )
+            r = self.session.request(method, url, headers=self.headers, data=data)
 
         # heartbeat should run only to keep the connection alive
         # if hasattr(self, 'user') and divmod((datetime.datetime.utcnow() - self.user.lastHeartBeat).seconds, 60)[0] != 0:
@@ -151,9 +149,7 @@ class Client(object):
         logging.info(f"[{self.info['@Name']}] Authenticated...")
         userId = d["UserService"]["UserLogin"]["@UserId"]
         if "@Credits" in d["UserService"]["UserLogin"]["User"]:
-            self.credits = int(
-                d["UserService"]["UserLogin"]["User"]["@Credits"]
-            )
+            self.credits = int(d["UserService"]["UserLogin"]["User"]["@Credits"])
         if "@DailyRewardStatus" in d["UserService"]["UserLogin"]["User"]:
             self.dailyReward = int(
                 d["UserService"]["UserLogin"]["User"]["@DailyRewardStatus"]
@@ -194,7 +190,11 @@ class Client(object):
 
         r = self.request(url, "POST")
         d = xmltodict.parse(r.content, xml_attribs=True)
-        if (not r or r.status_code != 200) or ("errorCode" in r.text) or ("accessToken" not in r.text):
+        if (
+            (not r or r.status_code != 200)
+            or ("errorCode" in r.text)
+            or ("accessToken" not in r.text)
+        ):
             logging.error(f"{d}")
             self.accessToken = ""
             return False
@@ -266,7 +266,8 @@ class Client(object):
                 return False
 
             self.device.refreshTokenAcquire(
-                r.text.split('refreshToken="')[1].split('"')[0])
+                r.text.split('refreshToken="')[1].split('"')[0]
+            )
 
             if 'RequireReload="True"' in r.text:
                 return self.quickReload()
@@ -302,6 +303,9 @@ class Client(object):
         url = f"https://api.pixelstarships.com/ShipService/GetShipByUserId?userId={userId if userId else self.user.id}&accessToken={self.accessToken}&clientDateTime={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}"
         r = self.request(url, "GET")
         self.shipByUserId = xmltodict.parse(r.content, xml_attribs=True)
+        if "ShipService" not in self.allCharactersOfUser:
+            logging.error("CharacterService data not avaialble.")
+            return False
 
     def listAchievementsOfAUser(self):
         url = f"https://api.pixelstarships.com/AchievementService/ListAchievementsOfAUser?accessToken={self.accessToken}&clientDateTime={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}"
@@ -311,9 +315,7 @@ class Client(object):
     def listImportantMessagesForUser(self):
         url = f"https://api.pixelstarships.com/MessageService/ListImportantMessagesForUser?accessToken={self.accessToken}&clientDateTime={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}"
         r = self.request(url, "GET")
-        self.importantMessagesForUser = xmltodict.parse(
-            r.content, xml_attribs=True
-        )
+        self.importantMessagesForUser = xmltodict.parse(r.content, xml_attribs=True)
 
     def listUserStarSystems(self):
         url = f"https://api.pixelstarships.com/GalaxyService/ListUserStarSystems?accessToken={self.accessToken}&clientDateTime={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}"
@@ -343,9 +345,7 @@ class Client(object):
         )
         url = f"https://api.pixelstarships.com/MissionService/ListCompletedMissionEvents?clientDateTime={ts}&checksum={checksum}&accessToken={self.accessToken}"
         r = self.request(url, "GET")
-        self.completedMissionEvents = xmltodict.parse(
-            r.content, xml_attribs=True
-        )
+        self.completedMissionEvents = xmltodict.parse(r.content, xml_attribs=True)
 
     def listSituations(self):
         url = f"https://api.pixelstarships.com/SituationService/ListSituations?accessToken={self.accessToken}&clientDateTime={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}"
@@ -438,7 +438,7 @@ class Client(object):
     def getTrainingUpdate(self, characterId):
         url = f"{self.baseUrl}/TrainingService/GetTrainingUpdate?characterId={characterId}&accessToken={self.accessToken}"
         r = self.request(url, "POST")
-        if 'errorMessage' in r.text:
+        if "errorMessage" in r.text:
             return False
         self.trainingUpdate = xmltodict.parse(r.content, xml_attribs=True)
         return True
@@ -448,9 +448,7 @@ class Client(object):
             self.getLatestVersion3()
         if "SettingService" not in self.latestVersion:
             return False
-        versions = self.latestVersion["SettingService"]["GetLatestSetting"][
-            "Setting"
-        ]
+        versions = self.latestVersion["SettingService"]["GetLatestSetting"]["Setting"]
         url = f"{self.baseUrl}/DesignService/ListAllDesigns4?LanguageKey=en&ListFileVersion={versions['@FileVersion']}&ListSpriteVersion={versions['@SpriteVersion']}&ListBackgroundVersion={versions['@BackgroundVersion']}&ListAllShipDesignVersion={versions['@ShipDesignVersion']}&ListRoomDesignVersion={versions['@RoomDesignVersion']}&ListAllCharacterDesignVersion={versions['@CharacterDesignVersion']}&ListAllCharacterDesignActionVersion={versions['@CharacterDesignActionVersion']}&ListItemDesignVersion={versions['@ItemDesignVersion']}&ListCraftDesignVersion={versions['@CraftDesignVersion']}&ListMissileDesignVersion={versions['@MissileDesignVersion']}&ListStarSystemVersion={versions['@StarSystemVersion']}&ListStarSystemLinkVersion={versions['@StarSystemLinkVersion']}&ListAllNewsDesignVersion={versions['@NewsDesignVersion']}&ListLeagueVersion={versions['@LeagueVersion']}&ListAchievementDesignVersion={versions['@AchievementDesignVersion']}&ListRoomDesignPurchaseVersion={versions['@RoomDesignPurchaseVersion']}&ListRoomDesignSpriteVersion={versions['@RoomDesignSpriteVersion']}&ListAllMissionDesignVersion={versions['@MissionDesignVersion']}&ListAnimationVersion={versions['@AnimationVersion']}&ListAllResearchDesignVersion={versions['@ResearchDesignVersion']}&ListAllTrainingDesignVersion={versions['@TrainingDesignVersion']}&ListAllChallengeDesignVersion={versions['@ChallengeDesignVersion']}&ListAllRewardDesignVersion={versions['@RewardDesignVersion']}&ListAllDivisionDesignVersion={versions['@DivisionDesignVersion']}&ListAllCollectionDesignVersion={versions['@CollectionDesignVersion']}&ListAllDrawDesignVersion={versions['@DrawDesignVersion']}&ListAllPromotionDesignVersion={versions['@PromotionDesignVersion']}&ListAllSituationDesignVersion={versions['@SituationDesignVersion']}&ListAllTaskDesignVersion={versions['@TaskDesignVersion']}&ListActionTypeVersion={versions['@ActionTypeVersion']}&ListConditionTypeVersion={versions['@ConditionTypeVersion']}&ListItemDesignActionVersion={versions['@ItemDesignActionVersion']}&ListSeasonDesignVersion={versions['@SeasonDesignVersion']}&ListAssetVersion={versions['@AssetVersion']}&ListMarkerGeneratorDesignVersion={versions['@MarkerGeneratorDesignVersion']}"
         r = self.request(url, "GET")
         allDesignVersion = xmltodict.parse(r.content, xml_attribs=True)
@@ -494,18 +492,11 @@ class Client(object):
             "StarSystemMarkerGenerators",
         ]
         for design in designs:
-            if (
-                design
-                not in allDesignVersion["DesignService"]["ListAllDesigns"]
-            ):
+            if design not in allDesignVersion["DesignService"]["ListAllDesigns"]:
                 logging.error("Missing design data.")
                 return False
-        self.files = allDesignVersion["DesignService"]["ListAllDesigns"][
-            "Files"
-        ]
-        self.sprites = allDesignVersion["DesignService"]["ListAllDesigns"][
-            "Sprites"
-        ]
+        self.files = allDesignVersion["DesignService"]["ListAllDesigns"]["Files"]
+        self.sprites = allDesignVersion["DesignService"]["ListAllDesigns"]["Sprites"]
         self.backgrounds = allDesignVersion["DesignService"]["ListAllDesigns"][
             "Backgrounds"
         ]
@@ -515,9 +506,9 @@ class Client(object):
         self.roomDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
             "RoomDesigns"
         ]
-        self.characterDesigns = allDesignVersion["DesignService"][
-            "ListAllDesigns"
-        ]["CharacterDesigns"]
+        self.characterDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+            "CharacterDesigns"
+        ]
         self.characterDesignActions = allDesignVersion["DesignService"][
             "ListAllDesigns"
         ]["CharacterDesignActions"]
@@ -527,72 +518,68 @@ class Client(object):
         self.craftDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
             "CraftDesigns"
         ]
-        self.missileDesigns = allDesignVersion["DesignService"][
-            "ListAllDesigns"
-        ]["MissileDesigns"]
+        self.missileDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+            "MissileDesigns"
+        ]
         self.starSystems = allDesignVersion["DesignService"]["ListAllDesigns"][
             "StarSystems"
         ]
-        self.starSystemsLinks = allDesignVersion["DesignService"][
-            "ListAllDesigns"
-        ]["StarSystemLinks"]
+        self.starSystemsLinks = allDesignVersion["DesignService"]["ListAllDesigns"][
+            "StarSystemLinks"
+        ]
         self.newsDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
             "NewsDesigns"
         ]
-        self.leagues = allDesignVersion["DesignService"]["ListAllDesigns"][
-            "Leagues"
+        self.leagues = allDesignVersion["DesignService"]["ListAllDesigns"]["Leagues"]
+        self.achievementDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+            "AchievementDesigns"
         ]
-        self.achievementDesigns = allDesignVersion["DesignService"][
-            "ListAllDesigns"
-        ]["AchievementDesigns"]
-        self.roomDesignPurchases = allDesignVersion["DesignService"][
-            "ListAllDesigns"
-        ]["RoomDesignPurchases"]
-        self.roomDesignSprites = allDesignVersion["DesignService"][
-            "ListAllDesigns"
-        ]["RoomDesignSprites"]
-        self.missionDesigns = allDesignVersion["DesignService"][
-            "ListAllDesigns"
-        ]["MissionDesigns"]
+        self.roomDesignPurchases = allDesignVersion["DesignService"]["ListAllDesigns"][
+            "RoomDesignPurchases"
+        ]
+        self.roomDesignSprites = allDesignVersion["DesignService"]["ListAllDesigns"][
+            "RoomDesignSprites"
+        ]
+        self.missionDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+            "MissionDesigns"
+        ]
         self.animations = allDesignVersion["DesignService"]["ListAllDesigns"][
             "Animations"
         ]
-        self.researchDesigns = allDesignVersion["DesignService"][
-            "ListAllDesigns"
-        ]["ResearchDesigns"]
-        self.trainingDesigns = allDesignVersion["DesignService"][
-            "ListAllDesigns"
-        ]["TrainingDesigns"]
-        self.challengeDesigns = allDesignVersion["DesignService"][
-            "ListAllDesigns"
-        ]["ChallengeDesigns"]
-        self.rewardDesigns = allDesignVersion["DesignService"][
-            "ListAllDesigns"
-        ]["RewardDesigns"]
-        self.divisionDesigns = allDesignVersion["DesignService"][
-            "ListAllDesigns"
-        ]["DivisionDesigns"]
-        self.collectionDesigns = allDesignVersion["DesignService"][
-            "ListAllDesigns"
-        ]["CollectionDesigns"]
+        self.researchDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+            "ResearchDesigns"
+        ]
+        self.trainingDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+            "TrainingDesigns"
+        ]
+        self.challengeDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+            "ChallengeDesigns"
+        ]
+        self.rewardDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+            "RewardDesigns"
+        ]
+        self.divisionDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+            "DivisionDesigns"
+        ]
+        self.collectionDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+            "CollectionDesigns"
+        ]
         self.drawDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
             "DrawDesigns"
         ]
-        self.promotionDesigns = allDesignVersion["DesignService"][
-            "ListAllDesigns"
-        ]["PromotionDesigns"]
-        self.situationDesigns = allDesignVersion["DesignService"][
-            "ListAllDesigns"
-        ]["SituationDesigns"]
-        self.itemDesignActions = allDesignVersion["DesignService"][
-            "ListAllDesigns"
-        ]["ItemDesignActions"]
-        self.seasonDesigns = allDesignVersion["DesignService"][
-            "ListAllDesigns"
-        ]["SeasonDesigns"]
-        self.assets = allDesignVersion["DesignService"]["ListAllDesigns"][
-            "Assets"
+        self.promotionDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+            "PromotionDesigns"
         ]
+        self.situationDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+            "SituationDesigns"
+        ]
+        self.itemDesignActions = allDesignVersion["DesignService"]["ListAllDesigns"][
+            "ItemDesignActions"
+        ]
+        self.seasonDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+            "SeasonDesigns"
+        ]
+        self.assets = allDesignVersion["DesignService"]["ListAllDesigns"]["Assets"]
         self.starSystemMarkerGenerators = allDesignVersion["DesignService"][
             "ListAllDesigns"
         ]["StarSystemMarkerGenerators"]
@@ -659,11 +646,9 @@ class Client(object):
                     count = count + int(character[stat])
 
                 characterDesign = {}
-                for characterDesign in self.allCharacterDesigns[
-                    "CharacterService"
-                ]["ListAllCharacterDesigns"]["CharacterDesigns"][
-                    "CharacterDesign"
-                ]:
+                for characterDesign in self.allCharacterDesigns["CharacterService"][
+                    "ListAllCharacterDesigns"
+                ]["CharacterDesigns"]["CharacterDesign"]:
                     if (
                         character["@CharacterDesignId"]
                         == characterDesign["@CharacterDesignId"]
@@ -673,28 +658,32 @@ class Client(object):
                 logging.debug(f"{character['@TrainingEndDate']=}")
                 if character["@TrainingEndDate"]:
                     trainingEndDate = datetime.datetime.strptime(
-                        character["@TrainingEndDate"], "%Y-%m-%dT%H:%M:%S")
+                        character["@TrainingEndDate"], "%Y-%m-%dT%H:%M:%S"
+                    )
 
                 logging.debug(
                     f"Total: {count=} {characterDesign['@TrainingCapacity']=} {count / int(characterDesign['@TrainingCapacity']) * 100}"
                 )
-                percent = (
-                    count / int(characterDesign["@TrainingCapacity"]) * 100
-                )
+                percent = count / int(characterDesign["@TrainingCapacity"]) * 100
                 trainingDesignId = ""
                 design = {}
-                if trainingEndDate < datetime.datetime.utcnow() or (trainingEndDate < datetime.datetime.utcnow() - datetime.timedelta(days=1)):
+                if trainingEndDate < datetime.datetime.utcnow() or (
+                    trainingEndDate
+                    < datetime.datetime.utcnow() - datetime.timedelta(days=1)
+                ):
                     if self.finishTraining(character["@CharacterId"]):
                         logging.debug(
                             f"[{self.info['@Name']}] Completed training for {character['@CharacterName']} in {self.roomName} with ability {characterDesign['@SpecialAbilityType']}, {character['@Fatigue']} fatigue, and {(datetime.datetime.utcnow() - trainingEndDate).seconds} seconds to complete training."
                         )
-                    logging.warning(f"[{self.info['@Name']}] {character['@CharacterName']} has {percent} training percentage in {self.roomName} with ability {characterDesign['@SpecialAbilityType']}, {character['@Fatigue']} fatigue, and {(datetime.datetime.utcnow() - trainingEndDate).seconds} seconds to complete training.")
-                if (
-                    percent < 1
-                    and (int(character["@Fatigue"]) < fatigueMax
-                    or trainingEndDate < datetime.datetime.utcnow() - datetime.timedelta(days=1))
+                    logging.warning(
+                        f"[{self.info['@Name']}] {character['@CharacterName']} has {percent} training percentage in {self.roomName} with ability {characterDesign['@SpecialAbilityType']}, {character['@Fatigue']} fatigue, and {(datetime.datetime.utcnow() - trainingEndDate).seconds} seconds to complete training."
+                    )
+                if percent < 1 and (
+                    int(character["@Fatigue"]) < fatigueMax
+                    or trainingEndDate
+                    < datetime.datetime.utcnow() - datetime.timedelta(days=1)
                 ):
-                    if (characterDesign["@SpecialAbilityType"] in characterAbilities):
+                    if characterDesign["@SpecialAbilityType"] in characterAbilities:
                         trainingName = "Read Expert Weapon Theory"
                     elif characterDesign["@SpecialAbilityType"] == "AddReload":
                         trainingName = "Steam Yoga"
@@ -708,11 +697,14 @@ class Client(object):
                 elif (
                     percent > 0
                     and percent < 51
-                    and (int(character["@Fatigue"]) < fatigueMax
-                    or trainingEndDate < datetime.datetime.utcnow() - datetime.timedelta(days=1))
+                    and (
+                        int(character["@Fatigue"]) < fatigueMax
+                        or trainingEndDate
+                        < datetime.datetime.utcnow() - datetime.timedelta(days=1)
+                    )
                     and trainingEndDate < datetime.datetime.utcnow()
                 ):
-                    if (characterDesign["@SpecialAbilityType"] in characterAbilities):
+                    if characterDesign["@SpecialAbilityType"] in characterAbilities:
                         trainingName = "Read Expert Weapon Theory"
                     elif characterDesign["@SpecialAbilityType"] == "AddReload":
                         trainingName = "Steam Yoga"
@@ -723,15 +715,19 @@ class Client(object):
                         f"[{self.info['@Name']}] Use Green (T1) {trainingName} primary training for {character['@CharacterName']} in {self.roomName} with ability {characterDesign['@SpecialAbilityType']}, {character['@Fatigue']} fatigue, {trainingEndDate < datetime.datetime.utcnow()} time logic, and {(datetime.datetime.utcnow() - trainingEndDate).seconds} seconds to complete training."
                     )
                     logging.debug(
-                        f"\n{datetime.datetime.utcnow()=}\n{trainingEndDate=}\n{(datetime.datetime.utcnow() - trainingEndDate).seconds=}\n{(trainingEndDate - datetime.datetime.utcnow()).seconds=}")
+                        f"\n{datetime.datetime.utcnow()=}\n{trainingEndDate=}\n{(datetime.datetime.utcnow() - trainingEndDate).seconds=}\n{(trainingEndDate - datetime.datetime.utcnow()).seconds=}"
+                    )
                 elif (
                     percent > 50
                     and percent < 65
-                    and (int(character["@Fatigue"]) < fatigueMax
-                    or trainingEndDate < datetime.datetime.utcnow() - datetime.timedelta(days=1))
+                    and (
+                        int(character["@Fatigue"]) < fatigueMax
+                        or trainingEndDate
+                        < datetime.datetime.utcnow() - datetime.timedelta(days=1)
+                    )
                     and trainingEndDate < datetime.datetime.utcnow()
                 ):
-                    if (characterDesign["@SpecialAbilityType"] in characterAbilities):
+                    if characterDesign["@SpecialAbilityType"] in characterAbilities:
                         trainingName = "Weapons Summit"
                     elif characterDesign["@SpecialAbilityType"] == "AddReload":
                         trainingName = "Crew vs Wild"
@@ -743,11 +739,14 @@ class Client(object):
                 elif (
                     percent > 64
                     and percent < 72
-                    and (int(character["@Fatigue"]) < fatigueMax
-                    or trainingEndDate < datetime.datetime.utcnow() - datetime.timedelta(days=1))
+                    and (
+                        int(character["@Fatigue"]) < fatigueMax
+                        or trainingEndDate
+                        < datetime.datetime.utcnow() - datetime.timedelta(days=1)
+                    )
                     and trainingEndDate < datetime.datetime.utcnow()
                 ):
-                    if (characterDesign["@SpecialAbilityType"] in characterAbilities):
+                    if characterDesign["@SpecialAbilityType"] in characterAbilities:
                         trainingName = "Weapons PHD"
                     elif characterDesign["@SpecialAbilityType"] == "AddReload":
                         trainingName = "Space Marine"
@@ -759,11 +758,14 @@ class Client(object):
                 elif (
                     percent > 71
                     and percent < 74
-                    and (int(character["@Fatigue"]) < fatigueMax
-                    or trainingEndDate < datetime.datetime.utcnow() - datetime.timedelta(days=1))
+                    and (
+                        int(character["@Fatigue"]) < fatigueMax
+                        or trainingEndDate
+                        < datetime.datetime.utcnow() - datetime.timedelta(days=1)
+                    )
                     and trainingEndDate < datetime.datetime.utcnow()
                 ):
-                    if (characterDesign["@SpecialAbilityType"] in characterAbilities):
+                    if characterDesign["@SpecialAbilityType"] in characterAbilities:
                         trainingName = "Bench Press"
                     elif characterDesign["@SpecialAbilityType"] == "AddReload":
                         trainingName = "Bench Press"
@@ -773,11 +775,16 @@ class Client(object):
                 elif (
                     percent > 73
                     and percent < 85
-                    and ((int(character["@Fatigue"]) < fatigueMax
-                    or trainingEndDate < datetime.datetime.utcnow() - datetime.timedelta(days=1))
-                    and trainingEndDate < datetime.datetime.utcnow())
+                    and (
+                        (
+                            int(character["@Fatigue"]) < fatigueMax
+                            or trainingEndDate
+                            < datetime.datetime.utcnow() - datetime.timedelta(days=1)
+                        )
+                        and trainingEndDate < datetime.datetime.utcnow()
+                    )
                 ):
-                    if (characterDesign["@SpecialAbilityType"] in characterAbilities):
+                    if characterDesign["@SpecialAbilityType"] in characterAbilities:
                         trainingName = "Muscle Beach"
                     elif characterDesign["@SpecialAbilityType"] == "AddReload":
                         trainingName = "Muscle Beach"
@@ -789,11 +796,14 @@ class Client(object):
                 elif (
                     percent > 84
                     and percent < 90
-                    and (int(character["@Fatigue"]) < fatigueMax
-                    or trainingEndDate < datetime.datetime.utcnow() - datetime.timedelta(days=1))
+                    and (
+                        int(character["@Fatigue"]) < fatigueMax
+                        or trainingEndDate
+                        < datetime.datetime.utcnow() - datetime.timedelta(days=1)
+                    )
                     and trainingEndDate < datetime.datetime.utcnow()
                 ):
-                    if (characterDesign["@SpecialAbilityType"] in characterAbilities):
+                    if characterDesign["@SpecialAbilityType"] in characterAbilities:
                         trainingName = "Olympic Weightlifting"
                     elif characterDesign["@SpecialAbilityType"] == "AddReload":
                         trainingName = "Olympic Weightlifting"
@@ -812,8 +822,11 @@ class Client(object):
 
                 if (
                     trainingEndDate < datetime.datetime.utcnow()
-                    and (int(character["@Fatigue"]) < fatigueMax
-                    or trainingEndDate < datetime.datetime.utcnow() - datetime.timedelta(days=1))
+                    and (
+                        int(character["@Fatigue"]) < fatigueMax
+                        or trainingEndDate
+                        < datetime.datetime.utcnow() - datetime.timedelta(days=1)
+                    )
                     and trainingName
                 ):
                     for design in self.trainingDesigns["TrainingDesign"]:
@@ -824,19 +837,19 @@ class Client(object):
                     logging.debug(
                         f"[{self.info['@Name']}] {character['@CharacterName']} in {self.roomName} with ability {characterDesign['@SpecialAbilityType']}, {character['@Fatigue']} fatigue, and {(datetime.datetime.utcnow() - trainingEndDate).seconds} seconds to complete training."
                     )
-                    if self.addTraining(
-                        trainingDesignId, character["@CharacterId"]
-                    ):
+                    if self.addTraining(trainingDesignId, character["@CharacterId"]):
                         logging.info(
                             f"[{self.info['@Name']}] Starting training {design['@TrainingName']} for {character['@CharacterName']} in {self.roomName} with ability {characterDesign['@SpecialAbilityType']}, {character['@Fatigue']} fatigue."
                         )
 
     def getCharacterRooms(self):
-        if not hasattr(self, 'allCharactersOfUser'):
+        if not hasattr(self, "allCharactersOfUser"):
             if not self.listAllCharactersOfUser():
                 return False
 
-        for character in self.allCharactersOfUser["CharacterService"]["ListAllCharactersOfUser"]["Characters"]["Character"]:
+        for character in self.allCharactersOfUser["CharacterService"][
+            "ListAllCharactersOfUser"
+        ]["Characters"]["Character"]:
             self.getRoomName(character["@RoomDesignId"])
             if self.roomName != "":
                 logging.info(
@@ -847,12 +860,11 @@ class Client(object):
         if self.latestVersion:
             url = f"{self.baseUrl}/CharacterService/ListAllCharacterDesigns2?languageKey={self.device.languageKey}&designVersion={self.latestVersion['SettingService']['GetLatestSetting']['Setting']['@ResearchDesignVersion']}"
             r = self.request(url, "GET")
-            self.allCharacterDesigns = xmltodict.parse(
-                r.content, xml_attribs=True
-            )
+            self.allCharacterDesigns = xmltodict.parse(r.content, xml_attribs=True)
             if "CharacterService" not in self.allCharacterDesigns:
                 logging.error(
-                    f"[{self.info['@Name']}] CharacterService data not avaialble.")
+                    f"[{self.info['@Name']}] CharacterService data not avaialble."
+                )
                 return False
             return True
         return False
@@ -885,11 +897,9 @@ class Client(object):
             #            logging.warn(f"{character['@CharacterName']=} {character['@Level']=} {character['@Xp']=} {characterDesign['@Rarity']=}")
 
             if character["@RoomId"] != "0" and character["@Level"] != "40":
-                for characterDesign in self.allCharacterDesigns[
-                    "CharacterService"
-                ]["ListAllCharacterDesigns"]["CharacterDesigns"][
-                    "CharacterDesign"
-                ]:
+                for characterDesign in self.allCharacterDesigns["CharacterService"][
+                    "ListAllCharacterDesigns"
+                ]["CharacterDesigns"]["CharacterDesign"]:
                     if (
                         character["@CharacterDesignId"]
                         == characterDesign["@CharacterDesignId"]
@@ -910,9 +920,7 @@ class Client(object):
         if self.user.isAuthorized:
             url = f"https://api.pixelstarships.com/RoomService/ListAllRoomActionsOfShip?accessToken={self.accessToken}&clientDateTime={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}"
             r = self.request(url, "GET")
-            self.allRoomActionsOfShip = xmltodict.parse(
-                r.content, xml_attribs=True
-            )
+            self.allRoomActionsOfShip = xmltodict.parse(r.content, xml_attribs=True)
             return True
         return False
 
@@ -923,10 +931,8 @@ class Client(object):
     def listSystemMessagesForUser3(self, fromMessageId=0, take=10000):
         url = f"https://api.pixelstarships.com/MessageService/ListSystemMessagesForUser3?fromMessageId={fromMessageId}&take={take}&accessToken={self.accessToken}"
         r = self.request(url, "GET")
-        self.systemMessagesForUser = xmltodict.parse(
-            r.content, xml_attribs=True
-        )
-        if 'MessageService' not in self.systemMessagesForUser:
+        self.systemMessagesForUser = xmltodict.parse(r.content, xml_attribs=True)
+        if "MessageService" not in self.systemMessagesForUser:
             logging.error("MessageService data unavailable.")
             return False
 
@@ -937,18 +943,14 @@ class Client(object):
             url = f"https://api.pixelstarships.com/UserService/ListFriends?UserId={userId if userId else self.info['@Id']}&accessToken={self.accessToken}"
             logging.debug(url)
             r = self.request(url, "POST")
-            self.systemMessagesForUser = xmltodict.parse(
-                r.content, xml_attribs=True
-            )
+            self.systemMessagesForUser = xmltodict.parse(r.content, xml_attribs=True)
             return True
         return False
 
     def listMessagesForChannelKey(self, channelKey="alliance-43958"):
         url = f"https://api.pixelstarships.com/MessageService/ListMessagesForChannelKey?channelKey=channelKey={channelKey}&accessToken={self.accessToken}"
         r = self.request(url, "GET")
-        self.messagesForChannelKey = xmltodict.parse(
-            r.content, xml_attribs=True
-        )
+        self.messagesForChannelKey = xmltodict.parse(r.content, xml_attribs=True)
         # Perform error handling and return values based on the results
         # return True
         # return False
@@ -967,9 +969,7 @@ class Client(object):
         message = "".join(v["@Message"])
         currency = v["@ActivityArgument"].split(":")[0]
         price = v["@ActivityArgument"].split(":")[1]
-        logging.info(
-            f"[{self.info['@Name']}] {message} for {price} {currency}."
-        )
+        logging.info(f"[{self.info['@Name']}] {message} for {price} {currency}.")
 
     def listActiveMarketplaceMessages(self):
         if self.user.isAuthorized:
@@ -981,10 +981,7 @@ class Client(object):
             if "errorMessage=" in r.text:
                 logging.error(f"An error occurred: {r.text}.")
                 return False
-            if (
-                d["MessageService"]["ListActiveMarketplaceMessages"]["Messages"]
-                == None
-            ):
+            if d["MessageService"]["ListActiveMarketplaceMessages"]["Messages"] == None:
                 logging.debug(
                     f'[{self.info["@Name"]}] You have no items listed on the marketplace.'
                 )
@@ -1018,17 +1015,15 @@ class Client(object):
         d = xmltodict.parse(r.content, xml_attribs=True)
         if "RoomService" not in d:
             return False
-        self.mineralTotal = d["RoomService"]["CollectResources"]["Items"][
-            "Item"
-        ][0]["@Quantity"]
-        self.gasTotal = d["RoomService"]["CollectResources"]["Items"]["Item"][
-            1
-        ]["@Quantity"]
+        self.mineralTotal = d["RoomService"]["CollectResources"]["Items"]["Item"][0][
+            "@Quantity"
+        ]
+        self.gasTotal = d["RoomService"]["CollectResources"]["Items"]["Item"][1][
+            "@Quantity"
+        ]
 
         if "User" in d["RoomService"]["CollectResources"]:
-            self.credits = d["RoomService"]["CollectResources"]["User"][
-                "@Credits"
-            ]
+            self.credits = d["RoomService"]["CollectResources"]["User"]["@Credits"]
 
         self.rssCollectedTimestamp = time.time()
 
@@ -1071,10 +1066,7 @@ class Client(object):
         return False
 
     def collectMiningDrone(self, starSystemMarkerId):
-        if (
-            self.user.isAuthorized
-            and starSystemMarkerId not in self.dronesCollected
-        ):
+        if self.user.isAuthorized and starSystemMarkerId not in self.dronesCollected:
             url = "https://api.pixelstarships.com/GalaxyService/CollectMarker2?starSystemMarkerId={}&checksum={}&clientDateTime={}&accessToken={}".format(
                 starSystemMarkerId,
                 self.checksum,
@@ -1151,13 +1143,13 @@ class Client(object):
 
     # Determine the boost gauge before attempting to speed up a room
     def speedUpResearchUsingBoostGauge(self, researchId, researchDesignId):
-        if not hasattr(self, 'allResearchDesigns'):
+        if not hasattr(self, "allResearchDesigns"):
             if not self.listAllResearchDesigns2():
                 return False
 
-        for i in self.allResearchDesigns["ResearchService"][
-            "ListAllResearchDesigns"
-        ]["ResearchDesigns"]["ResearchDesign"]:
+        for i in self.allResearchDesigns["ResearchService"]["ListAllResearchDesigns"][
+            "ResearchDesigns"
+        ]["ResearchDesign"]:
             if i["@ResearchDesignId"] == researchDesignId:
                 url = f"https://api.pixelstarships.com/ResearchService/SpeedUpResearchUsingBoostGauge?researchId={researchId}&accessToken={self.accessToken}&clientDateTime={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}"
                 r = self.request(url, "POST")
@@ -1195,20 +1187,20 @@ class Client(object):
         return False
 
     def rushResearchOrConstruction(self):
-        if not hasattr(self, 'shipByUserId'):
+        if not hasattr(self, "shipByUserId"):
             self.getShipByUserId()
 
         if "ShipService" in self.shipByUserId:
-            for i in self.shipByUserId["ShipService"]["GetShipByUserId"][
-                "Ship"
-            ]["Researches"]["Research"]:
+            for i in self.shipByUserId["ShipService"]["GetShipByUserId"]["Ship"][
+                "Researches"
+            ]["Research"]:
                 if i["@ResearchState"] == "Researching":
                     return self.speedUpResearchUsingBoostGauge(
                         i["@ResearchId"], i["@ResearchDesignId"]
                     )
-                for i in self.shipByUserId["ShipService"]["GetShipByUserId"][
-                    "Ship"
-                ]["Rooms"]["Room"]:
+                for i in self.shipByUserId["ShipService"]["GetShipByUserId"]["Ship"][
+                    "Rooms"
+                ]["Room"]:
                     if i["@RoomStatus"] == "Upgrading":
                         return self.speedUpRoomConstructionUsingBoostGauge(
                             i["@RoomId"], i["@RoomDesignId"]
@@ -1226,9 +1218,9 @@ class Client(object):
         designExceptionList = []
         rootDesignExceptionList = []
         researchingFlag = False
-        for research in self.allResearches["ResearchService"][
-            "ListAllResearches"
-        ]["Researches"]["Research"]:
+        for research in self.allResearches["ResearchService"]["ListAllResearches"][
+            "Researches"
+        ]["Research"]:
             for design in self.allResearchDesigns["ResearchService"][
                 "ListAllResearchDesigns"
             ]["ResearchDesigns"]["ResearchDesign"]:
@@ -1247,8 +1239,7 @@ class Client(object):
         ]["ResearchDesigns"]["ResearchDesign"]:
             if (
                 design["@ResearchDesignId"] not in designExceptionList
-                and design["@RootResearchDesignId"]
-                not in rootDesignExceptionList
+                and design["@RootResearchDesignId"] not in rootDesignExceptionList
             ):
                 rootDesigns[design["@RootResearchDesignId"]].append(design)
                 upgradeList.append(
@@ -1281,9 +1272,9 @@ class Client(object):
         self.getShipByUserId()
         shipByUserId = self.shipByUserId
         if shipByUserId:
-            for room in shipByUserId["ShipService"]["GetShipByUserId"]["Ship"][
-                "Rooms"
-            ]["Room"]:
+            for room in shipByUserId["ShipService"]["GetShipByUserId"]["Ship"]["Rooms"][
+                "Room"
+            ]:
                 roomId = room["@RoomId"]
                 roomStatus = room["@RoomStatus"]
                 roomDesignId = room["@RoomDesignId"]
@@ -1294,10 +1285,7 @@ class Client(object):
                 for roomDesignData in roomDesigns["RoomDesign"]:
                     if roomDesignId == roomDesignData["@RoomDesignId"]:
                         roomName = "".join(roomDesignData["@RoomName"])
-                    if (
-                        roomDesignId
-                        == roomDesignData["@UpgradeFromRoomDesignId"]
-                    ):
+                    if roomDesignId == roomDesignData["@UpgradeFromRoomDesignId"]:
                         upgradeRoomDesignId = roomDesignData["@RoomDesignId"]
                         upgradeRoomName = "".join(roomDesignData["@RoomName"])
                         cost = roomDesignData["@PriceString"].split(":")
@@ -1306,9 +1294,7 @@ class Client(object):
                         ):
                             continue
 
-                        if (cost[0] == "gas") and (
-                            int(cost[1]) > int(self.gasTotal)
-                        ):
+                        if (cost[0] == "gas") and (int(cost[1]) > int(self.gasTotal)):
                             continue
 
                         if (
@@ -1339,15 +1325,12 @@ class Client(object):
         if shipByUserId and roomDesigns:
             if "ShipService" not in shipByUserId:
                 logging.debug(f"{shipByUserId=}")
-            for room in shipByUserId["ShipService"]["GetShipByUserId"]["Ship"][
-                "Rooms"
-            ]["Room"]:
+            for room in shipByUserId["ShipService"]["GetShipByUserId"]["Ship"]["Rooms"][
+                "Room"
+            ]:
                 if room["@RoomStatus"] == "Upgrading":
                     for roomDesignData in roomDesigns["RoomDesign"]:
-                        if (
-                            room["@RoomDesignId"]
-                            == roomDesignData["@RoomDesignId"]
-                        ):
+                        if room["@RoomDesignId"] == roomDesignData["@RoomDesignId"]:
                             logging.info(
                                 f"[{self.info['@Name']}] {''.join(roomDesignData['@RoomName'])} is currently being upgraded."
                             )
@@ -1356,10 +1339,8 @@ class Client(object):
         if self.latestVersion:
             url = f"https://api.pixelstarships.com/ResearchService/ListAllResearchDesigns2?languageKey={self.device.languageKey}&designVersion={self.latestVersion['SettingService']['GetLatestSetting']['Setting']['@ResearchDesignVersion']}"
             r = self.request(url, "GET")
-            self.allResearchDesigns = xmltodict.parse(
-                r.content, xml_attribs=True
-            )
-            if 'ResearchService' not in self.allResearchDesigns:
+            self.allResearchDesigns = xmltodict.parse(r.content, xml_attribs=True)
+            if "ResearchService" not in self.allResearchDesigns:
                 return False
 
             return True
@@ -1373,9 +1354,7 @@ class Client(object):
             return True
 
     def rebuildAmmo(self):
-        self.clientDateTime = "{0:%Y-%m-%dT%H:%M:%S}".format(
-            DotNet.validDateTime()
-        )
+        self.clientDateTime = "{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime())
         ammoCategories = [
             "None",
             "Ammo",
@@ -1386,9 +1365,7 @@ class Client(object):
         ]
         for ammoCategory in ammoCategories:
             if ammoCategory == "None":
-                logging.info(
-                    f'[{self.info["@Name"]}] Restocking all ammo items.'
-                )
+                logging.info(f'[{self.info["@Name"]}] Restocking all ammo items.')
             else:
                 logging.info(
                     f'[{self.info["@Name"]}] Restocking {ammoCategory.lower()} items.'
@@ -1414,11 +1391,18 @@ class Client(object):
         for character in self.allCharactersOfUser["CharacterService"][
             "ListAllCharactersOfUser"
         ]["Characters"]["Character"]:
-
             character_list.append(character["@CharacterName"])
             if int(character["@Fatigue"]) > 0:
-                fatigue_characters.append("".join(
-                    [character["@CharacterName"], " has ", character["@Fatigue"], " fatigue"]))
+                fatigue_characters.append(
+                    "".join(
+                        [
+                            character["@CharacterName"],
+                            " has ",
+                            character["@Fatigue"],
+                            " fatigue",
+                        ]
+                    )
+                )
         if character_list:
             logging.info(
                 f"[{self.info['@Name']}] List of characters on your ship: {', '.join(character_list)}"
@@ -1426,7 +1410,6 @@ class Client(object):
         if fatigue_characters:
             logging.info(
                 f"[{self.info['@Name']}] List ot fatigue characters on your ship: {', '.join(fatigue_characters)}."
-
             )
         return True
 
@@ -1438,9 +1421,9 @@ class Client(object):
         ]["Messages"]:
             return True
         elif isinstance(
-            self.systemMessagesForUser["MessageService"][
-                "ListSystemMessagesForUser"
-            ]["Messages"]["Message"],
+            self.systemMessagesForUser["MessageService"]["ListSystemMessagesForUser"][
+                "Messages"
+            ]["Message"],
             dict,
         ):
             message = self.systemMessagesForUser["MessageService"][
@@ -1462,15 +1445,18 @@ class Client(object):
             else:
                 logging.info(f"[{self.info['@Name']}] {message['@Message']}")
         elif isinstance(
-            self.systemMessagesForUser["MessageService"][
-                "ListSystemMessagesForUser"
-            ]["Messages"]["Message"],
+            self.systemMessagesForUser["MessageService"]["ListSystemMessagesForUser"][
+                "Messages"
+            ]["Message"],
             list,
         ):
             for message in self.systemMessagesForUser["MessageService"][
                 "ListSystemMessagesForUser"
             ]["Messages"]["Message"]:
-                if message["@ActivityArgument"] != "None" and message["@ActivityArgument"] != "":
+                if (
+                    message["@ActivityArgument"] != "None"
+                    and message["@ActivityArgument"] != ""
+                ):
                     logging.info(
                         f"[{self.info['@Name']}] {message['@Message']}{''.join([' ', message['@ActivityArgument'].split(':')[1]])}{''.join([' ', message['@ActivityArgument'].split(':')[0]])} is collectable."
                     )
@@ -1481,17 +1467,15 @@ class Client(object):
                         self.collectReward2(message["@MessageId"])
                 else:
                     self.collectReward2(message["@MessageId"])
-                    logging.info(
-                        f"[{self.info['@Name']}] {message['@Message']}"
-                    )
+                    logging.info(f"[{self.info['@Name']}] {message['@Message']}")
         return True
 
     def listFinishTasks(self):
         self.listTasksOfAUser()
         self.listAllTaskDesigns2()
-        for task in self.tasksOfAUser["TaskService"]["ListTasksOfAUser"][
-            "Tasks"
-        ]["Task"]:
+        for task in self.tasksOfAUser["TaskService"]["ListTasksOfAUser"]["Tasks"][
+            "Task"
+        ]:
             logging.debug(f"{task=}")
             if task["@Collected"] == "true":
                 for taskDesign in self.allTaskDesigns["TaskService"][
@@ -1513,17 +1497,16 @@ class Client(object):
     def collectTaskReward(self):
         self.listTasksOfAUser()
         self.listAllTaskDesigns2()
-        for task in self.tasksOfAUser["TaskService"]["ListTasksOfAUser"][
-            "Tasks"
-        ]["Task"]:
+        for task in self.tasksOfAUser["TaskService"]["ListTasksOfAUser"]["Tasks"][
+            "Task"
+        ]:
             if task["@Collected"] == "false" and task["@ProgressValue"] != "0":
                 for taskDesign in self.allTaskDesigns["TaskService"][
                     "ListAllTaskDesigns"
                 ]["TaskDesigns"]["TaskDesign"]:
                     if (
                         taskDesign["@TaskDesignId"] == task["@TaskDesignId"]
-                        and taskDesign["@ObjectiveAmount"]
-                        == task["@ProgressValue"]
+                        and taskDesign["@ObjectiveAmount"] == task["@ProgressValue"]
                     ):
                         logging.debug(f"{task=}\n{taskDesign=}")
                         if self.collectTaskCompletion(task["@TaskDesignId"]):
@@ -1552,10 +1535,7 @@ class Client(object):
             logging.error(f"[{self.info['@Name']}] {d}")
             return False
 
-        if (
-            "UserService" in d
-            and d["UserService"]["HeartBeat"]["@success"] == "true"
-        ):
+        if "UserService" in d and d["UserService"]["HeartBeat"]["@success"] == "true":
             self.user.lastHeartBeat = datetime.datetime.utcnow()
             logging.info(f"[{self.info['@Name']}] Successful sent heartbeat.")
             return True
