@@ -668,6 +668,9 @@ class Client(object):
                         break
 
                 logging.debug(f"{character['@TrainingEndDate']=}")
+                trainingEndDate = datetime.datetime.utcnow() - datetime.timedelta(
+                    days=2
+                )
                 if character["@TrainingEndDate"]:
                     trainingEndDate = datetime.datetime.strptime(
                         character["@TrainingEndDate"], "%Y-%m-%dT%H:%M:%S"
