@@ -616,7 +616,19 @@ class Client(object):
                 return False
 
         characterAbilities = ["ProtectRoom", "Freeze"]
-        fatigueMax = 1
+        weapons = ["Apex", "Galactic Snow Maiden", "Turkey Hero"]
+        shields = ["Mistycball", "C.P.U.", "Penny"]
+        engines = ["The Conjoint Archon", "Galactic Sprite"]
+        rushers = ["Huge Hellaloya"]
+        defenders = [
+            "Admiral Serena",
+            "Ancestral Spirit",
+            "Green Ranger - Oliver",
+            "r2e",
+        ]
+        pilots = []
+
+        fatigueMax = 2
         for character in self.allCharactersOfUser["CharacterService"][
             "ListAllCharactersOfUser"
         ]["Characters"]["Character"]:
@@ -678,147 +690,101 @@ class Client(object):
                     logging.warning(
                         f"[{self.info['@Name']}] {character['@CharacterName']} has {percent} training percentage in {self.roomName} with ability {characterDesign['@SpecialAbilityType']}, {character['@Fatigue']} fatigue, and {(datetime.datetime.utcnow() - trainingEndDate).seconds} seconds to complete training."
                     )
-                if percent < 1 and (
+                if percent < 51 and (
+                    int(character["@Fatigue"]) < fatigueMax
+                    or trainingEndDate
+                    < (datetime.datetime.utcnow() - datetime.timedelta(days=1))
+                ):
+                    if character["@CharacterName"] in weapons:
+                        trainingName = "Read Expert Weapon Theory"
+                    elif character["@CharacterName"] in pilots:
+                        trainingName = "Read Expert Pilot Handbook"
+                    elif character["@CharacterName"] in shields:
+                        trainingName = "Big Book of Science"
+                    elif character["@CharacterName"] in engines:
+                        trainingName = "Study Expert Engineering Manual"
+                    elif character["@CharacterName"] in rushers:
+                        trainingName = "Steam Yoga"
+                    elif character["@CharacterName"] in defenders:
+                        trainingName = "Kickbox"
+
+                    logging.warning(
+                        f"[{self.info['@Name']}] Use Green (T1) {trainingName} primary training for {character['@CharacterName']} in {self.roomName} with ability {characterDesign['@SpecialAbilityType']}, {character['@Fatigue']} fatigue, {trainingEndDate < datetime.datetime.utcnow()} time logic, and {(datetime.datetime.utcnow() - trainingEndDate).seconds} seconds to complete training."
+                    )
+
+                elif 50 < percent < 65 and (
+                    int(character["@Fatigue"]) < fatigueMax
+                    or trainingEndDate
+                    < datetime.datetime.utcnow() - datetime.timedelta(days=1)
+                ):
+                    if character["@CharacterName"] in weapons:
+                        trainingName = "Weapons Summit"
+                    elif character["@CharacterName"] in pilots:
+                        trainingName = "Pilot Summit"
+                    elif character["@CharacterName"] in shields:
+                        trainingName = "Scientific Summit"
+                    elif character["@CharacterName"] in engines:
+                        trainingName = "Engineering Summit"
+                    elif character["@CharacterName"] in rushers:
+                        trainingName = "Crew vs Wild"
+                    elif character["@CharacterName"] in defenders:
+                        trainingName = "BBJ"
+
+                    logging.warning(
+                        f"[{self.info['@Name']}] Use Blue (T2) primary training for {character['@CharacterName']} in {self.roomName} with {character['@Fatigue']} fatigue and {(datetime.datetime.utcnow() - trainingEndDate).seconds} seconds to complete training."
+                    )
+
+                elif 64 < percent < 72 and (
+                    int(character["@Fatigue"]) < fatigueMax
+                    or trainingEndDate
+                    < datetime.datetime.utcnow() - datetime.timedelta(days=1)
+                ):
+                    if character["@CharacterName"] in weapons:
+                        trainingName = "Weapons PHD"
+                    elif character["@CharacterName"] in pilots:
+                        trainingName = "Pilot Expert"
+                    elif character["@CharacterName"] in shields:
+                        trainingName = "Science PHD"
+                    elif character["@CharacterName"] in engines:
+                        trainingName = "Engineering PHD"
+                    elif character["@CharacterName"] in rushers:
+                        trainingName = "Space Marine"
+                    elif character["@CharacterName"] in defenders:
+                        trainingName = "Shaolin Tradition"
+
+                    logging.warning(
+                        f"[{self.info['@Name']}] Use Yellow (T3) primary training for {character['@CharacterName']} in {self.roomName} with {character['@Fatigue']} fatigue and {(datetime.datetime.utcnow() - trainingEndDate).seconds} seconds to complete training."
+                    )
+                elif 71 < percent < 74 and (
                     int(character["@Fatigue"]) < fatigueMax
                     or trainingEndDate
                     < datetime.datetime.utcnow() - datetime.timedelta(days=1)
                 ):
                     if characterDesign["@SpecialAbilityType"] in characterAbilities:
-                        trainingName = "Read Expert Weapon Theory"
-                    elif characterDesign["@SpecialAbilityType"] == "AddReload":
-                        trainingName = "Steam Yoga"
-                    else:
-                        trainingName = "Read Expert Weapon Theory"
-
-                    logging.debug(
-                        f"[{self.info['@Name']}] Use Blue (T2) primary training for {character['@CharacterName']} in {self.roomName} with {character['@Fatigue']} fatigue and {(datetime.datetime.utcnow() - trainingEndDate).seconds} seconds to complete training."
-                    )
-
-                elif (
-                    percent > 0
-                    and percent < 51
-                    and (
-                        int(character["@Fatigue"]) < fatigueMax
-                        or trainingEndDate
-                        < datetime.datetime.utcnow() - datetime.timedelta(days=1)
-                    )
-                    and trainingEndDate < datetime.datetime.utcnow()
-                ):
-                    if characterDesign["@SpecialAbilityType"] in characterAbilities:
-                        trainingName = "Read Expert Weapon Theory"
-                    elif characterDesign["@SpecialAbilityType"] == "AddReload":
-                        trainingName = "Steam Yoga"
-                    else:
-                        trainingName = "Read Expert Weapon Theory"
-
-                    logging.debug(
-                        f"[{self.info['@Name']}] Use Green (T1) {trainingName} primary training for {character['@CharacterName']} in {self.roomName} with ability {characterDesign['@SpecialAbilityType']}, {character['@Fatigue']} fatigue, {trainingEndDate < datetime.datetime.utcnow()} time logic, and {(datetime.datetime.utcnow() - trainingEndDate).seconds} seconds to complete training."
-                    )
-                    logging.debug(
-                        f"\n{datetime.datetime.utcnow()=}\n{trainingEndDate=}\n{(datetime.datetime.utcnow() - trainingEndDate).seconds=}\n{(trainingEndDate - datetime.datetime.utcnow()).seconds=}"
-                    )
-                elif (
-                    percent > 50
-                    and percent < 65
-                    and (
-                        int(character["@Fatigue"]) < fatigueMax
-                        or trainingEndDate
-                        < datetime.datetime.utcnow() - datetime.timedelta(days=1)
-                    )
-                    and trainingEndDate < datetime.datetime.utcnow()
-                ):
-                    if characterDesign["@SpecialAbilityType"] in characterAbilities:
-                        trainingName = "Weapons Summit"
-                    elif characterDesign["@SpecialAbilityType"] == "AddReload":
-                        trainingName = "Crew vs Wild"
-                    else:
-                        trainingName = "Weapons Summit"
-                    logging.debug(
-                        f"[{self.info['@Name']}] Use Blue (T2) primary training for {character['@CharacterName']} in {self.roomName} with {character['@Fatigue']} fatigue and {(datetime.datetime.utcnow() - trainingEndDate).seconds} seconds to complete training."
-                    )
-                elif (
-                    percent > 64
-                    and percent < 72
-                    and (
-                        int(character["@Fatigue"]) < fatigueMax
-                        or trainingEndDate
-                        < datetime.datetime.utcnow() - datetime.timedelta(days=1)
-                    )
-                    and trainingEndDate < datetime.datetime.utcnow()
-                ):
-                    if characterDesign["@SpecialAbilityType"] in characterAbilities:
-                        trainingName = "Weapons PHD"
-                    elif characterDesign["@SpecialAbilityType"] == "AddReload":
-                        trainingName = "Space Marine"
-                    else:
-                        trainingName = "Weapons PHD"
-                    logging.debug(
-                        f"[{self.info['@Name']}] Use Yellow (T3) primary training for {character['@CharacterName']} in {self.roomName} with {character['@Fatigue']} fatigue and {(datetime.datetime.utcnow() - trainingEndDate).seconds} seconds to complete training."
-                    )
-                elif (
-                    percent > 71
-                    and percent < 74
-                    and (
-                        int(character["@Fatigue"]) < fatigueMax
-                        or trainingEndDate
-                        < datetime.datetime.utcnow() - datetime.timedelta(days=1)
-                    )
-                    and trainingEndDate < datetime.datetime.utcnow()
-                ):
-                    if characterDesign["@SpecialAbilityType"] in characterAbilities:
                         trainingName = "Bench Press"
                     elif characterDesign["@SpecialAbilityType"] == "AddReload":
                         trainingName = "Bench Press"
-                    logging.debug(
+                    logging.warning(
                         f"[{self.info['@Name']}] Use Green (T1) secondary training for {character['@CharacterName']} in {self.roomName} with {character['@Fatigue']} fatigue and {(datetime.datetime.utcnow() - trainingEndDate).seconds} seconds to complete training."
                     )
-                elif (
-                    percent > 73
-                    and percent < 85
-                    and (
-                        (
-                            int(character["@Fatigue"]) < fatigueMax
-                            or trainingEndDate
-                            < datetime.datetime.utcnow() - datetime.timedelta(days=1)
-                        )
-                        and trainingEndDate < datetime.datetime.utcnow()
-                    )
+                elif 73 < percent < 85 and (
+                    int(character["@Fatigue"]) < fatigueMax
+                    or trainingEndDate
+                    < datetime.datetime.utcnow() - datetime.timedelta(days=1)
                 ):
-                    if characterDesign["@SpecialAbilityType"] in characterAbilities:
-                        trainingName = "Muscle Beach"
-                    elif characterDesign["@SpecialAbilityType"] == "AddReload":
-                        trainingName = "Muscle Beach"
-                    else:
-                        trainingName = "Muscle Beach"
-                    logging.debug(
+                    trainingName = "Muscle Beach"
+                    logging.warning(
                         f"[{self.info['@Name']}] Use Blue (T2) secondary training for {character['@CharacterName']} in {self.roomName} with {character['@Fatigue']} fatigue and {(datetime.datetime.utcnow() - trainingEndDate).seconds} seconds to complete training."
                     )
-                elif (
-                    percent > 84
-                    and percent < 90
-                    and (
-                        int(character["@Fatigue"]) < fatigueMax
-                        or trainingEndDate
-                        < datetime.datetime.utcnow() - datetime.timedelta(days=1)
-                    )
-                    and trainingEndDate < datetime.datetime.utcnow()
+                elif 84 < percent < 90 and (
+                    int(character["@Fatigue"]) < fatigueMax
+                    or trainingEndDate
+                    < datetime.datetime.utcnow() - datetime.timedelta(days=1)
                 ):
-                    if characterDesign["@SpecialAbilityType"] in characterAbilities:
-                        trainingName = "Olympic Weightlifting"
-                    elif characterDesign["@SpecialAbilityType"] == "AddReload":
-                        trainingName = "Olympic Weightlifting"
-                    else:
-                        trainingName = "Olympic Weightlifting"
-                    logging.debug(
+                    trainingName = "Olympic Weightlifting"
+                    logging.warning(
                         f"[{self.info['@Name']}] Use Yellow (T3) secondary training for {character['@CharacterName']} in {self.roomName} with {character['@Fatigue']} fatigue and {(datetime.datetime.utcnow() - trainingEndDate).seconds} seconds to complete training."
                     )
-
-                logging.debug(
-                    f"[{self.info['@Name']}] {character['@CharacterName']} in {self.roomName} with ability {characterDesign['@SpecialAbilityType']}, {character['@Fatigue']} fatigue, and {(datetime.datetime.utcnow() - trainingEndDate).seconds} seconds to complete training."
-                )
-                logging.debug(
-                    f"[{self.info['@Name']}] {'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())=}\n{character=}\n{character['@CharacterName']} in {self.roomName} with ability {characterDesign['@SpecialAbilityType']}, {character['@Fatigue']} fatigue, and {(datetime.datetime.utcnow() - trainingEndDate).seconds} seconds to complete training."
-                )
 
                 if (
                     trainingEndDate < datetime.datetime.utcnow()
