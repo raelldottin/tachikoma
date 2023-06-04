@@ -124,10 +124,6 @@ class Client(object):
             self.quickReload()
             r = self.session.request(method, url, headers=self.headers, data=data)
 
-        # heartbeat should run only to keep the connection alive
-        # if hasattr(self, 'user') and divmod((datetime.datetime.utcnow() - self.user.lastHeartBeat).seconds, 60)[0] != 0:
-        #    self.heartbeat()
-
         return r
 
     def parseUserLoginData(self, r):
@@ -585,6 +581,19 @@ class Client(object):
         ]["StarSystemMarkerGenerators"]
         return True
 
+    def listAllCharacterDesigns2(self):
+        if self.latestVersion:
+            url = f"{self.baseUrl}/CharacterService/ListAllCharacterDesigns2?languageKey={self.device.languageKey}&designVersion={self.latestVersion['SettingService']['GetLatestSetting']['Setting']['@ResearchDesignVersion']}"
+            r = self.request(url, "GET")
+            self.allCharacterDesigns = xmltodict.parse(r.content, xml_attribs=True)
+            if "CharacterService" not in self.allCharacterDesigns:
+                logging.error(
+                    f"[{self.info['@Name']}] CharacterService data not avaialble."
+                )
+                return False
+            return True
+        return False
+
     def addTraining(self, trainingDesignId, characterId):
         url = f"{self.baseUrl}/TrainingService/AddTraining?trainingDesignId={trainingDesignId}&characterId={characterId}&trainingStartDate={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}&accessToken={self.accessToken}"
         r = self.request(url, "POST")
@@ -595,6 +604,7 @@ class Client(object):
     def manageTraining(self):
         if not hasattr(self, "allCharactersOfUser"):
             if not self.listAllCharactersOfUser():
+                logging.error("allCharactersOfUser data not avaialble.")
                 return False
 
         if not hasattr(self, "allCharacterDesigns"):
@@ -615,7 +625,6 @@ class Client(object):
                 logging.error("TrainingDesign data not available.")
                 return False
 
-        characterAbilities = ["ProtectRoom", "Freeze"]
         weapons = ["Apex", "Galactic Snow Maiden", "Turkey Hero"]
         shields = ["Mistycball", "C.P.U.", "Penny"]
         engines = ["The Conjoint Archon", "Galactic Sprite"]
@@ -628,12 +637,10 @@ class Client(object):
         ]
         pilots = []
 
-        fatigueMax = 2
         for character in self.allCharactersOfUser["CharacterService"][
             "ListAllCharactersOfUser"
         ]["Characters"]["Character"]:
             room = {}
-            design = {}
             trainingName = ""
             for room in self.roomsViaAccessToken["RoomService"][
                 "ListRoomsViaAccessToken"
@@ -668,9 +675,7 @@ class Client(object):
                         break
 
                 logging.debug(f"{character['@TrainingEndDate']=}")
-                trainingEndDate = datetime.datetime.utcnow() - datetime.timedelta(
-                    days=2
-                )
+                trainingEndDate = None
                 if character["@TrainingEndDate"]:
                     trainingEndDate = datetime.datetime.strptime(
                         character["@TrainingEndDate"], "%Y-%m-%dT%H:%M:%S"
@@ -680,23 +685,15 @@ class Client(object):
                     f"Total: {count=} {characterDesign['@TrainingCapacity']=} {count / int(characterDesign['@TrainingCapacity']) * 100}"
                 )
                 percent = count / int(characterDesign["@TrainingCapacity"]) * 100
-                trainingDesignId = ""
-                design = {}
-                if trainingEndDate < datetime.datetime.utcnow() or (
-                    trainingEndDate
-                    < datetime.datetime.utcnow() - datetime.timedelta(days=1)
-                ):
-                    if self.finishTraining(character["@CharacterId"]):
-                        logging.debug(
-                            f"[{self.info['@Name']}] Completed training for {character['@CharacterName']} in {self.roomName} with ability {characterDesign['@SpecialAbilityType']}, {character['@Fatigue']} fatigue, and {(datetime.datetime.utcnow() - trainingEndDate).seconds} seconds to complete training."
-                        )
-                    logging.warning(
-                        f"[{self.info['@Name']}] {character['@CharacterName']} has {percent} training percentage in {self.roomName} with ability {characterDesign['@SpecialAbilityType']}, {character['@Fatigue']} fatigue, and {(datetime.datetime.utcnow() - trainingEndDate).seconds} seconds to complete training."
+                logging.debug(
+                    f"{character['@CharacterName']=} {trainingEndDate=} {datetime.datetime.utcnow() - datetime.timedelta(minutes=45)=}"
+                )
+                if (percent < 51) and (
+                    not trainingEndDate
+                    or (
+                        trainingEndDate
+                        < (datetime.datetime.utcnow() - datetime.timedelta(minutes=45))
                     )
-                if percent < 51 and (
-                    int(character["@Fatigue"]) < fatigueMax
-                    or trainingEndDate
-                    < (datetime.datetime.utcnow() - datetime.timedelta(days=1))
                 ):
                     if character["@CharacterName"] in weapons:
                         trainingName = "Read Expert Weapon Theory"
@@ -711,14 +708,16 @@ class Client(object):
                     elif character["@CharacterName"] in defenders:
                         trainingName = "Kickbox"
 
-                    logging.warning(
-                        f"[{self.info['@Name']}] Use Green (T1) {trainingName} primary training for {character['@CharacterName']} in {self.roomName} with ability {characterDesign['@SpecialAbilityType']}, {character['@Fatigue']} fatigue, {trainingEndDate < datetime.datetime.utcnow()} time logic, and {(datetime.datetime.utcnow() - trainingEndDate).seconds} seconds to complete training."
+                    logging.info(
+                        f"[{self.info['@Name']}] Use Green (T1) {trainingName} primary training for {character['@CharacterName']} in {self.roomName} with ability {characterDesign['@SpecialAbilityType']}, and {character['@Fatigue']} fatigue."
                     )
 
-                elif 50 < percent < 65 and (
-                    int(character["@Fatigue"]) < fatigueMax
-                    or trainingEndDate
-                    < datetime.datetime.utcnow() - datetime.timedelta(days=1)
+                elif (50 < percent < 65) and (
+                    not trainingEndDate
+                    or (
+                        trainingEndDate
+                        < (datetime.datetime.utcnow() - datetime.timedelta(hours=3))
+                    )
                 ):
                     if character["@CharacterName"] in weapons:
                         trainingName = "Weapons Summit"
@@ -733,14 +732,16 @@ class Client(object):
                     elif character["@CharacterName"] in defenders:
                         trainingName = "BBJ"
 
-                    logging.warning(
-                        f"[{self.info['@Name']}] Use Blue (T2) primary training for {character['@CharacterName']} in {self.roomName} with {character['@Fatigue']} fatigue and {(datetime.datetime.utcnow() - trainingEndDate).seconds} seconds to complete training."
+                    logging.info(
+                        f"[{self.info['@Name']}] Use Blue (T2) {trainingName} primary training for {character['@CharacterName']} in {self.roomName} with ability {characterDesign['@SpecialAbilityType']}, and {character['@Fatigue']} fatigue."
                     )
 
-                elif 64 < percent < 72 and (
-                    int(character["@Fatigue"]) < fatigueMax
-                    or trainingEndDate
-                    < datetime.datetime.utcnow() - datetime.timedelta(days=1)
+                elif (64 < percent < 72) and (
+                    not trainingEndDate
+                    or (
+                        trainingEndDate
+                        < (datetime.datetime.utcnow() - datetime.timedelta(hours=12))
+                    )
                 ):
                     if character["@CharacterName"] in weapons:
                         trainingName = "Weapons PHD"
@@ -756,56 +757,55 @@ class Client(object):
                         trainingName = "Shaolin Tradition"
 
                     logging.warning(
-                        f"[{self.info['@Name']}] Use Yellow (T3) primary training for {character['@CharacterName']} in {self.roomName} with {character['@Fatigue']} fatigue and {(datetime.datetime.utcnow() - trainingEndDate).seconds} seconds to complete training."
+                        f"[{self.info['@Name']}] Use Yellow (T3) {trainingName} primary training for {character['@CharacterName']} in {self.roomName} with ability {characterDesign['@SpecialAbilityType']}, and {character['@Fatigue']} fatigue."
                     )
-                elif 71 < percent < 74 and (
-                    int(character["@Fatigue"]) < fatigueMax
-                    or trainingEndDate
-                    < datetime.datetime.utcnow() - datetime.timedelta(days=1)
+
+                elif (71 < percent < 74) and (
+                    not trainingEndDate
+                    or (
+                        trainingEndDate
+                        < (datetime.datetime.utcnow() - datetime.timedelta(minutes=45))
+                    )
                 ):
-                    if characterDesign["@SpecialAbilityType"] in characterAbilities:
-                        trainingName = "Bench Press"
-                    elif characterDesign["@SpecialAbilityType"] == "AddReload":
-                        trainingName = "Bench Press"
+                    trainingName = "Bench Press"
+
                     logging.warning(
-                        f"[{self.info['@Name']}] Use Green (T1) secondary training for {character['@CharacterName']} in {self.roomName} with {character['@Fatigue']} fatigue and {(datetime.datetime.utcnow() - trainingEndDate).seconds} seconds to complete training."
+                        f"[{self.info['@Name']}] Use Green (T1) {trainingName} primary training for {character['@CharacterName']} in {self.roomName} with ability {characterDesign['@SpecialAbilityType']}, and {character['@Fatigue']} fatigue."
                     )
-                elif 73 < percent < 85 and (
-                    int(character["@Fatigue"]) < fatigueMax
-                    or trainingEndDate
-                    < datetime.datetime.utcnow() - datetime.timedelta(days=1)
+                elif (73 < percent < 85) and (
+                    not trainingEndDate
+                    or (
+                        trainingEndDate
+                        < (datetime.datetime.utcnow() - datetime.timedelta(hours=3))
+                    )
                 ):
                     trainingName = "Muscle Beach"
                     logging.warning(
-                        f"[{self.info['@Name']}] Use Blue (T2) secondary training for {character['@CharacterName']} in {self.roomName} with {character['@Fatigue']} fatigue and {(datetime.datetime.utcnow() - trainingEndDate).seconds} seconds to complete training."
+                        f"[{self.info['@Name']}] Use Blue (T2) {trainingName} primary training for {character['@CharacterName']} in {self.roomName} with ability {characterDesign['@SpecialAbilityType']}, and {character['@Fatigue']} fatigue."
                     )
-                elif 84 < percent < 90 and (
-                    int(character["@Fatigue"]) < fatigueMax
-                    or trainingEndDate
-                    < datetime.datetime.utcnow() - datetime.timedelta(days=1)
+                elif (84 < percent < 90) and (
+                    not trainingEndDate
+                    or (
+                        trainingEndDate
+                        < (datetime.datetime.utcnow() - datetime.timedelta(hours=12))
+                    )
                 ):
                     trainingName = "Olympic Weightlifting"
                     logging.warning(
-                        f"[{self.info['@Name']}] Use Yellow (T3) secondary training for {character['@CharacterName']} in {self.roomName} with {character['@Fatigue']} fatigue and {(datetime.datetime.utcnow() - trainingEndDate).seconds} seconds to complete training."
+                        f"[{self.info['@Name']}] Use Yellow (T3) {trainingName} primary training for {character['@CharacterName']} in {self.roomName} with ability {characterDesign['@SpecialAbilityType']}, and {character['@Fatigue']} fatigue."
                     )
 
-                if (
-                    trainingEndDate < datetime.datetime.utcnow()
-                    and (
-                        int(character["@Fatigue"]) < fatigueMax
-                        or trainingEndDate
-                        < datetime.datetime.utcnow() - datetime.timedelta(days=1)
-                    )
-                    and trainingName
-                ):
+                if trainingName:
+                    if self.finishTraining(character["@CharacterId"]):
+                        logging.info(
+                            f"[{self.info['@Name']}] Completed training for {character['@CharacterName']} in {self.roomName} with ability {characterDesign['@SpecialAbilityType']}, {character['@Fatigue']} fatigue, and {(datetime.datetime.utcnow() - trainingEndDate).seconds} seconds to complete training."
+                        )
+
+                    trainingDesignId = None
                     for design in self.trainingDesigns["TrainingDesign"]:
                         if design["@TrainingName"] == trainingName:
                             trainingDesignId = design["@TrainingDesignId"]
-                            break
 
-                    logging.debug(
-                        f"[{self.info['@Name']}] {character['@CharacterName']} in {self.roomName} with ability {characterDesign['@SpecialAbilityType']}, {character['@Fatigue']} fatigue, and {(datetime.datetime.utcnow() - trainingEndDate).seconds} seconds to complete training."
-                    )
                     if self.addTraining(trainingDesignId, character["@CharacterId"]):
                         logging.info(
                             f"[{self.info['@Name']}] Starting training {design['@TrainingName']} for {character['@CharacterName']} in {self.roomName} with ability {characterDesign['@SpecialAbilityType']}, {character['@Fatigue']} fatigue."
@@ -824,19 +824,6 @@ class Client(object):
                 logging.info(
                     f"[{self.info['@Name']}] {character['@CharacterName']} is located in {self.roomName}."
                 )
-
-    def listAllCharacterDesigns2(self):
-        if self.latestVersion:
-            url = f"{self.baseUrl}/CharacterService/ListAllCharacterDesigns2?languageKey={self.device.languageKey}&designVersion={self.latestVersion['SettingService']['GetLatestSetting']['Setting']['@ResearchDesignVersion']}"
-            r = self.request(url, "GET")
-            self.allCharacterDesigns = xmltodict.parse(r.content, xml_attribs=True)
-            if "CharacterService" not in self.allCharacterDesigns:
-                logging.error(
-                    f"[{self.info['@Name']}] CharacterService data not avaialble."
-                )
-                return False
-            return True
-        return False
 
     def upgradeCharacter(self, characterId):
         url = f"{self.baseUrl}/CharacterService/UpgradeCharacter?characterId={characterId}&accessToken={self.accessToken}"
