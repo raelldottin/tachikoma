@@ -808,7 +808,7 @@ class Client(object):
 
                     if self.addTraining(trainingDesignId, character["@CharacterId"]):
                         logging.info(
-                            f"[{self.info['@Name']}] Starting training {design['@TrainingName']} for {character['@CharacterName']} in {self.roomName} with ability {characterDesign['@SpecialAbilityType']}, {character['@Fatigue']} fatigue."
+                            f"[{self.info['@Name']}] Starting training {trainingName} for {character['@CharacterName']} in {self.roomName} with ability {characterDesign['@SpecialAbilityType']}, {character['@Fatigue']} fatigue."
                         )
 
     def getCharacterRooms(self):
@@ -1376,7 +1376,8 @@ class Client(object):
             "ListSystemMessagesForUser"
         ]["Messages"]:
             return True
-        elif isinstance(
+
+        if isinstance(
             self.systemMessagesForUser["MessageService"]["ListSystemMessagesForUser"][
                 "Messages"
             ]["Message"],
@@ -1399,7 +1400,7 @@ class Client(object):
                 ]:
                     self.collectReward2(message["@MessageId"])
             else:
-                logging.info(f"[{self.info['@Name']}] {message['@Message']}")
+                self.actionMessage(message["@MessageId"])
         elif isinstance(
             self.systemMessagesForUser["MessageService"]["ListSystemMessagesForUser"][
                 "Messages"
@@ -1422,8 +1423,8 @@ class Client(object):
                     ]:
                         self.collectReward2(message["@MessageId"])
                 else:
-                    self.collectReward2(message["@MessageId"])
                     logging.info(f"[{self.info['@Name']}] {message['@Message']}")
+                    self.actionMessage(message["@MessageId"])
         return True
 
     def listFinishTasks(self):
@@ -1446,6 +1447,14 @@ class Client(object):
         url = f"{self.baseUrl}/TaskService/CollectTaskCompletion?taskDesignId={taskDesignId}&accessToken={self.accessToken}"
         r = self.request(url, "POST")
         if "errorMessage" in r.text:
+            return False
+        else:
+            return True
+
+    def actionMessage(self, messageId):
+        url = f"{self.baseUrl}/MessageService/ActionMessage?messageId={messageId}&accessToken={self.accessToken}"
+        r = self.request(url, "GET")
+        if r and "errorMessage" in r.text:
             return False
         else:
             return True
