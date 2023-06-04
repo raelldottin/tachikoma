@@ -626,7 +626,7 @@ class Client(object):
                 return False
 
         weapons = ["Apex", "Galactic Snow Maiden", "Turkey Hero"]
-        shields = ["Mistycball", "C.P.U.", "Penny"]
+        shields = ["Mistycball", "C.P.U.", "Penny", "Cyber Duck"]
         engines = ["The Conjoint Archon", "Galactic Sprite"]
         rushers = ["Huge Hellaloya"]
         defenders = [
