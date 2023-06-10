@@ -86,7 +86,7 @@ class Client(object):
     gasTotal = 0
     mineralIncrease = 0
     gasIncrease = 0
-    dronesCollected = dict()
+    dronesCollected = {}
     dailyRewardArgument = 0
     credits = 0
     info = {"@Name": ""}
@@ -114,11 +114,11 @@ class Client(object):
 
         if "errorMessage" in r.text:
             d = xmltodict.parse(r.content, xml_attribs=True)
-            logging.error(f"[{self.info['@Name']}] {url} - {d}")
+            logging.error("[%s] {%s} - {%s}", self.info["@Name"], url, d)
 
         if "Failed to authorize access token" in r.text:
             logging.info(
-                f"[{self.info['@Name']}] Attempting to reauthorized access token."
+                "[%s] Attempting to reauthorized access token.", self.info["@Name"]
             )
             self.user.isAuthorized = False
             self.quickReload()
@@ -142,7 +142,7 @@ class Client(object):
         self.info = d["UserService"]["UserLogin"]["User"]
         if "@Name" not in self.info:
             self.info["@Name"] = ""
-        logging.info(f"[{self.info['@Name']}] Authenticated...")
+        logging.info("[%s] Authenticated...", self.info["@Name"])
         userId = d["UserService"]["UserLogin"]["@UserId"]
         if "@Credits" in d["UserService"]["UserLogin"]["User"]:
             self.credits = int(d["UserService"]["UserLogin"]["User"]["@Credits"])
@@ -185,17 +185,18 @@ class Client(object):
         url = f"{self.baseUrl}/UserService/DeviceLogin8?deviceKey={self.device.key}&advertisingKey=&isJailBroken=False&checksum={self.checksum}&deviceType=DeviceType{self.device.name}&signal=False&languageKey={self.device.languageKey}&refreshToken={self.device.refreshToken if self.device.refreshToken else ''}"
 
         r = self.request(url, "POST")
-        d = xmltodict.parse(r.content, xml_attribs=True)
-        if (
-            (not r or r.status_code != 200)
-            or ("errorCode" in r.text)
-            or ("accessToken" not in r.text)
-        ):
-            logging.error(f"{d}")
-            self.accessToken = ""
-            return False
+        if r:
+            d = xmltodict.parse(r.content, xml_attribs=True)
+            if (
+                (not r or r.status_code != 200)
+                or ("errorCode" in r.text)
+                or ("accessToken" not in r.text)
+            ):
+                logging.error("{%s}", d)
+                self.accessToken = ""
+                return False
 
-        self.accessToken = r.text.split('accessToken="')[1].split('"')[0]
+            self.accessToken = r.text.split('accessToken="')[1].split('"')[0]
         if not self.parseUserLoginData(r):
             return False
 
@@ -222,7 +223,8 @@ class Client(object):
             return True
 
         # login with credentials and accessToken
-        ts = "{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime())
+        ts = f"{DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
+        #        ts = "{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime())
         self.checksum = ChecksumEmailAuthorize(
             self.device.key, email, ts, self.accessToken, self.salt
         )
@@ -232,9 +234,9 @@ class Client(object):
             url = f"{self.baseUrl}/UserService/UserEmailPasswordAuthorize2?clientDateTime={ts}&checksum={self.checksum}&deviceKey={self.device.key}&accessToken={self.accessToken}&refreshToken={self.device.refreshToken}"
             r = self.request(url, "POST")
 
-            if "Email=" not in r.text:
+            if r and "Email=" not in r.text:
                 logging.error(
-                    "[login] failed to authenticate with refreshToken:", r.text
+                    "[login] failed to authenticate with refreshToken: %s", r.text
                 )
                 return False
 
@@ -242,33 +244,34 @@ class Client(object):
                 return False
 
         else:
-            self.email = urllib.parse.quote(email)
+            if email:
+                self.email = urllib.parse.quote(email)
 
-            url = f"{self.baseUrl}/UserService/UserEmailPasswordAuthorize2?clientDateTime={ts}&checksum={self.checksum}&deviceKey={self.device.ke}&email={self.email}&password={password}&accessToken={self.accessToken}"
+            url = f"{self.baseUrl}/UserService/UserEmailPasswordAuthorize2?clientDateTime={ts}&checksum={self.checksum}&deviceKey={self.device.key}&email={self.email}&password={password}&accessToken={self.accessToken}"
             r = self.request(url, "POST")
 
-            if "errorMessage=" in r.text:
+            if r and "errorMessage=" in r.text:
                 logging.error(
-                    "[login] failed to authorize with credentials with the reason:",
+                    "[login] failed to authorize with credentials with the reason: %s",
                     r.text,
                 )
                 return False
 
-            if "refreshToken" not in r.text:
+            if r and "refreshToken" not in r.text:
                 logging.error(
-                    "[login] failed to acquire refreshToken with the reason",
-                    r.text,
+                    "[login] failed to acquire refreshToken with the reason: %s", r.text
                 )
                 return False
 
-            self.device.refreshTokenAcquire(
-                r.text.split('refreshToken="')[1].split('"')[0]
-            )
+            if r:
+                self.device.refreshTokenAcquire(
+                    r.text.split('refreshToken="')[1].split('"')[0]
+                )
 
-            if 'RequireReload="True"' in r.text:
+            if r and 'RequireReload="True"' in r.text:
                 return self.quickReload()
 
-        if "refreshToken" in r.text:
+        if r and "refreshToken" in r.text:
             self.device.refreshTokenAcquire(
                 r.text.split('refreshToken="')[1].split('"')[0]
             )
@@ -278,60 +281,72 @@ class Client(object):
     def getLatestVersion3(self):
         url = f"https://api.pixelstarships.com/SettingService/GetLatestVersion3?languageKey={self.device.languageKey}&deviceType=DeviceType{self.device.name}"
         r = self.request(url, "GET")
-        self.latestVersion = xmltodict.parse(r.content, xml_attribs=True)
+        if r:
+            self.latestVersion = xmltodict.parse(r.content, xml_attribs=True)
 
     def getTodayLiveOps2(self):
         url = f"https://api.pixelstarships.com/LiveOpsService/GetTodayLiveOps2?languageKey={self.device.languageKey}&deviceType=DeviceType{self.device.name}"
         r = self.request(url, "GET")
-        self.todayLiveOps = xmltodict.parse(r.content, xml_attribs=True)
+        if r:
+            self.todayLiveOps = xmltodict.parse(r.content, xml_attribs=True)
 
     def listRoomDesigns2(self):
         url = f"https://api.pixelstarships.com/RoomService/ListRoomDesigns2?languageKey={self.device.languageKey}&designVersion={self.latestVersion['SettingService']['GetLatestSetting']['Setting']['@RoomDesignVersion']}"
         r = self.request(url, "GET")
-        self.roomDesigns = xmltodict.parse(r.content, xml_attribs=True)
+        if r:
+            self.roomDesigns = xmltodict.parse(r.content, xml_attribs=True)
 
     def listAllTaskDesigns2(self):
         url = f"https://api.pixelstarships.com/TaskService/ListAllTaskDesigns2?languageKey={self.device.languageKey}&designVersion={self.latestVersion['SettingService']['GetLatestSetting']['Setting']['@RoomDesignVersion']}"
         r = self.request(url, "GET")
-        self.allTaskDesigns = xmltodict.parse(r.content, xml_attribs=True)
+        if r:
+            self.allTaskDesigns = xmltodict.parse(r.content, xml_attribs=True)
 
     def getShipByUserId(self, userId=0):
-        url = f"https://api.pixelstarships.com/ShipService/GetShipByUserId?userId={userId if userId else self.user.id}&accessToken={self.accessToken}&clientDateTime={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}"
+        url = f"https://api.pixelstarships.com/ShipService/GetShipByUserId?userId={userId if userId else self.user.id}&accessToken={self.accessToken}&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
         r = self.request(url, "GET")
-        self.shipByUserId = xmltodict.parse(r.content, xml_attribs=True)
-        if "ShipService" not in self.allCharactersOfUser:
-            logging.error("CharacterService data not avaialble.")
+        if r:
+            self.shipByUserId = xmltodict.parse(r.content, xml_attribs=True)
+        if "ShipService" not in self.shipByUserId:
+            logging.error("ShipService data not avaialble.")
             return False
+        return True
 
     def listAchievementsOfAUser(self):
-        url = f"https://api.pixelstarships.com/AchievementService/ListAchievementsOfAUser?accessToken={self.accessToken}&clientDateTime={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}"
+        url = f"https://api.pixelstarships.com/AchievementService/ListAchievementsOfAUser?accessToken={self.accessToken}&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
         r = self.request(url, "GET")
-        self.achievementsOfAUser = xmltodict.parse(r.content, xml_attribs=True)
+        if r:
+            self.achievementsOfAUser = xmltodict.parse(r.content, xml_attribs=True)
 
     def listImportantMessagesForUser(self):
-        url = f"https://api.pixelstarships.com/MessageService/ListImportantMessagesForUser?accessToken={self.accessToken}&clientDateTime={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}"
+        url = f"https://api.pixelstarships.com/MessageService/ListImportantMessagesForUser?accessToken={self.accessToken}&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
         r = self.request(url, "GET")
-        self.importantMessagesForUser = xmltodict.parse(r.content, xml_attribs=True)
+        if r:
+            self.importantMessagesForUser = xmltodict.parse(r.content, xml_attribs=True)
 
     def listUserStarSystems(self):
-        url = f"https://api.pixelstarships.com/GalaxyService/ListUserStarSystems?accessToken={self.accessToken}&clientDateTime={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}"
+        url = f"https://api.pixelstarships.com/GalaxyService/ListUserStarSystems?accessToken={self.accessToken}&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
         r = self.request(url, "GET")
-        self.userStarSystems = xmltodict.parse(r.content, xml_attribs=True)
+        if r:
+            self.userStarSystems = xmltodict.parse(r.content, xml_attribs=True)
 
     def listStarSystemMarkersAndUserMarkers(self):
         url = f"https://api.pixelstarships.com/GalaxyService/ListStarSystemMarkersAndUserMarkers?accessToken={self.accessToken}"
         r = self.request(url, "GET")
-        self.starSystemMarkersAndUserMarkers = xmltodict.parse(
-            r.content, xml_attribs=True
-        )
+        if r:
+            self.starSystemMarkersAndUserMarkers = xmltodict.parse(
+                r.content, xml_attribs=True
+            )
 
     def listTasksOfAUser(self):
-        url = f"https://api.pixelstarships.com/TaskService/ListTasksOfAUser?accessToken={self.accessToken}&clientDateTime={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}"
+        url = f"https://api.pixelstarships.com/TaskService/ListTasksOfAUser?accessToken={self.accessToken}&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
         r = self.request(url, "GET")
-        self.tasksOfAUser = xmltodict.parse(r.content, xml_attribs=True)
+        if r:
+            self.tasksOfAUser = xmltodict.parse(r.content, xml_attribs=True)
 
     def listCompletedMissionEvents(self):
-        ts = "{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime())
+        ts = f"{DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
+        #        ts = "{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime())
         checksum = ChecksumEmailAuthorize(
             self.device.key,
             self.info["@Email"],
@@ -341,69 +356,79 @@ class Client(object):
         )
         url = f"https://api.pixelstarships.com/MissionService/ListCompletedMissionEvents?clientDateTime={ts}&checksum={checksum}&accessToken={self.accessToken}"
         r = self.request(url, "GET")
-        self.completedMissionEvents = xmltodict.parse(r.content, xml_attribs=True)
+        if r:
+            self.completedMissionEvents = xmltodict.parse(r.content, xml_attribs=True)
 
     def listSituations(self):
-        url = f"https://api.pixelstarships.com/SituationService/ListSituations?accessToken={self.accessToken}&clientDateTime={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}"
+        url = f"https://api.pixelstarships.com/SituationService/ListSituations?accessToken={self.accessToken}&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
         r = self.request(url, "GET")
-        self.situations = xmltodict.parse(r.content, xml_attribs=True)
+        if r:
+            self.situations = xmltodict.parse(r.content, xml_attribs=True)
 
     def listPvPBattles2(self, take=25, skip=0):
         if self.user.isAuthorized:
-            url = f"https://api.pixelstarships.com/BattleService/ListPvPBattles2?take={take}&skip={skip}&accessToken={self.accessToken}&clientDateTime={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}"
+            url = f"https://api.pixelstarships.com/BattleService/ListPvPBattles2?take={take}&skip={skip}&accessToken={self.accessToken}&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
             r = self.request(url, "GET")
-            self.pvpBattles = xmltodict.parse(r.content, xml_attribs=True)
-            return True
+            if r:
+                self.pvpBattles = xmltodict.parse(r.content, xml_attribs=True)
+                return True
         return False
 
     def listMissionBattles(self, take=25, skip=0):
         if self.user.isAuthorized:
-            url = f"https://api.pixelstarships.com/BattleService/ListMissionBattles?take={take}&skip={skip}&accessToken={self.accessToken}&clientDateTime={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}"
+            url = f"https://api.pixelstarships.com/BattleService/ListMissionBattles?take={take}&skip={skip}&accessToken={self.accessToken}&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
             r = self.request(url, "GET")
-            self.missionBattles = xmltodict.parse(r.content, xml_attribs=True)
-            return True
+            if r:
+                self.missionBattles = xmltodict.parse(r.content, xml_attribs=True)
+                return True
         return False
 
     def listActionTypes2(self):
         if self.user.isAuthorized:
             url = f"https://api.pixelstarships.com/RoomService/ListActionTypes2?languageKey={self.device.languageKey}&designVersion={self.latestVersion['SettingService']['GetLatestSetting']['Setting']['@ResearchDesignVersion']}"
             r = self.request(url, "GET")
-            self.actionTypes = xmltodict.parse(r.content, xml_attribs=True)
-            return True
+            if r:
+                self.actionTypes = xmltodict.parse(r.content, xml_attribs=True)
+                return True
         return False
 
     def listConditionTypes2(self):
         if self.user.isAuthorized:
             url = f"https://api.pixelstarships.com/RoomService/ListConditionTypes2?languageKey={self.device.languageKey}&designVersion={self.latestVersion['SettingService']['GetLatestSetting']['Setting']['@ResearchDesignVersion']}"
             r = self.request(url, "GET")
-            self.conditionTypes = xmltodict.parse(r.content, xml_attribs=True)
-            return True
+            if r:
+                self.conditionTypes = xmltodict.parse(r.content, xml_attribs=True)
+                return True
         return False
 
     def listAllResearches(self):
-        url = f"https://api.pixelstarships.com/ResearchService/ListAllResearches?accessToken={self.accessToken}&clientDateTime={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}"
+        url = f"https://api.pixelstarships.com/ResearchService/ListAllResearches?accessToken={self.accessToken}&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
         r = self.request(url, "GET")
-        self.allResearches = xmltodict.parse(r.content, xml_attribs=True)
+        if r:
+            self.allResearches = xmltodict.parse(r.content, xml_attribs=True)
 
     def listItemsOfAShip(self):
         if self.user.isAuthorized:
-            url = f"https://api.pixelstarships.com/ItemService/ListItemsOfAShip?accessToken={self.accessToken}&clientDateTime={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}"
+            url = f"https://api.pixelstarships.com/ItemService/ListItemsOfAShip?accessToken={self.accessToken}&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
             r = self.request(url, "GET")
-            self.itemsOfAShip = xmltodict.parse(r.content, xml_attribs=True)
-            return True
+            if r:
+                self.itemsOfAShip = xmltodict.parse(r.content, xml_attribs=True)
+                return True
         return False
 
     def listRoomsViaAccessToken(self):
-        url = f"https://api.pixelstarships.com/RoomService/ListRoomsViaAccessToken?accessToken={self.accessToken}&clientDateTime={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}"
+        url = f"https://api.pixelstarships.com/RoomService/ListRoomsViaAccessToken?accessToken={self.accessToken}&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
         r = self.request(url, "GET")
-        self.roomsViaAccessToken = xmltodict.parse(r.content, xml_attribs=True)
+        if r:
+            self.roomsViaAccessToken = xmltodict.parse(r.content, xml_attribs=True)
 
     def listAllCharactersOfUser(self):
-        url = f"https://api.pixelstarships.com/CharacterService/ListAllCharactersOfUser?accessToken={self.accessToken}&clientDateTime={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}"
+        url = f"https://api.pixelstarships.com/CharacterService/ListAllCharactersOfUser?accessToken={self.accessToken}&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
         r = self.request(url, "GET")
-        self.allCharactersOfUser = xmltodict.parse(r.content, xml_attribs=True)
+        if r:
+            self.allCharactersOfUser = xmltodict.parse(r.content, xml_attribs=True)
         if "CharacterService" not in self.allCharactersOfUser:
-            logging.error(f"Failed to get list of characters on the ship.")
+            logging.error("Failed to get list of characters on the ship.")
             return False
         return True
 
@@ -426,17 +451,19 @@ class Client(object):
     def finishTraining(self, characterId):
         url = f"{self.baseUrl}/TrainingService/FinishTraining?characterId={characterId}&accessToken={self.accessToken}"
         r = self.request(url, "POST")
-        if "errorMessage" in r.text:
-            return False
+        if r:
+            if "errorMessage" in r.text:
+                return False
 
         return True
 
     def getTrainingUpdate(self, characterId):
         url = f"{self.baseUrl}/TrainingService/GetTrainingUpdate?characterId={characterId}&accessToken={self.accessToken}"
         r = self.request(url, "POST")
-        if "errorMessage" in r.text:
+        if r and "errorMessage" in r.text:
             return False
-        self.trainingUpdate = xmltodict.parse(r.content, xml_attribs=True)
+        if r:
+            self.trainingUpdate = xmltodict.parse(r.content, xml_attribs=True)
         return True
 
     def listAllDesigns4(self):
@@ -447,171 +474,181 @@ class Client(object):
         versions = self.latestVersion["SettingService"]["GetLatestSetting"]["Setting"]
         url = f"{self.baseUrl}/DesignService/ListAllDesigns4?LanguageKey=en&ListFileVersion={versions['@FileVersion']}&ListSpriteVersion={versions['@SpriteVersion']}&ListBackgroundVersion={versions['@BackgroundVersion']}&ListAllShipDesignVersion={versions['@ShipDesignVersion']}&ListRoomDesignVersion={versions['@RoomDesignVersion']}&ListAllCharacterDesignVersion={versions['@CharacterDesignVersion']}&ListAllCharacterDesignActionVersion={versions['@CharacterDesignActionVersion']}&ListItemDesignVersion={versions['@ItemDesignVersion']}&ListCraftDesignVersion={versions['@CraftDesignVersion']}&ListMissileDesignVersion={versions['@MissileDesignVersion']}&ListStarSystemVersion={versions['@StarSystemVersion']}&ListStarSystemLinkVersion={versions['@StarSystemLinkVersion']}&ListAllNewsDesignVersion={versions['@NewsDesignVersion']}&ListLeagueVersion={versions['@LeagueVersion']}&ListAchievementDesignVersion={versions['@AchievementDesignVersion']}&ListRoomDesignPurchaseVersion={versions['@RoomDesignPurchaseVersion']}&ListRoomDesignSpriteVersion={versions['@RoomDesignSpriteVersion']}&ListAllMissionDesignVersion={versions['@MissionDesignVersion']}&ListAnimationVersion={versions['@AnimationVersion']}&ListAllResearchDesignVersion={versions['@ResearchDesignVersion']}&ListAllTrainingDesignVersion={versions['@TrainingDesignVersion']}&ListAllChallengeDesignVersion={versions['@ChallengeDesignVersion']}&ListAllRewardDesignVersion={versions['@RewardDesignVersion']}&ListAllDivisionDesignVersion={versions['@DivisionDesignVersion']}&ListAllCollectionDesignVersion={versions['@CollectionDesignVersion']}&ListAllDrawDesignVersion={versions['@DrawDesignVersion']}&ListAllPromotionDesignVersion={versions['@PromotionDesignVersion']}&ListAllSituationDesignVersion={versions['@SituationDesignVersion']}&ListAllTaskDesignVersion={versions['@TaskDesignVersion']}&ListActionTypeVersion={versions['@ActionTypeVersion']}&ListConditionTypeVersion={versions['@ConditionTypeVersion']}&ListItemDesignActionVersion={versions['@ItemDesignActionVersion']}&ListSeasonDesignVersion={versions['@SeasonDesignVersion']}&ListAssetVersion={versions['@AssetVersion']}&ListMarkerGeneratorDesignVersion={versions['@MarkerGeneratorDesignVersion']}"
         r = self.request(url, "GET")
-        allDesignVersion = xmltodict.parse(r.content, xml_attribs=True)
-        if (
-            "DesignService" not in allDesignVersion
-            and "ListAllDesigns" not in allDesignVersion["DesignService"]
-        ):
-            return False
-        designs = [
-            "Files",
-            "Sprites",
-            "Backgrounds",
-            "ShipDesigns",
-            "RoomDesigns",
-            "CharacterDesigns",
-            "CharacterDesignActions",
-            "ItemDesigns",
-            "CraftDesigns",
-            "MissileDesigns",
-            "StarSystems",
-            "StarSystemLinks",
-            "NewsDesigns",
-            "Leagues",
-            "AchievementDesigns",
-            "RoomDesignPurchases",
-            "RoomDesignSprites",
-            "MissionDesigns",
-            "Animations",
-            "ResearchDesigns",
-            "TrainingDesigns",
-            "ChallengeDesigns",
-            "RewardDesigns",
-            "DivisionDesigns",
-            "CollectionDesigns",
-            "DrawDesigns",
-            "PromotionDesigns",
-            "SituationDesigns",
-            "ItemDesignActions",
-            "SeasonDesigns",
-            "Assets",
-            "StarSystemMarkerGenerators",
-        ]
-        for design in designs:
-            if design not in allDesignVersion["DesignService"]["ListAllDesigns"]:
-                logging.error("Missing design data.")
+        if r:
+            allDesignVersion = xmltodict.parse(r.content, xml_attribs=True)
+            if (
+                "DesignService" not in allDesignVersion
+                and "ListAllDesigns" not in allDesignVersion["DesignService"]
+            ):
                 return False
-        self.files = allDesignVersion["DesignService"]["ListAllDesigns"]["Files"]
-        self.sprites = allDesignVersion["DesignService"]["ListAllDesigns"]["Sprites"]
-        self.backgrounds = allDesignVersion["DesignService"]["ListAllDesigns"][
-            "Backgrounds"
-        ]
-        self.shipDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-            "ShipDesigns"
-        ]
-        self.roomDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-            "RoomDesigns"
-        ]
-        self.characterDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-            "CharacterDesigns"
-        ]
-        self.characterDesignActions = allDesignVersion["DesignService"][
-            "ListAllDesigns"
-        ]["CharacterDesignActions"]
-        self.itemDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-            "ItemDesigns"
-        ]
-        self.craftDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-            "CraftDesigns"
-        ]
-        self.missileDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-            "MissileDesigns"
-        ]
-        self.starSystems = allDesignVersion["DesignService"]["ListAllDesigns"][
-            "StarSystems"
-        ]
-        self.starSystemsLinks = allDesignVersion["DesignService"]["ListAllDesigns"][
-            "StarSystemLinks"
-        ]
-        self.newsDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-            "NewsDesigns"
-        ]
-        self.leagues = allDesignVersion["DesignService"]["ListAllDesigns"]["Leagues"]
-        self.achievementDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-            "AchievementDesigns"
-        ]
-        self.roomDesignPurchases = allDesignVersion["DesignService"]["ListAllDesigns"][
-            "RoomDesignPurchases"
-        ]
-        self.roomDesignSprites = allDesignVersion["DesignService"]["ListAllDesigns"][
-            "RoomDesignSprites"
-        ]
-        self.missionDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-            "MissionDesigns"
-        ]
-        self.animations = allDesignVersion["DesignService"]["ListAllDesigns"][
-            "Animations"
-        ]
-        self.researchDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-            "ResearchDesigns"
-        ]
-        self.trainingDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-            "TrainingDesigns"
-        ]
-        self.challengeDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-            "ChallengeDesigns"
-        ]
-        self.rewardDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-            "RewardDesigns"
-        ]
-        self.divisionDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-            "DivisionDesigns"
-        ]
-        self.collectionDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-            "CollectionDesigns"
-        ]
-        self.drawDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-            "DrawDesigns"
-        ]
-        self.promotionDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-            "PromotionDesigns"
-        ]
-        self.situationDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-            "SituationDesigns"
-        ]
-        self.itemDesignActions = allDesignVersion["DesignService"]["ListAllDesigns"][
-            "ItemDesignActions"
-        ]
-        self.seasonDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-            "SeasonDesigns"
-        ]
-        self.assets = allDesignVersion["DesignService"]["ListAllDesigns"]["Assets"]
-        self.starSystemMarkerGenerators = allDesignVersion["DesignService"][
-            "ListAllDesigns"
-        ]["StarSystemMarkerGenerators"]
+            designs = [
+                "Files",
+                "Sprites",
+                "Backgrounds",
+                "ShipDesigns",
+                "RoomDesigns",
+                "CharacterDesigns",
+                "CharacterDesignActions",
+                "ItemDesigns",
+                "CraftDesigns",
+                "MissileDesigns",
+                "StarSystems",
+                "StarSystemLinks",
+                "NewsDesigns",
+                "Leagues",
+                "AchievementDesigns",
+                "RoomDesignPurchases",
+                "RoomDesignSprites",
+                "MissionDesigns",
+                "Animations",
+                "ResearchDesigns",
+                "TrainingDesigns",
+                "ChallengeDesigns",
+                "RewardDesigns",
+                "DivisionDesigns",
+                "CollectionDesigns",
+                "DrawDesigns",
+                "PromotionDesigns",
+                "SituationDesigns",
+                "ItemDesignActions",
+                "SeasonDesigns",
+                "Assets",
+                "StarSystemMarkerGenerators",
+            ]
+            for design in designs:
+                if design not in allDesignVersion["DesignService"]["ListAllDesigns"]:
+                    logging.error("Missing design data.")
+                    return False
+            self.files = allDesignVersion["DesignService"]["ListAllDesigns"]["Files"]
+            self.sprites = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "Sprites"
+            ]
+            self.backgrounds = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "Backgrounds"
+            ]
+            self.shipDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "ShipDesigns"
+            ]
+            self.roomDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "RoomDesigns"
+            ]
+            self.characterDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "CharacterDesigns"
+            ]
+            self.characterDesignActions = allDesignVersion["DesignService"][
+                "ListAllDesigns"
+            ]["CharacterDesignActions"]
+            self.itemDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "ItemDesigns"
+            ]
+            self.craftDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "CraftDesigns"
+            ]
+            self.missileDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "MissileDesigns"
+            ]
+            self.starSystems = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "StarSystems"
+            ]
+            self.starSystemsLinks = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "StarSystemLinks"
+            ]
+            self.newsDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "NewsDesigns"
+            ]
+            self.leagues = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "Leagues"
+            ]
+            self.achievementDesigns = allDesignVersion["DesignService"][
+                "ListAllDesigns"
+            ]["AchievementDesigns"]
+            self.roomDesignPurchases = allDesignVersion["DesignService"][
+                "ListAllDesigns"
+            ]["RoomDesignPurchases"]
+            self.roomDesignSprites = allDesignVersion["DesignService"][
+                "ListAllDesigns"
+            ]["RoomDesignSprites"]
+            self.missionDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "MissionDesigns"
+            ]
+            self.animations = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "Animations"
+            ]
+            self.researchDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "ResearchDesigns"
+            ]
+            self.trainingDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "TrainingDesigns"
+            ]
+            self.challengeDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "ChallengeDesigns"
+            ]
+            self.rewardDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "RewardDesigns"
+            ]
+            self.divisionDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "DivisionDesigns"
+            ]
+            self.collectionDesigns = allDesignVersion["DesignService"][
+                "ListAllDesigns"
+            ]["CollectionDesigns"]
+            self.drawDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "DrawDesigns"
+            ]
+            self.promotionDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "PromotionDesigns"
+            ]
+            self.situationDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "SituationDesigns"
+            ]
+            self.itemDesignActions = allDesignVersion["DesignService"][
+                "ListAllDesigns"
+            ]["ItemDesignActions"]
+            self.seasonDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "SeasonDesigns"
+            ]
+            self.assets = allDesignVersion["DesignService"]["ListAllDesigns"]["Assets"]
+            self.starSystemMarkerGenerators = allDesignVersion["DesignService"][
+                "ListAllDesigns"
+            ]["StarSystemMarkerGenerators"]
         return True
 
     def listAllCharacterDesigns2(self):
         if self.latestVersion:
             url = f"{self.baseUrl}/CharacterService/ListAllCharacterDesigns2?languageKey={self.device.languageKey}&designVersion={self.latestVersion['SettingService']['GetLatestSetting']['Setting']['@ResearchDesignVersion']}"
             r = self.request(url, "GET")
-            self.allCharacterDesigns = xmltodict.parse(r.content, xml_attribs=True)
+            if r:
+                self.allCharacterDesigns = xmltodict.parse(r.content, xml_attribs=True)
             if "CharacterService" not in self.allCharacterDesigns:
                 logging.error(
-                    f"[{self.info['@Name']}] CharacterService data not avaialble."
+                    "[%s] CharacterService data not avaialble.", self.info["@Name"]
                 )
                 return False
             return True
         return False
 
     def addTraining(self, trainingDesignId, characterId):
-        url = f"{self.baseUrl}/TrainingService/AddTraining?trainingDesignId={trainingDesignId}&characterId={characterId}&trainingStartDate={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}&accessToken={self.accessToken}"
+        url = f"{self.baseUrl}/TrainingService/AddTraining?trainingDesignId={trainingDesignId}&characterId={characterId}&trainingStartDate={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}&accessToken={self.accessToken}"
         r = self.request(url, "POST")
-        if "errorMessage" in r.text:
-            return False
+        if r:
+            if "errorMessage" in r.text:
+                return False
         return True
 
     def manageTraining(self):
-        if not hasattr(self, "allCharactersOfUser"):
-            if not self.listAllCharactersOfUser():
-                logging.error("allCharactersOfUser data not avaialble.")
-                return False
+        if (
+            not hasattr(self, "allCharactersOfUser")
+            and not self.listAllCharactersOfUser()
+        ):
+            logging.error("allCharactersOfUser data not avaialble.")
+            return False
 
-        if not hasattr(self, "allCharacterDesigns"):
-            self.listAllCharacterDesigns2()
-            if "CharacterService" not in self.allCharactersOfUser:
-                logging.error("CharacterService data not avaialble.")
-                return False
+        if (
+            not hasattr(self, "allCharacterDesigns")
+            and "CharacterService" not in self.allCharactersOfUser
+        ):
+            logging.error("AllCharacterDesigns data not avaialble.")
+            return False
 
         if not hasattr(self, "roomsViaAccessToken"):
             self.listRoomsViaAccessToken()
@@ -625,23 +662,76 @@ class Client(object):
                 logging.error("TrainingDesign data not available.")
                 return False
 
-        weapons = ["Apex", "Galactic Snow Maiden", "Turkey Hero"]
-        shields = ["Mistycball", "C.P.U.", "Penny", "Cyber Duck"]
-        engines = ["The Conjoint Archon", "Galactic Sprite"]
-        rushers = ["Huge Hellaloya"]
-        defenders = [
-            "Admiral Serena",
-            "Ancestral Spirit",
-            "Green Ranger - Oliver",
-            "r2e",
-        ]
-        pilots = []
-
+        roles = {
+            "weapons": {
+                "characters": ["Apex", "Galactic Snow Maiden", "Turkey Hero"],
+                "primaryT1": "Read Expert Weapon Theory",
+                "primaryT2": "Weapons Summit",
+                "primaryT3": "Weapons PHD",
+                "secondaryT1": "Bench Press",
+                "secondaryT2": "Muscle Beach",
+                "secondaryT3": "Olympic Weightlifting",
+            },
+            "shields": {
+                "characters": ["Mistycball", "C.P.U.", "Penny", "Cyber Duck"],
+                "primaryT1": "Big Book of Science",
+                "primaryT2": "Scientific Summit",
+                "primaryT3": "Science PHD",
+                "secondaryT1": "Bench Press",
+                "secondaryT2": "Muscle Beach",
+                "secondaryT3": "Olympic Weightlifting",
+            },
+            "engines": {
+                "characters": ["The Conjoint Archon", "Galactic Sprite"],
+                "primaryT1": "Study Expert Engineering Manual",
+                "primaryT2": "Engineering Summit",
+                "primaryT3": "Engineering PHD",
+                "secondaryT1": "Bench Press",
+                "secondaryT2": "Muscle Beach",
+                "secondaryT3": "Olympic Weightlifting",
+            },
+            "rushers": {
+                "characters": ["Huge Hellaloya"],
+                "primaryT1": "Steam Yoga",
+                "primaryT2": "Crew vs Wild",
+                "primaryT3": "Space Marine",
+                "secondaryT1": "Bench Press",
+                "secondaryT2": "Muscle Beach",
+                "secondaryT3": "Olympic Weightlifting",
+            },
+            "defenders": {
+                "characters": [
+                    "Admiral Serena",
+                    "Ancestral Spirit",
+                    "Green Ranger - Oliver",
+                ],
+                "primaryT1": "Bench Press",
+                "primaryT2": "Muscle Beach",
+                "primaryT3": "Olympic Weightlifting",
+                "secondaryT1": "Kickbox",
+                "secondaryT2": "BBJ",
+                "secondaryT3": "Shaolin Tradition",
+            },
+            "pilots": {
+                "characters": ["r2e"],
+                "primaryT1": "Read Expert Pilot Handbook",
+                "primaryT2": "Pilot Summit",
+                "primaryT3": "Pilot Expert",
+                "secondaryT1": "Bench Press",
+                "secondaryT2": "Muscle Beach",
+                "secondaryT3": "Olympic Weightlifting",
+            },
+        }
         for character in self.allCharactersOfUser["CharacterService"][
             "ListAllCharactersOfUser"
         ]["Characters"]["Character"]:
-            room = {}
             trainingName = ""
+            roleData = {}
+            for data in roles.values():
+                if character["@CharacterName"] in data["characters"]:
+                    roleData = data
+
+            room = {}
             for room in self.roomsViaAccessToken["RoomService"][
                 "ListRoomsViaAccessToken"
             ]["Rooms"]["Room"]:
@@ -674,20 +764,13 @@ class Client(object):
                     ):
                         break
 
-                logging.debug(f"{character['@TrainingEndDate']=}")
                 trainingEndDate = None
                 if character["@TrainingEndDate"]:
                     trainingEndDate = datetime.datetime.strptime(
                         character["@TrainingEndDate"], "%Y-%m-%dT%H:%M:%S"
                     )
 
-                logging.debug(
-                    f"Total: {count=} {characterDesign['@TrainingCapacity']=} {count / int(characterDesign['@TrainingCapacity']) * 100}"
-                )
                 percent = count / int(characterDesign["@TrainingCapacity"]) * 100
-                logging.debug(
-                    f"{character['@CharacterName']=} {trainingEndDate=} {datetime.datetime.utcnow() - datetime.timedelta(minutes=45)=}"
-                )
                 if (percent < 51) and (
                     not trainingEndDate
                     or (
@@ -695,21 +778,10 @@ class Client(object):
                         < (datetime.datetime.utcnow() - datetime.timedelta(minutes=45))
                     )
                 ):
-                    if character["@CharacterName"] in weapons:
-                        trainingName = "Read Expert Weapon Theory"
-                    elif character["@CharacterName"] in pilots:
-                        trainingName = "Read Expert Pilot Handbook"
-                    elif character["@CharacterName"] in shields:
-                        trainingName = "Big Book of Science"
-                    elif character["@CharacterName"] in engines:
-                        trainingName = "Study Expert Engineering Manual"
-                    elif character["@CharacterName"] in rushers:
-                        trainingName = "Steam Yoga"
-                    elif character["@CharacterName"] in defenders:
-                        trainingName = "Kickbox"
-
-                    logging.info(
-                        f"[{self.info['@Name']}] Use Green (T1) {trainingName} primary training for {character['@CharacterName']} in {self.roomName} with ability {characterDesign['@SpecialAbilityType']}, and {character['@Fatigue']} fatigue."
+                    if roleData:
+                        trainingName = roleData["primaryT1"]
+                    logging.debug(
+                        f"[{self.info['@Name']}] Use Green (T1) {trainingName} primary training for {character['@CharacterName']} in {self.roomName} with {percent:.2f}% training complete, ability {characterDesign['@SpecialAbilityType']}, and {character['@Fatigue']} fatigue."
                     )
 
                 elif (50 < percent < 65) and (
@@ -719,21 +791,10 @@ class Client(object):
                         < (datetime.datetime.utcnow() - datetime.timedelta(hours=3))
                     )
                 ):
-                    if character["@CharacterName"] in weapons:
-                        trainingName = "Weapons Summit"
-                    elif character["@CharacterName"] in pilots:
-                        trainingName = "Pilot Summit"
-                    elif character["@CharacterName"] in shields:
-                        trainingName = "Scientific Summit"
-                    elif character["@CharacterName"] in engines:
-                        trainingName = "Engineering Summit"
-                    elif character["@CharacterName"] in rushers:
-                        trainingName = "Crew vs Wild"
-                    elif character["@CharacterName"] in defenders:
-                        trainingName = "BBJ"
-
-                    logging.info(
-                        f"[{self.info['@Name']}] Use Blue (T2) {trainingName} primary training for {character['@CharacterName']} in {self.roomName} with ability {characterDesign['@SpecialAbilityType']}, and {character['@Fatigue']} fatigue."
+                    if roleData:
+                        trainingName = roleData["primaryT2"]
+                    logging.debug(
+                        f"[{self.info['@Name']}] Use Blue (T2) {trainingName} primary training for {character['@CharacterName']} in {self.roomName} with {percent:.2f}% training complete, ability {characterDesign['@SpecialAbilityType']}, and {character['@Fatigue']} fatigue."
                     )
 
                 elif (64 < percent < 72) and (
@@ -743,21 +804,10 @@ class Client(object):
                         < (datetime.datetime.utcnow() - datetime.timedelta(hours=12))
                     )
                 ):
-                    if character["@CharacterName"] in weapons:
-                        trainingName = "Weapons PHD"
-                    elif character["@CharacterName"] in pilots:
-                        trainingName = "Pilot Expert"
-                    elif character["@CharacterName"] in shields:
-                        trainingName = "Science PHD"
-                    elif character["@CharacterName"] in engines:
-                        trainingName = "Engineering PHD"
-                    elif character["@CharacterName"] in rushers:
-                        trainingName = "Space Marine"
-                    elif character["@CharacterName"] in defenders:
-                        trainingName = "Shaolin Tradition"
-
-                    logging.warning(
-                        f"[{self.info['@Name']}] Use Yellow (T3) {trainingName} primary training for {character['@CharacterName']} in {self.roomName} with ability {characterDesign['@SpecialAbilityType']}, and {character['@Fatigue']} fatigue."
+                    if roleData:
+                        trainingName = roleData["primaryT3"]
+                    logging.debug(
+                        f"[{self.info['@Name']}] Use Yellow (T3) {trainingName} primary training for {character['@CharacterName']} in {self.roomName} with {percent:.2f}% training complete, ability {characterDesign['@SpecialAbilityType']}, and {character['@Fatigue']} fatigue."
                     )
 
                 elif (71 < percent < 74) and (
@@ -767,10 +817,10 @@ class Client(object):
                         < (datetime.datetime.utcnow() - datetime.timedelta(minutes=45))
                     )
                 ):
-                    trainingName = "Bench Press"
-
-                    logging.warning(
-                        f"[{self.info['@Name']}] Use Green (T1) {trainingName} primary training for {character['@CharacterName']} in {self.roomName} with ability {characterDesign['@SpecialAbilityType']}, and {character['@Fatigue']} fatigue."
+                    if roleData:
+                        trainingName = roleData["secondaryT1"]
+                    logging.debug(
+                        f"[{self.info['@Name']}] Use Green (T1) {trainingName} primary training for {character['@CharacterName']} in {self.roomName} with {percent:.2f}% training complete, ability {characterDesign['@SpecialAbilityType']}, and {character['@Fatigue']} fatigue."
                     )
                 elif (73 < percent < 85) and (
                     not trainingEndDate
@@ -779,9 +829,10 @@ class Client(object):
                         < (datetime.datetime.utcnow() - datetime.timedelta(hours=3))
                     )
                 ):
-                    trainingName = "Muscle Beach"
-                    logging.warning(
-                        f"[{self.info['@Name']}] Use Blue (T2) {trainingName} primary training for {character['@CharacterName']} in {self.roomName} with ability {characterDesign['@SpecialAbilityType']}, and {character['@Fatigue']} fatigue."
+                    if roleData:
+                        trainingName = roleData["secondaryT2"]
+                    logging.debug(
+                        f"[{self.info['@Name']}] Use Blue (T2) {trainingName} primary training for {character['@CharacterName']} in {self.roomName} with {percent:.2f}% training complete, ability {characterDesign['@SpecialAbilityType']}, and {character['@Fatigue']} fatigue."
                     )
                 elif (84 < percent < 90) and (
                     not trainingEndDate
@@ -790,15 +841,16 @@ class Client(object):
                         < (datetime.datetime.utcnow() - datetime.timedelta(hours=12))
                     )
                 ):
-                    trainingName = "Olympic Weightlifting"
-                    logging.warning(
-                        f"[{self.info['@Name']}] Use Yellow (T3) {trainingName} primary training for {character['@CharacterName']} in {self.roomName} with ability {characterDesign['@SpecialAbilityType']}, and {character['@Fatigue']} fatigue."
+                    if roleData:
+                        trainingName = roleData["secondaryT3"]
+                    logging.debug(
+                        f"[{self.info['@Name']}] Use Yellow (T3) {trainingName} primary training for {character['@CharacterName']} in {self.roomName} with {percent:.2f}% training complete, ability {characterDesign['@SpecialAbilityType']}, and {character['@Fatigue']} fatigue."
                     )
 
                 if trainingName:
                     if self.finishTraining(character["@CharacterId"]):
                         logging.info(
-                            f"[{self.info['@Name']}] Completed training for {character['@CharacterName']} in {self.roomName} with ability {characterDesign['@SpecialAbilityType']}, {character['@Fatigue']} fatigue, and {(datetime.datetime.utcnow() - trainingEndDate).seconds} seconds to complete training."
+                            f"[{self.info['@Name']}] Completed training for {character['@CharacterName']} in {self.roomName} with {percent:.2f}% training complete, ability {characterDesign['@SpecialAbilityType']}, {character['@Fatigue']} fatigue."
                         )
 
                     trainingDesignId = None
@@ -808,8 +860,9 @@ class Client(object):
 
                     if self.addTraining(trainingDesignId, character["@CharacterId"]):
                         logging.info(
-                            f"[{self.info['@Name']}] Starting training {trainingName} for {character['@CharacterName']} in {self.roomName} with ability {characterDesign['@SpecialAbilityType']}, {character['@Fatigue']} fatigue."
+                            f"[{self.info['@Name']}] Starting training {trainingName} for {character['@CharacterName']} in {self.roomName} with {percent:.2f}% training complete, ability {characterDesign['@SpecialAbilityType']}, {character['@Fatigue']} fatigue."
                         )
+        return True
 
     def getCharacterRooms(self):
         if not hasattr(self, "allCharactersOfUser"):
@@ -824,6 +877,7 @@ class Client(object):
                 logging.info(
                     f"[{self.info['@Name']}] {character['@CharacterName']} is located in {self.roomName}."
                 )
+        return True
 
     def upgradeCharacter(self, characterId):
         url = f"{self.baseUrl}/CharacterService/UpgradeCharacter?characterId={characterId}&accessToken={self.accessToken}"
@@ -869,15 +923,17 @@ class Client(object):
 
         if character_names:
             logging.info(
-                f"[{self.info['@Name']}] The following characters are below level 40: {' ,'.join(character_names)}"
+                f"[{self.info['@Name']}] The following characters are below level 40: {', '.join(character_names)}"
             )
+        return True
 
     def listAllRoomActionsOfShip(self):
         if self.user.isAuthorized:
             url = f"https://api.pixelstarships.com/RoomService/ListAllRoomActionsOfShip?accessToken={self.accessToken}&clientDateTime={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}"
             r = self.request(url, "GET")
-            self.allRoomActionsOfShip = xmltodict.parse(r.content, xml_attribs=True)
-            return True
+            if r:
+                self.allRoomActionsOfShip = xmltodict.parse(r.content, xml_attribs=True)
+                return True
         return False
 
     def pusherAuth(self):
@@ -887,7 +943,8 @@ class Client(object):
     def listSystemMessagesForUser3(self, fromMessageId=0, take=10000):
         url = f"https://api.pixelstarships.com/MessageService/ListSystemMessagesForUser3?fromMessageId={fromMessageId}&take={take}&accessToken={self.accessToken}"
         r = self.request(url, "GET")
-        self.systemMessagesForUser = xmltodict.parse(r.content, xml_attribs=True)
+        if r:
+            self.systemMessagesForUser = xmltodict.parse(r.content, xml_attribs=True)
         if "MessageService" not in self.systemMessagesForUser:
             logging.error("MessageService data unavailable.")
             return False
@@ -899,14 +956,18 @@ class Client(object):
             url = f"https://api.pixelstarships.com/UserService/ListFriends?UserId={userId if userId else self.info['@Id']}&accessToken={self.accessToken}"
             logging.debug(url)
             r = self.request(url, "POST")
-            self.systemMessagesForUser = xmltodict.parse(r.content, xml_attribs=True)
+            if r:
+                self.systemMessagesForUser = xmltodict.parse(
+                    r.content, xml_attribs=True
+                )
             return True
         return False
 
     def listMessagesForChannelKey(self, channelKey="alliance-43958"):
         url = f"https://api.pixelstarships.com/MessageService/ListMessagesForChannelKey?channelKey=channelKey={channelKey}&accessToken={self.accessToken}"
         r = self.request(url, "GET")
-        self.messagesForChannelKey = xmltodict.parse(r.content, xml_attribs=True)
+        if r:
+            self.messagesForChannelKey = xmltodict.parse(r.content, xml_attribs=True)
         # Perform error handling and return values based on the results
         # return True
         # return False
@@ -914,12 +975,14 @@ class Client(object):
     def findUserRanking(self):
         url = f"https://api.pixelstarships.com/LadderService/FindUserRanking?accessToken={self.accessToken}"
         r = self.request(url, "GET")
-        self.userRanking = xmltodict.parse(r.content, xml_attribs=True)
+        if r:
+            self.userRanking = xmltodict.parse(r.content, xml_attribs=True)
 
     def activateItem3(self, itemId=0, targetId=0):
         url = f"https://api.pixelstarships.com/ItemService/ActivateItem3?itemId={itemId}&targetId={targetId}&"
         r = self.request(url, "POST")
-        self.item = xmltodict.parse(r.content, xml_attribs=True)
+        if r:
+            self.item = xmltodict.parse(r.content, xml_attribs=True)
 
     def print_market_data(self, v):
         message = "".join(v["@Message"])
@@ -928,16 +991,16 @@ class Client(object):
         logging.info(f"[{self.info['@Name']}] {message} for {price} {currency}.")
 
     def listActiveMarketplaceMessages(self):
-        if self.user.isAuthorized:
-            url = "https://api.pixelstarships.com/MessageService/ListActiveMarketplaceMessages5?itemSubType=None&rarity=None&currencyType=Unknown&itemDesignId=0&userId={}&accessToken={}".format(
-                self.user.id, self.accessToken
-            )
-            r = self.request(url, "GET")
+        url = "https://api.pixelstarships.com/MessageService/ListActiveMarketplaceMessages5?itemSubType=None&rarity=None&currencyType=Unknown&itemDesignId=0&userId={}&accessToken={}".format(
+            self.user.id, self.accessToken
+        )
+        r = self.request(url, "GET")
+        if r:
             d = xmltodict.parse(r.content, xml_attribs=True)
             if "errorMessage=" in r.text:
                 logging.error(f"An error occurred: {r.text}.")
                 return False
-            if d["MessageService"]["ListActiveMarketplaceMessages"]["Messages"] == None:
+            if d["MessageService"]["ListActiveMarketplaceMessages"]["Messages"] is None:
                 logging.debug(
                     f'[{self.info["@Name"]}] You have no items listed on the marketplace.'
                 )
@@ -952,7 +1015,7 @@ class Client(object):
                     for i in v:
                         if isinstance(i, dict):
                             self.print_market_data(i)
-            return True
+        return True
 
     def infoBux(self):
         logging.info(
@@ -982,6 +1045,7 @@ class Client(object):
             self.credits = d["RoomService"]["CollectResources"]["User"]["@Credits"]
 
         self.rssCollectedTimestamp = time.time()
+        return True
 
     def getResourceTotals(self):
         logging.info(
@@ -1059,7 +1123,8 @@ class Client(object):
     def AddStarbux2(self, quantity=1):
         url = f"https://api.pixelstarships.com/UserService/AddStarbux2?quantity={quantity}&clientDateTime={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}&checksum={ChecksumTimeForDate(DotNet.get_time()) + ChecksumPasswordWithString(self.accessToken)}&accessToken={self.accessToken}"
         r = self.request(url, "POST")
-        self.starbux = xmltodict.parse(r.content, xml_attribs=True)
+        if r:
+            self.starbux = xmltodict.parse(r.content, xml_attribs=True)
 
     def grabFlyingStarbux(self):
         if (
@@ -1109,16 +1174,15 @@ class Client(object):
             if i["@ResearchDesignId"] == researchDesignId:
                 url = f"https://api.pixelstarships.com/ResearchService/SpeedUpResearchUsingBoostGauge?researchId={researchId}&accessToken={self.accessToken}&clientDateTime={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}"
                 r = self.request(url, "POST")
-                if "@errorMessage" in r.text:
+                if r and "@errorMessage" in r.text:
                     logging.info(
                         f"[{self.info['@Name']}] Failed to speed up research for {''.join(i['@ResearchName'])}."
                     )
                     return False
-                else:
-                    logging.info(
-                        f"[{self.info['@Name']}] Speeding up research for {''.join(i['@ResearchName'])}."
-                    )
-                    return True
+                logging.info(
+                    f"[{self.info['@Name']}] Speeding up research for {''.join(i['@ResearchName'])}."
+                )
+                return True
         return False
 
     # Determine the boost gauge before attempting to speed up a room
@@ -1130,15 +1194,14 @@ class Client(object):
             if i["@RoomDesignId"] == roomDesignId:
                 url = f"https://api.pixelstarships.com/RoomService/SpeedUpRoomConstructionUsingBoostGauge?roomId={roomId}&clientDateTime={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}&accessToken={self.accessToken}"
                 r = self.request(url, "POST")
-                if "errorMessage" in r.text:
+                if r and "errorMessage" in r.text:
                     logging.info(
                         f"[{self.info['@Name']}] Failed to speed contruction for {''.join(i['@RoomName'])}."
                     )
                     return False
-                else:
-                    logging.info(
-                        f"[{self.info['@Name']}] Speeding up contruction for {''.join(i['@RoomName'])}."
-                    )
+                logging.info(
+                    f"[{self.info['@Name']}] Speeding up contruction for {''.join(i['@RoomName'])}."
+                )
                 return True
         return False
 
@@ -1266,7 +1329,7 @@ class Client(object):
                             r = self.request(url, "POST")
                             roomName = ""
                             upgradeRoomName = ""
-                            if "concurrent" in r.text:
+                            if r and "concurrent" in r.text:
                                 logging.info(
                                     f'[{self.info["@Name"]}] You have reached the maximum number of concurrent constructions allowed.'
                                 )
@@ -1341,31 +1404,15 @@ class Client(object):
 
     def getCrewInfo(self):
         character_list = []
-        fatigue_characters = []
         self.listAllCharactersOfUser()
 
         for character in self.allCharactersOfUser["CharacterService"][
             "ListAllCharactersOfUser"
         ]["Characters"]["Character"]:
             character_list.append(character["@CharacterName"])
-            if int(character["@Fatigue"]) > 0:
-                fatigue_characters.append(
-                    "".join(
-                        [
-                            character["@CharacterName"],
-                            " has ",
-                            character["@Fatigue"],
-                            " fatigue",
-                        ]
-                    )
-                )
         if character_list:
             logging.info(
-                f"[{self.info['@Name']}] List of characters on your ship: {', '.join(character_list)}"
-            )
-        if fatigue_characters:
-            logging.info(
-                f"[{self.info['@Name']}] List ot fatigue characters on your ship: {', '.join(fatigue_characters)}."
+                f"[{self.info['@Name']}] List of characters: {', '.join(character_list)}"
             )
         return True
 
@@ -1448,16 +1495,14 @@ class Client(object):
         r = self.request(url, "POST")
         if "errorMessage" in r.text:
             return False
-        else:
-            return True
+        return True
 
     def actionMessage(self, messageId):
         url = f"{self.baseUrl}/MessageService/ActionMessage?messageId={messageId}&accessToken={self.accessToken}"
         r = self.request(url, "GET")
         if r and "errorMessage" in r.text:
             return False
-        else:
-            return True
+        return True
 
     def collectTaskReward(self):
         self.listTasksOfAUser()
