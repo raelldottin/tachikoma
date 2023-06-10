@@ -142,8 +142,7 @@ def main():
             client.getTodayLiveOps2()
             client.listAllDesigns4()
     else:
-        decide = input(
-            "Input G to login as guest. Input A to login as user : ")
+        decide = input("Input G to login as guest. Input A to login as user : ")
         if decide == "G":
             client = authenticate(device)
         else:
@@ -156,7 +155,6 @@ def main():
         if client.freeStarbuxToday >= client.freeStarbuxMax:
             client.collectTaskReward()
             client.getCrewInfo()
-            client.rushResearchOrConstruction()
             client.upgradeCharacters()
             client.upgradeResearches()
             client.upgradeRooms()
