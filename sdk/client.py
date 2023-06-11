@@ -704,6 +704,7 @@ class Client(object):
                     "Admiral Serena",
                     "Ancestral Spirit",
                     "Green Ranger - Oliver",
+                    "Huntress",
                 ],
                 "primaryT1": "Bench Press",
                 "primaryT2": "Muscle Beach",
