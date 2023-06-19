@@ -455,7 +455,6 @@ class Client(object):
             if "errorMessage" in r.text:
                 return False
             self.trainingFinish = xmltodict.parse(r.content, xml_attribs=True)
-
         return True
 
     def getTrainingUpdate(self, characterId):
@@ -900,8 +899,41 @@ class Client(object):
 
                 if trainingName:
                     if self.finishTraining(character["@CharacterId"]):
+                        statTotal = 0
+                        statChange = ""
+                        for stat in stats:
+                            statTotal = statTotal + int(
+                                self.trainingFinish["TrainingService"][
+                                    "FinishTraining"
+                                ]["Character"][stat]
+                            )
+                            if int(character[stat]) < int(
+                                self.trainingFinish["TrainingService"][
+                                    "FinishTraining"
+                                ]["Character"][stat]
+                            ):
+                                if statChange:
+                                    statChange = ", ".join(
+                                        stat
+                                        + " increased by "
+                                        + str(
+                                            int(
+                                                self.trainingFinish["TrainingService"][
+                                                    "FinishTraining"
+                                                ]["Character"][stat]
+                                                - int(character[stat])
+                                            )
+                                        )
+                                    )
+                        newPercent = (
+                            statTotal / int(characterDesign["@TrainingCapacity"]) * 100
+                        )
+                        newFatigue = self.trainingFinish["TrainingService"][
+                            "FinishTraining"
+                        ]["Character"]["@Fatigue"]
+
                         logging.info(
-                            f"[{self.info['@Name']}] Completed training for {character['@CharacterName']} in {self.roomName} with {percent:.2f}% training complete, ability {characterDesign['@SpecialAbilityType']}, {character['@Fatigue']} fatigue."
+                            f"[{self.info['@Name']}] Completed training for {character['@CharacterName']} in {self.roomName} with {statChange}, {newPercent - percent:.2f}% training increase and {newFatigue - int(character['@Fatigue'])} fatigue increase."
                         )
 
                     trainingDesignId = None
