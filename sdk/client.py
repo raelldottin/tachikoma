@@ -454,6 +454,7 @@ class Client(object):
         if r:
             if "errorMessage" in r.text:
                 return False
+            self.trainingFinish = xmltodict.parse(r.content, xml_attribs=True)
 
         return True
 
@@ -664,37 +665,45 @@ class Client(object):
 
         roles = {
             "weapons": {
-                "characters": ["Apex", "Galactic Snow Maiden", "Turkey Hero"],
+                "characters": ["Apex", "Galactic Snow Maiden"],
+                "primaryRoom": "Academy",
                 "primaryT1": "Read Expert Weapon Theory",
                 "primaryT2": "Weapons Summit",
                 "primaryT3": "Weapons PHD",
+                "secondaryRoom": "GYM",
                 "secondaryT1": "Bench Press",
                 "secondaryT2": "Muscle Beach",
                 "secondaryT3": "Olympic Weightlifting",
             },
             "shields": {
-                "characters": ["Mistycball", "C.P.U.", "Penny", "Cyber Duck"],
+                "characters": ["Mistycball", "C.P.U.", "Penny"],
+                "primaryRoom": "Academy",
                 "primaryT1": "Big Book of Science",
                 "primaryT2": "Scientific Summit",
                 "primaryT3": "Science PHD",
+                "secondaryRoom": "GYM",
                 "secondaryT1": "Bench Press",
                 "secondaryT2": "Muscle Beach",
                 "secondaryT3": "Olympic Weightlifting",
             },
             "engines": {
                 "characters": ["The Conjoint Archon", "Galactic Sprite"],
-                "primaryT1": "Study Expert Engineering Manual",
-                "primaryT2": "Engineering Summit",
-                "primaryT3": "Engineering PHD",
-                "secondaryT1": "Bench Press",
-                "secondaryT2": "Muscle Beach",
-                "secondaryT3": "Olympic Weightlifting",
+                "primaryRoom": "GYM",
+                "primaryT1": "Bench Press",
+                "primaryT2": "Muscle Beach",
+                "primaryT3": "Olympic Weightlifting",
+                "secondaryRoom": "Academy",
+                "secondaryT1": "Study Expert Engineering Manual",
+                "secondaryT2": "Engineering Summit",
+                "secondaryT3": "Engineering PHD",
             },
             "rushers": {
-                "characters": ["Huge Hellaloya"],
+                "characters": ["Huge Hellaloya", "Cyber Duck"],
+                "primaryRoom": "GYM",
                 "primaryT1": "Steam Yoga",
                 "primaryT2": "Crew vs Wild",
                 "primaryT3": "Space Marine",
+                "secondaryRoom": "GYM",
                 "secondaryT1": "Bench Press",
                 "secondaryT2": "Muscle Beach",
                 "secondaryT3": "Olympic Weightlifting",
@@ -705,19 +714,24 @@ class Client(object):
                     "Ancestral Spirit",
                     "Green Ranger - Oliver",
                     "Huntress",
+                    "Turkey Hero",
                 ],
+                "primaryRoom": "GYM",
                 "primaryT1": "Bench Press",
                 "primaryT2": "Muscle Beach",
                 "primaryT3": "Olympic Weightlifting",
+                "secondaryRoom": "GYM",
                 "secondaryT1": "Kickbox",
                 "secondaryT2": "BBJ",
                 "secondaryT3": "Shaolin Tradition",
             },
             "pilots": {
                 "characters": ["r2e"],
+                "primaryRoom": "Academy",
                 "primaryT1": "Read Expert Pilot Handbook",
                 "primaryT2": "Pilot Summit",
                 "primaryT3": "Pilot Expert",
+                "secondaryRoom": "GYM",
                 "secondaryT1": "Bench Press",
                 "secondaryT2": "Muscle Beach",
                 "secondaryT3": "Olympic Weightlifting",
@@ -727,11 +741,6 @@ class Client(object):
             "ListAllCharactersOfUser"
         ]["Characters"]["Character"]:
             trainingName = ""
-            roleData = {}
-            for data in roles.values():
-                if character["@CharacterName"] in data["characters"]:
-                    roleData = data
-
             room = {}
             for room in self.roomsViaAccessToken["RoomService"][
                 "ListRoomsViaAccessToken"
@@ -740,6 +749,11 @@ class Client(object):
                     break
             self.getRoomName(room["@RoomDesignId"])
             if "Academy" in self.roomName or "GYM" in self.roomName:
+                roleData = {}
+                for data in roles.values():
+                    if character["@CharacterName"] in data["characters"]:
+                        roleData = data
+
                 stats = [
                     "@HpImprovement",
                     "@PilotImprovement",
@@ -772,78 +786,114 @@ class Client(object):
                     )
 
                 percent = count / int(characterDesign["@TrainingCapacity"]) * 100
-                if (percent < 51) and (
-                    not trainingEndDate
-                    or (
-                        trainingEndDate
-                        < (datetime.datetime.utcnow() - datetime.timedelta(minutes=45))
+                if (
+                    roleData
+                    and roleData["primaryRoom"] == self.roomName
+                    and (percent < 51)
+                    and (
+                        not trainingEndDate
+                        or (
+                            trainingEndDate
+                            < (
+                                datetime.datetime.utcnow()
+                                - datetime.timedelta(minutes=45)
+                            )
+                        )
                     )
                 ):
-                    if roleData:
-                        trainingName = roleData["primaryT1"]
+                    trainingName = roleData["primaryT1"]
                     logging.debug(
                         f"[{self.info['@Name']}] Use Green (T1) {trainingName} primary training for {character['@CharacterName']} in {self.roomName} with {percent:.2f}% training complete, ability {characterDesign['@SpecialAbilityType']}, and {character['@Fatigue']} fatigue."
                     )
 
-                elif (50 < percent < 65) and (
-                    not trainingEndDate
-                    or (
-                        trainingEndDate
-                        < (datetime.datetime.utcnow() - datetime.timedelta(hours=3))
+                elif (
+                    roleData
+                    and roleData["primaryRoom"] == self.roomName
+                    and (50 < percent < 65)
+                    and (
+                        not trainingEndDate
+                        or (
+                            trainingEndDate
+                            < (datetime.datetime.utcnow() - datetime.timedelta(hours=3))
+                        )
                     )
                 ):
-                    if roleData:
-                        trainingName = roleData["primaryT2"]
+                    trainingName = roleData["primaryT2"]
                     logging.debug(
                         f"[{self.info['@Name']}] Use Blue (T2) {trainingName} primary training for {character['@CharacterName']} in {self.roomName} with {percent:.2f}% training complete, ability {characterDesign['@SpecialAbilityType']}, and {character['@Fatigue']} fatigue."
                     )
 
-                elif (64 < percent < 72) and (
-                    not trainingEndDate
-                    or (
-                        trainingEndDate
-                        < (datetime.datetime.utcnow() - datetime.timedelta(hours=12))
+                elif (
+                    roleData
+                    and roleData["primaryRoom"] == self.roomName
+                    and (64 < percent < 72)
+                    and (
+                        not trainingEndDate
+                        or (
+                            trainingEndDate
+                            < (
+                                datetime.datetime.utcnow()
+                                - datetime.timedelta(hours=12)
+                            )
+                        )
                     )
                 ):
-                    if roleData:
-                        trainingName = roleData["primaryT3"]
+                    trainingName = roleData["primaryT3"]
                     logging.debug(
                         f"[{self.info['@Name']}] Use Yellow (T3) {trainingName} primary training for {character['@CharacterName']} in {self.roomName} with {percent:.2f}% training complete, ability {characterDesign['@SpecialAbilityType']}, and {character['@Fatigue']} fatigue."
                     )
 
-                elif (71 < percent < 74) and (
-                    not trainingEndDate
-                    or (
-                        trainingEndDate
-                        < (datetime.datetime.utcnow() - datetime.timedelta(minutes=45))
+                elif (
+                    roleData
+                    and roleData["secondaryRoom"] == self.roomName
+                    and (71 < percent < 74)
+                    and (
+                        not trainingEndDate
+                        or (
+                            trainingEndDate
+                            < (
+                                datetime.datetime.utcnow()
+                                - datetime.timedelta(minutes=45)
+                            )
+                        )
                     )
                 ):
-                    if roleData:
-                        trainingName = roleData["secondaryT1"]
+                    trainingName = roleData["secondaryT1"]
                     logging.debug(
                         f"[{self.info['@Name']}] Use Green (T1) {trainingName} primary training for {character['@CharacterName']} in {self.roomName} with {percent:.2f}% training complete, ability {characterDesign['@SpecialAbilityType']}, and {character['@Fatigue']} fatigue."
                     )
-                elif (73 < percent < 85) and (
-                    not trainingEndDate
-                    or (
-                        trainingEndDate
-                        < (datetime.datetime.utcnow() - datetime.timedelta(hours=3))
+                elif (
+                    roleData
+                    and roleData["secondaryRoom"] == self.roomName
+                    and (73 < percent < 85)
+                    and (
+                        not trainingEndDate
+                        or (
+                            trainingEndDate
+                            < (datetime.datetime.utcnow() - datetime.timedelta(hours=3))
+                        )
                     )
                 ):
-                    if roleData:
-                        trainingName = roleData["secondaryT2"]
+                    trainingName = roleData["secondaryT2"]
                     logging.debug(
                         f"[{self.info['@Name']}] Use Blue (T2) {trainingName} primary training for {character['@CharacterName']} in {self.roomName} with {percent:.2f}% training complete, ability {characterDesign['@SpecialAbilityType']}, and {character['@Fatigue']} fatigue."
                     )
-                elif (84 < percent < 90) and (
-                    not trainingEndDate
-                    or (
-                        trainingEndDate
-                        < (datetime.datetime.utcnow() - datetime.timedelta(hours=12))
+                elif (
+                    roleData
+                    and roleData["secondaryRoom"] == self.roomName
+                    and (84 < percent < 90)
+                    and (
+                        not trainingEndDate
+                        or (
+                            trainingEndDate
+                            < (
+                                datetime.datetime.utcnow()
+                                - datetime.timedelta(hours=12)
+                            )
+                        )
                     )
                 ):
-                    if roleData:
-                        trainingName = roleData["secondaryT3"]
+                    trainingName = roleData["secondaryT3"]
                     logging.debug(
                         f"[{self.info['@Name']}] Use Yellow (T3) {trainingName} primary training for {character['@CharacterName']} in {self.roomName} with {percent:.2f}% training complete, ability {characterDesign['@SpecialAbilityType']}, and {character['@Fatigue']} fatigue."
                     )
