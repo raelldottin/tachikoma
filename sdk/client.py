@@ -928,9 +928,9 @@ class Client(object):
                         newPercent = (
                             statTotal / int(characterDesign["@TrainingCapacity"]) * 100
                         )
-                        newFatigue = self.trainingFinish["TrainingService"][
+                        newFatigue = int(self.trainingFinish["TrainingService"][
                             "FinishTraining"
-                        ]["Character"]["@Fatigue"]
+                        ]["Character"]["@Fatigue"])
 
                         logging.info(
                             f"[{self.info['@Name']}] Completed training for {character['@CharacterName']} in {self.roomName} with {statChange}, {newPercent - percent:.2f}% training increase and {newFatigue - int(character['@Fatigue'])} fatigue increase."
