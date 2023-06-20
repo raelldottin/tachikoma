@@ -787,7 +787,7 @@ class Client(object):
                 percent = count / int(characterDesign["@TrainingCapacity"]) * 100
                 if (
                     roleData
-                    and roleData["primaryRoom"] == self.roomName
+                    and roleData["primaryRoom"] in self.roomName
                     and (percent < 51)
                     and (
                         not trainingEndDate
@@ -807,7 +807,7 @@ class Client(object):
 
                 elif (
                     roleData
-                    and roleData["primaryRoom"] == self.roomName
+                    and roleData["primaryRoom"] in self.roomName
                     and (50 < percent < 65)
                     and (
                         not trainingEndDate
@@ -824,7 +824,7 @@ class Client(object):
 
                 elif (
                     roleData
-                    and roleData["primaryRoom"] == self.roomName
+                    and roleData["primaryRoom"] in self.roomName
                     and (64 < percent < 72)
                     and (
                         not trainingEndDate
@@ -844,7 +844,7 @@ class Client(object):
 
                 elif (
                     roleData
-                    and roleData["secondaryRoom"] == self.roomName
+                    and roleData["secondaryRoom"] in self.roomName
                     and (71 < percent < 74)
                     and (
                         not trainingEndDate
@@ -863,7 +863,7 @@ class Client(object):
                     )
                 elif (
                     roleData
-                    and roleData["secondaryRoom"] == self.roomName
+                    and roleData["secondaryRoom"] in self.roomName
                     and (73 < percent < 85)
                     and (
                         not trainingEndDate
@@ -879,7 +879,7 @@ class Client(object):
                     )
                 elif (
                     roleData
-                    and roleData["secondaryRoom"] == self.roomName
+                    and roleData["secondaryRoom"] in self.roomName
                     and (84 < percent < 90)
                     and (
                         not trainingEndDate
