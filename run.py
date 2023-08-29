@@ -36,7 +36,8 @@ def email_logfile(filename, client, email=None, password=None, recipient=None):
             recipient = config.get("MAIL_CONFIG", "RECIPIENT_EMAIL")
         except:
             logging.exception(
-                "Unable to email log file because email authentication is not properly setup."
+                "Unable to email log file because email authentication is not properly setup.",
+                exc_info=True,
             )
             return None
 
@@ -140,7 +141,6 @@ def main():
         if client:
             client.getLatestVersion3()
             client.getTodayLiveOps2()
-            client.listAllDesigns4()
     else:
         decide = input("Input G to login as guest. Input A to login as user : ")
         if decide == "G":
