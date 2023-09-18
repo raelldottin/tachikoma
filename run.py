@@ -141,6 +141,7 @@ def main():
         if client:
             client.getLatestVersion3()
             client.getTodayLiveOps2()
+            client.listAllDesigns5()
     else:
         decide = input("Input G to login as guest. Input A to login as user : ")
         if decide == "G":
