@@ -139,6 +139,7 @@ class Client(object):
             d["UserService"]["UserLogin"]["User"]["@LastHeartBeatDate"],
             "%Y-%m-%dT%H:%M:%S",
         )
+
         self.info = d["UserService"]["UserLogin"]["User"]
         if "@Name" not in self.info:
             self.info["@Name"] = ""
@@ -281,7 +282,8 @@ class Client(object):
     def getLatestVersion3(self):
         url = f"https://api.pixelstarships.com/SettingService/GetLatestVersion3?languageKey={self.device.languageKey}&deviceType=DeviceType{self.device.name}"
         r = self.request(url, "GET")
-        if r:
+
+        if r.content:
             self.latestVersion = xmltodict.parse(r.content, xml_attribs=True)
 
     def getTodayLiveOps2(self):
@@ -472,156 +474,154 @@ class Client(object):
             self.trainingUpdate = xmltodict.parse(r.content, xml_attribs=True)
         return True
 
-    # def listAllDesigns4(self):
-    # """
-    # ListAllDesigns4 has been deprecated
-    # The design data will be fetched individually
-    # """
-    # if not self.latestVersion:
-    #    self.getLatestVersion3()
-    # if "SettingService" not in self.latestVersion:
-    #    return False
-    # versions = self.latestVersion["SettingService"]["GetLatestSetting"]["Setting"]
-    # url = f"{self.baseUrl}/DesignService/ListAllDesigns4?LanguageKey=en&ListFileVersion={versions['@FileVersion']}&ListSpriteVersion={versions['@SpriteVersion']}&ListBackgroundVersion={versions['@BackgroundVersion']}&ListAllShipDesignVersion={versions['@ShipDesignVersion']}&ListRoomDesignVersion={versions['@RoomDesignVersion']}&ListAllCharacterDesignVersion={versions['@CharacterDesignVersion']}&ListAllCharacterDesignActionVersion={versions['@CharacterDesignActionVersion']}&ListItemDesignVersion={versions['@ItemDesignVersion']}&ListCraftDesignVersion={versions['@CraftDesignVersion']}&ListMissileDesignVersion={versions['@MissileDesignVersion']}&ListStarSystemVersion={versions['@StarSystemVersion']}&ListStarSystemLinkVersion={versions['@StarSystemLinkVersion']}&ListAllNewsDesignVersion={versions['@NewsDesignVersion']}&ListLeagueVersion={versions['@LeagueVersion']}&ListAchievementDesignVersion={versions['@AchievementDesignVersion']}&ListRoomDesignPurchaseVersion={versions['@RoomDesignPurchaseVersion']}&ListRoomDesignSpriteVersion={versions['@RoomDesignSpriteVersion']}&ListAllMissionDesignVersion={versions['@MissionDesignVersion']}&ListAnimationVersion={versions['@AnimationVersion']}&ListAllResearchDesignVersion={versions['@ResearchDesignVersion']}&ListAllTrainingDesignVersion={versions['@TrainingDesignVersion']}&ListAllChallengeDesignVersion={versions['@ChallengeDesignVersion']}&ListAllRewardDesignVersion={versions['@RewardDesignVersion']}&ListAllDivisionDesignVersion={versions['@DivisionDesignVersion']}&ListAllCollectionDesignVersion={versions['@CollectionDesignVersion']}&ListAllDrawDesignVersion={versions['@DrawDesignVersion']}&ListAllPromotionDesignVersion={versions['@PromotionDesignVersion']}&ListAllSituationDesignVersion={versions['@SituationDesignVersion']}&ListAllTaskDesignVersion={versions['@TaskDesignVersion']}&ListActionTypeVersion={versions['@ActionTypeVersion']}&ListConditionTypeVersion={versions['@ConditionTypeVersion']}&ListItemDesignActionVersion={versions['@ItemDesignActionVersion']}&ListSeasonDesignVersion={versions['@SeasonDesignVersion']}&ListAssetVersion={versions['@AssetVersion']}&ListMarkerGeneratorDesignVersion={versions['@MarkerGeneratorDesignVersion']}"
-    # r = self.request(url, "GET")
-    # if r:
-    #    allDesignVersion = xmltodict.parse(r.content, xml_attribs=True)
-    #    if (
-    #        "DesignService" not in allDesignVersion
-    #        and "ListAllDesigns" not in allDesignVersion["DesignService"]
-    #    ):
-    #        return False
-    #    designs = [
-    #        "Files",
-    #        "Sprites",
-    #        "Backgrounds",
-    #        "ShipDesigns",
-    #        "RoomDesigns",
-    #        "CharacterDesigns",
-    #        "CharacterDesignActions",
-    #        "ItemDesigns",
-    #        "CraftDesigns",
-    #        "MissileDesigns",
-    #        "StarSystems",
-    #        "StarSystemLinks",
-    #        "NewsDesigns",
-    #        "Leagues",
-    #        "AchievementDesigns",
-    #        "RoomDesignPurchases",
-    #        "RoomDesignSprites",
-    #        "MissionDesigns",
-    #        "Animations",
-    #        "ResearchDesigns",
-    #        "TrainingDesigns",
-    #        "ChallengeDesigns",
-    #        "RewardDesigns",
-    #        "DivisionDesigns",
-    #        "CollectionDesigns",
-    #        "DrawDesigns",
-    #        "PromotionDesigns",
-    #        "SituationDesigns",
-    #        "ItemDesignActions",
-    #        "SeasonDesigns",
-    #        "Assets",
-    #        "StarSystemMarkerGenerators",
-    #    ]
-    #    for design in designs:
-    #        if design not in allDesignVersion["DesignService"]["ListAllDesigns"]:
-    #            logging.error("Missing design data.")
-    #            return False
-    #    self.files = allDesignVersion["DesignService"]["ListAllDesigns"]["Files"]
-    #    self.sprites = allDesignVersion["DesignService"]["ListAllDesigns"][
-    #        "Sprites"
-    #    ]
-    #    self.backgrounds = allDesignVersion["DesignService"]["ListAllDesigns"][
-    #        "Backgrounds"
-    #    ]
-    #    self.shipDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-    #        "ShipDesigns"
-    #    ]
-    #    self.roomDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-    #        "RoomDesigns"
-    #    ]
-    #    self.characterDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-    #        "CharacterDesigns"
-    #    ]
-    #    self.characterDesignActions = allDesignVersion["DesignService"][
-    #        "ListAllDesigns"
-    #    ]["CharacterDesignActions"]
-    #    self.itemDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-    #        "ItemDesigns"
-    #    ]
-    #    self.craftDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-    #        "CraftDesigns"
-    #    ]
-    #    self.missileDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-    #        "MissileDesigns"
-    #    ]
-    #    self.starSystems = allDesignVersion["DesignService"]["ListAllDesigns"][
-    #        "StarSystems"
-    #    ]
-    #    self.starSystemsLinks = allDesignVersion["DesignService"]["ListAllDesigns"][
-    #        "StarSystemLinks"
-    #    ]
-    #    self.newsDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-    #        "NewsDesigns"
-    #    ]
-    #    self.leagues = allDesignVersion["DesignService"]["ListAllDesigns"][
-    #        "Leagues"
-    #    ]
-    #    self.achievementDesigns = allDesignVersion["DesignService"][
-    #        "ListAllDesigns"
-    #    ]["AchievementDesigns"]
-    #    self.roomDesignPurchases = allDesignVersion["DesignService"][
-    #        "ListAllDesigns"
-    #    ]["RoomDesignPurchases"]
-    #    self.roomDesignSprites = allDesignVersion["DesignService"][
-    #        "ListAllDesigns"
-    #    ]["RoomDesignSprites"]
-    #    self.missionDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-    #        "MissionDesigns"
-    #    ]
-    #    self.animations = allDesignVersion["DesignService"]["ListAllDesigns"][
-    #        "Animations"
-    #    ]
-    #    self.researchDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-    #        "ResearchDesigns"
-    #    ]
-    #    self.trainingDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-    #        "TrainingDesigns"
-    #    ]
-    #    self.challengeDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-    #        "ChallengeDesigns"
-    #    ]
-    #    self.rewardDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-    #        "RewardDesigns"
-    #    ]
-    #    self.divisionDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-    #        "DivisionDesigns"
-    #    ]
-    #    self.collectionDesigns = allDesignVersion["DesignService"][
-    #        "ListAllDesigns"
-    #    ]["CollectionDesigns"]
-    #    self.drawDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-    #        "DrawDesigns"
-    #    ]
-    #    self.promotionDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-    #        "PromotionDesigns"
-    #    ]
-    #    self.situationDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-    #        "SituationDesigns"
-    #    ]
-    #    self.itemDesignActions = allDesignVersion["DesignService"][
-    #        "ListAllDesigns"
-    #    ]["ItemDesignActions"]
-    #    self.seasonDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-    #        "SeasonDesigns"
-    #    ]
-    #    self.assets = allDesignVersion["DesignService"]["ListAllDesigns"]["Assets"]
-    #    self.starSystemMarkerGenerators = allDesignVersion["DesignService"][
-    #        "ListAllDesigns"
-    #    ]["StarSystemMarkerGenerators"]
-    # return True
+    def listAllDesigns5(self):
+        if not self.latestVersion:
+            self.getLatestVersion3()
+        if "SettingService" not in self.latestVersion:
+            return False
+        versions = self.latestVersion["SettingService"]["GetLatestSetting"]["Setting"]
+        url = f"{self.baseUrl}/DesignService/ListAllDesigns5?LanguageKey=en&ListFileVersion={versions['@FileVersion']}&ListSpriteVersion={versions['@SpriteVersion']}&ListBackgroundVersion={versions['@BackgroundVersion']}&ListAllShipDesignVersion={versions['@ShipDesignVersion']}&ListRoomDesignVersion={versions['@RoomDesignVersion']}&ListAllCharacterDesignVersion={versions['@CharacterDesignVersion']}&ListAllCharacterDesignActionVersion={versions['@CharacterDesignActionVersion']}&ListItemDesignVersion={versions['@ItemDesignVersion']}&ListCraftDesignVersion={versions['@CraftDesignVersion']}&ListMissileDesignVersion={versions['@MissileDesignVersion']}&ListStarSystemVersion={versions['@StarSystemVersion']}&ListStarSystemLinkVersion={versions['@StarSystemLinkVersion']}&ListAllNewsDesignVersion={versions['@NewsDesignVersion']}&ListLeagueVersion={versions['@LeagueVersion']}&ListAchievementDesignVersion={versions['@AchievementDesignVersion']}&ListRoomDesignPurchaseVersion={versions['@RoomDesignPurchaseVersion']}&ListRoomDesignSpriteVersion={versions['@RoomDesignSpriteVersion']}&ListAllMissionDesignVersion={versions['@MissionDesignVersion']}&ListAnimationVersion={versions['@AnimationVersion']}&ListAllResearchDesignVersion={versions['@ResearchDesignVersion']}&ListAllTrainingDesignVersion={versions['@TrainingDesignVersion']}&ListAllChallengeDesignVersion={versions['@ChallengeDesignVersion']}&ListAllRewardDesignVersion={versions['@RewardDesignVersion']}&ListAllDivisionDesignVersion={versions['@DivisionDesignVersion']}&ListAllCollectionDesignVersion={versions['@CollectionDesignVersion']}&ListAllDrawDesignVersion={versions['@DrawDesignVersion']}&ListAllPromotionDesignVersion={versions['@PromotionDesignVersion']}&ListAllSituationDesignVersion={versions['@SituationDesignVersion']}&ListAllTaskDesignVersion={versions['@TaskDesignVersion']}&ListActionTypeVersion={versions['@ActionTypeVersion']}&ListConditionTypeVersion={versions['@ConditionTypeVersion']}&ListItemDesignActionVersion={versions['@ItemDesignActionVersion']}&ListSeasonDesignVersion={versions['@SeasonDesignVersion']}&ListAssetVersion={versions['@AssetVersion']}&ListMarkerGeneratorDesignVersion={versions['@MarkerGeneratorDesignVersion']}"
+        # temporary fix until the next update
+        url = f"{self.baseUrl}/DesignService/ListAllDesigns5?LanguageKey=en&ListFileVersion=2119&ListSpriteVersion=2973&ListBackgroundVersion=489&ListAllShipDesignVersion=656&ListRoomDesignVersion=875&ListAllCharacterDesignVersion=1090&ListAllCharacterDesignActionVersion=387&ListItemDesignVersion=164584&ListCraftDesignVersion=476&ListMissileDesignVersion=550&ListStarSystemVersion=347&ListStarSystemLinkVersion=343&ListAllNewsDesignVersion=348&ListLeagueVersion=451&ListAchievementDesignVersion=569&ListRoomDesignPurchaseVersion=701&ListRoomDesignSpriteVersion=752&ListAllMissionDesignVersion=768&ListAnimationVersion=726&ListAllResearchDesignVersion=532&ListAllTrainingDesignVersion=432&ListAllChallengeDesignVersion=591&ListAllRewardDesignVersion=321131&ListAllDivisionDesignVersion=524&ListAllCollectionDesignVersion=386&ListAllDrawDesignVersion=354&ListAllPromotionDesignVersion=1187&ListAllSituationDesignVersion=504&ListAllTaskDesignVersion=0&ListActionTypeVersion=0&ListConditionTypeVersion=0&ListItemDesignActionVersion=84&ListSeasonDesignVersion=90&ListAssetVersion=70&ListMarkerGeneratorDesignVersion=36&ListSkinVersion=10"
+        r = self.request(url, "GET")
+        if r:
+            allDesignVersion = xmltodict.parse(r.content, xml_attribs=True)
+            if (
+                "DesignService" not in allDesignVersion
+                and "ListAllDesigns" not in allDesignVersion["DesignService"]
+            ):
+                return False
+            designs = [
+                "Files",
+                "Sprites",
+                "Backgrounds",
+                "ShipDesigns",
+                "RoomDesigns",
+                "CharacterDesigns",
+                "CharacterDesignActions",
+                "ItemDesigns",
+                "CraftDesigns",
+                "MissileDesigns",
+                "StarSystems",
+                "StarSystemLinks",
+                "NewsDesigns",
+                "Leagues",
+                "AchievementDesigns",
+                "RoomDesignPurchases",
+                "RoomDesignSprites",
+                "MissionDesigns",
+                "Animations",
+                "ResearchDesigns",
+                "TrainingDesigns",
+                "ChallengeDesigns",
+                "RewardDesigns",
+                "DivisionDesigns",
+                "CollectionDesigns",
+                "DrawDesigns",
+                "PromotionDesigns",
+                "SituationDesigns",
+                "ItemDesignActions",
+                "SeasonDesigns",
+                "Assets",
+                "StarSystemMarkerGenerators",
+            ]
+            for design in designs:
+                if design not in allDesignVersion["DesignService"]["ListAllDesigns"]:
+                    logging.error("Missing design data.")
+                    return False
+            self.files = allDesignVersion["DesignService"]["ListAllDesigns"]["Files"]
+            self.sprites = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "Sprites"
+            ]
+            self.backgrounds = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "Backgrounds"
+            ]
+            self.shipDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "ShipDesigns"
+            ]
+            self.roomDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "RoomDesigns"
+            ]
+            self.characterDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "CharacterDesigns"
+            ]
+            self.characterDesignActions = allDesignVersion["DesignService"][
+                "ListAllDesigns"
+            ]["CharacterDesignActions"]
+            self.itemDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "ItemDesigns"
+            ]
+            self.craftDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "CraftDesigns"
+            ]
+            self.missileDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "MissileDesigns"
+            ]
+            self.starSystems = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "StarSystems"
+            ]
+            self.starSystemsLinks = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "StarSystemLinks"
+            ]
+            self.newsDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "NewsDesigns"
+            ]
+            self.leagues = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "Leagues"
+            ]
+            self.achievementDesigns = allDesignVersion["DesignService"][
+                "ListAllDesigns"
+            ]["AchievementDesigns"]
+            self.roomDesignPurchases = allDesignVersion["DesignService"][
+                "ListAllDesigns"
+            ]["RoomDesignPurchases"]
+            self.roomDesignSprites = allDesignVersion["DesignService"][
+                "ListAllDesigns"
+            ]["RoomDesignSprites"]
+            self.missionDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "MissionDesigns"
+            ]
+            self.animations = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "Animations"
+            ]
+            self.researchDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "ResearchDesigns"
+            ]
+            self.trainingDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "TrainingDesigns"
+            ]
+            self.challengeDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "ChallengeDesigns"
+            ]
+            self.rewardDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "RewardDesigns"
+            ]
+            self.divisionDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "DivisionDesigns"
+            ]
+            self.collectionDesigns = allDesignVersion["DesignService"][
+                "ListAllDesigns"
+            ]["CollectionDesigns"]
+            self.drawDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "DrawDesigns"
+            ]
+            self.promotionDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "PromotionDesigns"
+            ]
+            self.situationDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "SituationDesigns"
+            ]
+            self.itemDesignActions = allDesignVersion["DesignService"][
+                "ListAllDesigns"
+            ]["ItemDesignActions"]
+            self.seasonDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "SeasonDesigns"
+            ]
+            self.assets = allDesignVersion["DesignService"]["ListAllDesigns"]["Assets"]
+            self.starSystemMarkerGenerators = allDesignVersion["DesignService"][
+                "ListAllDesigns"
+            ]["StarSystemMarkerGenerators"]
+        return True
 
     def listAllCharacterDesigns2(self):
         if self.latestVersion:
@@ -1632,11 +1632,7 @@ class Client(object):
                 for taskDesign in self.allTaskDesigns["TaskService"][
                     "ListAllTaskDesigns"
                 ]["TaskDesigns"]["TaskDesign"]:
-                    if (
-                        taskDesign["@TaskDesignId"] == task["@TaskDesignId"]
-                        and taskDesign["@ObjectiveAmount"] == task["@ProgressValue"]
-                    ):
-                        logging.debug(f"{task=}\n{taskDesign=}")
+                    if taskDesign["@TaskDesignId"] == task["@TaskDesignId"]:
                         if self.collectTaskCompletion(task["@TaskDesignId"]):
                             logging.info(
                                 f"[{self.info['@Name']}] Collecting reward for objective: {taskDesign['@Name']}."
