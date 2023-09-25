@@ -482,7 +482,6 @@ class Client(object):
             self.trainingUpdate = xmltodict.parse(r.content, xml_attribs=True)
         return True
 
-
     def listAllDesigns4(self):
         """
         ListAllDesigns4 has been deprecated
@@ -687,7 +686,7 @@ class Client(object):
 
         roles = {
             "weapons": {
-                "characters": ["Apex", "Galactic Snow Maiden"],
+                "characters": ["Galactic Succubus", "Galactic Snow Maiden"],
                 "primaryRoom": ["Academy", "Lunar College"],
                 "primaryT1": "Read Expert Weapon Theory",
                 "primaryT2": "Weapons Summit",
@@ -986,6 +985,11 @@ class Client(object):
                         logging.info(
                             f"[{self.info['@Name']}] Starting training {trainingName} for {character['@CharacterName']} in {self.roomName} with {percent:.2f}% training complete, ability {characterDesign['@SpecialAbilityType']}, {character['@Fatigue']} fatigue."
                         )
+                    if character["@CharacterName"]:
+                        logging.info(
+                            f"[{self.info['@Name']}] Considering training {trainingName} for {character['@CharacterName']} in {self.roomName} with {percent:.2f}% training complete, ability {characterDesign['@SpecialAbilityType']}, {character['@Fatigue']} fatigue."
+                        )
+
         return True
 
     def getCharacterRooms(self):
