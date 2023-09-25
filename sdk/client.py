@@ -315,6 +315,14 @@ class Client(object):
         r = self.request(url, "GET")
         if r:
             self.shipByUserId = xmltodict.parse(r.content, xml_attribs=True)
+
+            self.rooms = self.shipByUserId["ShipService"]["GetShipByUserId"]["Ship"][
+                "Rooms"
+            ]["Room"]
+            self.researches = self.shipByUserId["ShipService"]["GetShipByUserId"][
+                "Ship"
+            ]["Researches"]["Research"]
+
         if "ShipService" not in self.shipByUserId:
             logging.error("ShipService data not avaialble.")
             return False
@@ -474,18 +482,22 @@ class Client(object):
             self.trainingUpdate = xmltodict.parse(r.content, xml_attribs=True)
         return True
 
-    def listAllDesigns5(self):
+
+    def listAllDesigns4(self):
+        """
+        ListAllDesigns4 has been deprecated
+        The design data will be fetched individually
+        """
         if not self.latestVersion:
             self.getLatestVersion3()
         if "SettingService" not in self.latestVersion:
             return False
         versions = self.latestVersion["SettingService"]["GetLatestSetting"]["Setting"]
-        url = f"{self.baseUrl}/DesignService/ListAllDesigns5?LanguageKey=en&ListFileVersion={versions['@FileVersion']}&ListSpriteVersion={versions['@SpriteVersion']}&ListBackgroundVersion={versions['@BackgroundVersion']}&ListAllShipDesignVersion={versions['@ShipDesignVersion']}&ListRoomDesignVersion={versions['@RoomDesignVersion']}&ListAllCharacterDesignVersion={versions['@CharacterDesignVersion']}&ListAllCharacterDesignActionVersion={versions['@CharacterDesignActionVersion']}&ListItemDesignVersion={versions['@ItemDesignVersion']}&ListCraftDesignVersion={versions['@CraftDesignVersion']}&ListMissileDesignVersion={versions['@MissileDesignVersion']}&ListStarSystemVersion={versions['@StarSystemVersion']}&ListStarSystemLinkVersion={versions['@StarSystemLinkVersion']}&ListAllNewsDesignVersion={versions['@NewsDesignVersion']}&ListLeagueVersion={versions['@LeagueVersion']}&ListAchievementDesignVersion={versions['@AchievementDesignVersion']}&ListRoomDesignPurchaseVersion={versions['@RoomDesignPurchaseVersion']}&ListRoomDesignSpriteVersion={versions['@RoomDesignSpriteVersion']}&ListAllMissionDesignVersion={versions['@MissionDesignVersion']}&ListAnimationVersion={versions['@AnimationVersion']}&ListAllResearchDesignVersion={versions['@ResearchDesignVersion']}&ListAllTrainingDesignVersion={versions['@TrainingDesignVersion']}&ListAllChallengeDesignVersion={versions['@ChallengeDesignVersion']}&ListAllRewardDesignVersion={versions['@RewardDesignVersion']}&ListAllDivisionDesignVersion={versions['@DivisionDesignVersion']}&ListAllCollectionDesignVersion={versions['@CollectionDesignVersion']}&ListAllDrawDesignVersion={versions['@DrawDesignVersion']}&ListAllPromotionDesignVersion={versions['@PromotionDesignVersion']}&ListAllSituationDesignVersion={versions['@SituationDesignVersion']}&ListAllTaskDesignVersion={versions['@TaskDesignVersion']}&ListActionTypeVersion={versions['@ActionTypeVersion']}&ListConditionTypeVersion={versions['@ConditionTypeVersion']}&ListItemDesignActionVersion={versions['@ItemDesignActionVersion']}&ListSeasonDesignVersion={versions['@SeasonDesignVersion']}&ListAssetVersion={versions['@AssetVersion']}&ListMarkerGeneratorDesignVersion={versions['@MarkerGeneratorDesignVersion']}"
-        # temporary fix until the next update
-        url = f"{self.baseUrl}/DesignService/ListAllDesigns5?LanguageKey=en&ListFileVersion=2119&ListSpriteVersion=2973&ListBackgroundVersion=489&ListAllShipDesignVersion=656&ListRoomDesignVersion=875&ListAllCharacterDesignVersion=1090&ListAllCharacterDesignActionVersion=387&ListItemDesignVersion=164584&ListCraftDesignVersion=476&ListMissileDesignVersion=550&ListStarSystemVersion=347&ListStarSystemLinkVersion=343&ListAllNewsDesignVersion=348&ListLeagueVersion=451&ListAchievementDesignVersion=569&ListRoomDesignPurchaseVersion=701&ListRoomDesignSpriteVersion=752&ListAllMissionDesignVersion=768&ListAnimationVersion=726&ListAllResearchDesignVersion=532&ListAllTrainingDesignVersion=432&ListAllChallengeDesignVersion=591&ListAllRewardDesignVersion=321131&ListAllDivisionDesignVersion=524&ListAllCollectionDesignVersion=386&ListAllDrawDesignVersion=354&ListAllPromotionDesignVersion=1187&ListAllSituationDesignVersion=504&ListAllTaskDesignVersion=0&ListActionTypeVersion=0&ListConditionTypeVersion=0&ListItemDesignActionVersion=84&ListSeasonDesignVersion=90&ListAssetVersion=70&ListMarkerGeneratorDesignVersion=36&ListSkinVersion=10"
+        url = f"{self.baseUrl}/DesignService/ListAllDesigns4?LanguageKey=en&ListFileVersion={versions['@FileVersion']}&ListSpriteVersion={versions['@SpriteVersion']}&ListBackgroundVersion={versions['@BackgroundVersion']}&ListAllShipDesignVersion={versions['@ShipDesignVersion']}&ListRoomDesignVersion={versions['@RoomDesignVersion']}&ListAllCharacterDesignVersion={versions['@CharacterDesignVersion']}&ListAllCharacterDesignActionVersion={versions['@CharacterDesignActionVersion']}&ListItemDesignVersion={versions['@ItemDesignVersion']}&ListCraftDesignVersion={versions['@CraftDesignVersion']}&ListMissileDesignVersion={versions['@MissileDesignVersion']}&ListStarSystemVersion={versions['@StarSystemVersion']}&ListStarSystemLinkVersion={versions['@StarSystemLinkVersion']}&ListAllNewsDesignVersion={versions['@NewsDesignVersion']}&ListLeagueVersion={versions['@LeagueVersion']}&ListAchievementDesignVersion={versions['@AchievementDesignVersion']}&ListRoomDesignPurchaseVersion={versions['@RoomDesignPurchaseVersion']}&ListRoomDesignSpriteVersion={versions['@RoomDesignSpriteVersion']}&ListAllMissionDesignVersion={versions['@MissionDesignVersion']}&ListAnimationVersion={versions['@AnimationVersion']}&ListAllResearchDesignVersion={versions['@ResearchDesignVersion']}&ListAllTrainingDesignVersion={versions['@TrainingDesignVersion']}&ListAllChallengeDesignVersion={versions['@ChallengeDesignVersion']}&ListAllRewardDesignVersion={versions['@RewardDesignVersion']}&ListAllDivisionDesignVersion={versions['@DivisionDesignVersion']}&ListAllCollectionDesignVersion={versions['@CollectionDesignVersion']}&ListAllDrawDesignVersion={versions['@DrawDesignVersion']}&ListAllPromotionDesignVersion={versions['@PromotionDesignVersion']}&ListAllSituationDesignVersion={versions['@SituationDesignVersion']}&ListAllTaskDesignVersion={versions['@TaskDesignVersion']}&ListActionTypeVersion={versions['@ActionTypeVersion']}&ListConditionTypeVersion={versions['@ConditionTypeVersion']}&ListItemDesignActionVersion={versions['@ItemDesignActionVersion']}&ListSeasonDesignVersion={versions['@SeasonDesignVersion']}&ListAssetVersion={versions['@AssetVersion']}&ListMarkerGeneratorDesignVersion={versions['@MarkerGeneratorDesignVersion']}"
         r = self.request(url, "GET")
         if r:
             allDesignVersion = xmltodict.parse(r.content, xml_attribs=True)
+
             if (
                 "DesignService" not in allDesignVersion
                 and "ListAllDesigns" not in allDesignVersion["DesignService"]
@@ -629,6 +641,7 @@ class Client(object):
             r = self.request(url, "GET")
             if r:
                 self.allCharacterDesigns = xmltodict.parse(r.content, xml_attribs=True)
+
             if "CharacterService" not in self.allCharacterDesigns:
                 logging.error(
                     "[%s] CharacterService data not avaialble.", self.info["@Name"]
@@ -655,7 +668,7 @@ class Client(object):
 
         if (
             not hasattr(self, "allCharacterDesigns")
-            and "CharacterService" not in self.allCharactersOfUser
+            and not self.listAllCharacterDesigns2()
         ):
             logging.error("AllCharacterDesigns data not avaialble.")
             return False
@@ -675,29 +688,29 @@ class Client(object):
         roles = {
             "weapons": {
                 "characters": ["Apex", "Galactic Snow Maiden"],
-                "primaryRoom": "Academy",
+                "primaryRoom": ["Academy", "Lunar College"],
                 "primaryT1": "Read Expert Weapon Theory",
                 "primaryT2": "Weapons Summit",
                 "primaryT3": "Weapons PHD",
-                "secondaryRoom": "GYM",
+                "secondaryRoom": "Galaxy GYM",
                 "secondaryT1": "Bench Press",
                 "secondaryT2": "Muscle Beach",
                 "secondaryT3": "Olympic Weightlifting",
             },
             "shields": {
-                "characters": ["Mistycball", "C.P.U.", "Penny"],
-                "primaryRoom": "Academy",
+                "characters": ["Mistycball", "C.P.U.", "r2e"],
+                "primaryRoom": ["Academy", "Lunar College"],
                 "primaryT1": "Big Book of Science",
                 "primaryT2": "Scientific Summit",
                 "primaryT3": "Science PHD",
-                "secondaryRoom": "GYM",
+                "secondaryRoom": "Galaxy GYM",
                 "secondaryT1": "Bench Press",
                 "secondaryT2": "Muscle Beach",
                 "secondaryT3": "Olympic Weightlifting",
             },
             "engines": {
                 "characters": ["The Conjoint Archon", "Galactic Sprite"],
-                "primaryRoom": "GYM",
+                "primaryRoom": ["GYM", "Galaxy GYM"],
                 "primaryT1": "Bench Press",
                 "primaryT2": "Muscle Beach",
                 "primaryT3": "Olympic Weightlifting",
@@ -708,11 +721,11 @@ class Client(object):
             },
             "rushers": {
                 "characters": ["Huge Hellaloya", "Cyber Duck"],
-                "primaryRoom": "GYM",
+                "primaryRoom": ["GYM", "Galaxy GYM"],
                 "primaryT1": "Steam Yoga",
                 "primaryT2": "Crew vs Wild",
                 "primaryT3": "Space Marine",
-                "secondaryRoom": "GYM",
+                "secondaryRoom": "Galaxy GYM",
                 "secondaryT1": "Bench Press",
                 "secondaryT2": "Muscle Beach",
                 "secondaryT3": "Olympic Weightlifting",
@@ -725,22 +738,22 @@ class Client(object):
                     "Huntress",
                     "Turkey Hero",
                 ],
-                "primaryRoom": "GYM",
+                "primaryRoom": ["GYM", "Galaxy GYM"],
                 "primaryT1": "Bench Press",
                 "primaryT2": "Muscle Beach",
                 "primaryT3": "Olympic Weightlifting",
-                "secondaryRoom": "GYM",
+                "secondaryRoom": "Galaxy GYM",
                 "secondaryT1": "Kickbox",
                 "secondaryT2": "BBJ",
                 "secondaryT3": "Shaolin Tradition",
             },
             "pilots": {
-                "characters": ["r2e"],
-                "primaryRoom": "Academy",
+                "characters": [],
+                "primaryRoom": ["Academy", "Lunar College"],
                 "primaryT1": "Read Expert Pilot Handbook",
                 "primaryT2": "Pilot Summit",
                 "primaryT3": "Pilot Expert",
-                "secondaryRoom": "GYM",
+                "secondaryRoom": "Galaxy GYM",
                 "secondaryT1": "Bench Press",
                 "secondaryT2": "Muscle Beach",
                 "secondaryT3": "Olympic Weightlifting",
@@ -757,7 +770,14 @@ class Client(object):
                 if character["@RoomId"] == room["@RoomId"]:
                     break
             self.getRoomName(room["@RoomDesignId"])
-            if "Academy" in self.roomName or "GYM" in self.roomName:
+
+            logging.debug(
+                "{0!r} in {1!r}".format(character["@CharacterName"], self.roomName)
+            )
+            if any(
+                primaryRoom in self.roomName
+                for primaryRoom in ["Academy", "GYM", "Galaxy Gym", "Lunar College"]
+            ):
                 roleData = {}
                 for data in roles.values():
                     if character["@CharacterName"] in data["characters"]:
@@ -797,7 +817,10 @@ class Client(object):
                 percent = count / int(characterDesign["@TrainingCapacity"]) * 100
                 if (
                     roleData
-                    and roleData["primaryRoom"] in self.roomName
+                    and any(
+                        primaryRoom in self.roomName
+                        for primaryRoom in roleData["primaryRoom"]
+                    )
                     and (percent < 51)
                     and (
                         not trainingEndDate
@@ -817,7 +840,10 @@ class Client(object):
 
                 elif (
                     roleData
-                    and roleData["primaryRoom"] in self.roomName
+                    and any(
+                        primaryRoom in self.roomName
+                        for primaryRoom in roleData["primaryRoom"]
+                    )
                     and (50 < percent < 65)
                     and (
                         not trainingEndDate
@@ -834,7 +860,10 @@ class Client(object):
 
                 elif (
                     roleData
-                    and roleData["primaryRoom"] in self.roomName
+                    and any(
+                        primaryRoom in self.roomName
+                        for primaryRoom in roleData["primaryRoom"]
+                    )
                     and (64 < percent < 72)
                     and (
                         not trainingEndDate

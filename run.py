@@ -141,7 +141,8 @@ def main():
         if client:
             client.getLatestVersion3()
             client.getTodayLiveOps2()
-            client.listAllDesigns5()
+            client.listAllDesigns4()
+            client.getShipByUserId()
     else:
         decide = input("Input G to login as guest. Input A to login as user : ")
         if decide == "G":
@@ -156,7 +157,6 @@ def main():
         if client.freeStarbuxToday >= client.freeStarbuxMax:
             client.collectTaskReward()
             client.getCrewInfo()
-            client.upgradeCharacters()
             client.upgradeResearches()
             client.upgradeRooms()
             client.collectDailyReward()
