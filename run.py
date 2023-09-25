@@ -157,7 +157,6 @@ def main():
         if client.freeStarbuxToday >= client.freeStarbuxMax:
             client.collectTaskReward()
             client.getCrewInfo()
-            client.upgradeCharacters()
             client.upgradeResearches()
             client.upgradeRooms()
             client.collectDailyReward()
