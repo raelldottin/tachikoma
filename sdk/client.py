@@ -638,6 +638,7 @@ class Client(object):
             r = self.request(url, "GET")
             if r:
                 self.allCharacterDesigns = xmltodict.parse(r.content, xml_attribs=True)
+
             if "CharacterService" not in self.allCharacterDesigns:
                 logging.error(
                     "[%s] CharacterService data not avaialble.", self.info["@Name"]
@@ -664,7 +665,7 @@ class Client(object):
 
         if (
             not hasattr(self, "allCharacterDesigns")
-            and "CharacterService" not in self.allCharactersOfUser
+            and not self.listAllCharacterDesigns2()
         ):
             logging.error("AllCharacterDesigns data not avaialble.")
             return False
@@ -684,7 +685,7 @@ class Client(object):
         roles = {
             "weapons": {
                 "characters": ["Apex", "Galactic Snow Maiden"],
-                "primaryRoom": "Academy",
+                "primaryRoom": ["Academy", "Lunar College"],
                 "primaryT1": "Read Expert Weapon Theory",
                 "primaryT2": "Weapons Summit",
                 "primaryT3": "Weapons PHD",
@@ -695,7 +696,7 @@ class Client(object):
             },
             "shields": {
                 "characters": ["Mistycball", "C.P.U.", "r2e"],
-                "primaryRoom": "Academy",
+                "primaryRoom": ["Academy", "Lunar College"],
                 "primaryT1": "Big Book of Science",
                 "primaryT2": "Scientific Summit",
                 "primaryT3": "Science PHD",
@@ -706,7 +707,7 @@ class Client(object):
             },
             "engines": {
                 "characters": ["The Conjoint Archon", "Galactic Sprite"],
-                "primaryRoom": "Galaxy GYM",
+                "primaryRoom": ["GYM", "Galaxy GYM"],
                 "primaryT1": "Bench Press",
                 "primaryT2": "Muscle Beach",
                 "primaryT3": "Olympic Weightlifting",
@@ -717,7 +718,7 @@ class Client(object):
             },
             "rushers": {
                 "characters": ["Huge Hellaloya", "Cyber Duck"],
-                "primaryRoom": "Galaxy GYM",
+                "primaryRoom": ["GYM", "Galaxy GYM"],
                 "primaryT1": "Steam Yoga",
                 "primaryT2": "Crew vs Wild",
                 "primaryT3": "Space Marine",
@@ -734,7 +735,7 @@ class Client(object):
                     "Huntress",
                     "Turkey Hero",
                 ],
-                "primaryRoom": "Galaxy GYM",
+                "primaryRoom": ["GYM", "Galaxy GYM"],
                 "primaryT1": "Bench Press",
                 "primaryT2": "Muscle Beach",
                 "primaryT3": "Olympic Weightlifting",
@@ -745,7 +746,7 @@ class Client(object):
             },
             "pilots": {
                 "characters": [],
-                "primaryRoom": "Academy",
+                "primaryRoom": ["Academy", "Lunar College"],
                 "primaryT1": "Read Expert Pilot Handbook",
                 "primaryT2": "Pilot Summit",
                 "primaryT3": "Pilot Expert",
@@ -766,7 +767,14 @@ class Client(object):
                 if character["@RoomId"] == room["@RoomId"]:
                     break
             self.getRoomName(room["@RoomDesignId"])
-            if "Academy" in self.roomName or "Galaxy GYM" in self.roomName:
+
+            logging.debug(
+                "{0!r} in {1!r}".format(character["@CharacterName"], self.roomName)
+            )
+            if any(
+                primaryRoom in self.roomName
+                for primaryRoom in ["Academy", "GYM", "Galaxy Gym", "Lunar College"]
+            ):
                 roleData = {}
                 for data in roles.values():
                     if character["@CharacterName"] in data["characters"]:
@@ -806,7 +814,10 @@ class Client(object):
                 percent = count / int(characterDesign["@TrainingCapacity"]) * 100
                 if (
                     roleData
-                    and roleData["primaryRoom"] in self.roomName
+                    and any(
+                        primaryRoom in self.roomName
+                        for primaryRoom in roleData["primaryRoom"]
+                    )
                     and (percent < 51)
                     and (
                         not trainingEndDate
@@ -826,7 +837,10 @@ class Client(object):
 
                 elif (
                     roleData
-                    and roleData["primaryRoom"] in self.roomName
+                    and any(
+                        primaryRoom in self.roomName
+                        for primaryRoom in roleData["primaryRoom"]
+                    )
                     and (50 < percent < 65)
                     and (
                         not trainingEndDate
@@ -843,7 +857,10 @@ class Client(object):
 
                 elif (
                     roleData
-                    and roleData["primaryRoom"] in self.roomName
+                    and any(
+                        primaryRoom in self.roomName
+                        for primaryRoom in roleData["primaryRoom"]
+                    )
                     and (64 < percent < 72)
                     and (
                         not trainingEndDate
