@@ -313,6 +313,14 @@ class Client(object):
         r = self.request(url, "GET")
         if r:
             self.shipByUserId = xmltodict.parse(r.content, xml_attribs=True)
+
+            self.rooms = self.shipByUserId["ShipService"]["GetShipByUserId"]["Ship"][
+                "Rooms"
+            ]["Room"]
+            self.researches = self.shipByUserId["ShipService"]["GetShipByUserId"][
+                "Ship"
+            ]["Researches"]["Research"]
+
         if "ShipService" not in self.shipByUserId:
             logging.error("ShipService data not avaialble.")
             return False
@@ -472,156 +480,157 @@ class Client(object):
             self.trainingUpdate = xmltodict.parse(r.content, xml_attribs=True)
         return True
 
-    # def listAllDesigns4(self):
-    # """
-    # ListAllDesigns4 has been deprecated
-    # The design data will be fetched individually
-    # """
-    # if not self.latestVersion:
-    #    self.getLatestVersion3()
-    # if "SettingService" not in self.latestVersion:
-    #    return False
-    # versions = self.latestVersion["SettingService"]["GetLatestSetting"]["Setting"]
-    # url = f"{self.baseUrl}/DesignService/ListAllDesigns4?LanguageKey=en&ListFileVersion={versions['@FileVersion']}&ListSpriteVersion={versions['@SpriteVersion']}&ListBackgroundVersion={versions['@BackgroundVersion']}&ListAllShipDesignVersion={versions['@ShipDesignVersion']}&ListRoomDesignVersion={versions['@RoomDesignVersion']}&ListAllCharacterDesignVersion={versions['@CharacterDesignVersion']}&ListAllCharacterDesignActionVersion={versions['@CharacterDesignActionVersion']}&ListItemDesignVersion={versions['@ItemDesignVersion']}&ListCraftDesignVersion={versions['@CraftDesignVersion']}&ListMissileDesignVersion={versions['@MissileDesignVersion']}&ListStarSystemVersion={versions['@StarSystemVersion']}&ListStarSystemLinkVersion={versions['@StarSystemLinkVersion']}&ListAllNewsDesignVersion={versions['@NewsDesignVersion']}&ListLeagueVersion={versions['@LeagueVersion']}&ListAchievementDesignVersion={versions['@AchievementDesignVersion']}&ListRoomDesignPurchaseVersion={versions['@RoomDesignPurchaseVersion']}&ListRoomDesignSpriteVersion={versions['@RoomDesignSpriteVersion']}&ListAllMissionDesignVersion={versions['@MissionDesignVersion']}&ListAnimationVersion={versions['@AnimationVersion']}&ListAllResearchDesignVersion={versions['@ResearchDesignVersion']}&ListAllTrainingDesignVersion={versions['@TrainingDesignVersion']}&ListAllChallengeDesignVersion={versions['@ChallengeDesignVersion']}&ListAllRewardDesignVersion={versions['@RewardDesignVersion']}&ListAllDivisionDesignVersion={versions['@DivisionDesignVersion']}&ListAllCollectionDesignVersion={versions['@CollectionDesignVersion']}&ListAllDrawDesignVersion={versions['@DrawDesignVersion']}&ListAllPromotionDesignVersion={versions['@PromotionDesignVersion']}&ListAllSituationDesignVersion={versions['@SituationDesignVersion']}&ListAllTaskDesignVersion={versions['@TaskDesignVersion']}&ListActionTypeVersion={versions['@ActionTypeVersion']}&ListConditionTypeVersion={versions['@ConditionTypeVersion']}&ListItemDesignActionVersion={versions['@ItemDesignActionVersion']}&ListSeasonDesignVersion={versions['@SeasonDesignVersion']}&ListAssetVersion={versions['@AssetVersion']}&ListMarkerGeneratorDesignVersion={versions['@MarkerGeneratorDesignVersion']}"
-    # r = self.request(url, "GET")
-    # if r:
-    #    allDesignVersion = xmltodict.parse(r.content, xml_attribs=True)
-    #    if (
-    #        "DesignService" not in allDesignVersion
-    #        and "ListAllDesigns" not in allDesignVersion["DesignService"]
-    #    ):
-    #        return False
-    #    designs = [
-    #        "Files",
-    #        "Sprites",
-    #        "Backgrounds",
-    #        "ShipDesigns",
-    #        "RoomDesigns",
-    #        "CharacterDesigns",
-    #        "CharacterDesignActions",
-    #        "ItemDesigns",
-    #        "CraftDesigns",
-    #        "MissileDesigns",
-    #        "StarSystems",
-    #        "StarSystemLinks",
-    #        "NewsDesigns",
-    #        "Leagues",
-    #        "AchievementDesigns",
-    #        "RoomDesignPurchases",
-    #        "RoomDesignSprites",
-    #        "MissionDesigns",
-    #        "Animations",
-    #        "ResearchDesigns",
-    #        "TrainingDesigns",
-    #        "ChallengeDesigns",
-    #        "RewardDesigns",
-    #        "DivisionDesigns",
-    #        "CollectionDesigns",
-    #        "DrawDesigns",
-    #        "PromotionDesigns",
-    #        "SituationDesigns",
-    #        "ItemDesignActions",
-    #        "SeasonDesigns",
-    #        "Assets",
-    #        "StarSystemMarkerGenerators",
-    #    ]
-    #    for design in designs:
-    #        if design not in allDesignVersion["DesignService"]["ListAllDesigns"]:
-    #            logging.error("Missing design data.")
-    #            return False
-    #    self.files = allDesignVersion["DesignService"]["ListAllDesigns"]["Files"]
-    #    self.sprites = allDesignVersion["DesignService"]["ListAllDesigns"][
-    #        "Sprites"
-    #    ]
-    #    self.backgrounds = allDesignVersion["DesignService"]["ListAllDesigns"][
-    #        "Backgrounds"
-    #    ]
-    #    self.shipDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-    #        "ShipDesigns"
-    #    ]
-    #    self.roomDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-    #        "RoomDesigns"
-    #    ]
-    #    self.characterDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-    #        "CharacterDesigns"
-    #    ]
-    #    self.characterDesignActions = allDesignVersion["DesignService"][
-    #        "ListAllDesigns"
-    #    ]["CharacterDesignActions"]
-    #    self.itemDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-    #        "ItemDesigns"
-    #    ]
-    #    self.craftDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-    #        "CraftDesigns"
-    #    ]
-    #    self.missileDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-    #        "MissileDesigns"
-    #    ]
-    #    self.starSystems = allDesignVersion["DesignService"]["ListAllDesigns"][
-    #        "StarSystems"
-    #    ]
-    #    self.starSystemsLinks = allDesignVersion["DesignService"]["ListAllDesigns"][
-    #        "StarSystemLinks"
-    #    ]
-    #    self.newsDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-    #        "NewsDesigns"
-    #    ]
-    #    self.leagues = allDesignVersion["DesignService"]["ListAllDesigns"][
-    #        "Leagues"
-    #    ]
-    #    self.achievementDesigns = allDesignVersion["DesignService"][
-    #        "ListAllDesigns"
-    #    ]["AchievementDesigns"]
-    #    self.roomDesignPurchases = allDesignVersion["DesignService"][
-    #        "ListAllDesigns"
-    #    ]["RoomDesignPurchases"]
-    #    self.roomDesignSprites = allDesignVersion["DesignService"][
-    #        "ListAllDesigns"
-    #    ]["RoomDesignSprites"]
-    #    self.missionDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-    #        "MissionDesigns"
-    #    ]
-    #    self.animations = allDesignVersion["DesignService"]["ListAllDesigns"][
-    #        "Animations"
-    #    ]
-    #    self.researchDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-    #        "ResearchDesigns"
-    #    ]
-    #    self.trainingDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-    #        "TrainingDesigns"
-    #    ]
-    #    self.challengeDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-    #        "ChallengeDesigns"
-    #    ]
-    #    self.rewardDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-    #        "RewardDesigns"
-    #    ]
-    #    self.divisionDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-    #        "DivisionDesigns"
-    #    ]
-    #    self.collectionDesigns = allDesignVersion["DesignService"][
-    #        "ListAllDesigns"
-    #    ]["CollectionDesigns"]
-    #    self.drawDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-    #        "DrawDesigns"
-    #    ]
-    #    self.promotionDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-    #        "PromotionDesigns"
-    #    ]
-    #    self.situationDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-    #        "SituationDesigns"
-    #    ]
-    #    self.itemDesignActions = allDesignVersion["DesignService"][
-    #        "ListAllDesigns"
-    #    ]["ItemDesignActions"]
-    #    self.seasonDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-    #        "SeasonDesigns"
-    #    ]
-    #    self.assets = allDesignVersion["DesignService"]["ListAllDesigns"]["Assets"]
-    #    self.starSystemMarkerGenerators = allDesignVersion["DesignService"][
-    #        "ListAllDesigns"
-    #    ]["StarSystemMarkerGenerators"]
-    # return True
+    def listAllDesigns4(self):
+        """
+        ListAllDesigns4 has been deprecated
+        The design data will be fetched individually
+        """
+        if not self.latestVersion:
+            self.getLatestVersion3()
+        if "SettingService" not in self.latestVersion:
+            return False
+        versions = self.latestVersion["SettingService"]["GetLatestSetting"]["Setting"]
+        url = f"{self.baseUrl}/DesignService/ListAllDesigns4?LanguageKey=en&ListFileVersion={versions['@FileVersion']}&ListSpriteVersion={versions['@SpriteVersion']}&ListBackgroundVersion={versions['@BackgroundVersion']}&ListAllShipDesignVersion={versions['@ShipDesignVersion']}&ListRoomDesignVersion={versions['@RoomDesignVersion']}&ListAllCharacterDesignVersion={versions['@CharacterDesignVersion']}&ListAllCharacterDesignActionVersion={versions['@CharacterDesignActionVersion']}&ListItemDesignVersion={versions['@ItemDesignVersion']}&ListCraftDesignVersion={versions['@CraftDesignVersion']}&ListMissileDesignVersion={versions['@MissileDesignVersion']}&ListStarSystemVersion={versions['@StarSystemVersion']}&ListStarSystemLinkVersion={versions['@StarSystemLinkVersion']}&ListAllNewsDesignVersion={versions['@NewsDesignVersion']}&ListLeagueVersion={versions['@LeagueVersion']}&ListAchievementDesignVersion={versions['@AchievementDesignVersion']}&ListRoomDesignPurchaseVersion={versions['@RoomDesignPurchaseVersion']}&ListRoomDesignSpriteVersion={versions['@RoomDesignSpriteVersion']}&ListAllMissionDesignVersion={versions['@MissionDesignVersion']}&ListAnimationVersion={versions['@AnimationVersion']}&ListAllResearchDesignVersion={versions['@ResearchDesignVersion']}&ListAllTrainingDesignVersion={versions['@TrainingDesignVersion']}&ListAllChallengeDesignVersion={versions['@ChallengeDesignVersion']}&ListAllRewardDesignVersion={versions['@RewardDesignVersion']}&ListAllDivisionDesignVersion={versions['@DivisionDesignVersion']}&ListAllCollectionDesignVersion={versions['@CollectionDesignVersion']}&ListAllDrawDesignVersion={versions['@DrawDesignVersion']}&ListAllPromotionDesignVersion={versions['@PromotionDesignVersion']}&ListAllSituationDesignVersion={versions['@SituationDesignVersion']}&ListAllTaskDesignVersion={versions['@TaskDesignVersion']}&ListActionTypeVersion={versions['@ActionTypeVersion']}&ListConditionTypeVersion={versions['@ConditionTypeVersion']}&ListItemDesignActionVersion={versions['@ItemDesignActionVersion']}&ListSeasonDesignVersion={versions['@SeasonDesignVersion']}&ListAssetVersion={versions['@AssetVersion']}&ListMarkerGeneratorDesignVersion={versions['@MarkerGeneratorDesignVersion']}"
+        r = self.request(url, "GET")
+        if r:
+            allDesignVersion = xmltodict.parse(r.content, xml_attribs=True)
+
+            if (
+                "DesignService" not in allDesignVersion
+                and "ListAllDesigns" not in allDesignVersion["DesignService"]
+            ):
+                return False
+            designs = [
+                "Files",
+                "Sprites",
+                "Backgrounds",
+                "ShipDesigns",
+                "RoomDesigns",
+                "CharacterDesigns",
+                "CharacterDesignActions",
+                "ItemDesigns",
+                "CraftDesigns",
+                "MissileDesigns",
+                "StarSystems",
+                "StarSystemLinks",
+                "NewsDesigns",
+                "Leagues",
+                "AchievementDesigns",
+                "RoomDesignPurchases",
+                "RoomDesignSprites",
+                "MissionDesigns",
+                "Animations",
+                "ResearchDesigns",
+                "TrainingDesigns",
+                "ChallengeDesigns",
+                "RewardDesigns",
+                "DivisionDesigns",
+                "CollectionDesigns",
+                "DrawDesigns",
+                "PromotionDesigns",
+                "SituationDesigns",
+                "ItemDesignActions",
+                "SeasonDesigns",
+                "Assets",
+                "StarSystemMarkerGenerators",
+            ]
+            for design in designs:
+                if design not in allDesignVersion["DesignService"]["ListAllDesigns"]:
+                    logging.error("Missing design data.")
+                    return False
+            self.files = allDesignVersion["DesignService"]["ListAllDesigns"]["Files"]
+            self.sprites = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "Sprites"
+            ]
+            self.backgrounds = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "Backgrounds"
+            ]
+            self.shipDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "ShipDesigns"
+            ]
+            self.roomDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "RoomDesigns"
+            ]
+            self.characterDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "CharacterDesigns"
+            ]
+            self.characterDesignActions = allDesignVersion["DesignService"][
+                "ListAllDesigns"
+            ]["CharacterDesignActions"]
+            self.itemDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "ItemDesigns"
+            ]
+            self.craftDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "CraftDesigns"
+            ]
+            self.missileDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "MissileDesigns"
+            ]
+            self.starSystems = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "StarSystems"
+            ]
+            self.starSystemsLinks = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "StarSystemLinks"
+            ]
+            self.newsDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "NewsDesigns"
+            ]
+            self.leagues = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "Leagues"
+            ]
+            self.achievementDesigns = allDesignVersion["DesignService"][
+                "ListAllDesigns"
+            ]["AchievementDesigns"]
+            self.roomDesignPurchases = allDesignVersion["DesignService"][
+                "ListAllDesigns"
+            ]["RoomDesignPurchases"]
+            self.roomDesignSprites = allDesignVersion["DesignService"][
+                "ListAllDesigns"
+            ]["RoomDesignSprites"]
+            self.missionDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "MissionDesigns"
+            ]
+            self.animations = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "Animations"
+            ]
+            self.researchDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "ResearchDesigns"
+            ]
+            self.trainingDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "TrainingDesigns"
+            ]
+            self.challengeDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "ChallengeDesigns"
+            ]
+            self.rewardDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "RewardDesigns"
+            ]
+            self.divisionDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "DivisionDesigns"
+            ]
+            self.collectionDesigns = allDesignVersion["DesignService"][
+                "ListAllDesigns"
+            ]["CollectionDesigns"]
+            self.drawDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "DrawDesigns"
+            ]
+            self.promotionDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "PromotionDesigns"
+            ]
+            self.situationDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "SituationDesigns"
+            ]
+            self.itemDesignActions = allDesignVersion["DesignService"][
+                "ListAllDesigns"
+            ]["ItemDesignActions"]
+            self.seasonDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "SeasonDesigns"
+            ]
+            self.assets = allDesignVersion["DesignService"]["ListAllDesigns"]["Assets"]
+            self.starSystemMarkerGenerators = allDesignVersion["DesignService"][
+                "ListAllDesigns"
+            ]["StarSystemMarkerGenerators"]
+        return True
 
     def listAllCharacterDesigns2(self):
         if self.latestVersion:
@@ -679,25 +688,25 @@ class Client(object):
                 "primaryT1": "Read Expert Weapon Theory",
                 "primaryT2": "Weapons Summit",
                 "primaryT3": "Weapons PHD",
-                "secondaryRoom": "GYM",
+                "secondaryRoom": "Galaxy GYM",
                 "secondaryT1": "Bench Press",
                 "secondaryT2": "Muscle Beach",
                 "secondaryT3": "Olympic Weightlifting",
             },
             "shields": {
-                "characters": ["Mistycball", "C.P.U.", "Penny"],
+                "characters": ["Mistycball", "C.P.U.", "r2e"],
                 "primaryRoom": "Academy",
                 "primaryT1": "Big Book of Science",
                 "primaryT2": "Scientific Summit",
                 "primaryT3": "Science PHD",
-                "secondaryRoom": "GYM",
+                "secondaryRoom": "Galaxy GYM",
                 "secondaryT1": "Bench Press",
                 "secondaryT2": "Muscle Beach",
                 "secondaryT3": "Olympic Weightlifting",
             },
             "engines": {
                 "characters": ["The Conjoint Archon", "Galactic Sprite"],
-                "primaryRoom": "GYM",
+                "primaryRoom": "Galaxy GYM",
                 "primaryT1": "Bench Press",
                 "primaryT2": "Muscle Beach",
                 "primaryT3": "Olympic Weightlifting",
@@ -708,11 +717,11 @@ class Client(object):
             },
             "rushers": {
                 "characters": ["Huge Hellaloya", "Cyber Duck"],
-                "primaryRoom": "GYM",
+                "primaryRoom": "Galaxy GYM",
                 "primaryT1": "Steam Yoga",
                 "primaryT2": "Crew vs Wild",
                 "primaryT3": "Space Marine",
-                "secondaryRoom": "GYM",
+                "secondaryRoom": "Galaxy GYM",
                 "secondaryT1": "Bench Press",
                 "secondaryT2": "Muscle Beach",
                 "secondaryT3": "Olympic Weightlifting",
@@ -725,22 +734,22 @@ class Client(object):
                     "Huntress",
                     "Turkey Hero",
                 ],
-                "primaryRoom": "GYM",
+                "primaryRoom": "Galaxy GYM",
                 "primaryT1": "Bench Press",
                 "primaryT2": "Muscle Beach",
                 "primaryT3": "Olympic Weightlifting",
-                "secondaryRoom": "GYM",
+                "secondaryRoom": "Galaxy GYM",
                 "secondaryT1": "Kickbox",
                 "secondaryT2": "BBJ",
                 "secondaryT3": "Shaolin Tradition",
             },
             "pilots": {
-                "characters": ["r2e"],
+                "characters": [],
                 "primaryRoom": "Academy",
                 "primaryT1": "Read Expert Pilot Handbook",
                 "primaryT2": "Pilot Summit",
                 "primaryT3": "Pilot Expert",
-                "secondaryRoom": "GYM",
+                "secondaryRoom": "Galaxy GYM",
                 "secondaryT1": "Bench Press",
                 "secondaryT2": "Muscle Beach",
                 "secondaryT3": "Olympic Weightlifting",
@@ -757,7 +766,7 @@ class Client(object):
                 if character["@RoomId"] == room["@RoomId"]:
                     break
             self.getRoomName(room["@RoomDesignId"])
-            if "Academy" in self.roomName or "GYM" in self.roomName:
+            if "Academy" in self.roomName or "Galaxy GYM" in self.roomName:
                 roleData = {}
                 for data in roles.values():
                     if character["@CharacterName"] in data["characters"]:
