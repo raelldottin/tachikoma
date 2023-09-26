@@ -1,11 +1,11 @@
 name: Automated Actions Every Two Hours
 on:
   schedule:
-    - cron: '0 */2 * * *'
+    - cron: '0 * * * *'
 
 jobs:
   daily-run:
-    name: 'Runs bi-hourly'
+    name: 'Runs hourly'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
