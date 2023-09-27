@@ -1,4 +1,4 @@
-name: Automated Actions Every Two Hours
+name: Hourly Automated Actions
 on:
   schedule:
     - cron: '0 * * * *'
