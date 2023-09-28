@@ -686,7 +686,7 @@ class Client(object):
 
         roles = {
             "weapons": {
-                "characters": ["Galactic Succubus", "Galactic Snow Maiden"],
+                "characters": ["Galactic Succubus", "Galactic Snow Maiden", "Delish"],
                 "primaryRoom": ["Academy", "Lunar College"],
                 "primaryT1": "Read Expert Weapon Theory",
                 "primaryT2": "Weapons Summit",
