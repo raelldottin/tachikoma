@@ -736,6 +736,7 @@ class Client(object):
                     "Green Ranger - Oliver",
                     "Huntress",
                     "Turkey Hero",
+                    "1st engineer Tully",
                 ],
                 "primaryRoom": ["GYM", "Galexy Gym"],
                 "primaryT1": "Bench Press",
