@@ -880,6 +880,24 @@ class Client(object):
                     logging.debug(
                         f"[{self.info['@Name']}] Use Yellow (T3) {trainingName} primary training for {character['@CharacterName']} in {self.roomName} with {percent:.2f}% training complete, ability {characterDesign['@SpecialAbilityType']}, and {character['@Fatigue']} fatigue."
                     )
+                elif (
+                    roleData
+                    and roleData["secondaryRoom"] not in self.roomName
+                    and percent > 71
+                    and (
+                        not trainingEndDate
+                        or (
+                            trainingEndDate
+                            < (
+                                datetime.datetime.utcnow()
+                                - datetime.timedelta(minutes=45)
+                            )
+                        )
+                    )
+                ):
+                    logging.error(
+                        f"[{self.info['@Name']}] Move {character['@CharacterName']} in {self.roomName} to {roleData['secondaryRoom']} to complete training complete for ability {characterDesign['@SpecialAbilityType']}."
+                    )
 
                 elif (
                     roleData
@@ -934,6 +952,10 @@ class Client(object):
                     trainingName = roleData["secondaryT3"]
                     logging.debug(
                         f"[{self.info['@Name']}] Use Yellow (T3) {trainingName} primary training for {character['@CharacterName']} in {self.roomName} with {percent:.2f}% training complete, ability {characterDesign['@SpecialAbilityType']}, and {character['@Fatigue']} fatigue."
+                    )
+                elif roleData and percent > 89:
+                    logging.error(
+                        f"[{self.info['@Name']}] Training complete for {character['@CharacterName']} in {self.roomName} for ability {characterDesign['@SpecialAbilityType']}, please move this crew to its designated room."
                     )
 
                 if trainingName:
