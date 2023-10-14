@@ -7,6 +7,7 @@ This file is auto-generate by a github hook please modify README.template if you
 Automate trivial tasks in Pixel Starships Mobile Starategy Sci-Fi MMORPG
 
 # Requirements
+Python Version: 3.9.18
 
 `pip3 install xmltodict`
 
