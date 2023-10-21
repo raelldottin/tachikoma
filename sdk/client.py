@@ -691,7 +691,7 @@ class Client(object):
                 "primaryT1": "Read Expert Weapon Theory",
                 "primaryT2": "Weapons Summit",
                 "primaryT3": "Weapons PHD",
-                "secondaryRoom": "Galaxy Gym",
+                "secondaryRoom": ["GYM", "Galaxy Gym"],
                 "secondaryT1": "Bench Press",
                 "secondaryT2": "Muscle Beach",
                 "secondaryT3": "Olympic Weightlifting",
@@ -702,7 +702,7 @@ class Client(object):
                 "primaryT1": "Big Book of Science",
                 "primaryT2": "Scientific Summit",
                 "primaryT3": "Science PHD",
-                "secondaryRoom": "Galaxy Gym",
+                "secondaryRoom": ["Galaxy Gym", "GYM"],
                 "secondaryT1": "Bench Press",
                 "secondaryT2": "Muscle Beach",
                 "secondaryT3": "Olympic Weightlifting",
@@ -713,7 +713,7 @@ class Client(object):
                 "primaryT1": "Bench Press",
                 "primaryT2": "Muscle Beach",
                 "primaryT3": "Olympic Weightlifting",
-                "secondaryRoom": "Academy",
+                "secondaryRoom": ["Academy", "Lunar College"],
                 "secondaryT1": "Study Expert Engineering Manual",
                 "secondaryT2": "Engineering Summit",
                 "secondaryT3": "Engineering PHD",
@@ -724,7 +724,7 @@ class Client(object):
                 "primaryT1": "Steam Yoga",
                 "primaryT2": "Crew vs Wild",
                 "primaryT3": "Space Marine",
-                "secondaryRoom": "Galaxy Gym",
+                "secondaryRoom": ["Galaxy Gym", "GYM"],
                 "secondaryT1": "Bench Press",
                 "secondaryT2": "Muscle Beach",
                 "secondaryT3": "Olympic Weightlifting",
@@ -742,7 +742,7 @@ class Client(object):
                 "primaryT1": "Bench Press",
                 "primaryT2": "Muscle Beach",
                 "primaryT3": "Olympic Weightlifting",
-                "secondaryRoom": "Galaxy Gym",
+                "secondaryRoom": ["Galaxy Gym", "GYM"],
                 "secondaryT1": "Kickbox",
                 "secondaryT2": "BBJ",
                 "secondaryT3": "Shaolin Tradition",
@@ -753,7 +753,7 @@ class Client(object):
                 "primaryT1": "Read Expert Pilot Handbook",
                 "primaryT2": "Pilot Summit",
                 "primaryT3": "Pilot Expert",
-                "secondaryRoom": "Galaxy Gym",
+                "secondaryRoom": ["Galaxy Gym", "GYM"],
                 "secondaryT1": "Bench Press",
                 "secondaryT2": "Muscle Beach",
                 "secondaryT3": "Olympic Weightlifting",
@@ -882,7 +882,10 @@ class Client(object):
                     )
                 elif (
                     roleData
-                    and roleData["secondaryRoom"] not in self.roomName
+                    and any(
+                        secondaryRoom in self.roomName
+                        for secondaryRoom in roleData["secondaryRoom"]
+                    )
                     and percent > 71
                     and (
                         not trainingEndDate
@@ -901,7 +904,10 @@ class Client(object):
 
                 elif (
                     roleData
-                    and roleData["secondaryRoom"] in self.roomName
+                    and any(
+                        secondaryRoom in self.roomName
+                        for secondaryRoom in roleData["secondaryRoom"]
+                    )
                     and (71 < percent < 74)
                     and (
                         not trainingEndDate
@@ -920,7 +926,10 @@ class Client(object):
                     )
                 elif (
                     roleData
-                    and roleData["secondaryRoom"] in self.roomName
+                    and any(
+                        secondaryRoom in self.roomName
+                        for secondaryRoom in roleData["secondaryRoom"]
+                    )
                     and (73 < percent < 85)
                     and (
                         not trainingEndDate
@@ -936,7 +945,10 @@ class Client(object):
                     )
                 elif (
                     roleData
-                    and roleData["secondaryRoom"] in self.roomName
+                    and any(
+                        secondaryRoom in self.roomName
+                        for secondaryRoom in roleData["secondaryRoom"]
+                    )
                     and (84 < percent < 90)
                     and (
                         not trainingEndDate
@@ -1689,10 +1701,11 @@ class Client(object):
                     "ListAllTaskDesigns"
                 ]["TaskDesigns"]["TaskDesign"]:
                     if taskDesign["@TaskDesignId"] == task["@TaskDesignId"]:
-                        if self.collectTaskCompletion(task["@TaskDesignId"]):
-                            logging.info(
-                                f"[{self.info['@Name']}] Collecting reward for objective: {taskDesign['@Name']}."
-                            )
+                        if task["@ProgressValue"] == taskDesign["@ObjectiveAmount"]:
+                            if self.collectTaskCompletion(task["@TaskDesignId"]):
+                                logging.info(
+                                    f"[{self.info['@Name']}] Collecting reward for objective: {taskDesign['@Name']}."
+                                )
 
     def heartbeat(self):
         if (
