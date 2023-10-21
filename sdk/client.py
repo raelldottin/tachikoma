@@ -7,6 +7,7 @@ import requests
 import random
 import collections
 import logging
+import math
 from requests.adapters import HTTPAdapter
 from urllib3.util import Retry
 from requests.adapters import HTTPAdapter
@@ -882,10 +883,6 @@ class Client(object):
                     )
                 elif (
                     roleData
-                    and any(
-                        secondaryRoom in self.roomName
-                        for secondaryRoom in roleData["secondaryRoom"]
-                    )
                     and percent > 71
                     and (
                         not trainingEndDate
@@ -899,7 +896,7 @@ class Client(object):
                     )
                 ):
                     logging.error(
-                        f"[{self.info['@Name']}] Move {character['@CharacterName']} in {self.roomName} to {roleData['secondaryRoom']} to complete training complete for ability {characterDesign['@SpecialAbilityType']}."
+                        f"[{self.info['@Name']}] Move {character['@CharacterName']} with {math.ceil(percent)}% training and {character['@Fatigue']} fatigue in {self.roomName} to the {' or '.join(roleData['secondaryRoom'])} to complete training complete for ability {characterDesign['@SpecialAbilityType']}."
                     )
 
                 elif (
@@ -967,7 +964,7 @@ class Client(object):
                     )
                 elif roleData and percent > 89:
                     logging.error(
-                        f"[{self.info['@Name']}] Training complete for {character['@CharacterName']} in {self.roomName} for ability {characterDesign['@SpecialAbilityType']}, please move this crew to its designated room."
+                        f"[{self.info['@Name']}] Training complete for {character['@CharacterName']} with {math.ceil(percent)}% training and {character['@Fatigue']} fatigue in {self.roomName} for ability {characterDesign['@SpecialAbilityType']}, please move this crew to its designated room."
                     )
 
                 if trainingName:
