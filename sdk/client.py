@@ -884,15 +884,9 @@ class Client(object):
                 elif (
                     roleData
                     and percent > 71
-                    and (
-                        not trainingEndDate
-                        or (
-                            trainingEndDate
-                            < (
-                                datetime.datetime.utcnow()
-                                - datetime.timedelta(minutes=45)
-                            )
-                        )
+                    and not any(
+                        secondaryRoom in self.roomName
+                        for secondaryRoom in roleData["secondaryRoom"]
                     )
                 ):
                     logging.error(
