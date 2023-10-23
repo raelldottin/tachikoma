@@ -1,6 +1,7 @@
 import sys
 import getpass
 from configparser import ConfigParser
+from configparser import NoSectionError
 import smtplib
 from email.message import EmailMessage
 import argparse
@@ -34,10 +35,9 @@ def email_logfile(filename, client, email=None, password=None, recipient=None):
             email = config.get("MAIL_CONFIG", "SENDER_EMAIL")
             password = config.get("MAIL_CONFIG", "SENDER_PASSWD")
             recipient = config.get("MAIL_CONFIG", "RECIPIENT_EMAIL")
-        except:
-            logging.exception(
-                "Unable to email log file because email authentication is not properly setup.",
-                exc_info=True,
+        except NoSectionError:
+            logging.error(
+                "Unable to email log file because email authentication is not properly setup."
             )
             return None
 
