@@ -8,6 +8,7 @@ import random
 import collections
 import logging
 import math
+from itertools import accumulate
 from requests.adapters import HTTPAdapter
 from urllib3.util import Retry
 from requests.adapters import HTTPAdapter
@@ -1056,6 +1057,136 @@ class Client(object):
         if not hasattr(self, "allCharacterDesigns"):
             self.listAllCharacterDesigns2()
 
+        crewCostsPerLevel = [
+            0,
+            90,
+            270,
+            450,
+            630,
+            810,
+            1020,
+            1230,
+            1440,
+            1650,
+            1860,
+            2130,
+            2400,
+            2670,
+            2940,
+            3210,
+            3540,
+            3870,
+            4200,
+            4530,
+            4860,
+            5220,
+            5580,
+            5940,
+            6300,
+            6660,
+            7050,
+            7440,
+            7830,
+            8220,
+            8610,
+            9030,
+            9450,
+            9870,
+            10290,
+            10710,
+            11160,
+            11610,
+            12060,
+            12510,
+        ]
+        crewCosts = list(accumulate(crewCostsPerLevel))
+        legendaryCrewCosts = [cost * 3 for cost in crewCosts]
+
+        legendaryCrewGasCosts = [
+            0,
+            130000,
+            162500,
+            195000,
+            227500,
+            260000,
+            292500,
+            325000,
+            357500,
+            390000,
+            422500,
+            455000,
+            487500,
+            520000,
+            552500,
+            585000,
+            617500,
+            650000,
+            682500,
+            715000,
+            747500,
+            780000,
+            812500,
+            845000,
+            877500,
+            910000,
+            942000,
+            975000,
+            1007500,
+            1040000,
+            1072500,
+            1105000,
+            1137500,
+            1170000,
+            1202500,
+            1235000,
+            1267500,
+            1300000,
+            1332500,
+            1365000,
+        ]
+        crewGasCosts = [
+            0,
+            0,
+            17,
+            33,
+            65,
+            130,
+            325,
+            650,
+            1300,
+            3200,
+            6500,
+            9700,
+            13000,
+            19500,
+            26000,
+            35700,
+            43800,
+            52000,
+            61700,
+            71500,
+            84500,
+            104000,
+            117000,
+            130000,
+            156000,
+            175000,
+            201000,
+            227000,
+            253000,
+            279000,
+            312000,
+            351000,
+            383000,
+            422000,
+            468000,
+            507000,
+            552000,
+            604000,
+            650000,
+            715000,
+        ]
+
         for character in self.allCharactersOfUser["CharacterService"][
             "ListAllCharactersOfUser"
         ]["Characters"]["Character"]:
@@ -1073,11 +1204,28 @@ class Client(object):
                         == characterDesign["@CharacterDesignId"]
                     ):
                         character_names.append(character["@CharacterName"])
-                        logging.info(
-                            f"[{self.info['@Name']}] Upgrading {character['@CharacterName']} to level {int(character['@Level']) + 1}."
-                        )
-                        self.upgradeCharacter(character["@CharacterId"])
-                        # logging.warn(f"{character['@CharacterName']=} {character['@Level']=} {character['@Xp']=} {characterDesign['@Rarity']=}")
+                        logging.debug(f"{len(crewCosts)=} {len(legendaryCrewCosts)=}")
+                        if int(character["@Xp"]) >= (
+                            legendaryCrewCosts[int(character["@Level"])]
+                            if characterDesign["@Rarity"] == "Legendary"
+                            else crewCosts[int(character["@Level"])]
+                        ):
+                            self.collectAllResources()
+                            if (
+                                legendaryCrewGasCosts[int(character["@Level"])]
+                                if characterDesign["@Rarity"] == "Legendary"
+                                else crewGasCosts[int(character["@Level"])]
+                            ) <= int(self.gasTotal):
+                                logging.info(
+                                    f"[{self.info['@Name']}] Upgrading {character['@CharacterName']} to level {int(character['@Level']) + 1} costing {legendaryCrewGasCosts[int(character['@Level'])] if characterDesign['@Rarity'] == 'Legendary' else crewGasCosts[int(character['@Level'])]}/{self.gasTotal} gas and {int(character['@Xp'])}/{legendaryCrewCosts[int(character['@Level'])] if characterDesign['@Rarity'] == 'Legendary' else crewCosts[int(character['@Level'])]} xp."
+                                )
+                                self.upgradeCharacter(character["@CharacterId"])
+                            logging.debug(
+                                f"{character['@CharacterName']=} {character['@Level']=} {character['@Xp']=} {characterDesign['@Rarity']=}"
+                            )
+                            logging.debug(
+                                f"XP cost: {legendaryCrewCosts[int(character['@Level'])] if characterDesign['@Rarity'] == 'Legendary' else crewCosts[int(character['@Level'])]}"
+                            )
 
         if character_names:
             logging.info(
