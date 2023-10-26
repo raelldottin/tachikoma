@@ -165,6 +165,7 @@ def main():
             client.infoBux()
             client.manageTraining()
             client.getResourceTotals()
+            client.upgradeCharacters()
             logging.info(f'[{client.info["@Name"]}] Finished...')
             break
     if (
