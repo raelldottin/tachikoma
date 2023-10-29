@@ -318,17 +318,18 @@ class Client(object):
         if r:
             self.shipByUserId = xmltodict.parse(r.content, xml_attribs=True)
 
+            if "ShipService" not in self.shipByUserId:
+                logging.error("ShipService data not avaialble.")
+                return False
+
             self.rooms = self.shipByUserId["ShipService"]["GetShipByUserId"]["Ship"][
                 "Rooms"
             ]["Room"]
             self.researches = self.shipByUserId["ShipService"]["GetShipByUserId"][
                 "Ship"
             ]["Researches"]["Research"]
-
-        if "ShipService" not in self.shipByUserId:
-            logging.error("ShipService data not avaialble.")
-            return False
-        return True
+            return True
+        return False
 
     def listAchievementsOfAUser(self):
         url = f"https://api.pixelstarships.com/AchievementService/ListAchievementsOfAUser?accessToken={self.accessToken}&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
