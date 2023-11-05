@@ -1841,6 +1841,8 @@ class Client(object):
     def collectTaskReward(self):
         self.listTasksOfAUser()
         self.listAllTaskDesigns2()
+        if "TaskService" not in self.tasksOfAUser:
+            return False
         for task in self.tasksOfAUser["TaskService"]["ListTasksOfAUser"]["Tasks"][
             "Task"
         ]:
