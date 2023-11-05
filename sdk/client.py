@@ -1373,6 +1373,7 @@ class Client(object):
         self.dailyRewardArgument = self.todayLiveOps["LiveOpsService"][
             "GetTodayLiveOps"
         ]["LiveOps"]["@DailyRewardArgument"]
+        print(f"{self.dailyRewardArgument=}")
         if datetime.datetime.now().time() == datetime.time(
             hour=0, minute=0, tzinfo=datetime.timezone.utc
         ):
