@@ -1212,11 +1212,17 @@ class Client(object):
                             else crewCosts[int(character["@Level"])]
                         ):
                             self.collectAllResources()
+                            date_to_check = datetime.datetime.strptime(
+                                character["@AvailableDate"], "%Y-%m-%dT%H:%M:%S"
+                            )
+                            current_datetime = datetime.datetime.now()
                             if (
                                 legendaryCrewGasCosts[int(character["@Level"])]
                                 if characterDesign["@Rarity"] == "Legendary"
                                 else crewGasCosts[int(character["@Level"])]
-                            ) <= int(self.gasTotal):
+                            ) <= int(self.gasTotal) and (
+                                date_to_check <= current_datetime
+                            ):
                                 logging.info(
                                     f"[{self.info['@Name']}] Upgrading {character['@CharacterName']} to level {int(character['@Level']) + 1} costing {legendaryCrewGasCosts[int(character['@Level'])] if characterDesign['@Rarity'] == 'Legendary' else crewGasCosts[int(character['@Level'])]}/{self.gasTotal} gas and {int(character['@Xp'])}/{legendaryCrewCosts[int(character['@Level'])] if characterDesign['@Rarity'] == 'Legendary' else crewCosts[int(character['@Level'])]} xp."
                                 )
