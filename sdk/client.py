@@ -1369,6 +1369,7 @@ class Client(object):
         )
 
     def collectDailyReward(self):
+        print(f"{self.dailyReward=}")
         self.dailyRewardArgument = self.todayLiveOps["LiveOpsService"][
             "GetTodayLiveOps"
         ]["LiveOps"]["@DailyRewardArgument"]
@@ -1377,7 +1378,7 @@ class Client(object):
         ):
             self.dailyReward = 0
 
-        if self.user.isAuthorized and not self.dailyReward:
+        if self.user.isAuthorized and (not self.dailyReward or self.dailyReward != 3):
             url = "https://api.pixelstarships.com/UserService/CollectDailyReward2?dailyRewardStatus=Box&argument={}&accessToken={}".format(
                 self.dailyRewardArgument,
                 self.accessToken,
