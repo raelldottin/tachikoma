@@ -5,13 +5,11 @@ import collections
 import xmltodict
 import requests
 import random
-import collections
 import logging
 import math
 from itertools import accumulate
 from requests.adapters import HTTPAdapter
 from urllib3.util import Retry
-from requests.adapters import HTTPAdapter
 from ratelimit import limits, sleep_and_retry
 from sdk.device import Device
 from .security import (
@@ -817,7 +815,7 @@ class Client(object):
                         character["@TrainingEndDate"], "%Y-%m-%dT%H:%M:%S"
                     )
 
-                percent = count / int(characterDesign["@TrainingCapacity"]) * 100
+                percent = math.ceil(count / int(characterDesign["@TrainingCapacity"]) * 100)
                 if (
                     roleData
                     and any(
