@@ -1,7 +1,10 @@
 #!/bin/bash
 
 # https://www.viget.com/articles/two-ways-to-share-git-hooks-with-your-team/
+# This command is required for the Git Hooks to function
 # git config core.hooksPath .githooks
+
+git config current.version $(git describe | grep -io '[0-9]\.[0-9]\.[0-9]\-[0-9]*')
 
 # run from the root of the repo
 .githooks/replace_by_git_vars.py README.template README.md

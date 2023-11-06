@@ -89,6 +89,7 @@ class Client(object):
     dronesCollected = {}
     dailyRewardArgument = 0
     credits = 0
+    max_room_upgrades = False
     info = {"@Name": ""}
     user: User
 
@@ -1660,8 +1661,11 @@ class Client(object):
                                     logging.info(
                                         f'[{self.info["@Name"]}] You have reached the maximum number of concurrent constructions allowed.'
                                     )
+                                    self.max_room_upgrades = True
                                     break
                                 self.collectAllResources()
+                    if self.max_room_upgrades:
+                        break
             return True
         except:
             logging.exception("Unable to upgrade research.", exc_info=True)
