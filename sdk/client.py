@@ -1368,17 +1368,18 @@ class Client(object):
         )
 
     def collectDailyReward(self):
-        print(f"{self.dailyReward=}")
+        if "LiveOpsService" not in self.todayLiveOps:
+            loging.error("Unable to collect daily reward because of missing Live Ops data.")
+            return False
         self.dailyRewardArgument = self.todayLiveOps["LiveOpsService"][
             "GetTodayLiveOps"
         ]["LiveOps"]["@DailyRewardArgument"]
-        print(f"{self.dailyRewardArgument=}")
         if datetime.datetime.now().time() == datetime.time(
             hour=0, minute=0, tzinfo=datetime.timezone.utc
         ):
             self.dailyReward = 0
 
-        if self.user.isAuthorized and (not self.dailyReward or self.dailyReward != 3):
+        if self.user.isAuthorized and (self.info['@DailyRewardStatus'] != '1'):
             url = "https://api.pixelstarships.com/UserService/CollectDailyReward2?dailyRewardStatus=Box&argument={}&accessToken={}".format(
                 self.dailyRewardArgument,
                 self.accessToken,
