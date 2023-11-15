@@ -175,7 +175,11 @@ class Client(object):
         )
 
         self.info = d["UserService"]["UserLogin"]["User"]
-        self.credits = d["UserService"]["UserLogin"]["User"]["@Credits"]
+        try: 
+            self.credits = d["UserService"]["UserLogin"]["User"]["@Credits"]
+        except KeyError:
+            pass
+
         return True
 
     def getAccessToken(self):
