@@ -739,6 +739,7 @@ class Client(object):
                     "Huntress",
                     "Turkey Hero",
                     "1st engineer Tully",
+                    "King Dong",
                 ],
                 "primaryRoom": ["GYM", "Galexy Gym"],
                 "primaryT1": "Bench Press",
@@ -830,7 +831,7 @@ class Client(object):
                             trainingEndDate
                             < (
                                 datetime.datetime.utcnow()
-                                - datetime.timedelta(minutes=45)
+                                - datetime.timedelta(hours=1)
                             )
                         )
                     )
@@ -851,7 +852,7 @@ class Client(object):
                         not trainingEndDate
                         or (
                             trainingEndDate
-                            < (datetime.datetime.utcnow() - datetime.timedelta(hours=3))
+                            < (datetime.datetime.utcnow() - datetime.timedelta(hours=3,minutes=15))
                         )
                     )
                 ):
@@ -873,7 +874,7 @@ class Client(object):
                             trainingEndDate
                             < (
                                 datetime.datetime.utcnow()
-                                - datetime.timedelta(hours=12)
+                                - datetime.timedelta(hours=12,minutes=15)
                             )
                         )
                     )
@@ -907,7 +908,7 @@ class Client(object):
                             trainingEndDate
                             < (
                                 datetime.datetime.utcnow()
-                                - datetime.timedelta(minutes=45)
+                                - datetime.timedelta(hours=1)
                             )
                         )
                     )
@@ -927,7 +928,7 @@ class Client(object):
                         not trainingEndDate
                         or (
                             trainingEndDate
-                            < (datetime.datetime.utcnow() - datetime.timedelta(hours=3))
+                            < (datetime.datetime.utcnow() - datetime.timedelta(hours=3,minutes=15))
                         )
                     )
                 ):
@@ -948,7 +949,7 @@ class Client(object):
                             trainingEndDate
                             < (
                                 datetime.datetime.utcnow()
-                                - datetime.timedelta(hours=12)
+                                - datetime.timedelta(hours=12,minutes=15)
                             )
                         )
                     )
