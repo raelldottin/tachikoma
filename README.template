@@ -23,4 +23,7 @@ It also stores a token to relogin without credentials.
 * Use `client.listActiveMarketplaceMessages()` to list all items you have available for sell in the marketplace
 * Use `client.collectAllResources()` to collect all resources on your ship
 * Use `client.collectDailyReward()` to collect the daily reward
+
 ---
+
+![Visualization of the codebase](./diagram.svg)

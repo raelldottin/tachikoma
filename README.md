@@ -1,7 +1,7 @@
 <!---
 This file is auto-generate by a github hook please modify README.template if you don't want to loose your work
 -->
-# raelldottin/tachikoma 1.1.7-113
+# raelldottin/tachikoma 1.1.7-114
 [![Daily Automated Actions](https://github.com/raelldottin/tachikoma/actions/workflows/daily-run.yml/badge.svg?event=schedule)](https://github.com/raelldottin/tachikoma/actions/workflows/daily-run.yml)
 
 Automate trivial tasks in Pixel Starships Mobile Starategy Sci-Fi MMORPG
@@ -26,4 +26,7 @@ It also stores a token to relogin without credentials.
 * Use `client.listActiveMarketplaceMessages()` to list all items you have available for sell in the marketplace
 * Use `client.collectAllResources()` to collect all resources on your ship
 * Use `client.collectDailyReward()` to collect the daily reward
+
 ---
+
+![Visualization of the codebase](./diagram.svg)
