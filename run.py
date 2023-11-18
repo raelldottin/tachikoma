@@ -1,6 +1,7 @@
 import sys
 import getpass
 from configparser import ConfigParser
+from configparser import NoSectionError
 import smtplib
 from email.message import EmailMessage
 import argparse
@@ -34,10 +35,9 @@ def email_logfile(filename, client, email=None, password=None, recipient=None):
             email = config.get("MAIL_CONFIG", "SENDER_EMAIL")
             password = config.get("MAIL_CONFIG", "SENDER_PASSWD")
             recipient = config.get("MAIL_CONFIG", "RECIPIENT_EMAIL")
-        except:
-            logging.exception(
-                "Unable to email log file because email authentication is not properly setup.",
-                exc_info=True,
+        except NoSectionError:
+            logging.error(
+                "Unable to email log file because email authentication is not properly setup."
             )
             return None
 
@@ -141,6 +141,8 @@ def main():
         if client:
             client.getLatestVersion3()
             client.getTodayLiveOps2()
+            client.listAllDesigns4()
+            client.getShipByUserId()
     else:
         decide = input("Input G to login as guest. Input A to login as user : ")
         if decide == "G":
@@ -155,7 +157,6 @@ def main():
         if client.freeStarbuxToday >= client.freeStarbuxMax:
             client.collectTaskReward()
             client.getCrewInfo()
-            client.upgradeCharacters()
             client.upgradeResearches()
             client.upgradeRooms()
             client.collectDailyReward()
@@ -164,6 +165,7 @@ def main():
             client.infoBux()
             client.manageTraining()
             client.getResourceTotals()
+            client.upgradeCharacters()
             logging.info(f'[{client.info["@Name"]}] Finished...')
             break
     if (
