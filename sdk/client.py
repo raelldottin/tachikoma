@@ -5,11 +5,11 @@ import collections
 import xmltodict
 import requests
 import random
-import collections
 import logging
+import math
+from itertools import accumulate
 from requests.adapters import HTTPAdapter
 from urllib3.util import Retry
-from requests.adapters import HTTPAdapter
 from ratelimit import limits, sleep_and_retry
 from sdk.device import Device
 from .security import (
@@ -89,6 +89,7 @@ class Client(object):
     dronesCollected = {}
     dailyRewardArgument = 0
     credits = 0
+    max_room_upgrades = False
     info = {"@Name": ""}
     user: User
 
@@ -139,6 +140,7 @@ class Client(object):
             d["UserService"]["UserLogin"]["User"]["@LastHeartBeatDate"],
             "%Y-%m-%dT%H:%M:%S",
         )
+
         self.info = d["UserService"]["UserLogin"]["User"]
         if "@Name" not in self.info:
             self.info["@Name"] = ""
@@ -173,7 +175,11 @@ class Client(object):
         )
 
         self.info = d["UserService"]["UserLogin"]["User"]
-        self.credits = d["UserService"]["UserLogin"]["User"]["@Credits"]
+        try: 
+            self.credits = d["UserService"]["UserLogin"]["User"]["@Credits"]
+        except KeyError:
+            pass
+
         return True
 
     def getAccessToken(self):
@@ -281,7 +287,8 @@ class Client(object):
     def getLatestVersion3(self):
         url = f"https://api.pixelstarships.com/SettingService/GetLatestVersion3?languageKey={self.device.languageKey}&deviceType=DeviceType{self.device.name}"
         r = self.request(url, "GET")
-        if r:
+
+        if r.content:
             self.latestVersion = xmltodict.parse(r.content, xml_attribs=True)
 
     def getTodayLiveOps2(self):
@@ -313,10 +320,19 @@ class Client(object):
         r = self.request(url, "GET")
         if r:
             self.shipByUserId = xmltodict.parse(r.content, xml_attribs=True)
-        if "ShipService" not in self.shipByUserId:
-            logging.error("ShipService data not avaialble.")
-            return False
-        return True
+
+            if "ShipService" not in self.shipByUserId:
+                logging.error("ShipService data not avaialble.")
+                return False
+
+            self.rooms = self.shipByUserId["ShipService"]["GetShipByUserId"]["Ship"][
+                "Rooms"
+            ]["Room"]
+            self.researches = self.shipByUserId["ShipService"]["GetShipByUserId"][
+                "Ship"
+            ]["Researches"]["Research"]
+            return True
+        return False
 
     def listAchievementsOfAUser(self):
         url = f"https://api.pixelstarships.com/AchievementService/ListAchievementsOfAUser?accessToken={self.accessToken}&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
@@ -472,156 +488,157 @@ class Client(object):
             self.trainingUpdate = xmltodict.parse(r.content, xml_attribs=True)
         return True
 
-    # def listAllDesigns4(self):
-    # """
-    # ListAllDesigns4 has been deprecated
-    # The design data will be fetched individually
-    # """
-    # if not self.latestVersion:
-    #    self.getLatestVersion3()
-    # if "SettingService" not in self.latestVersion:
-    #    return False
-    # versions = self.latestVersion["SettingService"]["GetLatestSetting"]["Setting"]
-    # url = f"{self.baseUrl}/DesignService/ListAllDesigns4?LanguageKey=en&ListFileVersion={versions['@FileVersion']}&ListSpriteVersion={versions['@SpriteVersion']}&ListBackgroundVersion={versions['@BackgroundVersion']}&ListAllShipDesignVersion={versions['@ShipDesignVersion']}&ListRoomDesignVersion={versions['@RoomDesignVersion']}&ListAllCharacterDesignVersion={versions['@CharacterDesignVersion']}&ListAllCharacterDesignActionVersion={versions['@CharacterDesignActionVersion']}&ListItemDesignVersion={versions['@ItemDesignVersion']}&ListCraftDesignVersion={versions['@CraftDesignVersion']}&ListMissileDesignVersion={versions['@MissileDesignVersion']}&ListStarSystemVersion={versions['@StarSystemVersion']}&ListStarSystemLinkVersion={versions['@StarSystemLinkVersion']}&ListAllNewsDesignVersion={versions['@NewsDesignVersion']}&ListLeagueVersion={versions['@LeagueVersion']}&ListAchievementDesignVersion={versions['@AchievementDesignVersion']}&ListRoomDesignPurchaseVersion={versions['@RoomDesignPurchaseVersion']}&ListRoomDesignSpriteVersion={versions['@RoomDesignSpriteVersion']}&ListAllMissionDesignVersion={versions['@MissionDesignVersion']}&ListAnimationVersion={versions['@AnimationVersion']}&ListAllResearchDesignVersion={versions['@ResearchDesignVersion']}&ListAllTrainingDesignVersion={versions['@TrainingDesignVersion']}&ListAllChallengeDesignVersion={versions['@ChallengeDesignVersion']}&ListAllRewardDesignVersion={versions['@RewardDesignVersion']}&ListAllDivisionDesignVersion={versions['@DivisionDesignVersion']}&ListAllCollectionDesignVersion={versions['@CollectionDesignVersion']}&ListAllDrawDesignVersion={versions['@DrawDesignVersion']}&ListAllPromotionDesignVersion={versions['@PromotionDesignVersion']}&ListAllSituationDesignVersion={versions['@SituationDesignVersion']}&ListAllTaskDesignVersion={versions['@TaskDesignVersion']}&ListActionTypeVersion={versions['@ActionTypeVersion']}&ListConditionTypeVersion={versions['@ConditionTypeVersion']}&ListItemDesignActionVersion={versions['@ItemDesignActionVersion']}&ListSeasonDesignVersion={versions['@SeasonDesignVersion']}&ListAssetVersion={versions['@AssetVersion']}&ListMarkerGeneratorDesignVersion={versions['@MarkerGeneratorDesignVersion']}"
-    # r = self.request(url, "GET")
-    # if r:
-    #    allDesignVersion = xmltodict.parse(r.content, xml_attribs=True)
-    #    if (
-    #        "DesignService" not in allDesignVersion
-    #        and "ListAllDesigns" not in allDesignVersion["DesignService"]
-    #    ):
-    #        return False
-    #    designs = [
-    #        "Files",
-    #        "Sprites",
-    #        "Backgrounds",
-    #        "ShipDesigns",
-    #        "RoomDesigns",
-    #        "CharacterDesigns",
-    #        "CharacterDesignActions",
-    #        "ItemDesigns",
-    #        "CraftDesigns",
-    #        "MissileDesigns",
-    #        "StarSystems",
-    #        "StarSystemLinks",
-    #        "NewsDesigns",
-    #        "Leagues",
-    #        "AchievementDesigns",
-    #        "RoomDesignPurchases",
-    #        "RoomDesignSprites",
-    #        "MissionDesigns",
-    #        "Animations",
-    #        "ResearchDesigns",
-    #        "TrainingDesigns",
-    #        "ChallengeDesigns",
-    #        "RewardDesigns",
-    #        "DivisionDesigns",
-    #        "CollectionDesigns",
-    #        "DrawDesigns",
-    #        "PromotionDesigns",
-    #        "SituationDesigns",
-    #        "ItemDesignActions",
-    #        "SeasonDesigns",
-    #        "Assets",
-    #        "StarSystemMarkerGenerators",
-    #    ]
-    #    for design in designs:
-    #        if design not in allDesignVersion["DesignService"]["ListAllDesigns"]:
-    #            logging.error("Missing design data.")
-    #            return False
-    #    self.files = allDesignVersion["DesignService"]["ListAllDesigns"]["Files"]
-    #    self.sprites = allDesignVersion["DesignService"]["ListAllDesigns"][
-    #        "Sprites"
-    #    ]
-    #    self.backgrounds = allDesignVersion["DesignService"]["ListAllDesigns"][
-    #        "Backgrounds"
-    #    ]
-    #    self.shipDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-    #        "ShipDesigns"
-    #    ]
-    #    self.roomDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-    #        "RoomDesigns"
-    #    ]
-    #    self.characterDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-    #        "CharacterDesigns"
-    #    ]
-    #    self.characterDesignActions = allDesignVersion["DesignService"][
-    #        "ListAllDesigns"
-    #    ]["CharacterDesignActions"]
-    #    self.itemDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-    #        "ItemDesigns"
-    #    ]
-    #    self.craftDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-    #        "CraftDesigns"
-    #    ]
-    #    self.missileDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-    #        "MissileDesigns"
-    #    ]
-    #    self.starSystems = allDesignVersion["DesignService"]["ListAllDesigns"][
-    #        "StarSystems"
-    #    ]
-    #    self.starSystemsLinks = allDesignVersion["DesignService"]["ListAllDesigns"][
-    #        "StarSystemLinks"
-    #    ]
-    #    self.newsDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-    #        "NewsDesigns"
-    #    ]
-    #    self.leagues = allDesignVersion["DesignService"]["ListAllDesigns"][
-    #        "Leagues"
-    #    ]
-    #    self.achievementDesigns = allDesignVersion["DesignService"][
-    #        "ListAllDesigns"
-    #    ]["AchievementDesigns"]
-    #    self.roomDesignPurchases = allDesignVersion["DesignService"][
-    #        "ListAllDesigns"
-    #    ]["RoomDesignPurchases"]
-    #    self.roomDesignSprites = allDesignVersion["DesignService"][
-    #        "ListAllDesigns"
-    #    ]["RoomDesignSprites"]
-    #    self.missionDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-    #        "MissionDesigns"
-    #    ]
-    #    self.animations = allDesignVersion["DesignService"]["ListAllDesigns"][
-    #        "Animations"
-    #    ]
-    #    self.researchDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-    #        "ResearchDesigns"
-    #    ]
-    #    self.trainingDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-    #        "TrainingDesigns"
-    #    ]
-    #    self.challengeDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-    #        "ChallengeDesigns"
-    #    ]
-    #    self.rewardDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-    #        "RewardDesigns"
-    #    ]
-    #    self.divisionDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-    #        "DivisionDesigns"
-    #    ]
-    #    self.collectionDesigns = allDesignVersion["DesignService"][
-    #        "ListAllDesigns"
-    #    ]["CollectionDesigns"]
-    #    self.drawDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-    #        "DrawDesigns"
-    #    ]
-    #    self.promotionDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-    #        "PromotionDesigns"
-    #    ]
-    #    self.situationDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-    #        "SituationDesigns"
-    #    ]
-    #    self.itemDesignActions = allDesignVersion["DesignService"][
-    #        "ListAllDesigns"
-    #    ]["ItemDesignActions"]
-    #    self.seasonDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-    #        "SeasonDesigns"
-    #    ]
-    #    self.assets = allDesignVersion["DesignService"]["ListAllDesigns"]["Assets"]
-    #    self.starSystemMarkerGenerators = allDesignVersion["DesignService"][
-    #        "ListAllDesigns"
-    #    ]["StarSystemMarkerGenerators"]
-    # return True
+    def listAllDesigns4(self):
+        """
+        ListAllDesigns4 has been deprecated
+        The design data will be fetched individually
+        """
+        if not self.latestVersion:
+            self.getLatestVersion3()
+        if "SettingService" not in self.latestVersion:
+            return False
+        versions = self.latestVersion["SettingService"]["GetLatestSetting"]["Setting"]
+        url = f"{self.baseUrl}/DesignService/ListAllDesigns4?LanguageKey=en&ListFileVersion={versions['@FileVersion']}&ListSpriteVersion={versions['@SpriteVersion']}&ListBackgroundVersion={versions['@BackgroundVersion']}&ListAllShipDesignVersion={versions['@ShipDesignVersion']}&ListRoomDesignVersion={versions['@RoomDesignVersion']}&ListAllCharacterDesignVersion={versions['@CharacterDesignVersion']}&ListAllCharacterDesignActionVersion={versions['@CharacterDesignActionVersion']}&ListItemDesignVersion={versions['@ItemDesignVersion']}&ListCraftDesignVersion={versions['@CraftDesignVersion']}&ListMissileDesignVersion={versions['@MissileDesignVersion']}&ListStarSystemVersion={versions['@StarSystemVersion']}&ListStarSystemLinkVersion={versions['@StarSystemLinkVersion']}&ListAllNewsDesignVersion={versions['@NewsDesignVersion']}&ListLeagueVersion={versions['@LeagueVersion']}&ListAchievementDesignVersion={versions['@AchievementDesignVersion']}&ListRoomDesignPurchaseVersion={versions['@RoomDesignPurchaseVersion']}&ListRoomDesignSpriteVersion={versions['@RoomDesignSpriteVersion']}&ListAllMissionDesignVersion={versions['@MissionDesignVersion']}&ListAnimationVersion={versions['@AnimationVersion']}&ListAllResearchDesignVersion={versions['@ResearchDesignVersion']}&ListAllTrainingDesignVersion={versions['@TrainingDesignVersion']}&ListAllChallengeDesignVersion={versions['@ChallengeDesignVersion']}&ListAllRewardDesignVersion={versions['@RewardDesignVersion']}&ListAllDivisionDesignVersion={versions['@DivisionDesignVersion']}&ListAllCollectionDesignVersion={versions['@CollectionDesignVersion']}&ListAllDrawDesignVersion={versions['@DrawDesignVersion']}&ListAllPromotionDesignVersion={versions['@PromotionDesignVersion']}&ListAllSituationDesignVersion={versions['@SituationDesignVersion']}&ListAllTaskDesignVersion={versions['@TaskDesignVersion']}&ListActionTypeVersion={versions['@ActionTypeVersion']}&ListConditionTypeVersion={versions['@ConditionTypeVersion']}&ListItemDesignActionVersion={versions['@ItemDesignActionVersion']}&ListSeasonDesignVersion={versions['@SeasonDesignVersion']}&ListAssetVersion={versions['@AssetVersion']}&ListMarkerGeneratorDesignVersion={versions['@MarkerGeneratorDesignVersion']}"
+        r = self.request(url, "GET")
+        if r:
+            allDesignVersion = xmltodict.parse(r.content, xml_attribs=True)
+
+            if (
+                "DesignService" not in allDesignVersion
+                and "ListAllDesigns" not in allDesignVersion["DesignService"]
+            ):
+                return False
+            designs = [
+                "Files",
+                "Sprites",
+                "Backgrounds",
+                "ShipDesigns",
+                "RoomDesigns",
+                "CharacterDesigns",
+                "CharacterDesignActions",
+                "ItemDesigns",
+                "CraftDesigns",
+                "MissileDesigns",
+                "StarSystems",
+                "StarSystemLinks",
+                "NewsDesigns",
+                "Leagues",
+                "AchievementDesigns",
+                "RoomDesignPurchases",
+                "RoomDesignSprites",
+                "MissionDesigns",
+                "Animations",
+                "ResearchDesigns",
+                "TrainingDesigns",
+                "ChallengeDesigns",
+                "RewardDesigns",
+                "DivisionDesigns",
+                "CollectionDesigns",
+                "DrawDesigns",
+                "PromotionDesigns",
+                "SituationDesigns",
+                "ItemDesignActions",
+                "SeasonDesigns",
+                "Assets",
+                "StarSystemMarkerGenerators",
+            ]
+            for design in designs:
+                if design not in allDesignVersion["DesignService"]["ListAllDesigns"]:
+                    logging.error("Missing design data.")
+                    return False
+            self.files = allDesignVersion["DesignService"]["ListAllDesigns"]["Files"]
+            self.sprites = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "Sprites"
+            ]
+            self.backgrounds = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "Backgrounds"
+            ]
+            self.shipDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "ShipDesigns"
+            ]
+            self.roomDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "RoomDesigns"
+            ]
+            self.characterDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "CharacterDesigns"
+            ]
+            self.characterDesignActions = allDesignVersion["DesignService"][
+                "ListAllDesigns"
+            ]["CharacterDesignActions"]
+            self.itemDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "ItemDesigns"
+            ]
+            self.craftDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "CraftDesigns"
+            ]
+            self.missileDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "MissileDesigns"
+            ]
+            self.starSystems = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "StarSystems"
+            ]
+            self.starSystemsLinks = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "StarSystemLinks"
+            ]
+            self.newsDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "NewsDesigns"
+            ]
+            self.leagues = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "Leagues"
+            ]
+            self.achievementDesigns = allDesignVersion["DesignService"][
+                "ListAllDesigns"
+            ]["AchievementDesigns"]
+            self.roomDesignPurchases = allDesignVersion["DesignService"][
+                "ListAllDesigns"
+            ]["RoomDesignPurchases"]
+            self.roomDesignSprites = allDesignVersion["DesignService"][
+                "ListAllDesigns"
+            ]["RoomDesignSprites"]
+            self.missionDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "MissionDesigns"
+            ]
+            self.animations = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "Animations"
+            ]
+            self.researchDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "ResearchDesigns"
+            ]
+            self.trainingDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "TrainingDesigns"
+            ]
+            self.challengeDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "ChallengeDesigns"
+            ]
+            self.rewardDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "RewardDesigns"
+            ]
+            self.divisionDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "DivisionDesigns"
+            ]
+            self.collectionDesigns = allDesignVersion["DesignService"][
+                "ListAllDesigns"
+            ]["CollectionDesigns"]
+            self.drawDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "DrawDesigns"
+            ]
+            self.promotionDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "PromotionDesigns"
+            ]
+            self.situationDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "SituationDesigns"
+            ]
+            self.itemDesignActions = allDesignVersion["DesignService"][
+                "ListAllDesigns"
+            ]["ItemDesignActions"]
+            self.seasonDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "SeasonDesigns"
+            ]
+            self.assets = allDesignVersion["DesignService"]["ListAllDesigns"]["Assets"]
+            self.starSystemMarkerGenerators = allDesignVersion["DesignService"][
+                "ListAllDesigns"
+            ]["StarSystemMarkerGenerators"]
+        return True
 
     def listAllCharacterDesigns2(self):
         if self.latestVersion:
@@ -629,6 +646,7 @@ class Client(object):
             r = self.request(url, "GET")
             if r:
                 self.allCharacterDesigns = xmltodict.parse(r.content, xml_attribs=True)
+
             if "CharacterService" not in self.allCharacterDesigns:
                 logging.error(
                     "[%s] CharacterService data not avaialble.", self.info["@Name"]
@@ -655,7 +673,7 @@ class Client(object):
 
         if (
             not hasattr(self, "allCharacterDesigns")
-            and "CharacterService" not in self.allCharactersOfUser
+            and not self.listAllCharacterDesigns2()
         ):
             logging.error("AllCharacterDesigns data not avaialble.")
             return False
@@ -674,45 +692,45 @@ class Client(object):
 
         roles = {
             "weapons": {
-                "characters": ["Apex", "Galactic Snow Maiden"],
-                "primaryRoom": "Academy",
+                "characters": ["Galactic Succubus", "Galactic Snow Maiden", "Delish"],
+                "primaryRoom": ["Academy", "Lunar College"],
                 "primaryT1": "Read Expert Weapon Theory",
                 "primaryT2": "Weapons Summit",
                 "primaryT3": "Weapons PHD",
-                "secondaryRoom": "GYM",
+                "secondaryRoom": ["GYM", "Galaxy Gym"],
                 "secondaryT1": "Bench Press",
                 "secondaryT2": "Muscle Beach",
                 "secondaryT3": "Olympic Weightlifting",
             },
             "shields": {
-                "characters": ["Mistycball", "C.P.U.", "Penny"],
-                "primaryRoom": "Academy",
+                "characters": ["Mistycball", "C.P.U.", "r2e"],
+                "primaryRoom": ["Academy", "Lunar College"],
                 "primaryT1": "Big Book of Science",
                 "primaryT2": "Scientific Summit",
                 "primaryT3": "Science PHD",
-                "secondaryRoom": "GYM",
+                "secondaryRoom": ["Galaxy Gym", "GYM"],
                 "secondaryT1": "Bench Press",
                 "secondaryT2": "Muscle Beach",
                 "secondaryT3": "Olympic Weightlifting",
             },
             "engines": {
                 "characters": ["The Conjoint Archon", "Galactic Sprite"],
-                "primaryRoom": "GYM",
+                "primaryRoom": ["GYM", "Galaxy Gym"],
                 "primaryT1": "Bench Press",
                 "primaryT2": "Muscle Beach",
                 "primaryT3": "Olympic Weightlifting",
-                "secondaryRoom": "Academy",
+                "secondaryRoom": ["Academy", "Lunar College"],
                 "secondaryT1": "Study Expert Engineering Manual",
                 "secondaryT2": "Engineering Summit",
                 "secondaryT3": "Engineering PHD",
             },
             "rushers": {
                 "characters": ["Huge Hellaloya", "Cyber Duck"],
-                "primaryRoom": "GYM",
+                "primaryRoom": ["GYM", "Galaxy Gym"],
                 "primaryT1": "Steam Yoga",
                 "primaryT2": "Crew vs Wild",
                 "primaryT3": "Space Marine",
-                "secondaryRoom": "GYM",
+                "secondaryRoom": ["Galaxy Gym", "GYM"],
                 "secondaryT1": "Bench Press",
                 "secondaryT2": "Muscle Beach",
                 "secondaryT3": "Olympic Weightlifting",
@@ -724,23 +742,25 @@ class Client(object):
                     "Green Ranger - Oliver",
                     "Huntress",
                     "Turkey Hero",
+                    "1st engineer Tully",
+                    "King Dong",
                 ],
-                "primaryRoom": "GYM",
+                "primaryRoom": ["GYM", "Galexy Gym"],
                 "primaryT1": "Bench Press",
                 "primaryT2": "Muscle Beach",
                 "primaryT3": "Olympic Weightlifting",
-                "secondaryRoom": "GYM",
+                "secondaryRoom": ["Galaxy Gym", "GYM"],
                 "secondaryT1": "Kickbox",
                 "secondaryT2": "BBJ",
                 "secondaryT3": "Shaolin Tradition",
             },
             "pilots": {
-                "characters": ["r2e"],
-                "primaryRoom": "Academy",
+                "characters": [],
+                "primaryRoom": ["Academy", "Lunar College"],
                 "primaryT1": "Read Expert Pilot Handbook",
                 "primaryT2": "Pilot Summit",
                 "primaryT3": "Pilot Expert",
-                "secondaryRoom": "GYM",
+                "secondaryRoom": ["Galaxy Gym", "GYM"],
                 "secondaryT1": "Bench Press",
                 "secondaryT2": "Muscle Beach",
                 "secondaryT3": "Olympic Weightlifting",
@@ -757,7 +777,14 @@ class Client(object):
                 if character["@RoomId"] == room["@RoomId"]:
                     break
             self.getRoomName(room["@RoomDesignId"])
-            if "Academy" in self.roomName or "GYM" in self.roomName:
+
+            logging.debug(
+                "{0!r} in {1!r}".format(character["@CharacterName"], self.roomName)
+            )
+            if any(
+                primaryRoom in self.roomName
+                for primaryRoom in ["Academy", "GYM", "Galaxy Gym", "Lunar College"]
+            ):
                 roleData = {}
                 for data in roles.values():
                     if character["@CharacterName"] in data["characters"]:
@@ -794,10 +821,13 @@ class Client(object):
                         character["@TrainingEndDate"], "%Y-%m-%dT%H:%M:%S"
                     )
 
-                percent = count / int(characterDesign["@TrainingCapacity"]) * 100
+                percent = math.ceil(count / int(characterDesign["@TrainingCapacity"]) * 100)
                 if (
                     roleData
-                    and roleData["primaryRoom"] in self.roomName
+                    and any(
+                        primaryRoom in self.roomName
+                        for primaryRoom in roleData["primaryRoom"]
+                    )
                     and (percent < 51)
                     and (
                         not trainingEndDate
@@ -805,7 +835,7 @@ class Client(object):
                             trainingEndDate
                             < (
                                 datetime.datetime.utcnow()
-                                - datetime.timedelta(minutes=45)
+                                - datetime.timedelta(hours=1)
                             )
                         )
                     )
@@ -817,13 +847,16 @@ class Client(object):
 
                 elif (
                     roleData
-                    and roleData["primaryRoom"] in self.roomName
+                    and any(
+                        primaryRoom in self.roomName
+                        for primaryRoom in roleData["primaryRoom"]
+                    )
                     and (50 < percent < 65)
                     and (
                         not trainingEndDate
                         or (
                             trainingEndDate
-                            < (datetime.datetime.utcnow() - datetime.timedelta(hours=3))
+                            < (datetime.datetime.utcnow() - datetime.timedelta(hours=3,minutes=15))
                         )
                     )
                 ):
@@ -834,7 +867,10 @@ class Client(object):
 
                 elif (
                     roleData
-                    and roleData["primaryRoom"] in self.roomName
+                    and any(
+                        primaryRoom in self.roomName
+                        for primaryRoom in roleData["primaryRoom"]
+                    )
                     and (64 < percent < 72)
                     and (
                         not trainingEndDate
@@ -842,7 +878,7 @@ class Client(object):
                             trainingEndDate
                             < (
                                 datetime.datetime.utcnow()
-                                - datetime.timedelta(hours=12)
+                                - datetime.timedelta(hours=12,minutes=15)
                             )
                         )
                     )
@@ -851,10 +887,24 @@ class Client(object):
                     logging.debug(
                         f"[{self.info['@Name']}] Use Yellow (T3) {trainingName} primary training for {character['@CharacterName']} in {self.roomName} with {percent:.2f}% training complete, ability {characterDesign['@SpecialAbilityType']}, and {character['@Fatigue']} fatigue."
                     )
+                elif (
+                    roleData
+                    and percent > 71
+                    and not any(
+                        secondaryRoom in self.roomName
+                        for secondaryRoom in roleData["secondaryRoom"]
+                    )
+                ):
+                    logging.error(
+                        f"[{self.info['@Name']}] Move {character['@CharacterName']} with {math.ceil(percent)}% training and {character['@Fatigue']} fatigue in {self.roomName} to the {' or '.join(roleData['secondaryRoom'])} to complete training complete for ability {characterDesign['@SpecialAbilityType']}."
+                    )
 
                 elif (
                     roleData
-                    and roleData["secondaryRoom"] in self.roomName
+                    and any(
+                        secondaryRoom in self.roomName
+                        for secondaryRoom in roleData["secondaryRoom"]
+                    )
                     and (71 < percent < 74)
                     and (
                         not trainingEndDate
@@ -862,7 +912,7 @@ class Client(object):
                             trainingEndDate
                             < (
                                 datetime.datetime.utcnow()
-                                - datetime.timedelta(minutes=45)
+                                - datetime.timedelta(hours=1)
                             )
                         )
                     )
@@ -873,13 +923,16 @@ class Client(object):
                     )
                 elif (
                     roleData
-                    and roleData["secondaryRoom"] in self.roomName
+                    and any(
+                        secondaryRoom in self.roomName
+                        for secondaryRoom in roleData["secondaryRoom"]
+                    )
                     and (73 < percent < 85)
                     and (
                         not trainingEndDate
                         or (
                             trainingEndDate
-                            < (datetime.datetime.utcnow() - datetime.timedelta(hours=3))
+                            < (datetime.datetime.utcnow() - datetime.timedelta(hours=3,minutes=15))
                         )
                     )
                 ):
@@ -889,7 +942,10 @@ class Client(object):
                     )
                 elif (
                     roleData
-                    and roleData["secondaryRoom"] in self.roomName
+                    and any(
+                        secondaryRoom in self.roomName
+                        for secondaryRoom in roleData["secondaryRoom"]
+                    )
                     and (84 < percent < 90)
                     and (
                         not trainingEndDate
@@ -897,7 +953,7 @@ class Client(object):
                             trainingEndDate
                             < (
                                 datetime.datetime.utcnow()
-                                - datetime.timedelta(hours=12)
+                                - datetime.timedelta(hours=12,minutes=15)
                             )
                         )
                     )
@@ -905,6 +961,10 @@ class Client(object):
                     trainingName = roleData["secondaryT3"]
                     logging.debug(
                         f"[{self.info['@Name']}] Use Yellow (T3) {trainingName} primary training for {character['@CharacterName']} in {self.roomName} with {percent:.2f}% training complete, ability {characterDesign['@SpecialAbilityType']}, and {character['@Fatigue']} fatigue."
+                    )
+                elif roleData and percent > 89:
+                    logging.error(
+                        f"[{self.info['@Name']}] Training complete for {character['@CharacterName']} with {math.ceil(percent)}% training and {character['@Fatigue']} fatigue in {self.roomName} for ability {characterDesign['@SpecialAbilityType']}, please move this crew to its designated room."
                     )
 
                 if trainingName:
@@ -957,6 +1017,11 @@ class Client(object):
                         logging.info(
                             f"[{self.info['@Name']}] Starting training {trainingName} for {character['@CharacterName']} in {self.roomName} with {percent:.2f}% training complete, ability {characterDesign['@SpecialAbilityType']}, {character['@Fatigue']} fatigue."
                         )
+                    if character["@CharacterName"]:
+                        logging.info(
+                            f"[{self.info['@Name']}] Considering training {trainingName} for {character['@CharacterName']} in {self.roomName} with {percent:.2f}% training complete, ability {characterDesign['@SpecialAbilityType']}, {character['@Fatigue']} fatigue."
+                        )
+
         return True
 
     def getCharacterRooms(self):
@@ -997,6 +1062,136 @@ class Client(object):
         if not hasattr(self, "allCharacterDesigns"):
             self.listAllCharacterDesigns2()
 
+        crewCostsPerLevel = [
+            0,
+            90,
+            270,
+            450,
+            630,
+            810,
+            1020,
+            1230,
+            1440,
+            1650,
+            1860,
+            2130,
+            2400,
+            2670,
+            2940,
+            3210,
+            3540,
+            3870,
+            4200,
+            4530,
+            4860,
+            5220,
+            5580,
+            5940,
+            6300,
+            6660,
+            7050,
+            7440,
+            7830,
+            8220,
+            8610,
+            9030,
+            9450,
+            9870,
+            10290,
+            10710,
+            11160,
+            11610,
+            12060,
+            12510,
+        ]
+        crewCosts = list(accumulate(crewCostsPerLevel))
+        legendaryCrewCosts = [cost * 3 for cost in crewCosts]
+
+        legendaryCrewGasCosts = [
+            0,
+            130000,
+            162500,
+            195000,
+            227500,
+            260000,
+            292500,
+            325000,
+            357500,
+            390000,
+            422500,
+            455000,
+            487500,
+            520000,
+            552500,
+            585000,
+            617500,
+            650000,
+            682500,
+            715000,
+            747500,
+            780000,
+            812500,
+            845000,
+            877500,
+            910000,
+            942000,
+            975000,
+            1007500,
+            1040000,
+            1072500,
+            1105000,
+            1137500,
+            1170000,
+            1202500,
+            1235000,
+            1267500,
+            1300000,
+            1332500,
+            1365000,
+        ]
+        crewGasCosts = [
+            0,
+            0,
+            17,
+            33,
+            65,
+            130,
+            325,
+            650,
+            1300,
+            3200,
+            6500,
+            9700,
+            13000,
+            19500,
+            26000,
+            35700,
+            43800,
+            52000,
+            61700,
+            71500,
+            84500,
+            104000,
+            117000,
+            130000,
+            156000,
+            175000,
+            201000,
+            227000,
+            253000,
+            279000,
+            312000,
+            351000,
+            383000,
+            422000,
+            468000,
+            507000,
+            552000,
+            604000,
+            650000,
+            715000,
+        ]
+
         for character in self.allCharactersOfUser["CharacterService"][
             "ListAllCharactersOfUser"
         ]["Characters"]["Character"]:
@@ -1014,11 +1209,34 @@ class Client(object):
                         == characterDesign["@CharacterDesignId"]
                     ):
                         character_names.append(character["@CharacterName"])
-                        logging.info(
-                            f"[{self.info['@Name']}] Upgrading {character['@CharacterName']} to level {int(character['@Level']) + 1}."
-                        )
-                        self.upgradeCharacter(character["@CharacterId"])
-                        # logging.warn(f"{character['@CharacterName']=} {character['@Level']=} {character['@Xp']=} {characterDesign['@Rarity']=}")
+                        logging.debug(f"{len(crewCosts)=} {len(legendaryCrewCosts)=}")
+                        if int(character["@Xp"]) >= (
+                            legendaryCrewCosts[int(character["@Level"])]
+                            if characterDesign["@Rarity"] == "Legendary"
+                            else crewCosts[int(character["@Level"])]
+                        ):
+                            self.collectAllResources()
+                            date_to_check = datetime.datetime.strptime(
+                                character["@AvailableDate"], "%Y-%m-%dT%H:%M:%S"
+                            )
+                            current_datetime = datetime.datetime.now()
+                            if (
+                                legendaryCrewGasCosts[int(character["@Level"])]
+                                if characterDesign["@Rarity"] == "Legendary"
+                                else crewGasCosts[int(character["@Level"])]
+                            ) <= int(self.gasTotal) and (
+                                date_to_check <= current_datetime
+                            ):
+                                logging.info(
+                                    f"[{self.info['@Name']}] Upgrading {character['@CharacterName']} to level {int(character['@Level']) + 1} costing {legendaryCrewGasCosts[int(character['@Level'])] if characterDesign['@Rarity'] == 'Legendary' else crewGasCosts[int(character['@Level'])]}/{self.gasTotal} gas and {int(character['@Xp'])}/{legendaryCrewCosts[int(character['@Level'])] if characterDesign['@Rarity'] == 'Legendary' else crewCosts[int(character['@Level'])]} xp."
+                                )
+                                self.upgradeCharacter(character["@CharacterId"])
+                            logging.debug(
+                                f"{character['@CharacterName']=} {character['@Level']=} {character['@Xp']=} {characterDesign['@Rarity']=}"
+                            )
+                            logging.debug(
+                                f"XP cost: {legendaryCrewCosts[int(character['@Level'])] if characterDesign['@Rarity'] == 'Legendary' else crewCosts[int(character['@Level'])]}"
+                            )
 
         if character_names:
             logging.info(
@@ -1155,6 +1373,9 @@ class Client(object):
         )
 
     def collectDailyReward(self):
+        if "LiveOpsService" not in self.todayLiveOps:
+            loging.error("Unable to collect daily reward because of missing Live Ops data.")
+            return False
         self.dailyRewardArgument = self.todayLiveOps["LiveOpsService"][
             "GetTodayLiveOps"
         ]["LiveOps"]["@DailyRewardArgument"]
@@ -1163,7 +1384,7 @@ class Client(object):
         ):
             self.dailyReward = 0
 
-        if self.user.isAuthorized and not self.dailyReward:
+        if self.user.isAuthorized and (self.info['@DailyRewardStatus'] != '1'):
             url = "https://api.pixelstarships.com/UserService/CollectDailyReward2?dailyRewardStatus=Box&argument={}&accessToken={}".format(
                 self.dailyRewardArgument,
                 self.accessToken,
@@ -1446,8 +1667,11 @@ class Client(object):
                                     logging.info(
                                         f'[{self.info["@Name"]}] You have reached the maximum number of concurrent constructions allowed.'
                                     )
+                                    self.max_room_upgrades = True
                                     break
                                 self.collectAllResources()
+                    if self.max_room_upgrades:
+                        break
             return True
         except:
             logging.exception("Unable to upgrade research.", exc_info=True)
@@ -1625,6 +1849,8 @@ class Client(object):
     def collectTaskReward(self):
         self.listTasksOfAUser()
         self.listAllTaskDesigns2()
+        if "TaskService" not in self.tasksOfAUser:
+            return False
         for task in self.tasksOfAUser["TaskService"]["ListTasksOfAUser"]["Tasks"][
             "Task"
         ]:
@@ -1632,15 +1858,12 @@ class Client(object):
                 for taskDesign in self.allTaskDesigns["TaskService"][
                     "ListAllTaskDesigns"
                 ]["TaskDesigns"]["TaskDesign"]:
-                    if (
-                        taskDesign["@TaskDesignId"] == task["@TaskDesignId"]
-                        and taskDesign["@ObjectiveAmount"] == task["@ProgressValue"]
-                    ):
-                        logging.debug(f"{task=}\n{taskDesign=}")
-                        if self.collectTaskCompletion(task["@TaskDesignId"]):
-                            logging.info(
-                                f"[{self.info['@Name']}] Collecting reward for objective: {taskDesign['@Name']}."
-                            )
+                    if taskDesign["@TaskDesignId"] == task["@TaskDesignId"]:
+                        if task["@ProgressValue"] == taskDesign["@ObjectiveAmount"]:
+                            if self.collectTaskCompletion(task["@TaskDesignId"]):
+                                logging.info(
+                                    f"[{self.info['@Name']}] Collecting reward for objective: {taskDesign['@Name']}."
+                                )
 
     def heartbeat(self):
         if (
