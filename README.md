@@ -1,29 +1,62 @@
 <!---
 This file is auto-generate by a github hook please modify README.template if you don't want to loose your work
 -->
-# raelldottin/tachikoma 1.1.7-120
+# raelldottin/tachikoma 1.1.7-123
 [![Hourly Automated Actions](https://github.com/raelldottin/tachikoma/actions/workflows/hourly-run.yml/badge.svg?event=schedule)](https://github.com/raelldottin/tachikoma/actions/workflows/hourly-run.yml)
 
-Automate trivial tasks in Pixel Starships Mobile Starategy Sci-Fi MMORPG
+# Tachikoma - Pixel Starships Automation
 
-# Requirements
+This repository contains scripts and resources for automating tasks in the mobile game Pixel Starships. The project is built around a Python script `run.py` which interacts with various game elements to perform a series of automated tasks. It's designed to help players manage routine activities in the game more efficiently.
 
-`pip3 install xmltodict`
+## Repository Contents
 
-`pip3 install requests`
+- `.dockerignore`, `.gitignore`: Ignore files.
+- `.githooks/`: Custom Git hooks for the repository.
+- `.github/`: GitHub-specific configurations, including Actions workflow `hourly-run.yml`.
+- `.python-version`: Version-specific configurations.
+- `.ruff_cache/`: Cache directory for Python linter Ruff.
+- `LICENSE`: The license file.
+- `README.md`: This readme file.
+- `README.template`: Template for generating README files.
+- `conf.py`, `index.rst`, `make.bat`: Sphinx documentation configurations.
+- `pylintrc`: Configuration file for Python linter Pylint.
+- `requirements.txt`: Required Python packages for the project.
+- `run.py`: Main Python script to automate tasks in Pixel Starships.
+- `sdk/`: Python package containing modules like `client`, `device`, etc., used by `run.py`.
 
-# Docs
+## run.py
 
-It's super basic, one thing to note: `Device` class automatically saves generated device. Call `.reset()` method to cleanup saved data.
+`run.py` is the core script of this repository. It automates various tasks in Pixel Starships, such as resource collection, crew management, and more. The script provides a CLI for easy interaction and is configurable to either run as a guest or with user credentials.
 
-It also stores a token to relogin without credentials.
+### Key Features:
 
-* One creates a device `device = Device(language='ru')`
-* Then a client must be created `client = Client(device=device)`
-* Use `client.login()` and `client.heartbeat()` to keep your session alive as a guest
-* Use `client.login(email='supra@mail', password='1337')` and `client.heartbeat()` to keep authorized session alive
-* Use `client.quickReload()` to re-authenticate your session
-* Use `client.listActiveMarketplaceMessages()` to list all items you have available for sell in the marketplace
-* Use `client.collectAllResources()` to collect all resources on your ship
-* Use `client.collectDailyReward()` to collect the daily reward
+- Automated collection of resources and rewards.
+- Crew and room upgrades management.
+- Marketplace and messages handling.
+- Optional email logging for monitoring script activities.
+
+## Setup & Usage
+
+1. Clone the repository to your local machine.
+2. Install the required Python packages: `pip install -r requirements.txt`.
+3. Run the script using Python: `python run.py`.
+
+   Options:
+   - `-a` / `--auth`: Authentication string for the game.
+   - `-e` / `--email`: Email for SMTP (if email logging is desired).
+   - `-p` / `--password`: Password for SMTP.
+   - `-r` / `--recipient`: Recipient email for the log.
+
+## Contributing
+
+Contributions to enhance the script's functionality or efficiency are welcome. Feel free to fork the repository and submit pull requests.
+
+## License
+
+This project is licensed under the terms specified in the `LICENSE` file.
+
+---
+
+This README provides a basic overview of the repository. For more detailed information on specific components, please refer to the respective files or the source code comments.
+
 ---
