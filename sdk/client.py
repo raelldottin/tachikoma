@@ -188,7 +188,7 @@ class Client(object):
 
         self.checksum = ChecksumCreateDevice(self.device.key, self.device.name)
 
-        url = f"{self.baseUrl}/UserService/DeviceLogin8?deviceKey={self.device.key}&advertisingKey=&isJailBroken=False&checksum={self.checksum}&deviceType=DeviceType{self.device.name}&signal=False&languageKey={self.device.languageKey}&refreshToken={self.device.refreshToken if self.device.refreshToken else ''}"
+        url = f"{self.baseUrl}/UserService/DeviceLogin15?deviceKey={self.device.key}&advertisingKey=&isJailBroken=False&checksum={self.checksum}&deviceType=DeviceType{self.device.name}&signal=False&languageKey={self.device.languageKey}&refreshToken={self.device.refreshToken if self.device.refreshToken else ''}"
 
         r = self.request(url, "POST")
         if r:
