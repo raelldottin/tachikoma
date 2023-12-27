@@ -1,5 +1,5 @@
 # {{ repository.name }} {{ current.version }}
-[![Hourly Automated Actions](https://github.com/raelldottin/tachikoma/actions/workflows/hourly-run.yml/badge.svg?event=schedule)](https://github.com/raelldottin/tachikoma/actions/workflows/hourly-run.yml)
+[![Daily Automated Actions](https://github.com/raelldottin/tachikoma/actions/workflows/daily-run.yml/badge.svg?event=schedule)](https://github.com/raelldottin/tachikoma/actions/workflows/hourly-run.yml)
 
 # Tachikoma - Pixel Starships Automation
 
