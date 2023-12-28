@@ -188,9 +188,28 @@ class Client(object):
 
         self.checksum = ChecksumCreateDevice(self.device.key, self.device.name)
 
-        url = f"{self.baseUrl}/UserService/DeviceLogin15?deviceKey={self.device.key}&advertisingKey=&isJailBroken=False&checksum={self.checksum}&deviceType=DeviceType{self.device.name}&signal=False&languageKey={self.device.languageKey}&refreshToken={self.device.refreshToken if self.device.refreshToken else ''}"
+        url = f"{self.baseUrl}/UserService/DeviceLogin15"
+        params = {
+            "DeviceKey": self.device.key,
+            "AdvertisingKey": "",
+            "IsJailBroken": False,
+            "Checksum": self.checksum,
+            "DeviceType": 2,
+            "Signal": False,
+            "LanguageKey": self.device.languageKey,
+            "RefreshToken": {self.device.refreshToken if self.device.refreshToken else ''},
+            "UserDeviceInfo": {
+                "OSVersion": "Mac OS X 14.2.0",
+                "Locale": elf.device.languageKey,
+                "DeviceName": "Mac14.10",
+                "OSBuild": "0",
+                "ClientBuild": "13778",
+                "ClientVersion": "0.998.9"
+            },
+            "AccessToken": "00000000-0000-0000-0000-000000000000",
+        }       
 
-        r = self.request(url, "POST")
+        r = self.request(url, "POST", params=params)
         if r:
             d = xmltodict.parse(r.content, xml_attribs=True)
             if (
