@@ -197,10 +197,10 @@ class Client(object):
             "DeviceType": 2,
             "Signal": False,
             "LanguageKey": self.device.languageKey,
-            "RefreshToken": {self.device.refreshToken if self.device.refreshToken else ''},
+            "RefreshToken": self.device.refreshToken if self.device.refreshToken else '',
             "UserDeviceInfo": {
                 "OSVersion": "Mac OS X 14.2.0",
-                "Locale": elf.device.languageKey,
+                "Locale": self.device.languageKey,
                 "DeviceName": "Mac14.10",
                 "OSBuild": "0",
                 "ClientBuild": "13778",
