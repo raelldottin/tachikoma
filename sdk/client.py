@@ -188,9 +188,32 @@ class Client(object):
 
         self.checksum = ChecksumCreateDevice(self.device.key, self.device.name)
 
-        url = f"{self.baseUrl}/UserService/DeviceLogin9?deviceKey={self.device.key}&advertisingKey=&isJailBroken=False&checksum={self.checksum}&deviceType=DeviceType{self.device.name}&signal=False&languageKey={self.device.languageKey}&refreshToken={self.device.refreshToken if self.device.refreshToken else ''}"
+        url = f"{self.baseUrl}/UserService/DeviceLogin15?deviceKey={self.device.key}&advertisingKey=&isJailBroken=False&checksum={self.checksum}&deviceType=DeviceType{self.device.name}&signal=False&languageKey={self.device.languageKey}&refreshToken={self.device.refreshToken if self.device.refreshToken else ''}"
+        json = {
+            "DeviceKey": self.device.key,
+            "AdvertisingKey": "",
+            "ClientDateTime": "{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime()),
+            "IsJailBroken": False,
+            "Checksum": self.checksum,
+            "DeviceType": 2,
+            "Signal": False,
+            "LanguageKey": "en",
+            "RefreshToken": self.device.refreshToken
+            if self.device.refreshToken
+            else "eyJhbGciOiJodHRwOi8vd3d3LnczLm9yZy8yMDAxLzA0L3htbGRzaWctbW9yZSNobWFjLXNoYTI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiIzNDMwODkyIiwiZGV2aWNlS2V5IjoiNkFENDI4MjgtN0QwNi01MzRELUE0NjEtNDk2NTg0NjFBNjE0IiwiZW1haWwiOiJyYWVsbC5kb3R0aW5AZ21haWwuY29tIiwiY3JlYXRlZERhdGUiOiIyMDIzLTEyLTA2VDAwOjUzOjU4In0.NRROBWsIL57NzL_h6_TX50wE-73fenMA44jVJpa1Rqw",
+            "UserDeviceInfo": {
+                "OsVersion": "Mac OS X 14.2.0",
+                "Locale": "en",
+                "DeviceName": "Mac14,10",
+                "OSBuild": "0",
+                "ClientBuild": "13866",
+                "ClientVersion": "0.998.10",
+            },
+            "AccessToken": "00000000-0000-0000-0000-000000000000",
+        }
 
-        r = self.request(url, "POST")
+        r = requests.post(url, json=json)
+
         if r:
             d = xmltodict.parse(r.content, xml_attribs=True)
             if (
