@@ -1,7 +1,7 @@
 name: Hourly Automated Actions
 on:
   schedule:
-    - cron: '* */4 * * *'
+    - cron: '0 * * * *'
 
 jobs:
   daily-run:
