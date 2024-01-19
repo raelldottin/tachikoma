@@ -175,7 +175,7 @@ class Client(object):
         )
 
         self.info = d["UserService"]["UserLogin"]["User"]
-        try: 
+        try:
             self.credits = d["UserService"]["UserLogin"]["User"]["@Credits"]
         except KeyError:
             pass
@@ -188,7 +188,7 @@ class Client(object):
 
         self.checksum = ChecksumCreateDevice(self.device.key, self.device.name)
 
-        url = f"{self.baseUrl}/UserService/DeviceLogin8?deviceKey={self.device.key}&advertisingKey=&isJailBroken=False&checksum={self.checksum}&deviceType=DeviceType{self.device.name}&signal=False&languageKey={self.device.languageKey}&refreshToken={self.device.refreshToken if self.device.refreshToken else ''}"
+        url = f"{self.baseUrl}/UserService/DeviceLogin9?deviceKey={self.device.key}&advertisingKey=&isJailBroken=False&checksum={self.checksum}&deviceType=DeviceType{self.device.name}&signal=False&languageKey={self.device.languageKey}&refreshToken={self.device.refreshToken if self.device.refreshToken else ''}"
 
         r = self.request(url, "POST")
         if r:
@@ -821,7 +821,9 @@ class Client(object):
                         character["@TrainingEndDate"], "%Y-%m-%dT%H:%M:%S"
                     )
 
-                percent = math.ceil(count / int(characterDesign["@TrainingCapacity"]) * 100)
+                percent = math.ceil(
+                    count / int(characterDesign["@TrainingCapacity"]) * 100
+                )
                 if (
                     roleData
                     and any(
@@ -833,10 +835,7 @@ class Client(object):
                         not trainingEndDate
                         or (
                             trainingEndDate
-                            < (
-                                datetime.datetime.utcnow()
-                                - datetime.timedelta(hours=1)
-                            )
+                            < (datetime.datetime.utcnow() - datetime.timedelta(hours=1))
                         )
                     )
                 ):
@@ -856,7 +855,10 @@ class Client(object):
                         not trainingEndDate
                         or (
                             trainingEndDate
-                            < (datetime.datetime.utcnow() - datetime.timedelta(hours=3,minutes=15))
+                            < (
+                                datetime.datetime.utcnow()
+                                - datetime.timedelta(hours=3, minutes=15)
+                            )
                         )
                     )
                 ):
@@ -878,7 +880,7 @@ class Client(object):
                             trainingEndDate
                             < (
                                 datetime.datetime.utcnow()
-                                - datetime.timedelta(hours=12,minutes=15)
+                                - datetime.timedelta(hours=12, minutes=15)
                             )
                         )
                     )
@@ -910,10 +912,7 @@ class Client(object):
                         not trainingEndDate
                         or (
                             trainingEndDate
-                            < (
-                                datetime.datetime.utcnow()
-                                - datetime.timedelta(hours=1)
-                            )
+                            < (datetime.datetime.utcnow() - datetime.timedelta(hours=1))
                         )
                     )
                 ):
@@ -932,7 +931,10 @@ class Client(object):
                         not trainingEndDate
                         or (
                             trainingEndDate
-                            < (datetime.datetime.utcnow() - datetime.timedelta(hours=3,minutes=15))
+                            < (
+                                datetime.datetime.utcnow()
+                                - datetime.timedelta(hours=3, minutes=15)
+                            )
                         )
                     )
                 ):
@@ -953,7 +955,7 @@ class Client(object):
                             trainingEndDate
                             < (
                                 datetime.datetime.utcnow()
-                                - datetime.timedelta(hours=12,minutes=15)
+                                - datetime.timedelta(hours=12, minutes=15)
                             )
                         )
                     )
@@ -1374,7 +1376,9 @@ class Client(object):
 
     def collectDailyReward(self):
         if "LiveOpsService" not in self.todayLiveOps:
-            loging.error("Unable to collect daily reward because of missing Live Ops data.")
+            loging.error(
+                "Unable to collect daily reward because of missing Live Ops data."
+            )
             return False
         self.dailyRewardArgument = self.todayLiveOps["LiveOpsService"][
             "GetTodayLiveOps"
@@ -1384,7 +1388,7 @@ class Client(object):
         ):
             self.dailyReward = 0
 
-        if self.user.isAuthorized and (self.info['@DailyRewardStatus'] != '1'):
+        if self.user.isAuthorized and (self.info["@DailyRewardStatus"] != "1"):
             url = "https://api.pixelstarships.com/UserService/CollectDailyReward2?dailyRewardStatus=Box&argument={}&accessToken={}".format(
                 self.dailyRewardArgument,
                 self.accessToken,
