@@ -175,7 +175,7 @@ class Client(object):
         )
 
         self.info = d["UserService"]["UserLogin"]["User"]
-        try: 
+        try:
             self.credits = d["UserService"]["UserLogin"]["User"]["@Credits"]
         except KeyError:
             pass
@@ -188,28 +188,31 @@ class Client(object):
 
         self.checksum = ChecksumCreateDevice(self.device.key, self.device.name)
 
-        url = f"{self.baseUrl}/UserService/DeviceLogin15"
-        params = {
+        url = f"{self.baseUrl}/UserService/DeviceLogin15?deviceKey={self.device.key}&advertisingKey=&isJailBroken=False&checksum={self.checksum}&deviceType=DeviceType{self.device.name}&signal=False&languageKey={self.device.languageKey}&refreshToken={self.device.refreshToken if self.device.refreshToken else ''}"
+        json = {
             "DeviceKey": self.device.key,
             "AdvertisingKey": "",
+            "ClientDateTime": "{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime()),
             "IsJailBroken": False,
             "Checksum": self.checksum,
             "DeviceType": 2,
             "Signal": False,
-            "LanguageKey": self.device.languageKey,
-            "RefreshToken": self.device.refreshToken if self.device.refreshToken else '',
+            "LanguageKey": "en",
+            "RefreshToken": self.device.refreshToken
+            if self.device.refreshToken
+            else "eyJhbGciOiJodHRwOi8vd3d3LnczLm9yZy8yMDAxLzA0L3htbGRzaWctbW9yZSNobWFjLXNoYTI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiIzNDMwODkyIiwiZGV2aWNlS2V5IjoiNkFENDI4MjgtN0QwNi01MzRELUE0NjEtNDk2NTg0NjFBNjE0IiwiZW1haWwiOiJyYWVsbC5kb3R0aW5AZ21haWwuY29tIiwiY3JlYXRlZERhdGUiOiIyMDIzLTEyLTA2VDAwOjUzOjU4In0.NRROBWsIL57NzL_h6_TX50wE-73fenMA44jVJpa1Rqw",
             "UserDeviceInfo": {
-                "OSVersion": "Mac OS X 14.2.0",
-                "Locale": self.device.languageKey,
-                "DeviceName": "Mac14.10",
+                "OsVersion": "Mac OS X 14.2.0",
+                "Locale": "en",
+                "DeviceName": "Mac14,10",
                 "OSBuild": "0",
-                "ClientBuild": "13778",
-                "ClientVersion": "0.998.9"
+                "ClientBuild": "13866",
+                "ClientVersion": "0.998.10",
             },
             "AccessToken": "00000000-0000-0000-0000-000000000000",
-        }       
+        }
 
-        r = self.request(url, "POST", params=params)
+        r = requests.post(url, json=json)
         if r:
             d = xmltodict.parse(r.content, xml_attribs=True)
             if (
@@ -840,7 +843,9 @@ class Client(object):
                         character["@TrainingEndDate"], "%Y-%m-%dT%H:%M:%S"
                     )
 
-                percent = math.ceil(count / int(characterDesign["@TrainingCapacity"]) * 100)
+                percent = math.ceil(
+                    count / int(characterDesign["@TrainingCapacity"]) * 100
+                )
                 if (
                     roleData
                     and any(
@@ -852,10 +857,7 @@ class Client(object):
                         not trainingEndDate
                         or (
                             trainingEndDate
-                            < (
-                                datetime.datetime.utcnow()
-                                - datetime.timedelta(hours=1)
-                            )
+                            < (datetime.datetime.utcnow() - datetime.timedelta(hours=1))
                         )
                     )
                 ):
@@ -875,7 +877,10 @@ class Client(object):
                         not trainingEndDate
                         or (
                             trainingEndDate
-                            < (datetime.datetime.utcnow() - datetime.timedelta(hours=3,minutes=15))
+                            < (
+                                datetime.datetime.utcnow()
+                                - datetime.timedelta(hours=3, minutes=15)
+                            )
                         )
                     )
                 ):
@@ -897,7 +902,7 @@ class Client(object):
                             trainingEndDate
                             < (
                                 datetime.datetime.utcnow()
-                                - datetime.timedelta(hours=12,minutes=15)
+                                - datetime.timedelta(hours=12, minutes=15)
                             )
                         )
                     )
@@ -929,10 +934,7 @@ class Client(object):
                         not trainingEndDate
                         or (
                             trainingEndDate
-                            < (
-                                datetime.datetime.utcnow()
-                                - datetime.timedelta(hours=1)
-                            )
+                            < (datetime.datetime.utcnow() - datetime.timedelta(hours=1))
                         )
                     )
                 ):
@@ -951,7 +953,10 @@ class Client(object):
                         not trainingEndDate
                         or (
                             trainingEndDate
-                            < (datetime.datetime.utcnow() - datetime.timedelta(hours=3,minutes=15))
+                            < (
+                                datetime.datetime.utcnow()
+                                - datetime.timedelta(hours=3, minutes=15)
+                            )
                         )
                     )
                 ):
@@ -972,7 +977,7 @@ class Client(object):
                             trainingEndDate
                             < (
                                 datetime.datetime.utcnow()
-                                - datetime.timedelta(hours=12,minutes=15)
+                                - datetime.timedelta(hours=12, minutes=15)
                             )
                         )
                     )
@@ -1393,7 +1398,9 @@ class Client(object):
 
     def collectDailyReward(self):
         if "LiveOpsService" not in self.todayLiveOps:
-            loging.error("Unable to collect daily reward because of missing Live Ops data.")
+            loging.error(
+                "Unable to collect daily reward because of missing Live Ops data."
+            )
             return False
         self.dailyRewardArgument = self.todayLiveOps["LiveOpsService"][
             "GetTodayLiveOps"
@@ -1403,7 +1410,7 @@ class Client(object):
         ):
             self.dailyReward = 0
 
-        if self.user.isAuthorized and (self.info['@DailyRewardStatus'] != '1'):
+        if self.user.isAuthorized and (self.info["@DailyRewardStatus"] != "1"):
             url = "https://api.pixelstarships.com/UserService/CollectDailyReward2?dailyRewardStatus=Box&argument={}&accessToken={}".format(
                 self.dailyRewardArgument,
                 self.accessToken,
