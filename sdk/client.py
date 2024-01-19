@@ -213,7 +213,6 @@ class Client(object):
         }
 
         r = requests.post(url, json=json)
-
         if r:
             d = xmltodict.parse(r.content, xml_attribs=True)
             if (
