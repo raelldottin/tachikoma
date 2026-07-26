@@ -1,10 +1,8 @@
 <!---
 This file is auto-generate by a github hook please modify README.template if you don't want to loose your work
 -->
-
-# raelldottin/tachikoma 1.1.7-131
+# //github.com/raelldottin/tachikoma 1.1.7-130
 [![Daily Automated Actions](https://github.com/raelldottin/tachikoma/actions/workflows/daily-run.yml/badge.svg?event=schedule)](https://github.com/raelldottin/tachikoma/actions/workflows/hourly-run.yml)
-
 
 # Tachikoma - Pixel Starships Automation
 
