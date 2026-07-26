@@ -11,8 +11,8 @@
   },
   "slices": [
     {
-      "slice_id": "security-remove-hardcoded-auth-material",
-      "title": "Remove embedded authentication material",
+      "slice_id": "security-complete-auth-cleanup-coverage",
+      "title": "Complete authentication-material cleanup and add regression coverage",
       "status": "queued",
       "priority": 10,
       "domain": "security-auth",
@@ -20,6 +20,7 @@
         "sdk/client.py",
         "run.py",
         ".gitignore",
+        "Makefile",
         "README.md",
         "README.template",
         "tests/",
@@ -31,8 +32,8 @@
         "git diff --check"
       ],
       "depends_on": [],
-      "max_files_changed": 8,
-      "notes": "Remove embedded credentials, add redaction coverage, and do not contact live game endpoints."
+      "max_files_changed": 10,
+      "notes": "Token removal already done in adoption commit. Complete remaining cleanup: confirm no fallback credentials remain, add token/credential redaction in logs, add .device and secret files to .gitignore, add make test-security target with tests proving credentials are never embedded/logged, add security documentation. Report that token rotation and git-history cleanup remain manual security operations."
     },
     {
       "slice_id": "auth-add-offline-diagnostic-command",
@@ -54,7 +55,7 @@
         "git diff --check"
       ],
       "depends_on": [
-        "security-remove-hardcoded-auth-material"
+        "security-complete-auth-cleanup-coverage"
       ],
       "max_files_changed": 10,
       "notes": "Add diagnostic behavior with mocked responses. Do not perform account mutations."
