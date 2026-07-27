@@ -8,3 +8,4 @@ collectrss.sh
 config.secrets
 passwords.txt
 .DS_Store
+.venv/
