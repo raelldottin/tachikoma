@@ -19,6 +19,7 @@ from .security import (
     ChecksumEmailAuthorize,
 )
 from .dotnet import DotNet
+from .redaction import redact_secrets, safe_log_message
 
 
 DEFAULT_TIMEOUT = 5  # seconds
@@ -98,7 +99,7 @@ class Client(object):
         total=10,
         backoff_factor=1,
         status_forcelist=[500, 502, 503, 504, 520],
-        method_whitelist=["GET", "POST"],
+        allowed_methods=["GET", "POST"],
     )
     adapter = HTTPAdapter(max_retries=retry_strategy)
     session = requests.Session()
@@ -115,7 +116,7 @@ class Client(object):
 
         if "errorMessage" in r.text:
             d = xmltodict.parse(r.content, xml_attribs=True)
-            logging.error("[%s] {%s} - {%s}", self.info["@Name"], url, d)
+            logging.error("[%s] {%s} - {%s}", self.info["@Name"], redact_secrets(url), redact_secrets(str(d)))
 
         if "Failed to authorize access token" in r.text:
             logging.info(
@@ -188,7 +189,7 @@ class Client(object):
 
         self.checksum = ChecksumCreateDevice(self.device.key, self.device.name)
 
-        url = f"{self.baseUrl}/UserService/DeviceLogin15"
+        url = f"{self.baseUrl}/UserService/DeviceLogin17"
         json = {
             "DeviceKey": self.device.key,
             "AdvertisingKey": "",
@@ -218,7 +219,7 @@ class Client(object):
                 or ("errorCode" in r.text)
                 or ("accessToken" not in r.text)
             ):
-                logging.error("{%s}", d)
+                logging.error("{%s}", redact_secrets(str(d)))
                 self.accessToken = ""
                 return False
 
@@ -262,7 +263,7 @@ class Client(object):
 
             if r and "Email=" not in r.text:
                 logging.error(
-                    "[login] failed to authenticate with refreshToken: %s", r.text
+                    "[login] failed to authenticate with refreshToken: %s", redact_secrets(r.text)
                 )
                 return False
 
@@ -279,13 +280,13 @@ class Client(object):
             if r and "errorMessage=" in r.text:
                 logging.error(
                     "[login] failed to authorize with credentials with the reason: %s",
-                    r.text,
+                    redact_secrets(r.text),
                 )
                 return False
 
             if r and "refreshToken" not in r.text:
                 logging.error(
-                    "[login] failed to acquire refreshToken with the reason: %s", r.text
+                    "[login] failed to acquire refreshToken with the reason: %s", redact_secrets(r.text)
                 )
                 return False
 
@@ -1293,7 +1294,7 @@ class Client(object):
     def listFriends(self, userId=0):
         if self.user.isAuthorized:
             url = f"https://api.pixelstarships.com/UserService/ListFriends?UserId={userId if userId else self.info['@Id']}&accessToken={self.accessToken}"
-            logging.debug(url)
+            logging.debug(redact_secrets(url))
             r = self.request(url, "POST")
             if r:
                 self.systemMessagesForUser = xmltodict.parse(
@@ -1762,7 +1763,7 @@ class Client(object):
                 self.checksum,
             )
             url = f"http://api.pixelstarships.com/RoomService/RebuildAmmo2?ammoCategory={ammoCategory}&clientDateTime={ts}&checksum={checksum}&accessToken={self.accessToken}"
-            logging.debug(f"{url=}")
+            logging.debug(redact_secrets(f"{url=}"))
             self.request(url, "POST")
             return True
 
