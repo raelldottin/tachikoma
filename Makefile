@@ -1,4 +1,4 @@
-PYTHON_RUNTIME ?= python3.9
+PYTHON_RUNTIME ?= python3.11
 PYTHON_AUTOMATION ?= python3.11
 
 .PHONY: automation-check automation-dry-run syntax-check test test-security git-check
