@@ -18,6 +18,9 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# Export repo root for use in the adapter's embedded Python script
+export REPO_AUTOMATION_REPO_ROOT="$repo_root"
+
 export REPO_AUTOMATION_SUPERVISOR_CONTEXT_FILE="$context_file"
 export REPO_AUTOMATION_SUPERVISOR_HANDOFF_FILE="$handoff_file"
 export REPO_AUTOMATION_SUPERVISOR_SLICE_ID="$slice_id"

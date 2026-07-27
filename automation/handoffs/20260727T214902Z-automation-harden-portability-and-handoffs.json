@@ -1,0 +1,49 @@
+{
+  "slice_id": "automation-harden-portability-and-handoffs",
+  "status": "done",
+  "summary": "Replaced hardcoded Python paths in Makefile with portable discovery using command -v. Added adapter-level schema validation against handoff.schema.json in run_hermes.sh. Made handoff write truly atomic (temp + rename) was already implemented. Removed stale 'hermes -z' reference from queue notes. Added adapter test with fake Hermes executable in test_adapter.py.",
+  "files_touched": [
+    "Makefile",
+    "automation/supervisor/run_hermes.sh",
+    "automation/queue/slices.json",
+    "automation/tests/test_adapter.py"
+  ],
+  "validations_passed": [
+    "make automation-check",
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "Adapter portability and handoff robustness",
+      "before": "Hardcoded Python paths in Makefile, no adapter-level schema validation, handoff write used existing atomic method, stale 'hermes -z' reference in queue notes, no adapter test with fake Hermes",
+      "after": "Portable Python path discovery, adapter-level schema validation against handoff.schema.json, handoff write uses temp+rename atomic write, removed stale 'hermes -z' reference, added adapter test with fake Hermes executable",
+      "proof": [
+        "make automation-check passed",
+        "make syntax-check passed", 
+        "make test passed",
+        "git diff --check passed"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "No known residual risk."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "not-checked",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-07-27T21:49:02Z"
+}
