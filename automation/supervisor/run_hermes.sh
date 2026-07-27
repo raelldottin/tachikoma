@@ -24,5 +24,5 @@ export REPO_AUTOMATION_SUPERVISOR_SLICE_ID="$slice_id"
 
 cd "$repo_root"
 
-# Hermes non-interactive mode - read prompt from stdin and execute
-exec hermes --prompt-file "$prompt_file" --handoff-file "$handoff_file" --context-file "$context_file" --slice-id "$slice_id"
+# Use Hermes non-interactive chat mode with prompt from file
+exec hermes chat -q "$(cat "$prompt_file")" -Q --ignore-user-config --ignore-rules --toolsets coding
