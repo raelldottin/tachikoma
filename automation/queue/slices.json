@@ -60,7 +60,7 @@
     {
       "slice_id": "auth-add-offline-diagnostic-command",
       "title": "Add an offline-safe authentication diagnostic command",
-      "status": "queued",
+      "status": "done",
       "priority": 20,
       "domain": "security-auth",
       "allowed_paths": [

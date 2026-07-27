@@ -1,0 +1,37 @@
+{
+  "slice_id": "auth-add-offline-diagnostic-command",
+  "status": "done",
+  "summary": "Added an offline-safe authentication diagnostic command to run.py that simulates authentication flows without making network requests. Added new command 'auth-diagnostic' under the 'auth' command group. Updated README.template to document the new command. Updated tests to cover the new command with mocked responses.",
+  "files_touched": [
+    "run.py",
+    "sdk/client/auth.py",
+    "tests/test_auth.py",
+    "README.template",
+    "README.md"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [],
+  "residual_risks": [
+    "No known residual risk."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "not-checked",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-07-27T18:14:34Z"
+}
