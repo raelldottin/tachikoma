@@ -77,12 +77,9 @@ else
     json_output=$(echo "$hermes_output" | grep -v '^$' | tail -1)
   fi
 
-  # Validate and write JSON to handoff file using python json.tool (no external deps)
-  if echo "$json_output" | python3 -m json.tool >/dev/null 2>&1; then
-    echo "$json_output" > "$handoff_file"
-    exit 0
-  else
-    # Write failure handoff using python to avoid heredoc issues
+  # Validate JSON syntax
+  if ! echo "$json_output" | python3 -m json.tool >/dev/null 2>&1; then
+    # Write failure handoff
     python3 -c "
 import json
 import sys
@@ -111,4 +108,51 @@ with open(os.environ['REPO_AUTOMATION_SUPERVISOR_HANDOFF_FILE'], 'w') as f:
 "
     exit 1
   fi
+
+  # Validate slice_id matches
+  if ! echo "$json_output" | python3 -c "
+import json
+import sys
+import os
+data = json.load(sys.stdin)
+expected = os.environ.get('REPO_AUTOMATION_SUPERVISOR_SLICE_ID', '')
+if data.get('slice_id') != expected:
+    print(f'slice_id mismatch: expected {expected}, got {data.get(\"slice_id\")}', file=sys.stderr)
+    sys.exit(1)
+" 2>&1; then
+    # Write failure handoff for slice_id mismatch
+    python3 -c "
+import json
+import sys
+import os
+
+data = {
+  'slice_id': os.environ.get('REPO_AUTOMATION_SUPERVISOR_SLICE_ID', 'unknown'),
+  'status': 'failed',
+  'summary': 'Agent handoff slice_id does not match expected slice',
+  'files_touched': [],
+  'validations_passed': [],
+  'validations_failed': [],
+  'proof_level': 'doc-only',
+  'missing_proof_levels': ['domain-tested', 'build-tested', 'running-app-smoke', 'flow-verified', 'screenshot-verified', 'device-verified', 'testflight-verified'],
+  'contract_status_changes': [],
+  'residual_risks': ['Handoff slice_id mismatch'],
+  'recommended_next_slice': '',
+  'recommended_next_reason': '',
+  'repo_clean_status': 'unknown',
+  'git_mirror_status': 'not-checked',
+  'dirty_paths_outside_scope': [],
+  'timestamp': os.environ.get('TIMESTAMP', '')
+}
+with open(os.environ['REPO_AUTOMATION_SUPERVISOR_HANDOFF_FILE'], 'w') as f:
+    json.dump(data, f, indent=2)
+"
+    exit 1
+  fi
+
+  # Atomic write: write to temp file then rename
+  handoff_tmp="${handoff_file}.tmp"
+  echo "$json_output" > "$handoff_tmp"
+  mv "$handoff_tmp" "$handoff_file"
+  exit 0
 fi
