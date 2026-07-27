@@ -3,7 +3,7 @@
   "policy": {
     "consecutive_autonomous_limit": 2,
     "handoff_timeout_seconds": 1800,
-    "agent_command_template": "automation/supervisor/run_agent.sh --repo-root {repo_root} --prompt-file {prompt_file} --context-file {context_file} --handoff-file {handoff_file} --slice-id {slice_id}",
+    "agent_command_template": "automation/supervisor/run_hermes.sh --repo-root {repo_root} --prompt-file {prompt_file} --context-file {context_file} --handoff-file {handoff_file} --slice-id {slice_id}",
     "supervisor_owned_paths": [
       "automation/queue/slices.json",
       "automation/handoffs/"
@@ -36,6 +36,28 @@
       "notes": "Token removal already done in adoption commit. Complete remaining cleanup: confirm no fallback credentials remain, add token/credential redaction in logs, add .device and secret files to .gitignore, add make test-security target with tests proving credentials are never embedded/logged, add security documentation. Report that token rotation and git-history cleanup remain manual security operations."
     },
     {
+      "slice_id": "automation-fix-hermes-handoff-adapter",
+      "title": "Make Hermes supervisor handoffs deterministic",
+      "status": "done",
+      "priority": 15,
+      "domain": "automation-harness",
+      "allowed_paths": [
+        "automation/supervisor/run_hermes.sh",
+        "automation/tests/",
+        "automation/queue/slices.json",
+        "docs/workflows/"
+      ],
+      "required_validations": [
+        "make automation-check",
+        "git diff --check"
+      ],
+      "depends_on": [
+        "security-complete-auth-cleanup-coverage"
+      ],
+      "max_files_changed": 6,
+      "notes": "Run Hermes in scripted one-shot mode, capture its final response, validate the handoff JSON, and atomically write the supervisor handoff artifact. Use hermes -z for non-interactive mode. Adapter owns JSON file writing, not Hermes."
+    },
+    {
       "slice_id": "auth-add-offline-diagnostic-command",
       "title": "Add an offline-safe authentication diagnostic command",
       "status": "queued",
@@ -55,7 +77,7 @@
         "git diff --check"
       ],
       "depends_on": [
-        "security-complete-auth-cleanup-coverage"
+        "automation-fix-hermes-handoff-adapter"
       ],
       "max_files_changed": 10,
       "notes": "Add diagnostic behavior with mocked responses. Do not perform account mutations."

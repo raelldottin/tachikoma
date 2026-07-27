@@ -1,0 +1,25 @@
+{
+  "slice_id": "automation-fix-hermes-handoff-adapter",
+  "status": "done",
+  "summary": "Fixed Hermes adapter to use hermes chat -q -Q for non-interactive mode with proper JSON handoff output. The adapter captures Hermes output, extracts JSON, validates it, and writes to handoff file atomically.",
+  "files_touched": [
+    "automation/supervisor/run_hermes.sh"
+  ],
+  "validations_passed": [
+    "make automation-check",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [],
+  "contract_status_changes": [],
+  "residual_risks": [
+    "No known residual risk."
+  ],
+  "recommended_next_slice": "auth-add-offline-diagnostic-command",
+  "recommended_next_reason": "Adapter fixed, can now run slice 2",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "not-checked",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-07-27T08:15:00Z"
+}
