@@ -21,87 +21,78 @@ done
 export REPO_AUTOMATION_SUPERVISOR_CONTEXT_FILE="$context_file"
 export REPO_AUTOMATION_SUPERVISOR_HANDOFF_FILE="$handoff_file"
 export REPO_AUTOMATION_SUPERVISOR_SLICE_ID="$slice_id"
+export OWLORY_SUPERVISOR_CONTEXT_FILE="$context_file"
 
 cd "$repo_root"
 
-# Read the prompt content from the file (as the original script did)
+# Read prompt content from file
 prompt_content=$(cat "$prompt_file")
 
-# Generate timestamp for the handoff
-timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+# Choose agent based on environment variables (with defaults)
+AGENT_RUNNER="${REPO_AUTOMATION_AGENT_RUNNER:-}"
+CLAUDE_MODE="${CLAUDE_CODE:-0}"
 
-# Build the enhanced prompt for the agent
-cat > /tmp/enhanced_prompt.txt <<'ENHANCED_PROMPT'
-You are an AI agent tasked with completing the slice of work: '$slice_id'. Your task is to make Hermes supervisor handoffs deterministic by modifying the script at automation/supervisor/run_hermes.sh to use hermes -z for non-interactive mode and to write the handoff JSON atomically.
-
-After making the changes, you must run the required validations: 'make automation-check' and 'git diff --check'.
-
-Then, you must output a valid JSON object that matches the following structure exactly (fill in the fields based on your work):
-
-{
-  "slice_id": "$slice_id",
-  "status": "done" or "failed",
-  "summary": "A summary of what was done",
-  "files_touched": ["list of files changed"],
-  "validations_passed": ["list of validations that passed"],
-  "validations_failed": ["list of validations that failed"],
-  "proof_level": "domain-tested",
-  "missing_proof_levels": ["list of missing proof levels"],
-  "contract_status_changes": [],
-  "residual_risks": ["No known residual risk." or list of risks],
-  "recommended_next_slice": "auth-add-offline-diagnostic-command",
-  "recommended_next_reason": "Adapter fixed, can now run slice 2",
-  "repo_clean_status": "clean" or "dirty",
-  "git_mirror_status": "not-checked",
-  "dirty_paths_outside_scope": ["list of paths"],
-  "timestamp": "$timestamp"
-}
-
-If the validations pass, set status to "done". If they fail, set status to "failed" and adjust the fields accordingly.
-
-Do not output any text other than the JSON.
-ENHANCED_PROMPT
-
-# Now prepend the original prompt content? Actually, the original prompt is the slice description.
-# We'll combine them: our instructions + the original prompt.
-# But note: the original prompt might be just the slice description. We'll put our instructions first, then a separator, then the original prompt.
-final_prompt=$(cat /tmp/enhanced_prompt.txt)
-final_prompt="${final_prompt}
-
---- Original prompt from supervisor ---
-${prompt_content}"
-
-# Clean up the temporary file
-rm -f /tmp/enhanced_prompt.txt
-
-# Run Hermes in one-shot mode with the prompt
-hermes_output=$(hermes -z "$final_prompt" --toolsets coding --ignore-user-config --ignore-rules 2>&1)
-
-# Validate and write JSON to handoff file
-if echo "$hermes_output" | python3 -m.json.tool >/dev/null 2>&1; then
-  echo "$hermes_output" > "$handoff_file"
-  exit 0
+if [[ "$AGENT_RUNNER" == "codex" ]]; then
+  # CODEX path (as expected by tests)
+  echo "$prompt_content" | /Users/raelldottin/.local/bin/codex \
+    --ask-for-approval never exec --sandbox workspace-write - \
+    2>&1
+elif [[ "$CLAUDE_MODE" == "1" ]]; then
+  # CLAUDE CODE path (unchanged from original)
+  /Users/raelldottin/.local/bin/claude \
+    --print \
+    --input-format text \
+    --no-session-persistence \
+    --permission-mode bypassPermissions \
+    --add-dir "$repo_root" \
+    --dangerously-skip-permissions \
+    <<< "$prompt_content" \
+    2>&1
 else
-  # Write failure handoff
-  cat > "$handoff_file" <<'END_FAILURE'
-  {
-    "slice_id": "$slice_id",
-    "status": "failed",
-    "summary": "Agent failed to produce valid JSON handoff",
-    "files_touched": [],
-    "validations_passed": [],
-    "validations_failed": [],
-    "proof_level": "doc-only",
-    "missing_proof_levels": ["domain-tested", "build-tested", "running-app-smoke", "flow-verified", "screenshot-verified", "device-verified", "testflight-verified"],
-    "contract_status_changes": [],
-    "residual_risks": ["Agent did not produce valid JSON handoff"],
-    "recommended_next_slice": "",
-    "recommended_next_reason": "",
-    "repo_clean_status": "unknown",
-    "git_mirror_status": "not-checked",
-    "dirty_paths_outside_scope": [],
-    "timestamp": "$timestamp"
-  }
-  END_FAILURE
-  exit 1
+  # HERMES path: use chat -q -Q for clean JSON output
+  hermes_output=$(hermes chat -q "$prompt_content" -Q --ignore-user-config --ignore-rules --toolsets coding 2>&1)
+
+  # Extract JSON from output - find first line that starts with {
+  json_line=$(echo "$hermes_output" | grep -n '^{' | head -1 | cut -d: -f1)
+  if [[ -n "$json_line" ]]; then
+    json_output=$(echo "$hermes_output" | tail -n +"$json_line")
+  else
+    # Fallback: last non-empty line
+    json_output=$(echo "$hermes_output" | grep -v '^$' | tail -1)
+  fi
+
+  # Validate and write JSON to handoff file using python json.tool (no external deps)
+  if echo "$json_output" | python3 -m json.tool >/dev/null 2>&1; then
+    echo "$json_output" > "$handoff_file"
+    exit 0
+  else
+    # Write failure handoff using python to avoid heredoc issues
+    python3 -c "
+import json
+import sys
+import os
+
+data = {
+  'slice_id': os.environ.get('REPO_AUTOMATION_SUPERVISOR_SLICE_ID', 'unknown'),
+  'status': 'failed',
+  'summary': 'Agent failed to produce valid JSON handoff',
+  'files_touched': [],
+  'validations_passed': [],
+  'validations_failed': [],
+  'proof_level': 'doc-only',
+  'missing_proof_levels': ['domain-tested', 'build-tested', 'running-app-smoke', 'flow-verified', 'screenshot-verified', 'device-verified', 'testflight-verified'],
+  'contract_status_changes': [],
+  'residual_risks': ['Agent did not produce valid JSON handoff'],
+  'recommended_next_slice': '',
+  'recommended_next_reason': '',
+  'repo_clean_status': 'unknown',
+  'git_mirror_status': 'not-checked',
+  'dirty_paths_outside_scope': [],
+  'timestamp': os.environ.get('TIMESTAMP', '')
+}
+with open(os.environ['REPO_AUTOMATION_SUPERVISOR_HANDOFF_FILE'], 'w') as f:
+    json.dump(data, f, indent=2)
+"
+    exit 1
+  fi
 fi
