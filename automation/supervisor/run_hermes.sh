@@ -25,4 +25,5 @@ export REPO_AUTOMATION_SUPERVISOR_SLICE_ID="$slice_id"
 cd "$repo_root"
 
 # Use Hermes non-interactive chat mode with prompt from file
+# -q reads the query from the argument, -Q suppresses UI elements for programmatic use
 exec hermes chat -q "$(cat "$prompt_file")" -Q --ignore-user-config --ignore-rules --toolsets coding
