@@ -189,7 +189,7 @@ class Client(object):
 
         self.checksum = ChecksumCreateDevice(self.device.key, self.device.name)
 
-        url = f"{self.baseUrl}/UserService/DeviceLogin15"
+        url = f"{self.baseUrl}/UserService/DeviceLogin17"
         json = {
             "DeviceKey": self.device.key,
             "AdvertisingKey": "",
