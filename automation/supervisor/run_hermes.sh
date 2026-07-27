@@ -64,12 +64,14 @@ else
   agent_output=$(hermes chat -q "$prompt_content" -Q --ignore-user-config --ignore-rules --toolsets coding 2>&1)
 fi
 
-# Now, extract JSON from agent_output using a Python script
+# Export agent output for Python script
 export AGENT_OUTPUT="$agent_output"
+
+# Now, extract JSON from agent_output using a Python script
 python_output_file=$(mktemp)
 trap "rm -f $python_output_file" EXIT
 python_exit_code=0
-python3 << 'EOF' > "$python_output_file" || python_exit_code=$?
+python3 << 'PYEOF' > "$python_output_file" || python_exit_code=$?
 import sys
 import json
 import os
@@ -113,7 +115,7 @@ for match in reversed(matches):
 
 # Last resort: exit with error
 sys.exit(1)
-EOF
+PYEOF
 json_output=$(cat "$python_output_file")
 
 # Check if JSON extraction succeeded
@@ -219,7 +221,8 @@ with open(os.environ['REPO_AUTOMATION_SUPERVISOR_HANDOFF_FILE'], 'w') as f:
   exit 0
 fi
 
-# Validate against handoff schema
+# Validate against handoff schema - use environment variable to pass JSON
+export JSON_OUTPUT_FOR_VALIDATION="$json_output"
 if ! python3 -c "
 import json
 import sys
@@ -229,7 +232,7 @@ with open(os.path.join(os.environ.get('REPO_AUTOMATION_REPO_ROOT', '.'), 'automa
     schema = json.load(f)
 
 try:
-    data = json.loads('''$json_output''')
+    data = json.loads(os.environ.get('JSON_OUTPUT_FOR_VALIDATION', ''))
     # Basic schema validation - check required fields
     required = ['slice_id', 'status', 'summary', 'files_touched', 'validations_passed', 'validations_failed', 'proof_level', 'missing_proof_levels', 'contract_status_changes', 'residual_risks', 'recommended_next_slice', 'recommended_next_reason', 'repo_clean_status', 'git_mirror_status', 'dirty_paths_outside_scope', 'timestamp']
     for field in required:
