@@ -36,57 +36,44 @@ REPO_AUTOMATION_AGENT_RUNNER=${REPO_AUTOMATION_AGENT_RUNNER:-}
 CLAUDE_CODE=${CLAUDE_CODE:-0}
 OWLORY_SUPERVISOR_CONTEXT_FILE=${OWLORY_SUPERVISOR_CONTEXT_FILE:-}
 
-export REPO_AUTOMATION_SUPERVISOR_CONTEXT_FILE="$context_file"
-export REPO_AUTOMATION_SUPERVISOR_HANDOFF_FILE="$handoff_file"
-export REPO_AUTOMATION_SUPERVISOR_SLICE_ID="$slice_id"
-export OWLORY_SUPERVISOR_CONTEXT_FILE="$context_file"
-
-cd "$repo_root"
-
-# Read prompt content from file
-prompt_content=$(cat "$prompt_file")
-
-# Choose agent based on environment variables
+# Choose agent and run
 if [[ "$REPO_AUTOMATION_AGENT_RUNNER" == "codex" ]]; then
   # CODEX path (as expected by tests)
-  echo "$prompt_content" | codex \
+  agent_output=$(echo "$prompt_content" | codex \
     --ask-for-approval never \
     exec \
     --sandbox workspace-write \
     - \
-    2>&1
+    2>&1)
 elif [[ "$CLAUDE_CODE" == "1" ]]; then
   # CLAUDE CODE path (unchanged from original)
-  claude \
+  agent_output=$(claude \
     --print \
     --input-format text \
     --no-session-persistence \
     --permission-mode bypassPermissions \
     --add-dir "$repo_root" \
     --dangerously-skip-permissions \
-    <<< "$prompt_content" \
-    2>&1
+    <<< "$prompt_content" 2>&1)
 else
   # HERMES path: use chat -q -Q with HOMEBREW_NO_AUTO_UPDATE=1 for fast JSON output
   export HOMEBREW_NO_AUTO_UPDATE=1
-  hermes_output=$(hermes chat -q "$prompt_content" -Q --ignore-user-config --ignore-rules --toolsets coding 2>&1)
-  export HERMES_OUTPUT="$hermes_output"
+  agent_output=$(hermes chat -q "$prompt_content" -Q --ignore-user-config --ignore-rules --toolsets coding 2>&1)
+fi
 
-  # Extract JSON from output using a Python script
-  json_output=""
-  python_exit_code=0
-  # We'll use a temporary file to capture the Python script's output
-  python_output_file=$(mktemp)
-  trap "rm -f $python_output_file" EXIT
-
-  python3 << 'EOF' > "$python_output_file" || python_exit_code=$?
+# Now, extract JSON from agent_output using a Python script
+export AGENT_OUTPUT="$agent_output"
+python_output_file=$(mktemp)
+trap "rm -f $python_output_file" EXIT
+python_exit_code=0
+python3 << 'EOF' > "$python_output_file" || python_exit_code=$?
 import sys
 import json
 import os
 import re
 
-hermes_output = os.environ.get('HERMES_OUTPUT', '')
-output = hermes_output
+agent_output = os.environ.get('AGENT_OUTPUT', '')
+output = agent_output
 lines = output.split('\n')
 
 # Strategy 1: Find the last line that starts with { and is valid JSON
@@ -124,11 +111,12 @@ for match in reversed(matches):
 # Last resort: exit with error
 sys.exit(1)
 EOF
-  json_output=$(cat "$python_output_file")
+json_output=$(cat "$python_output_file")
 
-  if [[ $python_exit_code -ne 0 ]] || [[ -z "$json_output" ]]; then
-    # Write failure handoff (exit 0 - adapter handles the error)
-    python3 -c "
+# Check if JSON extraction succeeded
+if [[ $python_exit_code -ne 0 ]] || [[ -z "$json_output" ]]; then
+  # Write failure handoff (exit 0 - adapter handles the error)
+  python3 -c "
 import json
 import sys
 import os
@@ -152,14 +140,14 @@ data = {
   'timestamp': os.environ.get('TIMESTAMP', '')
 }
 with open(os.environ['REPO_AUTOMATION_SUPERVISOR_HANDOFF_FILE'], 'w') as f:
-    json.dump(data, f, indent=2)
+  json.dump(data, f, indent=2)
 "
-    exit 0
-  fi
+  exit 0
+fi
 
-  # Validate JSON syntax
-  if ! echo "$json_output" | python3 -m json.tool >/dev/null 2>&1; then
-    python3 -c "
+# Validate JSON syntax
+if ! echo "$json_output" | python3 -m json.tool >/dev/null 2>&1; then
+  python3 -c "
 import json
 import sys
 import os
@@ -183,13 +171,13 @@ data = {
   'timestamp': os.environ.get('TIMESTAMP', '')
 }
 with open(os.environ['REPO_AUTOMATION_SUPERVISOR_HANDOFF_FILE'], 'w') as f:
-    json.dump(data, f, indent=2)
+  json.dump(data, f, indent=2)
 "
-    exit 0
-  fi
+  exit 0
+fi
 
-  # Validate slice_id matches
-  if ! echo "$json_output" | python3 -c "
+# Validate slice_id matches
+if ! echo "$json_output" | python3 -c "
 import json
 import sys
 import os
@@ -199,7 +187,7 @@ if data.get('slice_id') != expected:
     print('slice_id mismatch: expected %s, got %s' % (expected, data.get('slice_id')), file=sys.stderr)
     sys.exit(1)
 " 2>&1; then
-    python3 -c "
+  python3 -c "
 import json
 import sys
 import os
@@ -223,13 +211,13 @@ data = {
   'timestamp': os.environ.get('TIMESTAMP', '')
 }
 with open(os.environ['REPO_AUTOMATION_SUPERVISOR_HANDOFF_FILE'], 'w') as f:
-    json.dump(data, f, indent=2)
+  json.dump(data, f, indent=2)
 "
-    exit 0
-  fi
+  exit 0
+fi
 
-  # Validate against handoff schema
-  if ! python3 -c "
+# Validate against handoff schema
+if ! python3 -c "
 import json
 import sys
 import os
@@ -268,7 +256,7 @@ except Exception as e:
     print('Schema validation failed: %s' % e, file=sys.stderr)
     sys.exit(1)
 " 2>&1; then
-    python3 -c "
+  python3 -c "
 import json
 import sys
 import os
@@ -292,14 +280,13 @@ data = {
   'timestamp': os.environ.get('TIMESTAMP', '')
 }
 with open(os.environ['REPO_AUTOMATION_SUPERVISOR_HANDOFF_FILE'], 'w') as f:
-    json.dump(data, f, indent=2)
+  json.dump(data, f, indent=2)
 "
-    exit 0
-  fi
-
-  # Atomic write: write to temp file then rename
-  handoff_tmp="${handoff_file}.tmp"
-  echo "$json_output" > "$handoff_tmp"
-  mv "$handoff_tmp" "$handoff_file"
   exit 0
 fi
+
+# Atomic write: write to temp file then rename
+handoff_tmp="${handoff_file}.tmp"
+echo "$json_output" > "$handoff_tmp"
+mv "$handoff_tmp" "$handoff_file"
+exit 0

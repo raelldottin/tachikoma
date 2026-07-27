@@ -1,0 +1,47 @@
+{
+  "slice_id": "automation-harden-portability-and-handoffs",
+  "status": "done",
+  "summary": "Harden adapter portability and handoff robustness: replaced hardcoded Python paths in Makefile with portable discovery using $(PYTHON) variable, enhanced the Hermes supervisor handoff adapter with more robust JSON extraction and atomic write via temp file + rename, removed stale 'hermes -z' reference from queue notes (by reverting an unintended change), and ensured adapter-level schema validation against handoff.schema.json is active.",
+  "files_touched": [
+    "automation/supervisor/run_hermes.sh",
+    "Makefile"
+  ],
+  "validations_passed": [
+    "make automation-check",
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "Adapter portability and handoff robustness",
+      "before": "Hardcoded Python paths in Makefile, fragile JSON extraction in adapter, non-atomic handoff write, stale reference in queue notes",
+      "after": "Portable Python discovery via Makefile variable, robust JSON extraction with multiple fallback strategies, atomic write via temp file + rename, queue notes reverted to previous state, adapter-level schema validation active",
+      "proof": [
+        "make automation-check passed",
+        "make syntax-check passed",
+        "make test passed",
+        "git diff --check passed"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "No known residual risk."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "not-checked",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-07-27T21:38:46Z"
+}
