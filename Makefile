@@ -1,5 +1,5 @@
 # Use .venv for all Python commands to ensure dependencies are available
-PYTHON ?= .venv/bin/python
+PYTHON = $(shell command -v .venv/bin/python 2>/dev/null || command -v python3 2>/dev/null || echo python3)
 
 .PHONY: automation-check automation-dry-run syntax-check test test-security git-check
 
