@@ -13,7 +13,7 @@
     {
       "slice_id": "security-complete-auth-cleanup-coverage",
       "title": "Complete authentication-material cleanup and add regression coverage",
-      "status": "queued",
+      "status": "done",
       "priority": 10,
       "domain": "security-auth",
       "allowed_paths": [
