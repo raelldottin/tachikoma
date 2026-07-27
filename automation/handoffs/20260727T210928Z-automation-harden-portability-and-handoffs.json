@@ -1,0 +1,35 @@
+{
+  "slice_id": "automation-harden-portability-and-handoffs",
+  "status": "done",
+  "summary": "Replaced hardcoded Python paths in Makefile with portable discovery using `which`. Added adapter-level JSON schema validation against handoff.schema.json in the Hermes supervisor adapter (run_hermes.sh). Made handoff write atomic by writing to a temporary file and then renaming. Removed stale 'hermes -z' reference from queue notes in automation/queue/slices.json. Ensured adapter tests pass with a fake Hermes executable.",
+  "files_touched": [
+    "Makefile",
+    "automation/supervisor/run_hermes.sh",
+    "automation/queue/slices.json"
+  ],
+  "validations_passed": [
+    "make automation-check",
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "build-tested",
+  "missing_proof_levels": [
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [],
+  "residual_risks": [
+    "No known residual risk."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "not-checked",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-07-27T21:34:38.648329Z"
+}
