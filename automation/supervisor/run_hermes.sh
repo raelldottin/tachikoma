@@ -24,25 +24,19 @@ export REPO_AUTOMATION_SUPERVISOR_SLICE_ID="$slice_id"
 
 cd "$repo_root"
 
-# Run Hermes with the prompt, capturing output
-# Hermes outputs JSON to stdout when -Q is used with -q for non-interactive mode
-hermes_output=$(hermes chat -q "$(cat "$prompt_file")" -Q --ignore-user-config --ignore-rules --toolsets coding 2>&1)
+# Read prompt content from file
+prompt_content=$(cat "$prompt_file")
 
-# Extract JSON from output - Hermes with -Q outputs clean JSON as final response
-# Find the JSON object in the output (starts with { or [)
-json_start=$(echo "$hermes_output" | grep -n '^\{' | head -1 | cut -d: -f1)
-if [[ -n "$json_start" ]]; then
-    json_output=$(echo "$hermes_output" | tail -n +$json_start)
-else
-    # Fallback: assume last line is JSON
-    json_output=$(echo "$hermes_output" | tail -1)
-fi
+# Run Hermes in non-interactive one-shot mode with -z for prompt and -t for toolsets
+# -z provides the prompt and prints ONLY the final response text to stdout (no banner, spinner, tool previews, or session_id)
+hermes_output=$(hermes -z "$prompt_content" -t coding --ignore-user-config --ignore-rules 2>&1)
 
 # Validate and write JSON to handoff file
-if echo "$json_output" | python3 -m json.tool >/dev/null 2>&1; then
-    echo "$json_output" > "$handoff_file"
+if echo "$hermes_output" | python3 -m json.tool >/dev/null 2>&1; then
+    echo "$hermes_output" > "$handoff_file"
+    exit 0
 else
-    # If output isn't valid JSON, create a minimal failed handoff
+    # Write failure handoff
     cat > "$handoff_file" <<EOF
 {
   "slice_id": "$slice_id",

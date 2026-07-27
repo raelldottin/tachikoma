@@ -252,18 +252,18 @@ class AutomationHarnessTests(unittest.TestCase):
         queue_data = policy.load_queue(queue_path, self.queue_schema_path)
         command_template = queue_data["policy"]["agent_command_template"]
 
-        self.assertIn("automation/supervisor/run_agent.sh", command_template)
+        self.assertIn("automation/supervisor/run_hermes.sh", command_template)
         self.assertIn("{repo_root}", command_template)
         self.assertIn("{prompt_file}", command_template)
         self.assertIn("{context_file}", command_template)
         self.assertIn("{handoff_file}", command_template)
         self.assertIn("{slice_id}", command_template)
-        script_path = self.repo_root / "automation/supervisor/run_agent.sh"
+        script_path = self.repo_root / "automation/supervisor/run_hermes.sh"
         self.assertTrue(script_path.exists())
         self.assertTrue(os.access(script_path, os.X_OK))
 
     def test_agent_wrapper_auto_selects_claude_for_claude_code_context(self) -> None:
-        script_path = self.repo_root / "automation/supervisor/run_agent.sh"
+        script_path = self.repo_root / "automation/supervisor/run_hermes.sh"
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
             repo_root = temp_path / "repo"
@@ -337,7 +337,7 @@ class AutomationHarnessTests(unittest.TestCase):
             self.assertIn("stdin:slice prompt", capture)
 
     def test_agent_wrapper_can_still_launch_codex_when_requested(self) -> None:
-        script_path = self.repo_root / "automation/supervisor/run_agent.sh"
+        script_path = self.repo_root / "automation/supervisor/run_hermes.sh"
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
             repo_root = temp_path / "repo"
