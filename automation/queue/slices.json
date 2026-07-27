@@ -1,0 +1,64 @@
+{
+  "version": 1,
+  "policy": {
+    "consecutive_autonomous_limit": 2,
+    "handoff_timeout_seconds": 1800,
+    "agent_command_template": "automation/supervisor/run_agent.sh --repo-root {repo_root} --prompt-file {prompt_file} --context-file {context_file} --handoff-file {handoff_file} --slice-id {slice_id}",
+    "supervisor_owned_paths": [
+      "automation/queue/slices.json",
+      "automation/handoffs/"
+    ]
+  },
+  "slices": [
+    {
+      "slice_id": "security-complete-auth-cleanup-coverage",
+      "title": "Complete authentication-material cleanup and add regression coverage",
+      "status": "queued",
+      "priority": 10,
+      "domain": "security-auth",
+      "allowed_paths": [
+        "sdk/client.py",
+        "run.py",
+        ".gitignore",
+        "Makefile",
+        "README.md",
+        "README.template",
+        "tests/",
+        "docs/security/"
+      ],
+      "required_validations": [
+        "make syntax-check",
+        "make test-security",
+        "git diff --check"
+      ],
+      "depends_on": [],
+      "max_files_changed": 10,
+      "notes": "Token removal already done in adoption commit. Complete remaining cleanup: confirm no fallback credentials remain, add token/credential redaction in logs, add .device and secret files to .gitignore, add make test-security target with tests proving credentials are never embedded/logged, add security documentation. Report that token rotation and git-history cleanup remain manual security operations."
+    },
+    {
+      "slice_id": "auth-add-offline-diagnostic-command",
+      "title": "Add an offline-safe authentication diagnostic command",
+      "status": "queued",
+      "priority": 20,
+      "domain": "security-auth",
+      "allowed_paths": [
+        "run.py",
+        "sdk/",
+        "tests/",
+        "README.md",
+        "README.template",
+        "docs/"
+      ],
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ],
+      "depends_on": [
+        "security-complete-auth-cleanup-coverage"
+      ],
+      "max_files_changed": 10,
+      "notes": "Add diagnostic behavior with mocked responses. Do not perform account mutations."
+    }
+  ]
+}

@@ -1,0 +1,174 @@
+{
+  "title": "Automation Handoff",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "slice_id",
+    "status",
+    "summary",
+    "files_touched",
+    "validations_passed",
+    "validations_failed",
+    "proof_level",
+    "missing_proof_levels",
+    "contract_status_changes",
+    "residual_risks",
+    "recommended_next_slice",
+    "recommended_next_reason",
+    "repo_clean_status",
+    "git_mirror_status",
+    "dirty_paths_outside_scope",
+    "timestamp"
+  ],
+  "properties": {
+    "slice_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "done",
+        "blocked",
+        "failed"
+      ]
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1
+    },
+    "files_touched": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "validations_passed": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "validations_failed": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "proof_level": {
+      "type": "string",
+      "enum": [
+        "doc-only",
+        "domain-tested",
+        "build-tested",
+        "running-app-smoke",
+        "flow-verified",
+        "screenshot-verified",
+        "device-verified",
+        "testflight-verified"
+      ]
+    },
+    "missing_proof_levels": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "doc-only",
+          "domain-tested",
+          "build-tested",
+          "running-app-smoke",
+          "flow-verified",
+          "screenshot-verified",
+          "device-verified",
+          "testflight-verified"
+        ]
+      }
+    },
+    "contract_status_changes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "contract",
+          "before",
+          "after",
+          "proof"
+        ],
+        "properties": {
+          "contract": {
+            "type": "string",
+            "minLength": 1
+          },
+          "before": {
+            "type": "string",
+            "minLength": 1
+          },
+          "after": {
+            "type": "string",
+            "minLength": 1
+          },
+          "proof": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    },
+    "residual_risks": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "recommended_next_slice": {
+      "type": "string"
+    },
+    "recommended_next_reason": {
+      "type": "string"
+    },
+    "repo_clean_status": {
+      "type": "string",
+      "enum": [
+        "clean",
+        "dirty",
+        "unknown"
+      ]
+    },
+    "git_mirror_status": {
+      "type": "string",
+      "enum": [
+        "mirrored",
+        "not-mirrored",
+        "not-relevant",
+        "not-checked"
+      ]
+    },
+    "dirty_paths_outside_scope": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "timestamp": {
+      "type": "string",
+      "minLength": 1
+    },
+    "open_questions": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  }
+}
