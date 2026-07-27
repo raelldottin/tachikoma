@@ -46,12 +46,15 @@ prompt_content=$(cat "$prompt_file")
 # Choose agent based on environment variables
 if [[ "$REPO_AUTOMATION_AGENT_RUNNER" == "codex" ]]; then
   # CODEX path (as expected by tests)
-  echo "$prompt_content" | /Users/raelldottin/.local/bin/codex \
-    --ask-for-approval never exec --sandbox workspace-write - \
+  echo "$prompt_content" | codex \
+    --ask-for-approval never \
+    exec \
+    --sandbox workspace-write \
+    - \
     2>&1
 elif [[ "$CLAUDE_CODE" == "1" ]]; then
   # CLAUDE CODE path (unchanged from original)
-  /Users/raelldottin/.local/bin/claude \
+  claude \
     --print \
     --input-format text \
     --no-session-persistence \
