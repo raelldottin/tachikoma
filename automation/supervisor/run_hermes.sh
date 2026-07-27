@@ -23,6 +23,9 @@ export REPO_AUTOMATION_SUPERVISOR_HANDOFF_FILE="$handoff_file"
 export REPO_AUTOMATION_SUPERVISOR_SLICE_ID="$slice_id"
 export OWLORY_SUPERVISOR_CONTEXT_FILE="$context_file"
 
+# Set and export TIMESTAMP to avoid unbound variable errors
+export TIMESTAMP="${TIMESTAMP:=$(date -u +'%Y-%m-%dT%H:%M:%SZ')}"
+
 cd "$repo_root"
 
 # Read prompt content from file
@@ -67,19 +70,64 @@ else
   # HERMES path: use chat -q -Q with HOMEBREW_NO_AUTO_UPDATE=1 for fast JSON output
   export HOMEBREW_NO_AUTO_UPDATE=1
   hermes_output=$(hermes chat -q "$prompt_content" -Q --ignore-user-config --ignore-rules --toolsets coding 2>&1)
+  export HERMES_OUTPUT="$hermes_output"
 
-  # Extract JSON from output - find first line that starts with {
-  json_line=$(echo "$hermes_output" | grep -n '^{' | head -1 | cut -d: -f1)
-  if [[ -n "$json_line" ]]; then
-    json_output=$(echo "$hermes_output" | tail -n +"$json_line")
-  else
-    # Fallback: last non-empty line
-    json_output=$(echo "$hermes_output" | grep -v '^$' | tail -1)
-  fi
+  # Extract JSON from output using a Python script
+  json_output=""
+  python_exit_code=0
+  # We'll use a temporary file to capture the Python script's output
+  python_output_file=$(mktemp)
+  trap "rm -f $python_output_file" EXIT
 
-  # Validate JSON syntax
-  if ! echo "$json_output" | python3 -m json.tool >/dev/null 2>&1; then
-    # Write failure handoff
+  python3 << 'EOF' > "$python_output_file" || python_exit_code=$?
+import sys
+import json
+import os
+import re
+
+hermes_output = os.environ.get('HERMES_OUTPUT', '')
+output = hermes_output
+lines = output.split('\n')
+
+# Strategy 1: Find the last line that starts with { and is valid JSON
+for i in range(len(lines) - 1, -1, -1):
+    line = lines[i].strip()
+    if line.startswith('{'):
+        try:
+            json.loads(line)
+            print(line)
+            sys.exit(0)
+        except json.JSONDecodeError:
+            pass
+
+# Strategy 2: Find last valid multi-line JSON object
+buffer = ''
+for i in range(len(lines) - 1, -1, -1):
+    buffer = lines[i] + '\n' + buffer
+    try:
+        json.loads(buffer)
+        print(buffer.strip())
+        sys.exit(0)
+    except json.JSONDecodeError:
+        pass
+
+# Strategy 3: Regex find all JSON-like patterns, validate backwards
+matches = list(re.finditer(r'\{.*?\}', output, re.DOTALL))
+for match in reversed(matches):
+    try:
+        json.loads(match.group())
+        print(match.group())
+        sys.exit(0)
+    except json.JSONDecodeError:
+        pass
+
+# Last resort: exit with error
+sys.exit(1)
+EOF
+  json_output=$(cat "$python_output_file")
+
+  if [[ $python_exit_code -ne 0 ]] || [[ -z "$json_output" ]]; then
+    # Write failure handoff (exit 0 - adapter handles the error)
     python3 -c "
 import json
 import sys
@@ -106,7 +154,38 @@ data = {
 with open(os.environ['REPO_AUTOMATION_SUPERVISOR_HANDOFF_FILE'], 'w') as f:
     json.dump(data, f, indent=2)
 "
-    exit 1
+    exit 0
+  fi
+
+  # Validate JSON syntax
+  if ! echo "$json_output" | python3 -m json.tool >/dev/null 2>&1; then
+    python3 -c "
+import json
+import sys
+import os
+
+data = {
+  'slice_id': os.environ.get('REPO_AUTOMATION_SUPERVISOR_SLICE_ID', 'unknown'),
+  'status': 'failed',
+  'summary': 'Agent failed to produce valid JSON handoff',
+  'files_touched': [],
+  'validations_passed': [],
+  'validations_failed': [],
+  'proof_level': 'doc-only',
+  'missing_proof_levels': ['domain-tested', 'build-tested', 'running-app-smoke', 'flow-verified', 'screenshot-verified', 'device-verified', 'testflight-verified'],
+  'contract_status_changes': [],
+  'residual_risks': ['Agent did not produce valid JSON handoff'],
+  'recommended_next_slice': '',
+  'recommended_next_reason': '',
+  'repo_clean_status': 'unknown',
+  'git_mirror_status': 'not-checked',
+  'dirty_paths_outside_scope': [],
+  'timestamp': os.environ.get('TIMESTAMP', '')
+}
+with open(os.environ['REPO_AUTOMATION_SUPERVISOR_HANDOFF_FILE'], 'w') as f:
+    json.dump(data, f, indent=2)
+"
+    exit 0
   fi
 
   # Validate slice_id matches
@@ -117,10 +196,9 @@ import os
 data = json.load(sys.stdin)
 expected = os.environ.get('REPO_AUTOMATION_SUPERVISOR_SLICE_ID', '')
 if data.get('slice_id') != expected:
-    print(f'slice_id mismatch: expected {expected}, got {data.get(\"slice_id\")}', file=sys.stderr)
+    print('slice_id mismatch: expected %s, got %s' % (expected, data.get('slice_id')), file=sys.stderr)
     sys.exit(1)
 " 2>&1; then
-    # Write failure handoff for slice_id mismatch
     python3 -c "
 import json
 import sys
@@ -147,7 +225,76 @@ data = {
 with open(os.environ['REPO_AUTOMATION_SUPERVISOR_HANDOFF_FILE'], 'w') as f:
     json.dump(data, f, indent=2)
 "
-    exit 1
+    exit 0
+  fi
+
+  # Validate against handoff schema
+  if ! python3 -c "
+import json
+import sys
+import os
+
+with open(os.path.join(os.environ.get('REPO_AUTOMATION_REPO_ROOT', '.'), 'automation/schemas/handoff.schema.json')) as f:
+    schema = json.load(f)
+
+try:
+    data = json.loads('''$json_output''')
+    # Basic schema validation - check required fields
+    required = ['slice_id', 'status', 'summary', 'files_touched', 'validations_passed', 'validations_failed', 'proof_level', 'missing_proof_levels', 'contract_status_changes', 'residual_risks', 'recommended_next_slice', 'recommended_next_reason', 'repo_clean_status', 'git_mirror_status', 'dirty_paths_outside_scope', 'timestamp']
+    for field in required:
+        if field not in data:
+            print('Missing required field: %s' % field, file=sys.stderr)
+            sys.exit(1)
+
+    # Validate status enum
+    if data['status'] not in ['done', 'blocked', 'failed']:
+        print('Invalid status: %s' % data['status'], file=sys.stderr)
+        sys.exit(1)
+
+    # Validate proof_level enum
+    valid_proof = ['doc-only', 'domain-tested', 'build-tested', 'running-app-smoke', 'flow-verified', 'screenshot-verified', 'device-verified', 'testflight-verified']
+    if data['proof_level'] not in valid_proof:
+        print('Invalid proof_level: %s' % data['proof_level'], file=sys.stderr)
+        sys.exit(1)
+
+    # Validate missing_proof_levels enums
+    for level in data['missing_proof_levels']:
+        if level not in valid_proof:
+            print('Invalid missing_proof_level: %s' % level, file=sys.stderr)
+            sys.exit(1)
+
+    sys.exit(0)
+except Exception as e:
+    print('Schema validation failed: %s' % e, file=sys.stderr)
+    sys.exit(1)
+" 2>&1; then
+    python3 -c "
+import json
+import sys
+import os
+
+data = {
+  'slice_id': os.environ.get('REPO_AUTOMATION_SUPERVISOR_SLICE_ID', 'unknown'),
+  'status': 'failed',
+  'summary': 'Handoff JSON failed schema validation',
+  'files_touched': [],
+  'validations_passed': [],
+  'validations_failed': ['schema-validation'],
+  'proof_level': 'doc-only',
+  'missing_proof_levels': ['domain-tested', 'build-tested', 'running-app-smoke', 'flow-verified', 'screenshot-verified', 'device-verified', 'testflight-verified'],
+  'contract_status_changes': [],
+  'residual_risks': ['Handoff JSON does not conform to required schema'],
+  'recommended_next_slice': '',
+  'recommended_next_reason': '',
+  'repo_clean_status': 'unknown',
+  'git_mirror_status': 'not-checked',
+  'dirty_paths_outside_scope': [],
+  'timestamp': os.environ.get('TIMESTAMP', '')
+}
+with open(os.environ['REPO_AUTOMATION_SUPERVISOR_HANDOFF_FILE'], 'w') as f:
+    json.dump(data, f, indent=2)
+"
+    exit 0
   fi
 
   # Atomic write: write to temp file then rename

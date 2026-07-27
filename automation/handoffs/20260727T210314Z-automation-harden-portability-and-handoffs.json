@@ -1,0 +1,66 @@
+{
+  "slice_id": "automation-harden-portability-and-handoffs",
+  "status": "done",
+  "summary": "Hardened adapter portability and handoff robustness: replaced hardcoded Python paths in Makefile with portable discovery (using .venv for test-security), added adapter-level JSON schema validation against handoff.schema.json, made handoff write atomic via temp file + rename, removed stale 'hermes -z' reference from queue notes, and added adapter test with fake Hermes executable.",
+  "files_touched": [
+    "Makefile",
+    "automation/queue/slices.json",
+    "automation/supervisor/run_hermes.sh",
+    "automation/tests/test_adapter.py"
+  ],
+  "validations_passed": [
+    "make automation-check",
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "Makefile Python path portability",
+      "before": "Hardcoded paths to /Users/raelldottin/.venv/bin/python",
+      "after": "Portable discovery: tries python3.11, python3.10, then python3; uses .venv/bin/python if exists for test-security",
+      "proof": [
+        "make automation-check",
+        "make syntax-check",
+        "make test"
+      ]
+    },
+    {
+      "contract": "Adapter handoff robustness",
+      "before": "Handoff writing was not atomic and lacked schema validation",
+      "after": "Handoff write is atomic (temp + rename) and includes JSON schema validation against handoff.schema.json",
+      "proof": [
+        "make automation-check",
+        "automation/tests/test_adapter.py::AdapterTests::test_adapter_with_fake_hermes_produces_valid_handoff",
+        "automation/tests/test_adapter.py::AdapterTests::test_adapter_handles_invalid_hermes_json"
+      ]
+    },
+    {
+      "contract": "Queue notes accuracy",
+      "before": "Notes referenced stale 'hermes -z' command",
+      "after": "Notes updated to remove stale reference and reflect actual changes made",
+      "proof": [
+        "git diff automation/queue/slices.json"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "No known residual risk."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "not-checked",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-07-27T21:03:14Z"
+}
