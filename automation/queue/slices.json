@@ -55,7 +55,7 @@
         "security-complete-auth-cleanup-coverage"
       ],
       "max_files_changed": 6,
-      "notes": "Run Hermes in scripted one-shot mode, capture its final response, validate the handoff JSON, and atomically write the supervisor handoff artifact. Use hermes -z for non-interactive mode. Adapter owns JSON file writing, not Hermes."
+      "notes": "Run Hermes in scripted one-shot mode with `hermes chat -q -Q` and HOMEBREW_NO_AUTO_UPDATE=1. Capture final response, validate JSON syntax and slice_id, write handoff atomically via temp file + mv. Adapter owns JSON file writing, not Hermes."
     },
     {
       "slice_id": "auth-add-offline-diagnostic-command",
@@ -81,6 +81,31 @@
       ],
       "max_files_changed": 10,
       "notes": "Add diagnostic behavior with mocked responses. Do not perform account mutations."
+    },
+    {
+      "slice_id": "automation-harden-portability-and-handoffs",
+      "title": "Harden adapter portability and handoff robustness",
+      "status": "queued",
+      "priority": 30,
+      "domain": "automation-harness",
+      "allowed_paths": [
+        "automation/supervisor/run_hermes.sh",
+        "Makefile",
+        "automation/queue/slices.json",
+        "automation/schemas/handoff.schema.json",
+        "automation/tests/"
+      ],
+      "required_validations": [
+        "make automation-check",
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ],
+      "depends_on": [
+        "auth-add-offline-diagnostic-command"
+      ],
+      "max_files_changed": 8,
+      "notes": "Replace hardcoded Python paths in Makefile with portable discovery. Add adapter-level schema validation against handoff.schema.json. Make handoff write truly atomic (temp + rename). Remove stale 'hermes -z' reference from queue notes. Add adapter test with fake Hermes executable."
     }
   ]
 }
