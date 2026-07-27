@@ -85,7 +85,7 @@
     {
       "slice_id": "automation-harden-portability-and-handoffs",
       "title": "Harden adapter portability and handoff robustness",
-      "status": "failed",
+      "status": "done",
       "priority": 30,
       "domain": "automation-harness",
       "allowed_paths": [
