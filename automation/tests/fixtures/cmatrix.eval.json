@@ -1,0 +1,100 @@
+{
+  "test_results": [
+    {
+      "name": "tests.test_basic_invocation.test_help_exits_immediately",
+      "branch": "79b69dd3fd98",
+      "status": "not_run",
+      "extra": {
+        "error_code": "copy_executable_failed"
+      }
+    },
+    {
+      "name": "tests.test_basic_invocation.test_help_flag_all_options",
+      "branch": "79b69dd3fd98",
+      "status": "not_run",
+      "extra": {
+        "error_code": "copy_executable_failed"
+      }
+    },
+    {
+      "name": "tests.test_basic_invocation.test_help_flag_short",
+      "branch": "79b69dd3fd98",
+      "status": "not_run",
+      "extra": {
+        "error_code": "copy_executable_failed"
+      }
+    },
+    {
+      "name": "tests.test_basic_invocation.test_invalid_flag",
+      "branch": "79b69dd3fd98",
+      "status": "not_run",
+      "extra": {
+        "error_code": "copy_executable_failed"
+      }
+    }
+  ],
+  "error_code": "copy_executable_failed",
+  "error_details": "mv: cannot stat './executable': No such file or directory",
+  "log": [
+    {
+      "step": "wipe_workspace",
+      "command": "rm -rf /workspace/* /workspace/.[!.]*",
+      "wall_time": 0.14373575011268258,
+      "output": "",
+      "returncode": 0,
+      "exception_info": ""
+    },
+    {
+      "step": "remove_hashed_files",
+      "command": "find /workspace -type f -exec sha256sum {} + 2>/dev/null | grep -E \"^(776f1c415ab5cb4e73320eb016f8627ae1fc2364c308dace7794989e9fb4a210)  \" | cut -c67- | xargs -I% rm -fv %",
+      "wall_time": 0.14306612499058247,
+      "output": "",
+      "returncode": 0,
+      "exception_info": ""
+    },
+    {
+      "step": "seed_git",
+      "command": "if [ ! -d .git ]; then GIT_AUTHOR_DATE='2000-01-01T00:00:00Z' GIT_COMMITTER_DATE='2000-01-01T00:00:00Z' git -c init.defaultBranch=gold init -q && git -c user.email=gold@local -c user.name=gold -c commit.gpgsign=false add -A && GIT_AUTHOR_DATE='2000-01-01T00:00:00Z' GIT_COMMITTER_DATE='2000-01-01T00:00:00Z' git -c user.email=gold@local -c user.name=gold -c commit.gpgsign=false commit -q --allow-empty -m gold; fi",
+      "wall_time": 0.25193575001321733,
+      "output": "",
+      "returncode": 0,
+      "exception_info": ""
+    },
+    {
+      "step": "compile",
+      "command": "chmod +x ./compile.sh && ./compile.sh",
+      "wall_time": 0.1402561250142753,
+      "output": "dummy compile.sh: no executable produced\n",
+      "returncode": 0,
+      "exception_info": ""
+    },
+    {
+      "step": "copy_executable",
+      "command": "mv ./executable /opt/programbench-stashed-executable-do-not-modify",
+      "wall_time": 0.1334711250383407,
+      "output": "mv: cannot stat './executable': No such file or directory\n",
+      "returncode": 1,
+      "exception_info": ""
+    }
+  ],
+  "solution_branch": "submission",
+  "test_branches": [
+    "79b69dd3fd98",
+    "1b991a57d4e9",
+    "bcaceaff5bda",
+    "f53d318371c8",
+    "1d30a9bd67f8",
+    "2a51b65a0988",
+    "c9a563c41e59",
+    "47e777b60c5e",
+    "f40262460d4c",
+    "4325cb75f082",
+    "60fce8bbb0c8",
+    "28d2b640a014",
+    "b75df89939ed",
+    "aa26a2ba3c36"
+  ],
+  "test_branch_errors": {},
+  "executable_hash": null,
+  "warnings": []
+}

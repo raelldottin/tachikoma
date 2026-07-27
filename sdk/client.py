@@ -188,7 +188,7 @@ class Client(object):
 
         self.checksum = ChecksumCreateDevice(self.device.key, self.device.name)
 
-        url = f"{self.baseUrl}/UserService/DeviceLogin15?deviceKey={self.device.key}&advertisingKey=&isJailBroken=False&checksum={self.checksum}&deviceType=DeviceType{self.device.name}&signal=False&languageKey={self.device.languageKey}&refreshToken={self.device.refreshToken if self.device.refreshToken else ''}"
+        url = f"{self.baseUrl}/UserService/DeviceLogin15"
         json = {
             "DeviceKey": self.device.key,
             "AdvertisingKey": "",
@@ -198,9 +198,7 @@ class Client(object):
             "DeviceType": 2,
             "Signal": False,
             "LanguageKey": "en",
-            "RefreshToken": self.device.refreshToken
-            if self.device.refreshToken
-            else "eyJhbGciOiJodHRwOi8vd3d3LnczLm9yZy8yMDAxLzA0L3htbGRzaWctbW9yZSNobWFjLXNoYTI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiIzNDMwODkyIiwiZGV2aWNlS2V5IjoiNkFENDI4MjgtN0QwNi01MzRELUE0NjEtNDk2NTg0NjFBNjE0IiwiZW1haWwiOiJyYWVsbC5kb3R0aW5AZ21haWwuY29tIiwiY3JlYXRlZERhdGUiOiIyMDIzLTEyLTA2VDAwOjUzOjU4In0.NRROBWsIL57NzL_h6_TX50wE-73fenMA44jVJpa1Rqw",
+            "RefreshToken": self.device.refreshToken if self.device.refreshToken else "",
             "UserDeviceInfo": {
                 "OsVersion": "Mac OS X 14.2.0",
                 "Locale": "en",

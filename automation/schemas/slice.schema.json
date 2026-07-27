@@ -1,0 +1,130 @@
+{
+  "title": "Automation Slice Queue",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "policy",
+    "slices"
+  ],
+  "properties": {
+    "version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "consecutive_autonomous_limit",
+        "handoff_timeout_seconds",
+        "agent_command_template",
+        "supervisor_owned_paths"
+      ],
+      "properties": {
+        "consecutive_autonomous_limit": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "handoff_timeout_seconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "agent_command_template": {
+          "type": "string"
+        },
+        "supervisor_owned_paths": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "slices": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "slice_id",
+          "title",
+          "status",
+          "priority",
+          "domain",
+          "allowed_paths",
+          "required_validations",
+          "depends_on",
+          "max_files_changed",
+          "notes"
+        ],
+        "properties": {
+          "slice_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "in_progress",
+              "blocked",
+              "deferred",
+              "done",
+              "failed"
+            ]
+          },
+          "priority": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "domain": {
+            "type": "string",
+            "minLength": 1
+          },
+          "allowed_paths": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required_validations": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "depends_on": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "max_files_changed": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "notes": {
+            "type": "string"
+          },
+          "entry_condition": {
+            "type": "string"
+          },
+          "recommended_unblocker": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

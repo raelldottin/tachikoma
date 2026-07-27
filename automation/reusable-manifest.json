@@ -1,0 +1,126 @@
+{
+  "version": 1,
+  "default_target": "/Users/raelldottin/Documents/Personal/repo-automation",
+  "entries": [
+    {
+      "source": "automation/README.md",
+      "destination": "automation/README.md",
+      "kind": "file",
+      "preserve_executable": false,
+      "delete_stale": false,
+      "template": false
+    },
+    {
+      "source": "automation/benchmark",
+      "destination": "automation/benchmark",
+      "kind": "directory",
+      "preserve_executable": false,
+      "delete_stale": true,
+      "template": false
+    },
+    {
+      "source": "automation/context",
+      "destination": "automation/context",
+      "kind": "directory",
+      "preserve_executable": false,
+      "delete_stale": true,
+      "template": false
+    },
+    {
+      "source": "automation/examples",
+      "destination": "automation/examples",
+      "kind": "directory",
+      "preserve_executable": false,
+      "delete_stale": false,
+      "template": true
+    },
+    {
+      "source": "automation/prompts",
+      "destination": "automation/prompts",
+      "kind": "directory",
+      "preserve_executable": false,
+      "delete_stale": false,
+      "template": true
+    },
+    {
+      "source": "automation/reusable-manifest.json",
+      "destination": "automation/reusable-manifest.json",
+      "kind": "file",
+      "preserve_executable": false,
+      "delete_stale": false,
+      "template": false
+    },
+    {
+      "source": "automation/schemas",
+      "destination": "automation/schemas",
+      "kind": "directory",
+      "preserve_executable": false,
+      "delete_stale": true,
+      "template": false
+    },
+    {
+      "source": "automation/supervisor",
+      "destination": "automation/supervisor",
+      "kind": "directory",
+      "preserve_executable": true,
+      "delete_stale": true,
+      "template": false
+    },
+    {
+      "source": "automation/tests/test_harness.py",
+      "destination": "automation/tests/test_harness.py",
+      "kind": "file",
+      "preserve_executable": false,
+      "delete_stale": false,
+      "template": false
+    },
+    {
+      "source": "automation/tests/test_benchmark_effectiveness.py",
+      "destination": "automation/tests/test_benchmark_effectiveness.py",
+      "kind": "file",
+      "preserve_executable": false,
+      "delete_stale": false,
+      "template": false
+    },
+    {
+      "source": "automation/tests/fixtures/cmatrix.eval.json",
+      "destination": "automation/tests/fixtures/cmatrix.eval.json",
+      "kind": "file",
+      "preserve_executable": false,
+      "delete_stale": false,
+      "template": false
+    },
+    {
+      "source": "docs/workflows/repo-automation.md",
+      "destination": "docs/workflows/repo-automation.md",
+      "kind": "file",
+      "preserve_executable": false,
+      "delete_stale": false,
+      "template": false
+    },
+    {
+      "source": "docs/workflows/effectiveness-benchmark.md",
+      "destination": "docs/workflows/effectiveness-benchmark.md",
+      "kind": "file",
+      "preserve_executable": false,
+      "delete_stale": false,
+      "template": false
+    },
+    {
+      "source": "Tools/repo-automation-sync.sh",
+      "destination": "Tools/repo-automation-sync.sh",
+      "kind": "file",
+      "preserve_executable": true,
+      "delete_stale": false,
+      "template": false
+    },
+    {
+      "source": "THIRD-PARTY-NOTICES.md",
+      "destination": "THIRD-PARTY-NOTICES.md",
+      "kind": "file",
+      "preserve_executable": false,
+      "delete_stale": false,
+      "template": false
+    }
+  ]
+}
