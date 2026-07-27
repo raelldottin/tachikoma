@@ -1,5 +1,5 @@
-PYTHON_RUNTIME ?= python3.11
-PYTHON_AUTOMATION ?= python3.11
+PYTHON_RUNTIME ?= /Users/raelldottin/.venv/bin/python
+PYTHON_AUTOMATION ?= /Users/raelldottin/.venv/bin/python
 
 .PHONY: automation-check automation-dry-run syntax-check test test-security git-check
 
