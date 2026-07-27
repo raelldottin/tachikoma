@@ -28,16 +28,28 @@ cd "$repo_root"
 # Read prompt content from file
 prompt_content=$(cat "$prompt_file")
 
-# Choose agent based on environment variables (with defaults)
-AGENT_RUNNER="${REPO_AUTOMATION_AGENT_RUNNER:-}"
-CLAUDE_MODE="${CLAUDE_CODE:-0}"
+# Default environment variables to avoid unbound variable errors with set -u
+REPO_AUTOMATION_AGENT_RUNNER=${REPO_AUTOMATION_AGENT_RUNNER:-}
+CLAUDE_CODE=${CLAUDE_CODE:-0}
+OWLORY_SUPERVISOR_CONTEXT_FILE=${OWLORY_SUPERVISOR_CONTEXT_FILE:-}
 
-if [[ "$AGENT_RUNNER" == "codex" ]]; then
+export REPO_AUTOMATION_SUPERVISOR_CONTEXT_FILE="$context_file"
+export REPO_AUTOMATION_SUPERVISOR_HANDOFF_FILE="$handoff_file"
+export REPO_AUTOMATION_SUPERVISOR_SLICE_ID="$slice_id"
+export OWLORY_SUPERVISOR_CONTEXT_FILE="$context_file"
+
+cd "$repo_root"
+
+# Read prompt content from file
+prompt_content=$(cat "$prompt_file")
+
+# Choose agent based on environment variables
+if [[ "$REPO_AUTOMATION_AGENT_RUNNER" == "codex" ]]; then
   # CODEX path (as expected by tests)
   echo "$prompt_content" | /Users/raelldottin/.local/bin/codex \
     --ask-for-approval never exec --sandbox workspace-write - \
     2>&1
-elif [[ "$CLAUDE_MODE" == "1" ]]; then
+elif [[ "$CLAUDE_CODE" == "1" ]]; then
   # CLAUDE CODE path (unchanged from original)
   /Users/raelldottin/.local/bin/claude \
     --print \
@@ -49,7 +61,8 @@ elif [[ "$CLAUDE_MODE" == "1" ]]; then
     <<< "$prompt_content" \
     2>&1
 else
-  # HERMES path: use chat -q -Q for clean JSON output
+  # HERMES path: use chat -q -Q with HOMEBREW_NO_AUTO_UPDATE=1 for fast JSON output
+  export HOMEBREW_NO_AUTO_UPDATE=1
   hermes_output=$(hermes chat -q "$prompt_content" -Q --ignore-user-config --ignore-rules --toolsets coding 2>&1)
 
   # Extract JSON from output - find first line that starts with {
