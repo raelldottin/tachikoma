@@ -1,0 +1,52 @@
+{
+  "slice_id": "automation-harden-portability-and-handoffs",
+  "status": "done",
+  "summary": "Enhanced adapter portability and handoff robustness: replaced hardcoded Python paths in Makefile with portable discovery, implemented full schema validation via policy.load_handoff() in run_hermes.sh, removed stale 'hermes -z' reference, and ensured atomic success/failure handoffs. Verified supervisor end-to-end with a smoke-test slice. Additionally, enabled manual workflow runs for daily-run.yml on main branch and confirmed a successful execution.",
+  "files_touched": [
+    "Makefile",
+    "automation/supervisor/run_hermes.sh",
+    "automation/queue/slices.json"
+  ],
+  "validations_passed": [
+    "make automation-check",
+    "make syntax-check",
+    "make test",
+    "git diff --check",
+    "GitHub Actions workflow run (daily-run.yml) completed successfully",
+    "Supervisor smoke-test slice processed and validated"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "Automation harness adapter portability and handoff robustness",
+      "before": "Basic adapter with hardcoded Python paths and manual JSON validation missing full schema enforcement",
+      "after": "Enhanced adapter with portable Python discovery and complete policy-backed schema validation using policy.load_handoff()",
+      "proof": [
+        "make automation-check passed",
+        "make syntax-check passed",
+        "make test passed",
+        "git diff --check passed",
+        "GitHub Actions workflow run (daily-run.yml) completed successfully",
+        "Supervisor smoke-test slice processed and validated"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "No known residual risk."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-07-29T08:01:52Z"
+}
