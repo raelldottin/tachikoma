@@ -18,8 +18,10 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# Export repo root for use in the adapter's embedded Python script
-export REPO_AUTOMATION_REPO_ROOT="$repo_root"
+# Get the directory where this script is located
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Add the script's parent directory to Python path so we can import automation
+export PYTHONPATH="${SCRIPT_DIR}/..:${PYTHONPATH}"
 
 export REPO_AUTOMATION_SUPERVISOR_CONTEXT_FILE="$context_file"
 export REPO_AUTOMATION_SUPERVISOR_HANDOFF_FILE="$handoff_file"
@@ -66,8 +68,6 @@ fi
 
 # Export agent output for Python script
 export AGENT_OUTPUT="$agent_output"
-
-# Now, extract JSON from agent_output using a Python script
 python_output_file=$(mktemp)
 trap "rm -f $python_output_file" EXIT
 python_exit_code=0
@@ -120,7 +120,7 @@ json_output=$(cat "$python_output_file")
 
 # Check if JSON extraction succeeded
 if [[ $python_exit_code -ne 0 ]] || [[ -z "$json_output" ]]; then
-  # Write failure handoff (exit 0 - adapter handles the error)
+  # Write failure handoff atomically
   python3 -c "
 import json
 import sys
@@ -144,8 +144,10 @@ data = {
   'dirty_paths_outside_scope': [],
   'timestamp': os.environ.get('TIMESTAMP', '')
 }
-with open(os.environ['REPO_AUTOMATION_SUPERVISOR_HANDOFF_FILE'], 'w') as f:
+handoff_tmp = os.environ['REPO_AUTOMATION_SUPERVISOR_HANDOFF_FILE'] + '.tmp'
+with open(handoff_tmp, 'w') as f:
   json.dump(data, f, indent=2)
+os.rename(handoff_tmp, os.environ['REPO_AUTOMATION_SUPERVISOR_HANDOFF_FILE'])
 "
   exit 0
 fi
@@ -175,8 +177,10 @@ data = {
   'dirty_paths_outside_scope': [],
   'timestamp': os.environ.get('TIMESTAMP', '')
 }
-with open(os.environ['REPO_AUTOMATION_SUPERVISOR_HANDOFF_FILE'], 'w') as f:
+handoff_tmp = os.environ['REPO_AUTOMATION_SUPERVISOR_HANDOFF_FILE'] + '.tmp'
+with open(handoff_tmp, 'w') as f:
   json.dump(data, f, indent=2)
+os.rename(handoff_tmp, os.environ['REPO_AUTOMATION_SUPERVISOR_HANDOFF_FILE'])
 "
   exit 0
 fi
@@ -215,53 +219,44 @@ data = {
   'dirty_paths_outside_scope': [],
   'timestamp': os.environ.get('TIMESTAMP', '')
 }
-with open(os.environ['REPO_AUTOMATION_SUPERVISOR_HANDOFF_FILE'], 'w') as f:
+handoff_tmp = os.environ['REPO_AUTOMATION_SUPERVISOR_HANDOFF_FILE'] + '.tmp'
+with open(handoff_tmp, 'w') as f:
   json.dump(data, f, indent=2)
+os.rename(handoff_tmp, os.environ['REPO_AUTOMATION_SUPERVISOR_HANDOFF_FILE'])
 "
   exit 0
 fi
 
-# Validate against handoff schema - use environment variable to pass JSON
-export JSON_OUTPUT_FOR_VALIDATION="$json_output"
+# Write JSON to temporary file for policy validation
+handoff_tmp="${handoff_file}.tmp"
+echo "$json_output" > "$handoff_tmp"
+
+# Validate against handoff schema using policy module
 if ! python3 -c "
 import json
 import sys
 import os
-
-with open(os.path.join(os.environ.get('REPO_AUTOMATION_REPO_ROOT', '.'), 'automation/schemas/handoff.schema.json')) as f:
-    schema = json.load(f)
+from pathlib import Path
+from automation.supervisor import policy
 
 try:
-    data = json.loads(os.environ.get('JSON_OUTPUT_FOR_VALIDATION', ''))
-    # Basic schema validation - check required fields
-    required = ['slice_id', 'status', 'summary', 'files_touched', 'validations_passed', 'validations_failed', 'proof_level', 'missing_proof_levels', 'contract_status_changes', 'residual_risks', 'recommended_next_slice', 'recommended_next_reason', 'repo_clean_status', 'git_mirror_status', 'dirty_paths_outside_scope', 'timestamp']
-    for field in required:
-        if field not in data:
-            print('Missing required field: %s' % field, file=sys.stderr)
-            sys.exit(1)
-
-    # Validate status enum
-    if data['status'] not in ['done', 'blocked', 'failed']:
-        print('Invalid status: %s' % data['status'], file=sys.stderr)
+    handoff = policy.load_handoff(
+        Path('$handoff_tmp'),
+        Path('.') / 'automation/schemas/handoff.schema.json'
+    )
+    
+    # Additional check: verify slice_id matches expected
+    expected_slice_id = os.environ.get('REPO_AUTOMATION_SUPERVISOR_SLICE_ID', '')
+    if handoff['slice_id'] != expected_slice_id:
+        print('slice_id mismatch: expected %s, got %s' % (expected_slice_id, handoff['slice_id']), file=sys.stderr)
         sys.exit(1)
-
-    # Validate proof_level enum
-    valid_proof = ['doc-only', 'domain-tested', 'build-tested', 'running-app-smoke', 'flow-verified', 'screenshot-verified', 'device-verified', 'testflight-verified']
-    if data['proof_level'] not in valid_proof:
-        print('Invalid proof_level: %s' % data['proof_level'], file=sys.stderr)
-        sys.exit(1)
-
-    # Validate missing_proof_levels enums
-    for level in data['missing_proof_levels']:
-        if level not in valid_proof:
-            print('Invalid missing_proof_level: %s' % level, file=sys.stderr)
-            sys.exit(1)
-
+    
     sys.exit(0)
 except Exception as e:
     print('Schema validation failed: %s' % e, file=sys.stderr)
     sys.exit(1)
 " 2>&1; then
+  # Validation failed - create failure handoff atomically
   python3 -c "
 import json
 import sys
@@ -285,14 +280,16 @@ data = {
   'dirty_paths_outside_scope': [],
   'timestamp': os.environ.get('TIMESTAMP', '')
 }
-with open(os.environ['REPO_AUTOMATION_SUPERVISOR_HANDOFF_FILE'], 'w') as f:
+handoff_tmp = os.environ['REPO_AUTOMATION_SUPERVISOR_HANDOFF_FILE'] + '.tmp'
+with open(handoff_tmp, 'w') as f:
   json.dump(data, f, indent=2)
+os.rename(handoff_tmp, os.environ['REPO_AUTOMATION_SUPERVISOR_HANDOFF_FILE'])
 "
+  # Clean up temp file
+  rm -f "$handoff_tmp"
   exit 0
 fi
 
-# Atomic write: write to temp file then rename
-handoff_tmp="${handoff_file}.tmp"
-echo "$json_output" > "$handoff_tmp"
+# Validation passed - move temp file to final location atomically
 mv "$handoff_tmp" "$handoff_file"
 exit 0
