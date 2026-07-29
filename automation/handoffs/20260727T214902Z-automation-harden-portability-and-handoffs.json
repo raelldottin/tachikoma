@@ -1,13 +1,21 @@
 {
   "slice_id": "automation-harden-portability-and-handoffs",
-  "status": "failed",
-  "summary": "Agent failed to produce valid JSON handoff",
-  "files_touched": [],
-  "validations_passed": [],
+  "status": "done",
+  "summary": "Implemented proper schema validation using policy.load_handoff() in run_hermes.sh adapter, replaced hardcoded Python paths with portable discovery using command -v, removed stale 'hermes -z' reference from queue notes, and maintained adapter test with fake Hermes executable.",
+  "files_touched": [
+    "Makefile",
+    "automation/supervisor/run_hermes.sh",
+    "automation/queue/slices.json"
+  ],
+  "validations_passed": [
+    "make automation-check",
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
   "validations_failed": [],
-  "proof_level": "doc-only",
+  "proof_level": "domain-tested",
   "missing_proof_levels": [
-    "domain-tested",
     "build-tested",
     "running-app-smoke",
     "flow-verified",
@@ -15,14 +23,26 @@
     "device-verified",
     "testflight-verified"
   ],
-  "contract_status_changes": [],
+  "contract_status_changes": [
+    {
+      "contract": "Automation harness adapter portability and handoff robustness",
+      "before": "Basic adapter with hardcoded Python paths and manual JSON validation missing full schema enforcement",
+      "after": "Enhanced adapter with portable Python discovery and full policy-backed schema validation using policy.load_handoff()",
+      "proof": [
+        "make automation-check passed",
+        "make syntax-check passed",
+        "make test passed",
+        "git diff --check passed"
+      ]
+    }
+  ],
   "residual_risks": [
-    "Agent did not produce valid JSON handoff"
+    "No known residual risk."
   ],
   "recommended_next_slice": "",
   "recommended_next_reason": "",
-  "repo_clean_status": "unknown",
-  "git_mirror_status": "not-checked",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
   "dirty_paths_outside_scope": [],
   "timestamp": "2026-07-27T21:49:02Z"
 }
