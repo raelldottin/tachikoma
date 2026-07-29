@@ -1,5 +1,7 @@
 name: Daily Automated Actions
+
 on:
+  workflow_dispatch:
   schedule:
     - cron: '0 0 * * *'
 
