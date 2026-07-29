@@ -1,11 +1,9 @@
-<!--
-This file is auto-generate by a github hook please modify README.template if you don't want to loose your work
--->
-# //github.com/raelldottin/tachikoma 1.1.7-131
-[![Hourly Automated Actions](https://github.com/raelldottin/tachikoma/actions/workflows/hourly-run.yml/badge.svg?event=schedule)](https://github.com/raelldottin/tachikoma/actions/workflows/hourly-run.yml)
+# raelldottin/tachikoma 1.1.7-131
 [![Daily Automated Actions](https://github.com/raelldottin/tachikoma/actions/workflows/daily-run.yml/badge.svg?event=schedule)](https://github.com/raelldottin/tachikoma/actions/workflows/daily-run.yml)
 
-# raelldottin/tachikoma 1.1.7-131
+# Tachikoma - Pixel Starships Automation
+
+This repository contains scripts and resources for automating tasks in the mobile game Pixel Starships. The project is built around a Python script `run.py` which interacts with various game elements to perform a series of automated tasks. It's designed to help players manage routine activities in the game more efficiently.
 
 ## Repository Contents
 
