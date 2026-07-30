@@ -66,9 +66,9 @@ class Client(object):
     salt = "5343"
     headers = {
         "Accept": "*/*",
-        "Accept-Encoding": "identity",
-        "User-Agent": "UnityPlayer/5.6.0f3 (UnityWebRequest/1.0, libcurl/7.51.0-DEV)",
-        "X-Unity-Version": "5.6.0f3",
+        "Accept-Encoding": "deflate, gzip",
+        "User-Agent": "UnityPlayer/6000.0.77f1 (UnityWebRequest/1.0, libcurl/8.10.1-DEV)",
+        "X-Unity-Version": "6000.0.77f1",
     }
     # Use the actual base url and implement handling for different services
     baseUrl = "https://api.pixelstarships.com"
@@ -205,8 +205,8 @@ class Client(object):
                 "Locale": "en",
                 "DeviceName": "Mac14,10",
                 "OSBuild": "0",
-                "ClientBuild": "13866",
-                "ClientVersion": "0.998.10",
+                "ClientBuild": "6400",
+                "ClientVersion": "6000.0.77f1",
             },
             "AccessToken": "00000000-0000-0000-0000-000000000000",
         }
@@ -306,7 +306,7 @@ class Client(object):
         return True
 
     def getLatestVersion3(self):
-        url = f"https://api.pixelstarships.com/SettingService/GetLatestVersion3?languageKey={self.device.languageKey}&deviceType=DeviceType{self.device.name}"
+        url = f"https://api.pixelstarships.com/SettingService/GetLatestVersion4?languageKey={self.device.languageKey}&deviceType=DeviceType{self.device.name}"
         r = self.request(url, "GET")
 
         if r.content:
