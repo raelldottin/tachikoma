@@ -10,9 +10,8 @@ import io
 from sdk.client import Client
 from sdk.device import Device
 
-
 logfilepath = "tachikoma.log"
-log_catpure_string = io.StringIO()
+log_capture_string = io.StringIO()
 
 logging.basicConfig(
     level=logging.INFO,
@@ -20,10 +19,9 @@ logging.basicConfig(
     handlers=[
         logging.FileHandler(logfilepath),
         logging.StreamHandler(sys.stdout),
-        logging.StreamHandler(log_catpure_string),
+        logging.StreamHandler(log_capture_string),
     ],
 )
-
 
 def email_logfile(filename, client, email=None, password=None, recipient=None):
     if email and password and recipient:
@@ -51,8 +49,8 @@ def email_logfile(filename, client, email=None, password=None, recipient=None):
     if not logs:
         return False
 
-    logs = log_catpure_string.getvalue()
-    subject = f"Pixel Starships Automation Log: {client.user.name if hasattr(client, 'user') else ''}"
+    logs = log_capture_string.getvalue()
+    subject = f"Pixel Starships Automation Log: {getattr(client, 'user', None) and getattr(client.user, 'name', '') or ''}"
     message = EmailMessage()
     message["from"] = email
     message["to"] = recipient
@@ -68,24 +66,8 @@ def email_logfile(filename, client, email=None, password=None, recipient=None):
         session.quit()
     except:
         logging.exception("Exception occurred", exc_info=True)
-    log_catpure_string.close()
+    log_capture_string.close()
     return True
-
-
-def authenticate(device, email=None, password=None):
-    client = Client(device=device)
-
-    if device.refreshToken:
-        if client.login():
-            return client
-        return False
-
-    if not client.login(email=email, password=password):
-        logging.warning("[authenticate] failed to login")
-        return False
-
-    return client
-
 
 def main():
     parser = argparse.ArgumentParser(
@@ -98,7 +80,7 @@ def main():
         action="store",
         dest="auth",
         default=None,
-        help="authentication string",
+        help="authentication string (key:name:refreshToken:languageKey)",
     )
     parser.add_argument(
         "-e",
@@ -107,7 +89,7 @@ def main():
         action="store",
         dest="email",
         default=None,
-        help="username for smtp",
+        help="email for game login and SMTP sender",
     )
     parser.add_argument(
         "-p",
@@ -116,7 +98,7 @@ def main():
         action="store",
         dest="password",
         default=None,
-        help="password for smtp",
+        help="password for game login and SMTP sender",
     )
     parser.add_argument(
         "-r",
@@ -129,56 +111,175 @@ def main():
     )
     args = parser.parse_args()
 
-    if type(args.auth) == list:
-        device = Device(language="en", authentication_string=args.auth[0])
+    # Parse auth string
+    auth_string = args.auth[0] if args.auth else None
+    if auth_string:
+        # Expect format: key:name:refreshToken:languageKey
+        parts = auth_string.split(":")
+        if len(parts) < 3:
+            logging.error("Invalid auth_string format. Expected key:name:refreshToken[:languageKey]")
+            sys.exit(1)
+        key = parts[0]
+        name = parts[1]
+        refresh_token = parts[2]
+        language_key = parts[3] if len(parts) > 3 else "en"
+        # Create device from authentication_string
+        device = Device(authentication_string=f"{name}|{key}|{refresh_token}|{language_key}")
     else:
-        device = Device(language="en")
+        # Interactive mode
+        key = input("Device key: ")
+        name = input("Device name: ")
+        refresh_token = input("Refresh token: ")
+        language_key = input("Language code (default en): ") or "en"
+        device = Device(name=name, key=key, language=language_key)
+        if refresh_token:
+            device.refreshTokenAcquire(refresh_token)
 
-    client = None
+    email = args.email[0] if args.email else None
+    password = args.password[0] if args.password else None
+    recipient = args.recipient[0] if args.recipient else None
 
-    if device.refreshToken:
-        client = authenticate(device)
-        if client:
-            client.getLatestVersion3()
-            client.getTodayLiveOps2()
-            client.listAllDesigns4()
-            client.getShipByUserId()
-    else:
-        decide = input("Input G to login as guest. Input A to login as user : ")
-        if decide == "G":
-            client = authenticate(device)
-        else:
-            email = input("Enter email: ")
-            password = getpass.getpass("Enter password: ")
-            client = authenticate(device, email, password)
+    client = Client(device)
 
+    # Attempt to log in
+    if not client.login(email=email, password=password):
+        logging.error("Authentication failed. Exiting.")
+        # Still attempt to email log (though it may be empty or contain only the error)
+        email_logfile(logfilepath, client, email, password, recipient)
+        sys.exit(1)
+
+    logging.info(f"[{client.info.get('@Name', 'unknown')}] Authenticated successfully")
+
+    # Task loop with success tracking
+    success_counts = {}
+    failure_counts = {}
+
+    try:
+        client.getLatestVersion3()
+        client.getTodayLiveOps2()
+        client.listAllDesigns4()
+        client.getShipByUserId()
+    except Exception as e:
+        logging.warning(f"[{client.info.get('@Name', 'unknown')}] Initialization step failed: {e}")
+        failure_counts["initialization"] = failure_counts.get("initialization", 0) + 1
+
+    # Main task loop (runs once per account)
     while client:
-        client.grabFlyingStarbux()
-        if client.freeStarbuxToday >= client.freeStarbuxMax:
-            client.collectTaskReward()
-            client.getCrewInfo()
-            client.upgradeResearches()
-            client.upgradeRooms()
-            client.collectDailyReward()
-            client.listActiveMarketplaceMessages()
-            client.getMessages()
-            client.infoBux()
-            client.manageTraining()
-            client.getResourceTotals()
-            client.upgradeCharacters()
-            logging.info(f'[{client.info["@Name"]}] Finished...')
-            break
-    if (
-        type(args.email) == list
-        and type(args.password) == list
-        and type(args.recipient) == list
-    ):
-        email_logfile(
-            logfilepath, client, args.email[0], args.password[0], args.recipient[0]
-        )
-    else:
-        email_logfile(logfilepath, client)
+        try:
+            client.grabFlyingStarbux()
+            success_counts["grabFlyingStarbux"] = success_counts.get("grabFlyingStarbux", 0) + 1
+        except Exception as e:
+            logging.warning(f"[{client.info.get('@Name', 'unknown')}] grabFlyingStarbux failed: {e}")
+            failure_counts["grabFlyingStarbux"] = failure_counts.get("grabFlyingStarbux", 0) + 1
 
+        if client.freeStarbuxToday < client.freeStarbuxMax:
+            logging.info(
+                f"[{client.info.get('@Name', 'unknown')}] "
+                f"Flying Starbux threshold not reached ({client.freeStarbuxToday}/{client.freeStarbuxMax}); "
+                f"ending this run."
+            )
+            break
+
+        # Remaining tasks
+        if client.freeStarbuxToday >= client.freeStarbuxMax:
+            try:
+                client.collectTaskReward()
+                success_counts["collectTaskReward"] = success_counts.get("collectTaskReward", 0) + 1
+            except Exception as e:
+                logging.warning(f"[{client.info.get('@Name', 'unknown')}] collectTaskReward failed: {e}")
+                failure_counts["collectTaskReward"] = failure_counts.get("collectTaskReward", 0) + 1
+
+            try:
+                client.getCrewInfo()
+                success_counts["getCrewInfo"] = success_counts.get("getCrewInfo", 0) + 1
+            except Exception as e:
+                logging.warning(f"[{client.info.get('@Name', 'unknown')}] getCrewInfo failed: {e}")
+                failure_counts["getCrewInfo"] = failure_counts.get("getCrewInfo", 0) + 1
+
+            try:
+                client.upgradeResearches()
+                success_counts["upgradeResearches"] = success_counts.get("upgradeResearches", 0) + 1
+            except Exception as e:
+                logging.warning(f"[{client.info.get('@Name', 'unknown')}] upgradeResearches failed: {e}")
+                failure_counts["upgradeResearches"] = failure_counts.get("upgradeResearches", 0) + 1
+
+            try:
+                client.upgradeRooms()
+                success_counts["upgradeRooms"] = success_counts.get("upgradeRooms", 0) + 1
+            except Exception as e:
+                logging.warning(f"[{client.info.get('@Name', 'unknown')}] upgradeRooms failed: {e}")
+                failure_counts["upgradeRooms"] = failure_counts.get("upgradeRooms", 0) + 1
+
+            try:
+                client.collectDailyReward()
+                success_counts["collectDailyReward"] = success_counts.get("collectDailyReward", 0) + 1
+            except Exception as e:
+                logging.warning(f"[{client.info.get('@Name', 'unknown')}] collectDailyReward failed: {e}")
+                failure_counts["collectDailyReward"] = failure_counts.get("collectDailyReward", 0) + 1
+
+            try:
+                client.listActiveMarketplaceMessages()
+                success_counts["listActiveMarketplaceMessages"] = success_counts.get("listActiveMarketplaceMessages", 0) + 1
+            except Exception as e:
+                logging.warning(f"[{client.info.get('@Name', 'unknown')}] listActiveMarketplaceMessages failed: {e}")
+                failure_counts["listActiveMarketplaceMessages"] = failure_counts.get("listActiveMarketplaceMessages", 0) + 1
+
+            try:
+                client.getMessages()
+                success_counts["getMessages"] = success_counts.get("getMessages", 0) + 1
+            except Exception as e:
+                logging.warning(f"[{client.info.get('@Name', 'unknown')}] getMessages failed: {e}")
+                failure_counts["getMessages"] = failure_counts.get("getMessages", 0) + 1
+
+            try:
+                client.infoBux()
+                success_counts["infoBux"] = success_counts.get("infoBux", 0) + 1
+            except Exception as e:
+                logging.warning(f"[{client.info.get('@Name', 'unknown')}] infoBux failed: {e}")
+                failure_counts["infoBux"] = failure_counts.get("infoBux", 0) + 1
+
+            try:
+                client.manageTraining()
+                success_counts["manageTraining"] = success_counts.get("manageTraining", 0) + 1
+            except Exception as e:
+                logging.warning(f"[{client.info.get('@Name', 'unknown')}] manageTraining failed: {e}")
+                failure_counts["manageTraining"] = failure_counts.get("manageTraining", 0) + 1
+
+            try:
+                client.getResourceTotals()
+                success_counts["getResourceTotals"] = success_counts.get("getResourceTotals", 0) + 1
+            except Exception as e:
+                logging.warning(f"[{client.info.get('@Name', 'unknown')}] getResourceTotals failed: {e}")
+                failure_counts["getResourceTotals"] = failure_counts.get("getResourceTotals", 0) + 1
+
+            try:
+                client.upgradeCharacters()
+                success_counts["upgradeCharacters"] = success_counts.get("upgradeCharacters", 0) + 1
+            except Exception as e:
+                logging.warning(f"[{client.info.get('@Name', 'unknown')}] upgradeCharacters failed: {e}")
+                failure_counts["upgradeCharacters"] = failure_counts.get("upgradeCharacters", 0) + 1
+
+            logging.info(f'[{client.info.get("@Name", "unknown")}] Finished...')
+            break
+
+    # Summary
+    name = client.info.get('@Name', 'unknown') if client and hasattr(client, 'info') else 'unknown'
+    logging.info(f"[{name}] === Task Execution Summary ===")
+    total_success = sum(success_counts.values())
+    total_failure = sum(failure_counts.values())
+    logging.info(f"[{name}] Total successful actions: {total_success}")
+    logging.info(f"[{name}] Total failed actions: {total_failure}")
+    if success_counts:
+        logging.info(f"[{name}] Successes per action: {success_counts}")
+    if failure_counts:
+        logging.info(f"[{name}] Failures per action: {failure_counts}")
+    overall_success = (total_failure == 0)
+    logging.info(f"[{name}] Overall result: {'PASSED' if overall_success else 'FAILED'}")
+
+    # Email log
+    email_logfile(logfilepath, client, email, password, recipient)
+
+    sys.exit(0 if overall_success else 1)
 
 if __name__ == "__main__":
     main()
