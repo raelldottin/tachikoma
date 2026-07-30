@@ -98,7 +98,7 @@ class Client(object):
         total=10,
         backoff_factor=1,
         status_forcelist=[500, 502, 503, 504, 520],
-        method_whitelist=["GET", "POST"],
+        allowed_methods=["GET", "POST"],
     )
     adapter = HTTPAdapter(max_retries=retry_strategy)
     session = requests.Session()
