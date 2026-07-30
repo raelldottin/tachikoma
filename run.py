@@ -116,7 +116,8 @@ def main():
     password = args.password[0] if args.password else None
     recipient = args.recipient[0] if args.recipient else None
 
-    # Parse auth string — Device expects "name|key|refreshToken|languageKey" (pipe-delimited)
+    # Parse auth string — Device expects "name|key|refreshToken|languageKey"
+    # Optional 5th and 6th fields: "name|key|refreshToken|languageKey|accessToken|userId"
     auth_string = args.auth[0] if args.auth else None
     if auth_string:
         device = Device(language="en", authentication_string=auth_string)

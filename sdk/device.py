@@ -10,6 +10,8 @@ class Device(object):
     languageKey = "en"
     DB = "./.device"
     authentication_string = None
+    accessToken = None  # pre-provisioned access token (bypass DeviceLogin17)
+    userId = None  # user ID associated with the pre-provisioned token
 
     def __init__(
         self, name="Android", key=None, language="en", authentication_string=None
@@ -66,6 +68,16 @@ class Device(object):
         self.name = data[0]
         self.key = data[1]
         self.refreshToken = data[2] if len(data[2]) > 3 else None
-        self.languageKey = data[3]
+        self.languageKey = data[3] if len(data) > 3 else "en"
+        # Optional 5th field: pre-provisioned access token (UUID or JWT)
+        if len(data) > 4 and len(data[4]) > 3:
+            self.accessToken = data[4]
+        else:
+            self.accessToken = None
+        # Optional 6th field: user ID associated with the pre-provisioned token
+        if len(data) > 5 and data[5]:
+            self.userId = data[5]
+        else:
+            self.userId = None
 
         return True

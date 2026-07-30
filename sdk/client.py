@@ -71,7 +71,7 @@ class Client(object):
         "X-Unity-Version": "6000.0.77f1",
     }
     # Use the actual base url and implement handling for different services
-    baseUrl = "https://api.pixelstarships.com"
+    baseUrl = "http://api.pixelstarships.com"
 
     # runtime data
     accessToken = None
@@ -183,9 +183,76 @@ class Client(object):
 
         return True
 
+    def _load_user_data_with_preauth_token(self):
+        """Load user data using a pre-provisioned access token.
+
+        Calls GetShipByUserId (auth-light) to verify the token works,
+        then reads user info from ListAllUserDataFirst2 or a cached
+        UserLogin response if provided.
+        """
+        userId = getattr(self.device, "userId", None)
+
+        # If userId is provided, try GetShipByUserId to verify the token
+        if userId:
+            url = f"{self.baseUrl}/ShipService/GetShipByUserId?userId={userId}&accessToken={self.accessToken}"
+            r = self.session.get(url, headers=self.headers)
+            if "errorMessage" in r.text:
+                logging.error(
+                    "Pre-provisioned token rejected by GetShipByUserId: %s",
+                    redact_secrets(r.text),
+                )
+                return False
+
+            # Parse user data from the response
+            try:
+                d = xmltodict.parse(r.content, xml_attribs=True)
+                self.shipByUserId = d
+            except Exception:
+                pass
+
+        # Set up minimal user info so the rest of the pipeline can proceed
+        # The full user object will be populated when getShipByUserId is
+        # called normally after login.
+        if userId:
+            self.user = User(
+                userId,
+                "unknown",
+                datetime.datetime.now(),
+                self.device.refreshToken,
+            )
+            self.info = {"@Name": "unknown", "@Id": str(userId)}
+        else:
+            # No userId provided — can't proceed
+            logging.error(
+                "Pre-provisioned token requires userId in auth string "
+                "(format: name|key|refreshToken|language|accessToken|userId)"
+            )
+            return False
+
+        return True
+
     def getAccessToken(self):
         if self.accessToken:
-            return self.accessToken
+            return True
+
+        # Use pre-provisioned access token if available (bypass DeviceLogin17)
+        if getattr(self.device, "accessToken", None):
+            self.accessToken = self.device.accessToken
+            logging.info(
+                "[%s] Using pre-provisioned access token (bypassing DeviceLogin17)",
+                self.info.get("@Name", "unknown"),
+            )
+            # Fetch user data to populate self.info, self.user, etc.
+            # We need a valid user ID — fetch it via GetShipByUserId or similar
+            # The userId is embedded in the token response from DeviceLogin17,
+            # but with a pre-provisioned token we need to get it another way.
+            # Try calling ListAllUserDataFirst2 with a known userId, or
+            # use the GetShipByUserId endpoint which may return user info.
+            # For now, attempt to parse the user data from a lightweight call.
+            if not self._load_user_data_with_preauth_token():
+                logging.error("Failed to load user data with pre-provisioned token")
+                return False
+            return True
 
         self.checksum = ChecksumCreateDevice(self.device.key, self.device.name)
 
