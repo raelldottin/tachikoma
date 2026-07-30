@@ -111,32 +111,25 @@ def main():
     )
     args = parser.parse_args()
 
-    # Parse auth string
-    auth_string = args.auth[0] if args.auth else None
-    if auth_string:
-        # Expect format: key:name:refreshToken:languageKey
-        parts = auth_string.split(":")
-        if len(parts) < 3:
-            logging.error("Invalid auth_string format. Expected key:name:refreshToken[:languageKey]")
-            sys.exit(1)
-        key = parts[0]
-        name = parts[1]
-        refresh_token = parts[2]
-        language_key = parts[3] if len(parts) > 3 else "en"
-        # Create device from authentication_string
-        device = Device(authentication_string=f"{name}|{key}|{refresh_token}|{language_key}")
-    else:
-        # Interactive mode
-        key = input("Device key: ")
-        name = input("Device name: ")
-        refresh_token = input("Refresh token: ")
-        language_key = input("Language code (default en): ") or "en"
-        device = Device(name=name, key=key, language=language_key)
-        if refresh_token:
-            device.refreshTokenAcquire(refresh_token)
-
+    # Set email/password/recipient from args (may be overridden by interactive mode below)
     email = args.email[0] if args.email else None
     password = args.password[0] if args.password else None
+    recipient = args.recipient[0] if args.recipient else None
+
+    # Parse auth string — Device expects "name|key|refreshToken|languageKey" (pipe-delimited)
+    auth_string = args.auth[0] if args.auth else None
+    if auth_string:
+        device = Device(language="en", authentication_string=auth_string)
+    else:
+        # Interactive mode
+        decide = input("Input G to login as guest. Input A to login as user : ")
+        if decide == "G":
+            device = Device(language="en")
+        else:
+            email = input("Enter email: ")
+            password = getpass.getpass("Enter password: ")
+            device = Device(language="en")
+
     recipient = args.recipient[0] if args.recipient else None
 
     client = Client(device)
