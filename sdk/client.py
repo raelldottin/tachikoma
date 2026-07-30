@@ -19,6 +19,7 @@ from .security import (
     ChecksumEmailAuthorize,
 )
 from .dotnet import DotNet
+from .redaction import redact_secrets, safe_log_message
 
 
 DEFAULT_TIMEOUT = 5  # seconds
@@ -115,7 +116,7 @@ class Client(object):
 
         if "errorMessage" in r.text:
             d = xmltodict.parse(r.content, xml_attribs=True)
-            logging.error("[%s] {%s} - {%s}", self.info["@Name"], url, d)
+            logging.error("[%s] {%s} - {%s}", self.info["@Name"], redact_secrets(url), redact_secrets(str(d)))
 
         if "Failed to authorize access token" in r.text:
             logging.info(
@@ -188,7 +189,7 @@ class Client(object):
 
         self.checksum = ChecksumCreateDevice(self.device.key, self.device.name)
 
-        url = f"{self.baseUrl}/UserService/DeviceLogin15?deviceKey={self.device.key}&advertisingKey=&isJailBroken=False&checksum={self.checksum}&deviceType=DeviceType{self.device.name}&signal=False&languageKey={self.device.languageKey}&refreshToken={self.device.refreshToken if self.device.refreshToken else ''}"
+        url = f"{self.baseUrl}/UserService/DeviceLogin17"
         json = {
             "DeviceKey": self.device.key,
             "AdvertisingKey": "",
@@ -198,9 +199,7 @@ class Client(object):
             "DeviceType": 2,
             "Signal": False,
             "LanguageKey": "en",
-            "RefreshToken": self.device.refreshToken
-            if self.device.refreshToken
-            else "eyJhbGciOiJodHRwOi8vd3d3LnczLm9yZy8yMDAxLzA0L3htbGRzaWctbW9yZSNobWFjLXNoYTI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiIzNDMwODkyIiwiZGV2aWNlS2V5IjoiNkFENDI4MjgtN0QwNi01MzRELUE0NjEtNDk2NTg0NjFBNjE0IiwiZW1haWwiOiJyYWVsbC5kb3R0aW5AZ21haWwuY29tIiwiY3JlYXRlZERhdGUiOiIyMDIzLTEyLTA2VDAwOjUzOjU4In0.NRROBWsIL57NzL_h6_TX50wE-73fenMA44jVJpa1Rqw",
+            "RefreshToken": self.device.refreshToken if self.device.refreshToken else "",
             "UserDeviceInfo": {
                 "OsVersion": "Mac OS X 14.2.0",
                 "Locale": "en",
@@ -220,7 +219,7 @@ class Client(object):
                 or ("errorCode" in r.text)
                 or ("accessToken" not in r.text)
             ):
-                logging.error("{%s}", d)
+                logging.error("{%s}", redact_secrets(str(d)))
                 self.accessToken = ""
                 return False
 
@@ -264,7 +263,7 @@ class Client(object):
 
             if r and "Email=" not in r.text:
                 logging.error(
-                    "[login] failed to authenticate with refreshToken: %s", r.text
+                    "[login] failed to authenticate with refreshToken: %s", redact_secrets(r.text)
                 )
                 return False
 
@@ -281,13 +280,13 @@ class Client(object):
             if r and "errorMessage=" in r.text:
                 logging.error(
                     "[login] failed to authorize with credentials with the reason: %s",
-                    r.text,
+                    redact_secrets(r.text),
                 )
                 return False
 
             if r and "refreshToken" not in r.text:
                 logging.error(
-                    "[login] failed to acquire refreshToken with the reason: %s", r.text
+                    "[login] failed to acquire refreshToken with the reason: %s", redact_secrets(r.text)
                 )
                 return False
 
@@ -1295,7 +1294,7 @@ class Client(object):
     def listFriends(self, userId=0):
         if self.user.isAuthorized:
             url = f"https://api.pixelstarships.com/UserService/ListFriends?UserId={userId if userId else self.info['@Id']}&accessToken={self.accessToken}"
-            logging.debug(url)
+            logging.debug(redact_secrets(url))
             r = self.request(url, "POST")
             if r:
                 self.systemMessagesForUser = xmltodict.parse(
@@ -1764,7 +1763,7 @@ class Client(object):
                 self.checksum,
             )
             url = f"http://api.pixelstarships.com/RoomService/RebuildAmmo2?ammoCategory={ammoCategory}&clientDateTime={ts}&checksum={checksum}&accessToken={self.accessToken}"
-            logging.debug(f"{url=}")
+            logging.debug(redact_secrets(f"{url=}"))
             self.request(url, "POST")
             return True
 
