@@ -308,6 +308,11 @@ class Client(object):
         if not self.accessToken:
             return False
 
+        # If using a pre-provisioned access token, skip DeviceLogin17
+        # and email/password authorization — the token is already valid.
+        if getattr(self.device, "accessToken", None):
+            return True
+
         # authorization just fine with refreshToken, we're in da house
         if self.device.refreshToken and self.accessToken:
             return True
