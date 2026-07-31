@@ -69,6 +69,7 @@ class Client(object):
         "Accept-Encoding": "deflate, gzip",
         "User-Agent": "UnityPlayer/6000.0.77f1 (UnityWebRequest/1.0, libcurl/8.10.1-DEV)",
         "X-Unity-Version": "6000.0.77f1",
+        "Content-Type": "application/x-www-form-urlencoded",
     }
     # Use the actual base url and implement handling for different services
     baseUrl = "http://api.pixelstarships.com"
@@ -112,6 +113,15 @@ class Client(object):
     @sleep_and_retry
     @limits(calls=MAX_CALLS_PER_MINUTE, period=ONE_MINUTE)
     def request(self, url, method, data=None):
+        # For POST without explicit body, mirror the official game client's behaviour:
+        # send query params in the form-urlencoded body, EXCLUDING accessToken
+        # (accessToken stays in the URL query only — including it in the body
+        # causes AddStarbux2 to return "An error occurred." per mitmproxy capture).
+        if method == "POST" and data is None and "?" in url:
+            from urllib.parse import parse_qsl, urlencode
+            params = parse_qsl(url.split("?", 1)[1])
+            params = [(k, v) for k, v in params if k != "accessToken"]
+            data = urlencode(params)
         r = self.session.request(method, url, headers=self.headers, data=data)
 
         if "errorMessage" in r.text:

@@ -193,5 +193,47 @@ class TestDeviceSecurity(unittest.TestCase):
         self.assertTrue(hasattr(device, 'load'))
 
 
+class TestPostBodyExcludesAccessToken(unittest.TestCase):
+    """Regression: accessToken must NOT appear in POST body (mitmproxy evidence).
+
+    The official game client sends accessToken only in the URL query string,
+    never in the form-urlencoded POST body. Including it in the body causes
+    AddStarbux2 to return 'An error occurred.' (mitmproxy capture 2026-07-31).
+    """
+
+    def test_post_body_excludes_access_token(self):
+        """request() should not include accessToken in auto-populated POST body."""
+        from unittest.mock import MagicMock, patch
+        from urllib.parse import parse_qs
+
+        device = Device(language="en")
+        client = Client(device=device)
+
+        # Capture what data gets sent
+        captured_data = {}
+        mock_response = MagicMock()
+        mock_response.text = "<ok/>"
+
+        def capture_request(method, url, headers=None, data=None):
+            captured_data['data'] = data
+            return mock_response
+
+        with patch.object(client.session, 'request', side_effect=capture_request):
+            url = ("http://api.pixelstarships.com/UserService/AddStarbux2"
+                   "?quantity=1&clientDateTime=2026-07-31T09:42:46"
+                   "&checksum=2141&accessToken=66e3603d-test-token")
+            client.request(url, "POST")
+
+        body = captured_data.get('data', '')
+        params = parse_qs(body) if body else {}
+
+        # accessToken must NOT be in the POST body
+        self.assertNotIn('accessToken', params,
+                         "accessToken must not be in POST body (causes AddStarbux2 failure)")
+        # Other params should be present
+        self.assertIn('quantity', params)
+        self.assertIn('checksum', params)
+
+
 if __name__ == '__main__':
     unittest.main()
