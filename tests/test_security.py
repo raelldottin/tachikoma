@@ -655,6 +655,134 @@ class TestPostBodyExcludesAccessToken(unittest.TestCase):
         self.assertEqual(params.get('argument'), ['1'])
         self.assertEqual(params.get('dailyRewardStatus'), ['Box'])
 
+    def test_collect_task_completion_request_shape(self):
+        """CollectTaskCompletion must send taskDesignId and accessToken in query."""
+        from unittest.mock import MagicMock, patch
+        from urllib.parse import urlsplit, parse_qs
+
+        device = Device(name="iPhone", language="en")
+        client = Client(device=device)
+        client.accessToken = "test-token-uuid"
+
+        captured_url = {}
+
+        def capture_request(method, url, headers=None, data=None):
+            captured_url['url'] = url
+            mock = MagicMock()
+            mock.content = b"<TaskService><CollectTaskCompletion><Success>true</Success></CollectTaskCompletion></TaskService>"
+            mock.text = "<TaskService><CollectTaskCompletion><Success>true</Success></CollectTaskCompletion></TaskService>"
+            return mock
+
+        with patch.object(client.session, 'request', side_effect=capture_request):
+            client.collectTaskCompletion("12345")
+
+        parsed = urlsplit(captured_url['url'])
+        params = parse_qs(parsed.query)
+        self.assertEqual(parsed.path, "/TaskService/CollectTaskCompletion")
+        self.assertEqual(params.get('accessToken'), ['test-token-uuid'])
+        self.assertEqual(params.get('taskDesignId'), ['12345'])
+
+    def test_upgrade_character_request_shape(self):
+        """UpgradeCharacter must send characterId and accessToken in query."""
+        from unittest.mock import MagicMock, patch
+        from urllib.parse import urlsplit, parse_qs
+
+        device = Device(name="iPhone", language="en")
+        client = Client(device=device)
+        client.accessToken = "test-token-uuid"
+
+        captured_url = {}
+
+        def capture_request(method, url, headers=None, data=None):
+            captured_url['url'] = url
+            mock = MagicMock()
+            mock.content = b"<CharacterService><UpgradeCharacter><Success>true</Success></UpgradeCharacter></CharacterService>"
+            mock.text = "<CharacterService><UpgradeCharacter><Success>true</Success></UpgradeCharacter></CharacterService>"
+            return mock
+
+        with patch.object(client.session, 'request', side_effect=capture_request):
+            client.upgradeCharacter("67890")
+
+        parsed = urlsplit(captured_url['url'])
+        params = parse_qs(parsed.query)
+        self.assertEqual(parsed.path, "/CharacterService/UpgradeCharacter")
+        self.assertEqual(params.get('accessToken'), ['test-token-uuid'])
+        self.assertEqual(params.get('characterId'), ['67890'])
+
+    def test_add_training_request_shape(self):
+        """AddTraining must send trainingDesignId, characterId, trainingStartDate, accessToken."""
+        from unittest.mock import MagicMock, patch
+        from urllib.parse import urlsplit, parse_qs
+
+        device = Device(name="iPhone", language="en")
+        client = Client(device=device)
+        client.accessToken = "test-token-uuid"
+
+        captured_url = {}
+
+        def capture_request(method, url, headers=None, data=None):
+            captured_url['url'] = url
+            mock = MagicMock()
+            mock.content = b"<TrainingService><AddTraining><Success>true</Success></AddTraining></TrainingService>"
+            mock.text = "<TrainingService><AddTraining><Success>true</Success></AddTraining></TrainingService>"
+            return mock
+
+        with patch.object(client.session, 'request', side_effect=capture_request):
+            client.addTraining("111", "222")
+
+        parsed = urlsplit(captured_url['url'])
+        params = parse_qs(parsed.query)
+        self.assertEqual(parsed.path, "/TrainingService/AddTraining")
+        self.assertEqual(params.get('accessToken'), ['test-token-uuid'])
+        self.assertEqual(params.get('trainingDesignId'), ['111'])
+        self.assertEqual(params.get('characterId'), ['222'])
+        self.assertIn('trainingStartDate', params)
+
+    def test_upgrade_rooms_request_shape(self):
+        """upgradeRooms must call listRoomDesigns2, listUpgradingRooms, getShipByUserId."""
+        from unittest.mock import MagicMock, patch
+        from sdk.client import User
+
+        device = Device(name="iPhone", language="en")
+        client = Client(device=device)
+        client.accessToken = "test-token-uuid"
+        client.user = User(3430892, "test", None, True)
+
+        # Must set roomDesigns to pass the hasattr check, then mock listRoomDesigns2
+        client.roomDesigns = {"RoomDesign": []}
+        client.listRoomDesigns2 = MagicMock()
+        client.listUpgradingRooms = MagicMock()
+        client.getShipByUserId = MagicMock()
+        client.shipByUserId = {"ShipService": {"GetShipByUserId": {"Ship": {"Rooms": {"Room": []}}}}}
+        client.mineralTotal = 0
+        client.gasTotal = 0
+
+        # Should not crash
+        result = client.upgradeRooms()
+        self.assertTrue(client.listUpgradingRooms.called)
+        self.assertTrue(client.getShipByUserId.called)
+
+    def test_upgrade_researches_request_shape(self):
+        """upgradeResearches must call listAllResearches and listAllResearchDesigns2."""
+        from unittest.mock import MagicMock, patch
+        from sdk.client import User
+
+        device = Device(name="iPhone", language="en")
+        client = Client(device=device)
+        client.accessToken = "test-token-uuid"
+        client.user = User(3430892, "test", None, True)
+
+        # Mock the dependent methods
+        client.listAllResearches = MagicMock()
+        client.allResearches = {"ResearchService": {"ListAllResearches": {"Researches": {"Research": []}}}}
+        client.listAllResearchDesigns2 = MagicMock()
+        client.allResearchDesigns = {"ResearchService": {"ListAllResearchDesigns": {"ResearchDesigns": {"ResearchDesign": []}}}}
+
+        # Should not crash
+        result = client.upgradeResearches()
+        self.assertTrue(client.listAllResearches.called)
+        self.assertTrue(client.listAllResearchDesigns2.called)
+
 
 if __name__ == '__main__':
     unittest.main()
