@@ -219,9 +219,9 @@ class TestPostBodyExcludesAccessToken(unittest.TestCase):
             return mock_response
 
         with patch.object(client.session, 'request', side_effect=capture_request):
-            url = ("http://api.pixelstarships.com/UserService/AddStarbux2"
-                   "?quantity=1&clientDateTime=2026-07-31T09:42:46"
-                   "&checksum=2141&accessToken=66e3603d-test-token")
+            url = ("http://api.pixelstarships.com/RoomService/CollectAllResources"
+                   "?itemType=None&collectDate=2026-07-31T09:42:46"
+                   "&accessToken=66e3603d-test-token")
             client.request(url, "POST")
 
         body = captured_data.get('data', '')
@@ -229,10 +229,45 @@ class TestPostBodyExcludesAccessToken(unittest.TestCase):
 
         # accessToken must NOT be in the POST body
         self.assertNotIn('accessToken', params,
-                         "accessToken must not be in POST body (causes AddStarbux2 failure)")
+                         "accessToken must not be in POST body (causes CollectAllResources failure)")
         # Other params should be present
-        self.assertIn('quantity', params)
-        self.assertIn('checksum', params)
+        self.assertIn('itemType', params)
+        self.assertIn('collectDate', params)
+
+    def test_collect_all_resources_body_excludes_access_token(self):
+        """CollectAllResources must not send accessToken in POST body.
+
+        Mitmproxy evidence (2026-07-31): old code included accessToken
+        in body → errorMessage='An error occurred.' Fixed by request()
+        excluding accessToken from auto-populated body.
+        """
+        from unittest.mock import MagicMock, patch
+        from urllib.parse import parse_qs
+
+        device = Device(language="en")
+        client = Client(device=device)
+        client.accessToken = "test-token-uuid"
+
+        captured_data = {}
+        mock_response = MagicMock()
+        mock_response.text = "<ok/>"
+        mock_response.content = b"<ok/>"
+
+        def capture_request(method, url, headers=None, data=None):
+            captured_data['data'] = data
+            captured_data['url'] = url
+            return mock_response
+
+        with patch.object(client.session, 'request', side_effect=capture_request):
+            client.collectAllResources()
+
+        body = captured_data.get('data', '')
+        params = parse_qs(body) if body else {}
+
+        self.assertNotIn('accessToken', params,
+                         "accessToken must not be in CollectAllResources POST body")
+        self.assertIn('itemType', params)
+        self.assertIn('collectDate', params)
 
 
 if __name__ == '__main__':
