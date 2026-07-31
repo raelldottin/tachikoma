@@ -33,6 +33,9 @@ class Device(object):
         if authentication_string:
             self.DB = None
 
+        # Compute deviceType from the provided name BEFORE load() can overwrite it
+        self.deviceType = self._resolve_device_type(name)
+
         if not self.load():
             self.save()
 
@@ -79,5 +82,26 @@ class Device(object):
             self.userId = data[5]
         else:
             self.userId = None
+
+        # Map device name (first auth field) to correct deviceType enum
+        # Official iOS client uses DeviceTypeIPhone (capital P)
+        # Mac client uses DeviceTypeMac
+        # Any other value is invalid and will cause "An error occurred."
+        # Only override deviceType when we have an auth string (real device)
+        if self.authentication_string:
+            self.deviceType = self._resolve_device_type(self.name)
+
+    def _resolve_device_type(self, name: str) -> str:
+        """Map auth string name field to valid deviceType enum value."""
+        # Case-insensitive matching for known platforms
+        lower = name.lower()
+        if lower == "iphone" or lower == "ios":
+            return "DeviceTypeIPhone"
+        elif lower == "mac" or lower == "macos":
+            return "DeviceTypeMac"
+        elif lower == "android":
+            return "DeviceTypeAndroid"
+        # Default to Mac (known working) rather than sending invalid value
+        return "DeviceTypeMac"
 
         return True
