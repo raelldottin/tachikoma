@@ -269,6 +269,32 @@ class TestPostBodyExcludesAccessToken(unittest.TestCase):
         self.assertIn('itemType', params)
         self.assertIn('collectDate', params)
 
+    def test_get_ship_by_user_id_requires_user_id(self):
+        """GetShipByUserId must fail early if no userId available.
+
+        Without a valid userId (6th field in auth string), the endpoint
+        would send userId=None and receive 'An error occurred.'
+        """
+        from unittest.mock import MagicMock, patch
+
+        device = Device(language="en")
+        client = Client(device=device)
+        client.accessToken = "test-token-uuid"
+        # No self.user set
+
+        mock_response = MagicMock()
+        mock_response.text = "<ok/>"
+        mock_response.content = b"<ok/>"
+
+        def capture_request(method, url, headers=None, data=None):
+            return mock_response
+
+        with patch.object(client.session, 'request', side_effect=capture_request):
+            result = client.getShipByUserId()
+
+        self.assertFalse(result,
+                         "getShipByUserId must return False when no userId available")
+
 
 if __name__ == '__main__':
     unittest.main()
