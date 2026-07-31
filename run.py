@@ -160,8 +160,14 @@ def main():
     # Main task loop (runs once per account)
     while client:
         try:
-            client.grabFlyingStarbux()
-            success_counts["grabFlyingStarbux"] = success_counts.get("grabFlyingStarbux", 0) + 1
+            result = client.grabFlyingStarbux()
+            if result is True:
+                success_counts["grabFlyingStarbux"] = success_counts.get("grabFlyingStarbux", 0) + 1
+            elif result is False:
+                logging.warning(f"[{client.info.get('@Name', 'unknown')}] grabFlyingStarbux returned False (API error or no-op)")
+                failure_counts["grabFlyingStarbux"] = failure_counts.get("grabFlyingStarbux", 0) + 1
+            else:
+                success_counts["grabFlyingStarbux"] = success_counts.get("grabFlyingStarbux", 0) + 1
         except Exception as e:
             logging.warning(f"[{client.info.get('@Name', 'unknown')}] grabFlyingStarbux failed: {e}")
             failure_counts["grabFlyingStarbux"] = failure_counts.get("grabFlyingStarbux", 0) + 1
