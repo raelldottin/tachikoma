@@ -295,6 +295,92 @@ class TestPostBodyExcludesAccessToken(unittest.TestCase):
         self.assertFalse(result,
                          "getShipByUserId must return False when no userId available")
 
+    def test_device_type_mapping(self):
+        """Device.resolve_device_type must map names to valid deviceType enums.
+
+        Official iOS client uses DeviceTypeIPhone (capital P).
+        Invalid values cause 'An error occurred.' on GetLatestVersion4/GetTodayLiveOps2.
+        """
+        device = Device(name="iPhone", language="en")
+        self.assertEqual(device.deviceType, "DeviceTypeIPhone",
+                         "iphone -> DeviceTypeIPhone (capital P)")
+
+        device = Device(name="iOS", language="en")
+        self.assertEqual(device.deviceType, "DeviceTypeIPhone",
+                         "iOS -> DeviceTypeIPhone")
+
+        device = Device(name="Mac", language="en")
+        self.assertEqual(device.deviceType, "DeviceTypeMac",
+                         "Mac -> DeviceTypeMac")
+
+        device = Device(name="macOS", language="en")
+        self.assertEqual(device.deviceType, "DeviceTypeMac",
+                         "macOS -> DeviceTypeMac")
+
+        device = Device(name="Android", language="en")
+        self.assertEqual(device.deviceType, "DeviceTypeAndroid",
+                         "Android -> DeviceTypeAndroid")
+
+        # Unknown names default to Mac (known working)
+        device = Device(name="r2e", language="en")
+        self.assertEqual(device.deviceType, "DeviceTypeMac",
+                         "unknown name -> DeviceTypeMac (safe default)")
+
+        device = Device(name="Windows", language="en")
+        self.assertEqual(device.deviceType, "DeviceTypeMac",
+                         "Windows -> DeviceTypeMac (safe default)")
+
+    def test_get_latest_version_uses_correct_device_type(self):
+        """GetLatestVersion4 must send correct deviceType, not DeviceType{name}."""
+        from unittest.mock import MagicMock, patch
+        from urllib.parse import urlsplit, parse_qs
+
+        device = Device(name="iPhone", language="en")
+        client = Client(device=device)
+        client.accessToken = "test-token"
+
+        captured_url = {}
+
+        def capture_request(method, url, headers=None, data=None):
+            captured_url['url'] = url
+            mock = MagicMock()
+            mock.content = b"<SettingService><GetLatestSetting><Setting SettingId=\"1\" ServerSettingVersion=\"3307251\" MinimumClientVersion=\"0.999.59\" /></GetLatestSetting></SettingService>"
+            return mock
+
+        with patch.object(client.session, 'request', side_effect=capture_request):
+            client.getLatestVersion3()
+
+        parsed = urlsplit(captured_url['url'])
+        params = parse_qs(parsed.query)
+        self.assertEqual(params.get('deviceType'), ['DeviceTypeIPhone'],
+                         "getLatestVersion3 must send DeviceTypeIPhone, not DeviceTypeiPhone")
+
+    def test_get_today_live_ops_uses_correct_device_type(self):
+        """GetTodayLiveOps2 must send correct deviceType, not DeviceType{name}."""
+        from unittest.mock import MagicMock, patch
+        from urllib.parse import urlsplit, parse_qs
+
+        device = Device(name="iPhone", language="en")
+        client = Client(device=device)
+        client.accessToken = "test-token"
+
+        captured_url = {}
+
+        def capture_request(method, url, headers=None, data=None):
+            captured_url['url'] = url
+            mock = MagicMock()
+            # .content must return bytes for xmltodict
+            mock.content = b"<LiveOpsService><GetTodayLiveOps><LiveOps LiveOpsId=\"1\" DailyRewardType=\"Starbux\" DailyRewardArgument=\"1\" /></GetTodayLiveOps></LiveOpsService>"
+            return mock
+
+        with patch.object(client.session, 'request', side_effect=capture_request):
+            client.getTodayLiveOps2()
+
+        parsed = urlsplit(captured_url['url'])
+        params = parse_qs(parsed.query)
+        self.assertEqual(params.get('deviceType'), ['DeviceTypeIPhone'],
+                         "getTodayLiveOps2 must send DeviceTypeIPhone, not DeviceTypeiPhone")
+
 
 if __name__ == '__main__':
     unittest.main()

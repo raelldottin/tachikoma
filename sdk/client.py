@@ -388,14 +388,14 @@ class Client(object):
         return True
 
     def getLatestVersion3(self):
-        url = f"{self.baseUrl}/SettingService/GetLatestVersion4?languageKey={self.device.languageKey}&deviceType=DeviceType{self.device.name}"
+        url = f"{self.baseUrl}/SettingService/GetLatestVersion4?languageKey={self.device.languageKey}&deviceType={self.device.deviceType}"
         r = self.request(url, "GET")
 
         if r.content:
             self.latestVersion = xmltodict.parse(r.content, xml_attribs=True)
 
     def getTodayLiveOps2(self):
-        url = f"{self.baseUrl}/LiveOpsService/GetTodayLiveOps2?languageKey={self.device.languageKey}&deviceType=DeviceType{self.device.name}"
+        url = f"{self.baseUrl}/LiveOpsService/GetTodayLiveOps2?languageKey={self.device.languageKey}&deviceType={self.device.deviceType}"
         r = self.request(url, "GET")
         if r:
             self.todayLiveOps = xmltodict.parse(r.content, xml_attribs=True)
