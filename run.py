@@ -176,12 +176,11 @@ def main():
             logging.info(
                 f"[{client.info.get('@Name', 'unknown')}] "
                 f"Flying Starbux threshold not reached ({client.freeStarbuxToday}/{client.freeStarbuxMax}); "
-                f"ending this run."
+                f"continuing with other tasks."
             )
-            break
 
-        # Remaining tasks
-        if client.freeStarbuxToday >= client.freeStarbuxMax:
+        # Remaining tasks — run regardless of Flying Starbux result
+        if client.freeStarbuxToday >= client.freeStarbuxMax or True:
             try:
                 client.collectTaskReward()
                 success_counts["collectTaskReward"] = success_counts.get("collectTaskReward", 0) + 1
