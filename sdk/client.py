@@ -228,9 +228,9 @@ class Client(object):
                 userId,
                 "unknown",
                 datetime.datetime.now(),
-                self.device.refreshToken,
+                True,  # pre-provisioned token = authorized
             )
-            self.info = {"@Name": "unknown", "@Id": str(userId)}
+            self.info = {"@Name": "unknown", "@Id": str(userId), "@DailyRewardStatus": "0"}
         else:
             # No userId provided — can't proceed
             logging.error(
@@ -1481,7 +1481,7 @@ class Client(object):
 
     def collectDailyReward(self):
         if "LiveOpsService" not in self.todayLiveOps:
-            loging.error(
+            logging.error(
                 "Unable to collect daily reward because of missing Live Ops data."
             )
             return False

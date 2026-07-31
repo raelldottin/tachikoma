@@ -592,6 +592,69 @@ class TestPostBodyExcludesAccessToken(unittest.TestCase):
         self.assertEqual(params.get('currencyType'), ['Unknown'])
         self.assertEqual(params.get('itemDesignId'), ['0'])
 
+    def test_preauth_token_sets_authorized_and_daily_reward_status(self):
+        """Pre-provisioned token must set isAuthorized=True and include
+        @DailyRewardStatus in info stub so collectDailyReward doesn't KeyError."""
+        from unittest.mock import MagicMock, patch
+
+        device = Device(name="iPhone", language="en")
+        device.userId = 3430892
+        device.accessToken = "test-token-uuid"
+        client = Client(device=device)
+        client.accessToken = "test-token-uuid"
+
+        # Mock GetShipByUserId to return valid XML
+        mock_resp = MagicMock()
+        mock_resp.content = b"<ShipService><Ship ShipId=\"2708491\" /></ShipService>"
+        mock_resp.text = "<ShipService><Ship ShipId=\"2708491\" /></ShipService>"
+
+        with patch.object(client.session, 'get', return_value=mock_resp):
+            result = client._load_user_data_with_preauth_token()
+
+        self.assertTrue(result)
+        self.assertTrue(client.user.isAuthorized)
+        self.assertEqual(client.info["@DailyRewardStatus"], "0")
+        self.assertEqual(client.info["@Id"], "3430892")
+
+    def test_collect_daily_reward_argument_from_liveops(self):
+        """collectDailyReward must use DailyRewardArgument from todayLiveOps,
+        not the class default of 0."""
+        from unittest.mock import MagicMock, patch
+        from urllib.parse import urlsplit, parse_qs
+        from sdk.client import User
+
+        device = Device(name="iPhone", language="en")
+        client = Client(device=device)
+        client.accessToken = "test-token-uuid"
+        client.user = User(3430892, "test", None, True)
+        client.info = {"@Name": "test", "@Id": "3430892", "@DailyRewardStatus": "0"}
+        client.todayLiveOps = {
+            "LiveOpsService": {
+                "GetTodayLiveOps": {
+                    "LiveOps": {
+                        "@DailyRewardArgument": "1",
+                    }
+                }
+            }
+        }
+
+        captured_url = {}
+
+        def capture_request(method, url, headers=None, data=None):
+            captured_url['url'] = url
+            mock = MagicMock()
+            mock.content = b"<UserService><CollectDailyReward><Items /></CollectDailyReward></UserService>"
+            mock.text = "<UserService><CollectDailyReward><Items /></CollectDailyReward></UserService>"
+            return mock
+
+        with patch.object(client.session, 'request', side_effect=capture_request):
+            client.collectDailyReward()
+
+        parsed = urlsplit(captured_url['url'])
+        params = parse_qs(parsed.query)
+        self.assertEqual(params.get('argument'), ['1'])
+        self.assertEqual(params.get('dailyRewardStatus'), ['Box'])
+
 
 if __name__ == '__main__':
     unittest.main()
