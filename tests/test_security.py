@@ -381,6 +381,217 @@ class TestPostBodyExcludesAccessToken(unittest.TestCase):
         self.assertEqual(params.get('deviceType'), ['DeviceTypeIPhone'],
                          "getTodayLiveOps2 must send DeviceTypeIPhone, not DeviceTypeiPhone")
 
+    def test_list_all_designs_uses_version_params_from_latest_version(self):
+        """listAllDesigns4 must include all version params from GetLatestVersion3.
+
+        Uses 36 design version parameters from SettingService.GetLatestSetting.Setting.
+        """
+        from unittest.mock import MagicMock, patch
+        from urllib.parse import urlsplit, parse_qs
+
+        device = Device(name="iPhone", language="en")
+        client = Client(device=device)
+        client.accessToken = "test-token"
+
+        # Mock latestVersion as if getLatestVersion3 was called
+        client.latestVersion = {
+            "SettingService": {
+                "GetLatestSetting": {
+                    "Setting": {
+                        "@FileVersion": "2949",
+                        "@SpriteVersion": "6416",
+                        "@BackgroundVersion": "627",
+                        "@ShipDesignVersion": "863",
+                        "@RoomDesignVersion": "1298",
+                        "@CharacterDesignVersion": "1351",
+                        "@CharacterDesignActionVersion": "519",
+                        "@ItemDesignVersion": "166510",
+                        "@CraftDesignVersion": "771",
+                        "@MissileDesignVersion": "785",
+                        "@StarSystemVersion": "483",
+                        "@StarSystemLinkVersion": "480",
+                        "@NewsDesignVersion": "518",
+                        "@LeagueVersion": "583",
+                        "@AchievementDesignVersion": "728",
+                        "@RoomDesignPurchaseVersion": "929",
+                        "@RoomDesignSpriteVersion": "978",
+                        "@MissionDesignVersion": "1025",
+                        "@AnimationVersion": "1110",
+                        "@ResearchDesignVersion": "706",
+                        "@TrainingDesignVersion": "568",
+                        "@ChallengeDesignVersion": "899",
+                        "@RewardDesignVersion": "433735",
+                        "@DivisionDesignVersion": "707",
+                        "@CollectionDesignVersion": "561",
+                        "@DrawDesignVersion": "490",
+                        "@PromotionDesignVersion": "2656",
+                        "@SituationDesignVersion": "1181",
+                        "@TaskDesignVersion": "1962416",
+                        "@ActionTypeVersion": "583",
+                        "@ConditionTypeVersion": "669",
+                        "@ItemDesignActionVersion": "216",
+                        "@SeasonDesignVersion": "247",
+                        "@AssetVersion": "202",
+                        "@MarkerGeneratorDesignVersion": "135",
+                    }
+                }
+            }
+        }
+
+        captured_url = {}
+
+        def capture_request(method, url, headers=None, data=None):
+            captured_url['url'] = url
+            mock = MagicMock()
+            # Provide all 36 design types to pass the "Missing design data" check
+            mock.content = b"""<DesignService><ListAllDesigns>
+                <Files version="2949"><File Id="1" Filename="test.png" /></Files>
+                <Sprites version="6416"><Sprite Id="1" /></Sprites>
+                <Backgrounds version="627"><Background Id="1" /></Backgrounds>
+                <ShipDesigns version="863"><ShipDesign Id="1" /></ShipDesigns>
+                <RoomDesigns version="1298"><RoomDesign Id="1" /></RoomDesigns>
+                <CharacterDesigns version="1351"><CharacterDesign Id="1" /></CharacterDesigns>
+                <CharacterDesignActions version="519"><CharacterDesignAction Id="1" /></CharacterDesignActions>
+                <ItemDesigns version="166510"><ItemDesign Id="1" /></ItemDesigns>
+                <CraftDesigns version="771"><CraftDesign Id="1" /></CraftDesigns>
+                <MissileDesigns version="785"><MissileDesign Id="1" /></MissileDesigns>
+                <StarSystems version="483"><StarSystem Id="1" /></StarSystems>
+                <StarSystemLinks version="480"><StarSystemLink Id="1" /></StarSystemLinks>
+                <NewsDesigns version="518"><NewsDesign Id="1" /></NewsDesigns>
+                <Leagues version="583"><League Id="1" /></Leagues>
+                <AchievementDesigns version="728"><AchievementDesign Id="1" /></AchievementDesigns>
+                <RoomDesignPurchases version="929"><RoomDesignPurchase Id="1" /></RoomDesignPurchases>
+                <RoomDesignSprites version="978"><RoomDesignSprite Id="1" /></RoomDesignSprites>
+                <MissionDesigns version="1025"><MissionDesign Id="1" /></MissionDesigns>
+                <Animations version="1110"><Animation Id="1" /></Animations>
+                <ResearchDesigns version="706"><ResearchDesign Id="1" /></ResearchDesigns>
+                <TrainingDesigns version="568"><TrainingDesign Id="1" /></TrainingDesigns>
+                <ChallengeDesigns version="899"><ChallengeDesign Id="1" /></ChallengeDesigns>
+                <RewardDesigns version="433735"><RewardDesign Id="1" /></RewardDesigns>
+                <DivisionDesigns version="707"><DivisionDesign Id="1" /></DivisionDesigns>
+                <CollectionDesigns version="561"><CollectionDesign Id="1" /></CollectionDesigns>
+                <DrawDesigns version="490"><DrawDesign Id="1" /></DrawDesigns>
+                <PromotionDesigns version="2656"><PromotionDesign Id="1" /></PromotionDesigns>
+                <SituationDesigns version="1181"><SituationDesign Id="1" /></SituationDesigns>
+                <ItemDesignActions version="216"><ItemDesignAction Id="1" /></ItemDesignActions>
+                <SeasonDesigns version="247"><SeasonDesign Id="1" /></SeasonDesigns>
+                <Assets version="202"><Asset Id="1" /></Assets>
+                <StarSystemMarkerGenerators version="135"><StarSystemMarkerGenerator Id="1" /></StarSystemMarkerGenerators>
+            </ListAllDesigns></DesignService>"""
+            return mock
+
+        with patch.object(client.session, 'request', side_effect=capture_request):
+            result = client.listAllDesigns4()
+
+        self.assertTrue(result, "listAllDesigns4 should return True on success")
+
+        parsed = urlsplit(captured_url['url'])
+        params = parse_qs(parsed.query)
+
+        # Verify endpoint
+        self.assertEqual(parsed.path, "/DesignService/ListAllDesigns4")
+
+        # Verify LanguageKey
+        self.assertEqual(params.get('LanguageKey'), ['en'])
+
+        # Verify at least some version params are present (spot check)
+        self.assertEqual(params.get('ListFileVersion'), ['2949'])
+        self.assertEqual(params.get('ListSpriteVersion'), ['6416'])
+        self.assertEqual(params.get('ListRoomDesignVersion'), ['1298'])
+        self.assertEqual(params.get('ListItemDesignVersion'), ['166510'])
+        self.assertEqual(params.get('ListAssetVersion'), ['202'])
+        self.assertEqual(params.get('ListMarkerGeneratorDesignVersion'), ['135'])
+
+        # Should have all 35 version parameters
+        version_params = [k for k in params.keys() if k.startswith('List')]
+        self.assertEqual(len(version_params), 35,
+                         f"Expected 35 version parameters, got {len(version_params)}")
+
+    def test_list_all_characters_of_user_request_shape(self):
+        """ListAllCharactersOfUser must send correct query params."""
+        from unittest.mock import MagicMock, patch
+        from urllib.parse import urlsplit, parse_qs
+
+        device = Device(name="iPhone", language="en")
+        client = Client(device=device)
+        client.accessToken = "test-token-uuid"
+
+        captured_url = {}
+
+        def capture_request(method, url, headers=None, data=None):
+            captured_url['url'] = url
+            mock = MagicMock()
+            mock.content = b"<CharacterService><ListAllCharactersOfUser><Characters><Character CharacterName=\"Test\" /></Characters></ListAllCharactersOfUser></CharacterService>"
+            return mock
+
+        with patch.object(client.session, 'request', side_effect=capture_request):
+            client.listAllCharactersOfUser()
+
+        parsed = urlsplit(captured_url['url'])
+        params = parse_qs(parsed.query)
+        self.assertEqual(parsed.path, "/CharacterService/ListAllCharactersOfUser")
+        self.assertEqual(params.get('accessToken'), ['test-token-uuid'])
+        self.assertIn('clientDateTime', params)
+
+    def test_list_system_messages_for_user_request_shape(self):
+        """ListSystemMessagesForUser3 must send correct query params."""
+        from unittest.mock import MagicMock, patch
+        from urllib.parse import urlsplit, parse_qs
+
+        device = Device(name="iPhone", language="en")
+        client = Client(device=device)
+        client.accessToken = "test-token-uuid"
+
+        captured_url = {}
+
+        def capture_request(method, url, headers=None, data=None):
+            captured_url['url'] = url
+            mock = MagicMock()
+            mock.content = b"<MessageService><ListSystemMessagesForUser><Messages><Message Id=\"1\" /></Messages></ListSystemMessagesForUser></MessageService>"
+            return mock
+
+        with patch.object(client.session, 'request', side_effect=capture_request):
+            client.listSystemMessagesForUser3()
+
+        parsed = urlsplit(captured_url['url'])
+        params = parse_qs(parsed.query)
+        self.assertEqual(parsed.path, "/MessageService/ListSystemMessagesForUser3")
+        self.assertEqual(params.get('accessToken'), ['test-token-uuid'])
+        self.assertEqual(params.get('fromMessageId'), ['0'])
+        self.assertEqual(params.get('take'), ['10000'])
+
+    def test_list_active_marketplace_messages_request_shape(self):
+        """ListActiveMarketplaceMessages5 must send correct query params."""
+        from unittest.mock import MagicMock, patch
+        from urllib.parse import urlsplit, parse_qs
+        from sdk.client import User
+
+        device = Device(name="iPhone", language="en")
+        client = Client(device=device)
+        client.accessToken = "test-token-uuid"
+        client.user = User(3430892, "test", None, True)
+
+        captured_url = {}
+
+        def capture_request(method, url, headers=None, data=None):
+            captured_url['url'] = url
+            mock = MagicMock()
+            mock.content = b"<MessageService><ListActiveMarketplaceMessages><Messages /></ListActiveMarketplaceMessages></MessageService>"
+            return mock
+
+        with patch.object(client.session, 'request', side_effect=capture_request):
+            client.listActiveMarketplaceMessages()
+
+        parsed = urlsplit(captured_url['url'])
+        params = parse_qs(parsed.query)
+        self.assertEqual(parsed.path, "/MessageService/ListActiveMarketplaceMessages5")
+        self.assertEqual(params.get('accessToken'), ['test-token-uuid'])
+        self.assertEqual(params.get('userId'), ['3430892'])
+        self.assertEqual(params.get('itemSubType'), ['None'])
+        self.assertEqual(params.get('rarity'), ['None'])
+        self.assertEqual(params.get('currencyType'), ['Unknown'])
+        self.assertEqual(params.get('itemDesignId'), ['0'])
+
 
 if __name__ == '__main__':
     unittest.main()
