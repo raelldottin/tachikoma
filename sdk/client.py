@@ -1513,9 +1513,13 @@ class Client(object):
 
     def collectMiningDrone(self, starSystemMarkerId):
         if self.user.isAuthorized and starSystemMarkerId not in self.dronesCollected:
-            url = f"{self.baseUrl}/GalaxyService/CollectMarker2?starSystemMarkerId={starSystemMarkerId}&checksum={self.checksum}&clientDateTime={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}&accessToken={self.accessToken}"
+            ts = "{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime())
+            # Use HeartBeat4-style checksum (works for pre-provisioned tokens)
+            checksum = ChecksumTimeForDate(DotNet.get_time()) + ChecksumPasswordWithString(self.accessToken)
+            url = f"{self.baseUrl}/GalaxyService/CollectMarker2?starSystemMarkerId={starSystemMarkerId}&checksum={checksum}&clientDateTime={ts}&accessToken={self.accessToken}"
             r = self.request(url, "POST")
             if "errorMessage=" in r.text:
+                logging.warning(f'[{self.info["@Name"]}] CollectMarker2 failed: {r.text[:200]}')
                 return False
 
             self.dronesCollected[starSystemMarkerId] = 1
@@ -1524,9 +1528,13 @@ class Client(object):
 
     def placeMiningDrone(self, missionDesignId, missionEventId):
         if self.user.isAuthorized:
-            url = f"{self.baseUrl}/MissionService/SelectInstantMission3?missionDesignId={missionDesignId}&missionEventId={missionEventId}&messageId=0&clientDateTime={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())},clientNumber=0&checksum={self.checksum}&accessToken={self.accessToken}"
+            ts = "{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime())
+            # Use HeartBeat4-style checksum (works for pre-provisioned tokens)
+            checksum = ChecksumTimeForDate(DotNet.get_time()) + ChecksumPasswordWithString(self.accessToken)
+            url = f"{self.baseUrl}/MissionService/SelectInstantMission3?missionDesignId={missionDesignId}&missionEventId={missionEventId}&messageId=0&clientDateTime={ts},clientNumber=0&checksum={checksum}&accessToken={self.accessToken}"
             r = self.request(url, "POST")
             if "errorMessage=" in r.text:
+                logging.warning(f'[{self.info["@Name"]}] SelectInstantMission3 failed: {r.text[:200]}')
                 return False
             return True
         return False
@@ -1808,7 +1816,11 @@ class Client(object):
             return True
 
     def rebuildAmmo(self):
-        self.clientDateTime = "{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime())
+        """Restock ammo, android, craft, module, and charge items.
+        
+        Uses HeartBeat4-style checksum (ChecksumTimeForDate + ChecksumPasswordWithString)
+        which works with pre-provisioned tokens that don't have email/salt.
+        """
         ammoCategories = [
             "None",
             "Ammo",
@@ -1825,17 +1837,14 @@ class Client(object):
                     f'[{self.info["@Name"]}] Restocking {ammoCategory.lower()} items.'
                 )
             ts = "{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime())
-            checksum = ChecksumEmailAuthorize(
-                self.device.key,
-                self.info["@Email"],
-                ts,
-                self.accessToken,
-                self.checksum,
-            )
-            url = f"http://api.pixelstarships.com/RoomService/RebuildAmmo2?ammoCategory={ammoCategory}&clientDateTime={ts}&checksum={checksum}&accessToken={self.accessToken}"
+            # Use HeartBeat4-style checksum: works for pre-provisioned tokens
+            checksum = ChecksumTimeForDate(DotNet.get_time()) + ChecksumPasswordWithString(self.accessToken)
+            url = f"{self.baseUrl}/RoomService/RebuildAmmo2?ammoCategory={ammoCategory}&clientDateTime={ts}&checksum={checksum}&accessToken={self.accessToken}"
             logging.debug(redact_secrets(f"{url=}"))
-            self.request(url, "POST")
-            return True
+            r = self.request(url, "POST")
+            if "errorMessage=" in r.text:
+                logging.warning(f'[{self.info["@Name"]}] RebuildAmmo2 {ammoCategory} failed: {r.text[:200]}')
+        return True
 
     def getCrewInfo(self):
         character_list = []

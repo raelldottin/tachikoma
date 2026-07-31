@@ -783,6 +783,106 @@ class TestPostBodyExcludesAccessToken(unittest.TestCase):
         self.assertTrue(client.listAllResearches.called)
         self.assertTrue(client.listAllResearchDesigns2.called)
 
+    def test_collect_mining_drone_request_shape(self):
+        """collectMiningDrone must use HeartBeat4-style checksum and correct endpoint.
+        
+        Mitmproxy evidence (2026-07-31): old code used self.checksum (None for 
+        pre-provisioned tokens) → errorMessage='An error occurred.' Fixed by using
+        ChecksumTimeForDate + ChecksumPasswordWithString like HeartBeat4.
+        """
+        from unittest.mock import MagicMock, patch
+        from sdk.client import User
+        from urllib.parse import parse_qs, urlparse
+
+        device = Device(name="iPhone", language="en")
+        client = Client(device=device)
+        client.accessToken = "test-token-uuid"
+        client.user = User(3430892, "test", None, True)
+
+        captured_urls = []
+        mock_response = MagicMock()
+        mock_response.text = "<CollectMarker/>"
+
+        def capture_request(method, url, headers=None, data=None):
+            captured_urls.append(url)
+            return mock_response
+
+        with patch.object(client.session, 'request', side_effect=capture_request):
+            client.collectMiningDrone(123456)
+
+        self.assertEqual(len(captured_urls), 1)
+        url = captured_urls[0]
+        parsed = urlparse(url)
+        query = parse_qs(parsed.query)
+        
+        # Must use GalaxyService/CollectMarker2 endpoint
+        self.assertIn('GalaxyService/CollectMarker2', url)
+        
+        # Must have starSystemMarkerId
+        self.assertEqual(query.get('starSystemMarkerId'), ['123456'])
+        
+        # Must have clientDateTime
+        self.assertIn('clientDateTime', query)
+        
+        # Must have accessToken in query (NOT in body)
+        self.assertEqual(query.get('accessToken'), ['test-token-uuid'])
+        
+        # Must have checksum (HeartBeat4-style)
+        self.assertIn('checksum', query)
+        self.assertNotEqual(query.get('checksum'), ['None'])
+
+    def test_rebuild_ammo_request_shape(self):
+        """rebuildAmmo must use HeartBeat4-style checksum and process all categories.
+        
+        Fixed bugs:
+        - Old code used ChecksumEmailAuthorize requiring @Email (KeyError for pre-provisioned)
+        - Old code had return True inside loop (only processed 'None' category)
+        - Now uses ChecksumTimeForDate + ChecksumPasswordWithString like HeartBeat4
+        """
+        from unittest.mock import MagicMock, patch
+        from sdk.client import User
+        from urllib.parse import parse_qs, urlparse
+
+        device = Device(name="iPhone", language="en")
+        client = Client(device=device)
+        client.accessToken = "test-token-uuid"
+        client.user = User(3430892, "test", None, True)
+
+        captured_urls = []
+        mock_response = MagicMock()
+        mock_response.text = "<RebuildAmmo/>"
+
+        def capture_request(method, url, headers=None, data=None):
+            captured_urls.append(url)
+            return mock_response
+
+        with patch.object(client.session, 'request', side_effect=capture_request):
+            client.rebuildAmmo()
+
+        # Must call RebuildAmmo2 for all 6 categories
+        self.assertEqual(len(captured_urls), 6, "Should call RebuildAmmo2 for all 6 ammo categories")
+        
+        categories = ["None", "Ammo", "Android", "Craft", "Module", "Charge"]
+        for i, url in enumerate(captured_urls):
+            parsed = urlparse(url)
+            query = parse_qs(parsed.query)
+            
+            # Must use RoomService/RebuildAmmo2 endpoint
+            self.assertIn('RoomService/RebuildAmmo2', url, f"Call {i}: wrong endpoint")
+            
+            # Must have correct ammoCategory
+            self.assertEqual(query.get('ammoCategory'), [categories[i]], f"Call {i}: wrong category")
+            
+            # Must have clientDateTime
+            self.assertIn('clientDateTime', query, f"Call {i}: missing clientDateTime")
+            
+            # Must have accessToken in query
+            self.assertEqual(query.get('accessToken'), ['test-token-uuid'], f"Call {i}: missing accessToken")
+            
+            # Must have HeartBeat4-style checksum
+            self.assertIn('checksum', query, f"Call {i}: missing checksum")
+            self.assertNotEqual(query.get('checksum'), ['None'], f"Call {i}: checksum is None")
+
 
 if __name__ == '__main__':
     unittest.main()
