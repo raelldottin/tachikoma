@@ -378,38 +378,38 @@ class Client(object):
         return True
 
     def getLatestVersion3(self):
-        url = f"https://api.pixelstarships.com/SettingService/GetLatestVersion4?languageKey={self.device.languageKey}&deviceType=DeviceType{self.device.name}"
+        url = f"{self.baseUrl}/SettingService/GetLatestVersion4?languageKey={self.device.languageKey}&deviceType=DeviceType{self.device.name}"
         r = self.request(url, "GET")
 
         if r.content:
             self.latestVersion = xmltodict.parse(r.content, xml_attribs=True)
 
     def getTodayLiveOps2(self):
-        url = f"https://api.pixelstarships.com/LiveOpsService/GetTodayLiveOps2?languageKey={self.device.languageKey}&deviceType=DeviceType{self.device.name}"
+        url = f"{self.baseUrl}/LiveOpsService/GetTodayLiveOps2?languageKey={self.device.languageKey}&deviceType=DeviceType{self.device.name}"
         r = self.request(url, "GET")
         if r:
             self.todayLiveOps = xmltodict.parse(r.content, xml_attribs=True)
 
     def listRoomDesigns2(self):
-        url = f"https://api.pixelstarships.com/RoomService/ListRoomDesigns2?languageKey={self.device.languageKey}&designVersion={self.latestVersion['SettingService']['GetLatestSetting']['Setting']['@RoomDesignVersion']}"
+        url = f"{self.baseUrl}/RoomService/ListRoomDesigns2?languageKey={self.device.languageKey}&designVersion={self.latestVersion['SettingService']['GetLatestSetting']['Setting']['@RoomDesignVersion']}"
         r = self.request(url, "GET")
         if r:
             self.roomDesigns = xmltodict.parse(r.content, xml_attribs=True)
 
     def listAllTaskDesigns2(self):
-        url = f"https://api.pixelstarships.com/TaskService/ListAllTaskDesigns2?languageKey={self.device.languageKey}&designVersion={self.latestVersion['SettingService']['GetLatestSetting']['Setting']['@RoomDesignVersion']}"
+        url = f"{self.baseUrl}/TaskService/ListAllTaskDesigns2?languageKey={self.device.languageKey}&designVersion={self.latestVersion['SettingService']['GetLatestSetting']['Setting']['@RoomDesignVersion']}"
         r = self.request(url, "GET")
         if r:
             self.allTaskDesigns = xmltodict.parse(r.content, xml_attribs=True)
 
     def listAllTrainingDesigns2(self):
-        url = f"https://api.pixelstarships.com/TrainingService/ListAllTrainingDesigns2?languageKey={self.device.languageKey}&designVersion={self.latestVersion['SettingService']['GetLatestSetting']['Setting']['@RoomDesignVersion']}"
+        url = f"{self.baseUrl}/TrainingService/ListAllTrainingDesigns2?languageKey={self.device.languageKey}&designVersion={self.latestVersion['SettingService']['GetLatestSetting']['Setting']['@RoomDesignVersion']}"
         r = self.request(url, "GET")
         if r:
             self.trainingDesigns = xmltodict.parse(r.content, xml_attribs=True)
 
     def getShipByUserId(self, userId=0):
-        url = f"https://api.pixelstarships.com/ShipService/GetShipByUserId?userId={userId if userId else self.user.id}&accessToken={self.accessToken}&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
+        url = f"{self.baseUrl}/ShipService/GetShipByUserId?userId={userId if userId else self.user.id}&accessToken={self.accessToken}&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
         r = self.request(url, "GET")
         if r:
             self.shipByUserId = xmltodict.parse(r.content, xml_attribs=True)
@@ -428,25 +428,25 @@ class Client(object):
         return False
 
     def listAchievementsOfAUser(self):
-        url = f"https://api.pixelstarships.com/AchievementService/ListAchievementsOfAUser?accessToken={self.accessToken}&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
+        url = f"{self.baseUrl}/AchievementService/ListAchievementsOfAUser?accessToken={self.accessToken}&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
         r = self.request(url, "GET")
         if r:
             self.achievementsOfAUser = xmltodict.parse(r.content, xml_attribs=True)
 
     def listImportantMessagesForUser(self):
-        url = f"https://api.pixelstarships.com/MessageService/ListImportantMessagesForUser?accessToken={self.accessToken}&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
+        url = f"{self.baseUrl}/MessageService/ListImportantMessagesForUser?accessToken={self.accessToken}&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
         r = self.request(url, "GET")
         if r:
             self.importantMessagesForUser = xmltodict.parse(r.content, xml_attribs=True)
 
     def listUserStarSystems(self):
-        url = f"https://api.pixelstarships.com/GalaxyService/ListUserStarSystems?accessToken={self.accessToken}&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
+        url = f"{self.baseUrl}/GalaxyService/ListUserStarSystems?accessToken={self.accessToken}&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
         r = self.request(url, "GET")
         if r:
             self.userStarSystems = xmltodict.parse(r.content, xml_attribs=True)
 
     def listStarSystemMarkersAndUserMarkers(self):
-        url = f"https://api.pixelstarships.com/GalaxyService/ListStarSystemMarkersAndUserMarkers?accessToken={self.accessToken}"
+        url = f"{self.baseUrl}/GalaxyService/ListStarSystemMarkersAndUserMarkers?accessToken={self.accessToken}"
         r = self.request(url, "GET")
         if r:
             self.starSystemMarkersAndUserMarkers = xmltodict.parse(
@@ -454,7 +454,7 @@ class Client(object):
             )
 
     def listTasksOfAUser(self):
-        url = f"https://api.pixelstarships.com/TaskService/ListTasksOfAUser?accessToken={self.accessToken}&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
+        url = f"{self.baseUrl}/TaskService/ListTasksOfAUser?accessToken={self.accessToken}&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
         r = self.request(url, "GET")
         if r:
             self.tasksOfAUser = xmltodict.parse(r.content, xml_attribs=True)
@@ -469,20 +469,20 @@ class Client(object):
             self.accessToken,
             self.salt,
         )
-        url = f"https://api.pixelstarships.com/MissionService/ListCompletedMissionEvents?clientDateTime={ts}&checksum={checksum}&accessToken={self.accessToken}"
+        url = f"{self.baseUrl}/MissionService/ListCompletedMissionEvents?clientDateTime={ts}&checksum={checksum}&accessToken={self.accessToken}"
         r = self.request(url, "GET")
         if r:
             self.completedMissionEvents = xmltodict.parse(r.content, xml_attribs=True)
 
     def listSituations(self):
-        url = f"https://api.pixelstarships.com/SituationService/ListSituations?accessToken={self.accessToken}&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
+        url = f"{self.baseUrl}/SituationService/ListSituations?accessToken={self.accessToken}&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
         r = self.request(url, "GET")
         if r:
             self.situations = xmltodict.parse(r.content, xml_attribs=True)
 
     def listPvPBattles2(self, take=25, skip=0):
         if self.user.isAuthorized:
-            url = f"https://api.pixelstarships.com/BattleService/ListPvPBattles2?take={take}&skip={skip}&accessToken={self.accessToken}&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
+            url = f"{self.baseUrl}/BattleService/ListPvPBattles2?take={take}&skip={skip}&accessToken={self.accessToken}&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
             r = self.request(url, "GET")
             if r:
                 self.pvpBattles = xmltodict.parse(r.content, xml_attribs=True)
@@ -491,7 +491,7 @@ class Client(object):
 
     def listMissionBattles(self, take=25, skip=0):
         if self.user.isAuthorized:
-            url = f"https://api.pixelstarships.com/BattleService/ListMissionBattles?take={take}&skip={skip}&accessToken={self.accessToken}&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
+            url = f"{self.baseUrl}/BattleService/ListMissionBattles?take={take}&skip={skip}&accessToken={self.accessToken}&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
             r = self.request(url, "GET")
             if r:
                 self.missionBattles = xmltodict.parse(r.content, xml_attribs=True)
@@ -500,7 +500,7 @@ class Client(object):
 
     def listActionTypes2(self):
         if self.user.isAuthorized:
-            url = f"https://api.pixelstarships.com/RoomService/ListActionTypes2?languageKey={self.device.languageKey}&designVersion={self.latestVersion['SettingService']['GetLatestSetting']['Setting']['@ResearchDesignVersion']}"
+            url = f"{self.baseUrl}/RoomService/ListActionTypes2?languageKey={self.device.languageKey}&designVersion={self.latestVersion['SettingService']['GetLatestSetting']['Setting']['@ResearchDesignVersion']}"
             r = self.request(url, "GET")
             if r:
                 self.actionTypes = xmltodict.parse(r.content, xml_attribs=True)
@@ -509,7 +509,7 @@ class Client(object):
 
     def listConditionTypes2(self):
         if self.user.isAuthorized:
-            url = f"https://api.pixelstarships.com/RoomService/ListConditionTypes2?languageKey={self.device.languageKey}&designVersion={self.latestVersion['SettingService']['GetLatestSetting']['Setting']['@ResearchDesignVersion']}"
+            url = f"{self.baseUrl}/RoomService/ListConditionTypes2?languageKey={self.device.languageKey}&designVersion={self.latestVersion['SettingService']['GetLatestSetting']['Setting']['@ResearchDesignVersion']}"
             r = self.request(url, "GET")
             if r:
                 self.conditionTypes = xmltodict.parse(r.content, xml_attribs=True)
@@ -517,14 +517,14 @@ class Client(object):
         return False
 
     def listAllResearches(self):
-        url = f"https://api.pixelstarships.com/ResearchService/ListAllResearches?accessToken={self.accessToken}&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
+        url = f"{self.baseUrl}/ResearchService/ListAllResearches?accessToken={self.accessToken}&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
         r = self.request(url, "GET")
         if r:
             self.allResearches = xmltodict.parse(r.content, xml_attribs=True)
 
     def listItemsOfAShip(self):
         if self.user.isAuthorized:
-            url = f"https://api.pixelstarships.com/ItemService/ListItemsOfAShip?accessToken={self.accessToken}&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
+            url = f"{self.baseUrl}/ItemService/ListItemsOfAShip?accessToken={self.accessToken}&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
             r = self.request(url, "GET")
             if r:
                 self.itemsOfAShip = xmltodict.parse(r.content, xml_attribs=True)
@@ -532,13 +532,13 @@ class Client(object):
         return False
 
     def listRoomsViaAccessToken(self):
-        url = f"https://api.pixelstarships.com/RoomService/ListRoomsViaAccessToken?accessToken={self.accessToken}&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
+        url = f"{self.baseUrl}/RoomService/ListRoomsViaAccessToken?accessToken={self.accessToken}&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
         r = self.request(url, "GET")
         if r:
             self.roomsViaAccessToken = xmltodict.parse(r.content, xml_attribs=True)
 
     def listAllCharactersOfUser(self):
-        url = f"https://api.pixelstarships.com/CharacterService/ListAllCharactersOfUser?accessToken={self.accessToken}&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
+        url = f"{self.baseUrl}/CharacterService/ListAllCharactersOfUser?accessToken={self.accessToken}&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
         r = self.request(url, "GET")
         self.allCharactersOfUser = xmltodict.parse(r.content, xml_attribs=True)
 
@@ -1341,7 +1341,7 @@ class Client(object):
 
     def listAllRoomActionsOfShip(self):
         if self.user.isAuthorized:
-            url = f"https://api.pixelstarships.com/RoomService/ListAllRoomActionsOfShip?accessToken={self.accessToken}&clientDateTime={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}"
+            url = f"{self.baseUrl}/RoomService/ListAllRoomActionsOfShip?accessToken={self.accessToken}&clientDateTime={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}"
             r = self.request(url, "GET")
             if r:
                 self.allRoomActionsOfShip = xmltodict.parse(r.content, xml_attribs=True)
@@ -1349,11 +1349,11 @@ class Client(object):
         return False
 
     def pusherAuth(self):
-        url = f"https://api.pixelstarships.com/UserService/PusherAuth?accessToken={self.accessToken}"
+        url = f"{self.baseUrl}/UserService/PusherAuth?accessToken={self.accessToken}"
         self.request(url, "POST")
 
     def listSystemMessagesForUser3(self, fromMessageId=0, take=10000):
-        url = f"https://api.pixelstarships.com/MessageService/ListSystemMessagesForUser3?fromMessageId={fromMessageId}&take={take}&accessToken={self.accessToken}"
+        url = f"{self.baseUrl}/MessageService/ListSystemMessagesForUser3?fromMessageId={fromMessageId}&take={take}&accessToken={self.accessToken}"
         r = self.request(url, "GET")
         if r:
             self.systemMessagesForUser = xmltodict.parse(r.content, xml_attribs=True)
@@ -1365,7 +1365,7 @@ class Client(object):
 
     def listFriends(self, userId=0):
         if self.user.isAuthorized:
-            url = f"https://api.pixelstarships.com/UserService/ListFriends?UserId={userId if userId else self.info['@Id']}&accessToken={self.accessToken}"
+            url = f"{self.baseUrl}/UserService/ListFriends?UserId={userId if userId else self.info['@Id']}&accessToken={self.accessToken}"
             logging.debug(redact_secrets(url))
             r = self.request(url, "POST")
             if r:
@@ -1376,7 +1376,7 @@ class Client(object):
         return False
 
     def listMessagesForChannelKey(self, channelKey="alliance-43958"):
-        url = f"https://api.pixelstarships.com/MessageService/ListMessagesForChannelKey?channelKey=channelKey={channelKey}&accessToken={self.accessToken}"
+        url = f"{self.baseUrl}/MessageService/ListMessagesForChannelKey?channelKey=channelKey={channelKey}&accessToken={self.accessToken}"
         r = self.request(url, "GET")
         if r:
             self.messagesForChannelKey = xmltodict.parse(r.content, xml_attribs=True)
@@ -1385,13 +1385,13 @@ class Client(object):
         # return False
 
     def findUserRanking(self):
-        url = f"https://api.pixelstarships.com/LadderService/FindUserRanking?accessToken={self.accessToken}"
+        url = f"{self.baseUrl}/LadderService/FindUserRanking?accessToken={self.accessToken}"
         r = self.request(url, "GET")
         if r:
             self.userRanking = xmltodict.parse(r.content, xml_attribs=True)
 
     def activateItem3(self, itemId=0, targetId=0):
-        url = f"https://api.pixelstarships.com/ItemService/ActivateItem3?itemId={itemId}&targetId={targetId}&"
+        url = f"{self.baseUrl}/ItemService/ActivateItem3?itemId={itemId}&targetId={targetId}&"
         r = self.request(url, "POST")
         if r:
             self.item = xmltodict.parse(r.content, xml_attribs=True)
@@ -1403,9 +1403,7 @@ class Client(object):
         logging.info(f"[{self.info['@Name']}] {message} for {price} {currency}.")
 
     def listActiveMarketplaceMessages(self):
-        url = "https://api.pixelstarships.com/MessageService/ListActiveMarketplaceMessages5?itemSubType=None&rarity=None&currencyType=Unknown&itemDesignId=0&userId={}&accessToken={}".format(
-            self.user.id, self.accessToken
-        )
+        url = f"{self.baseUrl}/MessageService/ListActiveMarketplaceMessages5?itemSubType=None&rarity=None&currencyType=Unknown&itemDesignId=0&userId={self.user.id}&accessToken={self.accessToken}"
         r = self.request(url, "GET")
         if r:
             d = xmltodict.parse(r.content, xml_attribs=True)
@@ -1438,10 +1436,7 @@ class Client(object):
         )
 
     def collectAllResources(self):
-        url = "https://api.pixelstarships.com/RoomService/CollectAllResources?itemType=None&collectDate={}&accessToken={}".format(
-            "{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime()),
-            self.accessToken,
-        )
+        url = f"{self.baseUrl}/RoomService/CollectAllResources?itemType=None&collectDate={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}&accessToken={self.accessToken}"
         r = self.request(url, "POST")
         d = xmltodict.parse(r.content, xml_attribs=True)
         if "RoomService" not in d:
@@ -1482,10 +1477,7 @@ class Client(object):
             self.dailyReward = 0
 
         if self.user.isAuthorized and (self.info["@DailyRewardStatus"] != "1"):
-            url = "https://api.pixelstarships.com/UserService/CollectDailyReward2?dailyRewardStatus=Box&argument={}&accessToken={}".format(
-                self.dailyRewardArgument,
-                self.accessToken,
-            )
+            url = f"{self.baseUrl}/UserService/CollectDailyReward2?dailyRewardStatus=Box&argument={self.dailyRewardArgument}&accessToken={self.accessToken}"
 
             r = self.request(url, "POST")
 
@@ -1504,12 +1496,7 @@ class Client(object):
 
     def collectMiningDrone(self, starSystemMarkerId):
         if self.user.isAuthorized and starSystemMarkerId not in self.dronesCollected:
-            url = "https://api.pixelstarships.com/GalaxyService/CollectMarker2?starSystemMarkerId={}&checksum={}&clientDateTime={}&accessToken={}".format(
-                starSystemMarkerId,
-                self.checksum,
-                "{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime()),
-                self.accessToken,
-            )
+            url = f"{self.baseUrl}/GalaxyService/CollectMarker2?starSystemMarkerId={starSystemMarkerId}&checksum={self.checksum}&clientDateTime={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}&accessToken={self.accessToken}"
             r = self.request(url, "POST")
             if "errorMessage=" in r.text:
                 return False
@@ -1520,13 +1507,7 @@ class Client(object):
 
     def placeMiningDrone(self, missionDesignId, missionEventId):
         if self.user.isAuthorized:
-            url = "https://api.pixelstarships.com/MissionService/SelectInstantMission3?missionDesignId={}&missionEventId={}&messageId=0&clientDateTime={},clientNumber=0&checksum={}&accessToken={}".format(
-                missionDesignId,
-                missionEventId,
-                "{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime()),
-                self.checksum,
-                self.accessToken,
-            )
+            url = f"{self.baseUrl}/MissionService/SelectInstantMission3?missionDesignId={missionDesignId}&missionEventId={missionEventId}&messageId=0&clientDateTime={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())},clientNumber=0&checksum={self.checksum}&accessToken={self.accessToken}"
             r = self.request(url, "POST")
             if "errorMessage=" in r.text:
                 return False
@@ -1534,11 +1515,11 @@ class Client(object):
         return False
 
     def collectReward2(self, messageId):
-        url = f"https://api.pixelstarships.com/MessageService/CollectReward2?messageId={messageId}&clientDateTime={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}&checksum={ChecksumTimeForDate(DotNet.get_time()) + ChecksumPasswordWithString(self.accessToken)}&accessToken={self.accessToken}"
+        url = f"{self.baseUrl}/MessageService/CollectReward2?messageId={messageId}&clientDateTime={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}&checksum={ChecksumTimeForDate(DotNet.get_time()) + ChecksumPasswordWithString(self.accessToken)}&accessToken={self.accessToken}"
         self.request(url, "POST")
 
     def AddStarbux2(self, quantity=1):
-        url = f"https://api.pixelstarships.com/UserService/AddStarbux2?quantity={quantity}&clientDateTime={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}&checksum={ChecksumTimeForDate(DotNet.get_time()) + ChecksumPasswordWithString(self.accessToken)}&accessToken={self.accessToken}"
+        url = f"{self.baseUrl}/UserService/AddStarbux2?quantity={quantity}&clientDateTime={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}&checksum={ChecksumTimeForDate(DotNet.get_time()) + ChecksumPasswordWithString(self.accessToken)}&accessToken={self.accessToken}"
         r = self.request(url, "POST")
         if r:
             self.starbux = xmltodict.parse(r.content, xml_attribs=True)
@@ -1589,7 +1570,7 @@ class Client(object):
             "ResearchDesigns"
         ]["ResearchDesign"]:
             if i["@ResearchDesignId"] == researchDesignId:
-                url = f"https://api.pixelstarships.com/ResearchService/SpeedUpResearchUsingBoostGauge?researchId={researchId}&accessToken={self.accessToken}&clientDateTime={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}"
+                url = f"{self.baseUrl}/ResearchService/SpeedUpResearchUsingBoostGauge?researchId={researchId}&accessToken={self.accessToken}&clientDateTime={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}"
                 r = self.request(url, "POST")
                 if r and "@errorMessage" in r.text:
                     logging.info(
@@ -1610,7 +1591,7 @@ class Client(object):
 
         for i in self.roomDesigns["RoomDesign"]:
             if i["@RoomDesignId"] == roomDesignId:
-                url = f"https://api.pixelstarships.com/RoomService/SpeedUpRoomConstructionUsingBoostGauge?roomId={roomId}&clientDateTime={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}&accessToken={self.accessToken}"
+                url = f"{self.baseUrl}/RoomService/SpeedUpRoomConstructionUsingBoostGauge?roomId={roomId}&clientDateTime={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}&accessToken={self.accessToken}"
                 r = self.request(url, "POST")
                 if r and "errorMessage" in r.text:
                     logging.info(
@@ -1756,7 +1737,7 @@ class Client(object):
                                 logging.info(
                                     f'[{self.info["@Name"]}] Upgradng {roomName} to {upgradeRoomName}.'
                                 )
-                                url = f"https://api.pixelstarships.com/RoomService/UpgradeRoom2?roomId={roomId}&upgradeRoomDesignId={upgradeRoomDesignId}&accessToken={self.accessToken}"
+                                url = f"{self.baseUrl}/RoomService/UpgradeRoom2?roomId={roomId}&upgradeRoomDesignId={upgradeRoomDesignId}&accessToken={self.accessToken}"
                                 r = self.request(url, "POST")
                                 roomName = ""
                                 upgradeRoomName = ""
@@ -1793,7 +1774,7 @@ class Client(object):
 
     def listAllResearchDesigns2(self):
         if self.latestVersion:
-            url = f"https://api.pixelstarships.com/ResearchService/ListAllResearchDesigns2?languageKey={self.device.languageKey}&designVersion={self.latestVersion['SettingService']['GetLatestSetting']['Setting']['@ResearchDesignVersion']}"
+            url = f"{self.baseUrl}/ResearchService/ListAllResearchDesigns2?languageKey={self.device.languageKey}&designVersion={self.latestVersion['SettingService']['GetLatestSetting']['Setting']['@ResearchDesignVersion']}"
             r = self.request(url, "GET")
             self.allResearchDesigns = xmltodict.parse(r.content, xml_attribs=True)
             if "ResearchService" not in self.allResearchDesigns:
@@ -1802,7 +1783,7 @@ class Client(object):
             return True
 
     def addResearch(self, researchDesignId):
-        url = f"https://api.pixelstarships.com/ResearchService/AddResearch?researchDesignId={researchDesignId}&researchStartDate={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}&accessToken={self.accessToken}"
+        url = f"{self.baseUrl}/ResearchService/AddResearch?researchDesignId={researchDesignId}&researchStartDate={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}&accessToken={self.accessToken}"
         r = self.request(url, "POST")
         if "errorMessage" in r.text:
             return False
