@@ -419,7 +419,14 @@ class Client(object):
             self.trainingDesigns = xmltodict.parse(r.content, xml_attribs=True)
 
     def getShipByUserId(self, userId=0):
-        url = f"{self.baseUrl}/ShipService/GetShipByUserId?userId={userId if userId else self.user.id}&accessToken={self.accessToken}&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
+        uid = userId if userId else (self.user.id if hasattr(self, "user") and self.user else 0)
+        if not uid:
+            logging.error(
+                "getShipByUserId called without a valid userId "
+                "(self.user.id not set — check auth string has 6th field)"
+            )
+            return False
+        url = f"{self.baseUrl}/ShipService/GetShipByUserId?userId={uid}&accessToken={self.accessToken}&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
         r = self.request(url, "GET")
         if r:
             self.shipByUserId = xmltodict.parse(r.content, xml_attribs=True)
