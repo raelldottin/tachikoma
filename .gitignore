@@ -7,3 +7,4 @@ collectrss.sh
 *.app
 config.secrets
 Makefile
+.venv/
