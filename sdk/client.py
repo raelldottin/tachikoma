@@ -1515,8 +1515,13 @@ class Client(object):
     def collectMiningDrone(self, starSystemMarkerId):
         if self.user.isAuthorized and starSystemMarkerId not in self.dronesCollected:
             ts = "{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime())
-            # Use HeartBeat4-style checksum (works for pre-provisioned tokens)
-            checksum = ChecksumTimeForDate(DotNet.get_time()) + ChecksumPasswordWithString(self.accessToken)
+            # Use MD5 checksum with salt from JWT (unityUserId) - same pattern as ChecksumEmailAuthorize
+            # Format: deviceKey + email + starSystemMarkerId + ts + accessToken + salt + 'savysoda'
+            salt = "91cde416c93fb401585d963a556381ca"  # unityUserId from JWT refresh token
+            email = self.info.get("@Email", "unknown@unknown.com")
+            checksum = hashlib.md5(
+                (self.device.key + email + str(starSystemMarkerId) + ts + self.accessToken + salt + "savysoda").encode("utf-8")
+            ).hexdigest()
             url = f"{self.baseUrl}/GalaxyService/CollectMarker2?starSystemMarkerId={starSystemMarkerId}&checksum={checksum}&clientDateTime={ts}&accessToken={self.accessToken}"
             r = self.request(url, "POST")
             if "errorMessage=" in r.text:
