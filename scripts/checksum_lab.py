@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 """Checksum research harness for CollectMarker2, RebuildAmmo3, and UserEmailPasswordAuthorize4.
 
 Loads captured checksum samples from tests/fixtures/checksum_samples.json,
