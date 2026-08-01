@@ -148,7 +148,14 @@ def main():
     client = Client(device)
 
     # Attempt to log in
-    if not client.login(email=email, password=password):
+    # If auth string was provided, use pre-provisioned token path (no email/password)
+    # Otherwise fall back to email/password login (blocked until checksum solved)
+    if auth_string:
+        authenticated = client.login()
+    else:
+        authenticated = client.login(email=email, password=password)
+
+    if not authenticated:
         logging.error("Authentication failed. Exiting.")
         # Still attempt to email log (though it may be empty or contain only the error)
         email_logfile(logfilepath, client, email, password, recipient)
