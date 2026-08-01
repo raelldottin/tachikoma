@@ -12,11 +12,12 @@ from sdk.client import Client
 from sdk.device import Device
 
 # Feature flags for experimental checksum-gated actions.
-# These endpoints (CollectMarker2, RebuildAmmo3) use an MD5 checksum
+# These endpoints (CollectMarker2, RebuildAmmo3, AddStarbux2) use an MD5 checksum
 # whose construction has not been reproduced from the iOS client.
 # Disabled by default to avoid noisy logs and server-side throttling.
 ENABLE_COLLECT_MARKER = os.environ.get("ENABLE_COLLECT_MARKER", "false").lower() == "true"
 ENABLE_REBUILD_AMMO = os.environ.get("ENABLE_REBUILD_AMMO", "false").lower() == "true"
+ENABLE_GRAB_STARBUCKS = os.environ.get("ENABLE_GRAB_STARBUCKS", "false").lower() == "true"
 
 logfilepath = "tachikoma.log"
 log_capture_string = io.StringIO()
@@ -119,7 +120,7 @@ def main():
     )
     args = parser.parse_args()
 
-    # Set email/password/recipient from args (may be overridden by interactive mode below)
+    # Set email/password/recipient from args
     email = args.email[0] if args.email else None
     password = args.password[0] if args.password else None
     recipient = args.recipient[0] if args.recipient else None
@@ -129,6 +130,9 @@ def main():
     auth_string = args.auth[0] if args.auth else None
     if auth_string:
         device = Device(language="en", authentication_string=auth_string)
+    elif email and password:
+        # Non-interactive: use provided email/password
+        device = Device(language="en")
     else:
         # Interactive mode
         decide = input("Input G to login as guest. Input A to login as user : ")
@@ -167,18 +171,23 @@ def main():
 
     # Main task loop (runs once per account)
     while client:
-        try:
-            result = client.grabFlyingStarbux()
-            if result is True:
-                success_counts["grabFlyingStarbux"] = success_counts.get("grabFlyingStarbux", 0) + 1
-            elif result is False:
-                logging.warning(f"[{client.info.get('@Name', 'unknown')}] grabFlyingStarbux returned False (API error or no-op)")
+        # grabFlyingStarbux uses AddStarbux2 which has an incorrect checksum formula
+        # (integer arithmetic instead of MD5). Gated behind ENABLE_GRAB_STARBUCKS.
+        if ENABLE_GRAB_STARBUCKS:
+            try:
+                result = client.grabFlyingStarbux()
+                if result is True:
+                    success_counts["grabFlyingStarbux"] = success_counts.get("grabFlyingStarbux", 0) + 1
+                elif result is False:
+                    logging.warning(f"[{client.info.get('@Name', 'unknown')}] grabFlyingStarbux returned False (API error or no-op)")
+                    failure_counts["grabFlyingStarbux"] = failure_counts.get("grabFlyingStarbux", 0) + 1
+                else:
+                    success_counts["grabFlyingStarbux"] = success_counts.get("grabFlyingStarbux", 0) + 1
+            except Exception as e:
+                logging.warning(f"[{client.info.get('@Name', 'unknown')}] grabFlyingStarbux failed: {e}")
                 failure_counts["grabFlyingStarbux"] = failure_counts.get("grabFlyingStarbux", 0) + 1
-            else:
-                success_counts["grabFlyingStarbux"] = success_counts.get("grabFlyingStarbux", 0) + 1
-        except Exception as e:
-            logging.warning(f"[{client.info.get('@Name', 'unknown')}] grabFlyingStarbux failed: {e}")
-            failure_counts["grabFlyingStarbux"] = failure_counts.get("grabFlyingStarbux", 0) + 1
+        else:
+            logging.debug(f"[{client.info.get('@Name', 'unknown')}] grabFlyingStarbux SKIPPED (ENABLE_GRAB_STARBUCKS=false)")
 
         if client.freeStarbuxToday < client.freeStarbuxMax:
             logging.info(

@@ -1,4 +1,5 @@
 import hashlib
+from .dotnet import DotNet
 
 def first_stub(dt):
     return int((dt & 0x3FFFFFFFFFFFFFFF) // 0x989680) % 60
@@ -19,3 +20,13 @@ def ChecksumPasswordWithString(accessToken):
 
 def ChecksumEmailAuthorize(deviceKey, email, ts, accessToken, salt):
     return hashlib.md5((deviceKey + email + ts + accessToken + salt + 'savysoda').encode('utf-8')).hexdigest()
+
+
+def ChecksumUserEmailPasswordAuthorize4(deviceKey, email, password, ts, languageKey, isWeb, accessToken):
+    """
+    Checksum for UserEmailPasswordAuthorize4 endpoint.
+    Based on captured traffic: checksum = ChecksumTimeForDate(DotNet.get_time())
+    This is an integer (not MD5), matching the ChecksumTimeForDate pattern.
+    """
+    dt = DotNet.get_time()
+    return ChecksumTimeForDate(dt)

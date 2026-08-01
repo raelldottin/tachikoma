@@ -18,6 +18,7 @@ from .security import (
     ChecksumTimeForDate,
     ChecksumPasswordWithString,
     ChecksumEmailAuthorize,
+    ChecksumUserEmailPasswordAuthorize4,
 )
 from .dotnet import DotNet
 from .redaction import redact_secrets, safe_log_message
@@ -312,10 +313,18 @@ class Client(object):
         self.getAccessToken()
 
     def login(self, email=None, password=None):
+        """
+        Login flow using UserEmailPasswordAuthorize4 (modern email/password auth).
+        
+        Flow:
+        1. Get accessToken (via DeviceLogin17 or pre-provisioned)
+        2. Call UserEmailPasswordAuthorize4 with email/password
+        3. Parse response for refreshToken and UserId
+        4. Call DeviceLogin17 to exchange for fresh accessToken
+        """
         if not self.getAccessToken():
             return False
 
-        # double check if something goes wrong
         if not self.accessToken:
             return False
 
@@ -332,59 +341,107 @@ class Client(object):
         if self.accessToken and not email:
             return True
 
-        # login with credentials and accessToken
+        # Step 1: UserEmailPasswordAuthorize4 - email/password login
         ts = f"{DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
-        #        ts = "{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime())
-        self.checksum = ChecksumEmailAuthorize(
-            self.device.key, email, ts, self.accessToken, self.salt
+        checksum = ChecksumUserEmailPasswordAuthorize4(
+            self.device.key, email, password, ts, "en", False, self.accessToken
         )
 
-        # if refreshToken was used we get acquire session without credentials
-        if self.device.refreshToken:
-            url = f"{self.baseUrl}/UserService/UserEmailPasswordAuthorize2?clientDateTime={ts}&checksum={self.checksum}&deviceKey={self.device.key}&accessToken={self.accessToken}&refreshToken={self.device.refreshToken}"
-            r = self.request(url, "POST")
+        # Build form-urlencoded body (matching official client)
+        body_data = {
+            "clientDateTime": ts,
+            "checksum": str(checksum),
+            "deviceKey": self.device.key,
+            "email": email,
+            "password": password,
+            "languageKey": "en",
+            "isWeb": "False",
+            "accessToken": self.accessToken,
+        }
 
-            if r and "Email=" not in r.text:
-                logging.error(
-                    "[login] failed to authenticate with refreshToken: %s", redact_secrets(r.text)
-                )
-                return False
+        url = f"{self.baseUrl}/UserService/UserEmailPasswordAuthorize4"
+        r = self.request(url, "POST", data=body_data)
 
-            if not self.parseUserLoginData(r):
-                return False
-
-        else:
-            if email:
-                self.email = urllib.parse.quote(email)
-
-            url = f"{self.baseUrl}/UserService/UserEmailPasswordAuthorize2?clientDateTime={ts}&checksum={self.checksum}&deviceKey={self.device.key}&email={self.email}&password={password}&accessToken={self.accessToken}"
-            r = self.request(url, "POST")
-
-            if r and "errorMessage=" in r.text:
-                logging.error(
-                    "[login] failed to authorize with credentials with the reason: %s",
-                    redact_secrets(r.text),
-                )
-                return False
-
-            if r and "refreshToken" not in r.text:
-                logging.error(
-                    "[login] failed to acquire refreshToken with the reason: %s", redact_secrets(r.text)
-                )
-                return False
-
-            if r:
-                self.device.refreshTokenAcquire(
-                    r.text.split('refreshToken="')[1].split('"')[0]
-                )
-
-            if r and 'RequireReload="True"' in r.text:
-                return self.quickReload()
-
-        if r and "refreshToken" in r.text:
-            self.device.refreshTokenAcquire(
-                r.text.split('refreshToken="')[1].split('"')[0]
+        if not r or "errorMessage=" in r.text:
+            logging.error(
+                "[login] UserEmailPasswordAuthorize4 failed: %s",
+                redact_secrets(r.text if r else "no response")
             )
+            return False
+
+        # Parse response for refreshToken and UserId
+        try:
+            d = xmltodict.parse(r.content, xml_attribs=True)
+            auth_elem = d.get("UserService", {}).get("UserEmailPasswordAuthorize", {})
+            refresh_token = auth_elem.get("@refreshToken")
+            require_reload = auth_elem.get("@RequireReload") == "True"
+            user_id = auth_elem.get("User", {}).get("@Id")
+            
+            if not refresh_token:
+                logging.error("[login] No refreshToken in UserEmailPasswordAuthorize4 response")
+                return False
+                
+            logging.info(f"[login] Got refreshToken, UserId={user_id}, RequireReload={require_reload}")
+            
+            # Store refresh token
+            self.device.refreshTokenAcquire(refresh_token)
+            
+            # Store userId in device for later use
+            self.device.userId = user_id
+            
+        except Exception as e:
+            logging.error(f"[login] Failed to parse UserEmailPasswordAuthorize4 response: {e}")
+            return False
+
+        # Step 2: DeviceLogin17 to exchange refreshToken for fresh accessToken
+        if not self._device_login_with_refresh():
+            return False
+
+        if require_reload:
+            return self.quickReload()
+
+        return True
+
+    def _device_login_with_refresh(self):
+        """Call DeviceLogin17 with refreshToken to get fresh accessToken."""
+        self.checksum = ChecksumCreateDevice(self.device.key, self.device.name)
+
+        json_data = {
+            "DeviceKey": self.device.key,
+            "AdvertisingKey": "",
+            "ClientDateTime": "{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime()),
+            "IsJailBroken": False,
+            "Checksum": self.checksum,
+            "DeviceType": 2,
+            "Signal": False,
+            "LanguageKey": "en",
+            "RefreshToken": self.device.refreshToken if self.device.refreshToken else "",
+            "UserDeviceInfo": {
+                "OsVersion": "Mac OS X 14.2.0",
+                "Locale": "en",
+                "DeviceName": "Mac14,10",
+                "OSBuild": "0",
+                "ClientBuild": "6400",
+                "ClientVersion": "6000.0.77f1",
+            },
+            "AccessToken": "00000000-0000-0000-0000-000000000000",
+        }
+
+        url = f"{self.baseUrl}/UserService/DeviceLogin17"
+        r = requests.post(url, json=json_data, headers=self.headers)
+        
+        if not r or r.status_code != 200:
+            logging.error("[_device_login_with_refresh] HTTP error: %s", r.status_code if r else "no response")
+            return False
+
+        if "errorCode" in r.text or "accessToken" not in r.text:
+            logging.error("[_device_login_with_refresh] Failed: %s", redact_secrets(r.text))
+            return False
+
+        self.accessToken = r.text.split('accessToken="')[1].split('"')[0]
+        
+        if not self.parseUserLoginData(r):
+            return False
 
         return True
 
