@@ -19,9 +19,15 @@ from .security import (
     ChecksumPasswordWithString,
     ChecksumEmailAuthorize,
     ChecksumUserEmailPasswordAuthorize4,
+    UnsupportedNativeChecksum,
 )
 from .dotnet import DotNet
 from .redaction import redact_secrets, safe_log_message
+
+
+class ConfigurationError(RuntimeError):
+    """Raised when required configuration is missing or invalid."""
+    pass
 
 
 DEFAULT_TIMEOUT = 5  # seconds
@@ -109,8 +115,9 @@ class Client(object):
     session.mount("https://", adapter)
     session.mount("http://", adapter)
 
-    def __init__(self, device):
+    def __init__(self, device, settings=None):
         self.device = device
+        self.settings = settings or {}
 
     @sleep_and_retry
     @limits(calls=MAX_CALLS_PER_MINUTE, period=ONE_MINUTE)
@@ -1880,14 +1887,20 @@ class Client(object):
 
     def rebuildAmmo(self):
         """Restock ammo, android, craft, module, and charge items.
-        
-        Uses RebuildAmmo3 (not deprecated RebuildAmmo2) with ChecksumEmailAuthorize-style
-        checksum including the ammoCategory. Salt is from iOS client plist.
+
+        Uses RebuildAmmo3 with checksum derived from configuration values.
+        Requires checksum_key and savy_checksum configuration settings.
         """
-        # Salt from iOS client preferences (persistedDeviceKey related)
-        # Extracted from com.savysoda.pixelStarships.plist
-        salt = "91cde416c93fb401585d963a556381ca"
-        
+        # These must be provided via configuration - no fallback to hardcoded values
+        checksum_key = self.settings.get("checksum_key")
+        savy_checksum = self.settings.get("savy_checksum")
+
+        if not checksum_key or not savy_checksum:
+            raise ConfigurationError(
+                "RebuildAmmo3 requires checksum_key and savy_checksum configuration "
+                "values compatible with the installed game version."
+            )
+
         ammoCategories = [
             "None",
             "Ammo",
@@ -1904,12 +1917,16 @@ class Client(object):
                     f'[{self.info["@Name"]}] Restocking {ammoCategory.lower()} items.'
                 )
             ts = "{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime())
-            # Use ChecksumEmailAuthorize-style MD5 with category included
-            # Format: deviceKey + email + category + ts + accessToken + salt + 'savysoda'
             email = self.info.get("@Email", "unknown@unknown.com")
-            checksum = hashlib.md5(
-                (self.device.key + email + ammoCategory + ts + self.accessToken + salt + "savysoda").encode("utf-8")
-            ).hexdigest()
+            preimage = (
+                self.device.key
+                + email
+                + ammoCategory
+                + ts
+                + checksum_key
+            )
+            encrypted = preimage + savy_checksum
+            checksum = hashlib.md5(encrypted.encode("utf-8")).hexdigest()
             url = f"{self.baseUrl}/RoomService/RebuildAmmo3?ammoCategory={ammoCategory}&clientDateTime={ts}&checksum={checksum}&accessToken={self.accessToken}"
             logging.debug(redact_secrets(f"{url=}"))
             r = self.request(url, "POST")
