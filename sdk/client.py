@@ -328,13 +328,13 @@ class Client(object):
         if not self.accessToken:
             return False
 
-        # If using a pre-provisioned access token, skip DeviceLogin17
-        # and email/password authorization — the token is already valid.
-        if getattr(self.device, "accessToken", None):
+        # If using a pre-provisioned access token AND not doing email/password login,
+        # we can skip the full flow — the token is already valid.
+        if not email and getattr(self.device, "accessToken", None):
             return True
 
         # authorization just fine with refreshToken, we're in da house
-        if self.device.refreshToken and self.accessToken:
+        if not email and self.device.refreshToken and self.accessToken:
             return True
 
         # accessToken is enough for guest to play a tutorial
