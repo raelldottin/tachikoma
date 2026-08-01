@@ -7,6 +7,7 @@ import requests
 import random
 import logging
 import math
+import hashlib
 from itertools import accumulate
 from requests.adapters import HTTPAdapter
 from urllib3.util import Retry
@@ -1818,9 +1819,13 @@ class Client(object):
     def rebuildAmmo(self):
         """Restock ammo, android, craft, module, and charge items.
         
-        Uses HeartBeat4-style checksum (ChecksumTimeForDate + ChecksumPasswordWithString)
-        which works with pre-provisioned tokens that don't have email/salt.
+        Uses RebuildAmmo3 (not deprecated RebuildAmmo2) with ChecksumEmailAuthorize-style
+        checksum including the ammoCategory. Salt is from iOS client plist.
         """
+        # Salt from iOS client preferences (persistedDeviceKey related)
+        # Extracted from com.savysoda.pixelStarships.plist
+        salt = "91cde416c93fb401585d963a556381ca"
+        
         ammoCategories = [
             "None",
             "Ammo",
@@ -1837,13 +1842,17 @@ class Client(object):
                     f'[{self.info["@Name"]}] Restocking {ammoCategory.lower()} items.'
                 )
             ts = "{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime())
-            # Use HeartBeat4-style checksum: works for pre-provisioned tokens
-            checksum = ChecksumTimeForDate(DotNet.get_time()) + ChecksumPasswordWithString(self.accessToken)
-            url = f"{self.baseUrl}/RoomService/RebuildAmmo2?ammoCategory={ammoCategory}&clientDateTime={ts}&checksum={checksum}&accessToken={self.accessToken}"
+            # Use ChecksumEmailAuthorize-style MD5 with category included
+            # Format: deviceKey + email + category + ts + accessToken + salt + 'savysoda'
+            email = self.info.get("@Email", "unknown@unknown.com")
+            checksum = hashlib.md5(
+                (self.device.key + email + ammoCategory + ts + self.accessToken + salt + "savysoda").encode("utf-8")
+            ).hexdigest()
+            url = f"{self.baseUrl}/RoomService/RebuildAmmo3?ammoCategory={ammoCategory}&clientDateTime={ts}&checksum={checksum}&accessToken={self.accessToken}"
             logging.debug(redact_secrets(f"{url=}"))
             r = self.request(url, "POST")
             if "errorMessage=" in r.text:
-                logging.warning(f'[{self.info["@Name"]}] RebuildAmmo2 {ammoCategory} failed: {r.text[:200]}')
+                logging.warning(f'[{self.info["@Name"]}] RebuildAmmo3 {ammoCategory} failed: {r.text[:200]}')
         return True
 
     def getCrewInfo(self):
