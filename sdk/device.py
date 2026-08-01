@@ -30,8 +30,8 @@ class Device(object):
         self.key = key
         self.languageKey = language
         self.authentication_string = authentication_string
-        if authentication_string:
-            self.DB = None
+        # Always use .device file for persistence (even with auth string)
+        self.DB = "./.device"
 
         # Compute deviceType from the provided name BEFORE load() can overwrite it
         self.deviceType = self._resolve_device_type(name)
@@ -52,8 +52,13 @@ class Device(object):
         if self.DB:
             with open(self.DB, "w+") as f:
                 f.write(
-                    "{}|{}|{}|{}".format(
-                        self.name, self.key, self.refreshToken, self.languageKey
+                    "{}|{}|{}|{}|{}|{}".format(
+                        self.name,
+                        self.key,
+                        self.refreshToken if self.refreshToken else "",
+                        self.languageKey,
+                        self.accessToken if self.accessToken else "",
+                        self.userId if self.userId else "",
                     )
                 )
 
