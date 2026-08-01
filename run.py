@@ -1,5 +1,6 @@
 import sys
 import getpass
+import os
 from configparser import ConfigParser
 from configparser import NoSectionError
 import smtplib
@@ -9,6 +10,13 @@ import logging
 import io
 from sdk.client import Client
 from sdk.device import Device
+
+# Feature flags for experimental checksum-gated actions.
+# These endpoints (CollectMarker2, RebuildAmmo3) use an MD5 checksum
+# whose construction has not been reproduced from the iOS client.
+# Disabled by default to avoid noisy logs and server-side throttling.
+ENABLE_COLLECT_MARKER = os.environ.get("ENABLE_COLLECT_MARKER", "false").lower() == "true"
+ENABLE_REBUILD_AMMO = os.environ.get("ENABLE_REBUILD_AMMO", "false").lower() == "true"
 
 logfilepath = "tachikoma.log"
 log_capture_string = io.StringIO()
@@ -251,36 +259,42 @@ def main():
                 logging.warning(f"[{client.info.get('@Name', 'unknown')}] getResourceTotals failed: {e}")
                 failure_counts["getResourceTotals"] = failure_counts.get("getResourceTotals", 0) + 1
 
-            # Collect mining drones
-            try:
-                client.listStarSystemMarkersAndUserMarkers()
-                markers = client.starSystemMarkersAndUserMarkers
-                all_markers = markers.get('GalaxyService', {}).get('ListStarSystemMarkersAndUserMarkers', {}).get('StarSystemMarkers', {}).get('StarSystemMarker', [])
-                if not isinstance(all_markers, list):
-                    all_markers = [all_markers] if all_markers else []
-                
-                collected_count = 0
-                for marker in all_markers:
-                    marker_id = marker.get('@StarSystemMarkerId', '')
-                    marker_type = marker.get('@MarkerType', '')
-                    is_collected = marker.get('@IsCollected', 'false')
-                    if marker_type == 'Mining' and is_collected == 'false' and marker_id:
-                        if client.collectMiningDrone(int(marker_id)):
-                            collected_count += 1
-                
-                success_counts["collectMiningDrones"] = success_counts.get("collectMiningDrones", 0) + 1
-                logging.info(f'[{client.info.get("@Name", "unknown")}] Collected {collected_count} mining drones')
-            except Exception as e:
-                logging.warning(f"[{client.info.get('@Name', 'unknown')}] collectMiningDrones failed: {e}")
-                failure_counts["collectMiningDrones"] = failure_counts.get("collectMiningDrones", 0) + 1
+            # Collect mining drones (experimental — checksum contract unknown)
+            if ENABLE_COLLECT_MARKER:
+                try:
+                    client.listStarSystemMarkersAndUserMarkers()
+                    markers = client.starSystemMarkersAndUserMarkers
+                    all_markers = markers.get('GalaxyService', {}).get('ListStarSystemMarkersAndUserMarkers', {}).get('StarSystemMarkers', {}).get('StarSystemMarker', [])
+                    if not isinstance(all_markers, list):
+                        all_markers = [all_markers] if all_markers else []
+                    
+                    collected_count = 0
+                    for marker in all_markers:
+                        marker_id = marker.get('@StarSystemMarkerId', '')
+                        marker_type = marker.get('@MarkerType', '')
+                        is_collected = marker.get('@IsCollected', 'false')
+                        if marker_type == 'Mining' and is_collected == 'false' and marker_id:
+                            if client.collectMiningDrone(int(marker_id)):
+                                collected_count += 1
+                    
+                    success_counts["collectMiningDrones"] = success_counts.get("collectMiningDrones", 0) + 1
+                    logging.info(f'[{client.info.get("@Name", "unknown")}] Collected {collected_count} mining drones')
+                except Exception as e:
+                    logging.warning(f'[{client.info.get("@Name", "unknown")}] collectMiningDrones failed: {e}')
+                    failure_counts["collectMiningDrones"] = failure_counts.get("collectMiningDrones", 0) + 1
+            else:
+                logging.info(f'[{client.info.get("@Name", "unknown")}] CollectMarker2: SKIPPED — checksum algorithm unavailable')
 
-            # Rearm/recharge ship (ammo, android, craft, module, charge)
-            try:
-                client.rebuildAmmo()
-                success_counts["rebuildAmmo"] = success_counts.get("rebuildAmmo", 0) + 1
-            except Exception as e:
-                logging.warning(f"[{client.info.get('@Name', 'unknown')}] rebuildAmmo failed: {e}")
-                failure_counts["rebuildAmmo"] = failure_counts.get("rebuildAmmo", 0) + 1
+            # Rearm/recharge ship (experimental — checksum contract unknown)
+            if ENABLE_REBUILD_AMMO:
+                try:
+                    client.rebuildAmmo()
+                    success_counts["rebuildAmmo"] = success_counts.get("rebuildAmmo", 0) + 1
+                except Exception as e:
+                    logging.warning(f'[{client.info.get("@Name", "unknown")}] rebuildAmmo failed: {e}')
+                    failure_counts["rebuildAmmo"] = failure_counts.get("rebuildAmmo", 0) + 1
+            else:
+                logging.info(f'[{client.info.get("@Name", "unknown")}] RebuildAmmo3: SKIPPED — checksum algorithm unavailable')
 
             try:
                 client.upgradeCharacters()
