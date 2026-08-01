@@ -832,12 +832,12 @@ class TestPostBodyExcludesAccessToken(unittest.TestCase):
         self.assertNotEqual(query.get('checksum'), ['None'])
 
     def test_rebuild_ammo_request_shape(self):
-        """rebuildAmmo must use HeartBeat4-style checksum and process all categories.
+        """rebuildAmmo must use RebuildAmmo3 with ChecksumEmailAuthorize-style checksum and process all categories.
         
         Fixed bugs:
-        - Old code used ChecksumEmailAuthorize requiring @Email (KeyError for pre-provisioned)
+        - Old code used RebuildAmmo2 (deprecated) and ChecksumEmailAuthorize requiring @Email (KeyError for pre-provisioned)
         - Old code had return True inside loop (only processed 'None' category)
-        - Now uses ChecksumTimeForDate + ChecksumPasswordWithString like HeartBeat4
+        - Now uses RebuildAmmo3 with MD5 checksum including category: deviceKey + email + category + ts + accessToken + salt + 'savysoda'
         """
         from unittest.mock import MagicMock, patch
         from sdk.client import User
@@ -847,6 +847,7 @@ class TestPostBodyExcludesAccessToken(unittest.TestCase):
         client = Client(device=device)
         client.accessToken = "test-token-uuid"
         client.user = User(3430892, "test", None, True)
+        client.info = {"@Email": "test@example.com", "@Name": "test"}
 
         captured_urls = []
         mock_response = MagicMock()
@@ -859,16 +860,16 @@ class TestPostBodyExcludesAccessToken(unittest.TestCase):
         with patch.object(client.session, 'request', side_effect=capture_request):
             client.rebuildAmmo()
 
-        # Must call RebuildAmmo2 for all 6 categories
-        self.assertEqual(len(captured_urls), 6, "Should call RebuildAmmo2 for all 6 ammo categories")
+        # Must call RebuildAmmo3 for all 6 categories
+        self.assertEqual(len(captured_urls), 6, "Should call RebuildAmmo3 for all 6 ammo categories")
         
         categories = ["None", "Ammo", "Android", "Craft", "Module", "Charge"]
         for i, url in enumerate(captured_urls):
             parsed = urlparse(url)
             query = parse_qs(parsed.query)
             
-            # Must use RoomService/RebuildAmmo2 endpoint
-            self.assertIn('RoomService/RebuildAmmo2', url, f"Call {i}: wrong endpoint")
+            # Must use RoomService/RebuildAmmo3 endpoint
+            self.assertIn('RoomService/RebuildAmmo3', url, f"Call {i}: wrong endpoint")
             
             # Must have correct ammoCategory
             self.assertEqual(query.get('ammoCategory'), [categories[i]], f"Call {i}: wrong category")
@@ -879,9 +880,11 @@ class TestPostBodyExcludesAccessToken(unittest.TestCase):
             # Must have accessToken in query
             self.assertEqual(query.get('accessToken'), ['test-token-uuid'], f"Call {i}: missing accessToken")
             
-            # Must have HeartBeat4-style checksum
+            # Must have MD5 checksum (32 hex chars)
             self.assertIn('checksum', query, f"Call {i}: missing checksum")
-            self.assertNotEqual(query.get('checksum'), ['None'], f"Call {i}: checksum is None")
+            checksum = query.get('checksum', [''])[0]
+            self.assertEqual(len(checksum), 32, f"Call {i}: checksum must be 32-char MD5")
+            self.assertNotEqual(checksum, 'None', f"Call {i}: checksum is None")
 
 
 if __name__ == '__main__':
