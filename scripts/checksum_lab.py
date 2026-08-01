@@ -95,6 +95,43 @@ def get_sample_params(sample, session):
     }
 
 
+# ─── Value transformations ────────────────────────────────────────────
+
+def to_ticks(dt_str: str) -> int:
+    """Convert ISO datetime to .NET ticks (100ns since 0001-01-01)."""
+    from datetime import datetime
+    dt = datetime.fromisoformat(dt_str.replace('Z', '+00:00'))
+    epoch = datetime(1, 1, 1)
+    return int((dt - epoch).total_seconds() * 10000000)
+
+
+def to_unix_ts(dt_str: str) -> int:
+    """Convert ISO datetime to Unix timestamp."""
+    from datetime import datetime
+    dt = datetime.fromisoformat(dt_str.replace('Z', '+00:00'))
+    return int(dt.timestamp())
+
+
+def checksum_time_for_date(dt_str: str) -> int:
+    """Replicate ChecksumTimeForDate from sdk/security.py."""
+    ticks = to_ticks(dt_str)
+    def first_stub(dt):
+        return int((dt & 0x3FFFFFFFFFFFFFFF) // 0x989680) % 60
+    def second_stub(dt):
+        return int((dt & 0x3FFFFFFFFFFFFFFF) // 0x23C34600) % 60
+    return first_stub(ticks) * second_stub(ticks)
+
+
+def derive_savy_checksum(device_key: str, suffix: str) -> str:
+    """SavyChecksum = md5(deviceKey + 'savysoda') per IL2CPP pattern."""
+    return hashlib.md5((device_key + suffix).encode('utf-8')).hexdigest()
+
+
+def derive_checksum_key(device_key: str, salt: str) -> str:
+    """ChecksumKey = md5(deviceKey + salt) per IL2CPP pattern."""
+    return hashlib.md5((device_key + salt).encode('utf-8')).hexdigest()
+
+
 # ─── Candidate formulas ──────────────────────────────────────────────
 # Each formula takes a dict of labeled values and returns a string to hash.
 # The lab computes MD5(result) and compares to the expected checksum.
@@ -158,6 +195,108 @@ def formula_salt_ts_at_suffix(p):
 def formula_ts_param_at_salt_suffix(p):
     return p["clientDateTime"] + p["param_value"] + p["accessToken"] + p["salt"] + p["suffix"]
 
+
+# ─── Advanced formulas using derived keys and value transformations ───
+
+def formula_build_key_then_finalise(p):
+    """Two-step: key = md5(salt + at + suffix), checksum = md5(pv + cdt + key + suffix)."""
+    key = hashlib.md5((p['salt'] + p['accessToken'] + p['suffix']).encode('utf-8')).hexdigest()
+    return p['param_value'] + p['clientDateTime'] + key + p['suffix']
+
+def formula_build_key_then_finalise_v2(p):
+    """key = md5(at + salt + suffix)."""
+    key = hashlib.md5((p['accessToken'] + p['salt'] + p['suffix']).encode('utf-8')).hexdigest()
+    return p['param_value'] + p['clientDateTime'] + key + p['suffix']
+
+def formula_build_key_then_finalise_v3(p):
+    """key = md5(salt + at), checksum = md5(pv + cdt + key + suffix)."""
+    key = hashlib.md5((p['salt'] + p['accessToken']).encode('utf-8')).hexdigest()
+    return p['param_value'] + p['clientDateTime'] + key + p['suffix']
+
+def formula_savy_checksum_as_salt(p):
+    """Use SavyChecksum (md5(deviceKey + savysoda)) as the salt."""
+    savy = derive_savy_checksum(p['device_key'], p['suffix'])
+    return p['param_value'] + p['clientDateTime'] + p['accessToken'] + savy + p['suffix']
+
+def formula_checksum_key_as_salt(p):
+    """Use ChecksumKey (md5(deviceKey + salt)) as the salt."""
+    ck = derive_checksum_key(p['device_key'], p['salt'])
+    return p['param_value'] + p['clientDateTime'] + p['accessToken'] + ck + p['suffix']
+
+def formula_format_string_collect_empty_csum(p):
+    """CollectMarker2 format string with empty checksum."""
+    fmt = f"starSystemMarkerId={p['param_value']}&checksum=&clientDateTime={p['clientDateTime']}&accessToken={p['accessToken']}"
+    return fmt + p['salt'] + p['suffix']
+
+def formula_format_string_rebuild_empty_csum(p):
+    """RebuildAmmo3 format string with empty checksum."""
+    fmt = f"ammoCategory={p['param_value']}&clientDateTime={p['clientDateTime']}&checksum=&accessToken={p['accessToken']}"
+    return fmt + p['salt'] + p['suffix']
+
+def formula_ticks_instead_of_datetime(p):
+    """Use .NET ticks instead of ISO datetime string."""
+    ticks = str(to_ticks(p['clientDateTime']))
+    return p['param_value'] + ticks + p['accessToken'] + p['salt'] + p['suffix']
+
+def formula_unix_ts_instead_of_datetime(p):
+    """Use Unix timestamp instead of ISO datetime string."""
+    ts = str(to_unix_ts(p['clientDateTime']))
+    return p['param_value'] + ts + p['accessToken'] + p['salt'] + p['suffix']
+
+def formula_time_checksum_instead_of_datetime(p):
+    """Use ChecksumTimeForDate result instead of datetime."""
+    tc = str(checksum_time_for_date(p['clientDateTime']))
+    return p['param_value'] + tc + p['accessToken'] + p['salt'] + p['suffix']
+
+def formula_hmac_md5_at_key(p):
+    """HMAC-MD5 with accessToken as key, params as message."""
+    import hmac
+    msg = f"{p['param_value']}{p['clientDateTime']}{p['salt']}{p['suffix']}".encode('utf-8')
+    return hmac.new(p['accessToken'].encode('utf-8'), msg, hashlib.md5).hexdigest()
+
+def formula_hmac_md5_salt_key(p):
+    """HMAC-MD5 with salt as key."""
+    import hmac
+    msg = f"{p['param_value']}{p['clientDateTime']}{p['accessToken']}{p['suffix']}".encode('utf-8')
+    return hmac.new(p['salt'].encode('utf-8'), msg, hashlib.md5).hexdigest()
+
+def formula_hmac_md5_device_key(p):
+    """HMAC-MD5 with deviceKey as key."""
+    import hmac
+    msg = f"{p['param_value']}{p['clientDateTime']}{p['accessToken']}{p['suffix']}".encode('utf-8')
+    return hmac.new(p['device_key'].encode('utf-8'), msg, hashlib.md5).hexdigest()
+
+def formula_double_md5(p):
+    """md5(md5(params + salt + suffix))."""
+    inner = hashlib.md5((p['param_value'] + p['clientDateTime'] + p['accessToken'] + p['salt'] + p['suffix']).encode('utf-8')).hexdigest()
+    return inner
+
+def formula_lowercase_all(p):
+    """All inputs lowercased."""
+    return (p['param_value'] + p['clientDateTime'] + p['accessToken'] + p['salt'] + p['suffix']).lower()
+
+def formula_url_encoded_timestamp(p):
+    """Timestamp URL-encoded."""
+    ts_enc = quote(p['clientDateTime'], safe='')
+    return p['param_value'] + ts_enc + p['accessToken'] + p['salt'] + p['suffix']
+
+def formula_endpoint_with_underscore(p):
+    """Endpoint name with underscore separator."""
+    return p['endpoint'] + '_' + p['param_value'] + p['clientDateTime'] + p['accessToken'] + p['salt'] + p['suffix']
+
+def formula_param_name_value_pairs(p):
+    """paramName=value&clientDateTime=...&accessToken=..."""
+    return f"{p['param_name']}={p['param_value']}&clientDateTime={p['clientDateTime']}&accessToken={p['accessToken']}" + p['salt'] + p['suffix']
+
+def formula_rebuild_exact_url_format(p):
+    """RebuildAmmo3 exact URL format with all params including checksum placeholder."""
+    return f"ammoCategory={p['param_value']}&clientDateTime={p['clientDateTime']}&checksum=&accessToken={p['accessToken']}" + p['salt'] + p['suffix']
+
+def formula_collect_exact_url_format(p):
+    """CollectMarker2 exact URL format."""
+    return f"starSystemMarkerId={p['param_value']}&checksum=&clientDateTime={p['clientDateTime']}&accessToken={p['accessToken']}" + p['salt'] + p['suffix']
+
+
 # Registry of all candidate formulas
 FORMULAS = {
     "device_email_param_ts_at_salt_suffix": formula_device_email_param_ts_at_salt_suffix,
@@ -176,6 +315,28 @@ FORMULAS = {
     "email_param_ts_at_salt_suffix": formula_email_param_ts_at_salt_suffix,
     "salt_ts_at_suffix": formula_salt_ts_at_suffix,
     "ts_param_at_salt_suffix": formula_ts_param_at_salt_suffix,
+
+    # Advanced formulas
+    "build_key_then_finalise": formula_build_key_then_finalise,
+    "build_key_then_finalise_v2": formula_build_key_then_finalise_v2,
+    "build_key_then_finalise_v3": formula_build_key_then_finalise_v3,
+    "savy_checksum_as_salt": formula_savy_checksum_as_salt,
+    "checksum_key_as_salt": formula_checksum_key_as_salt,
+    "format_string_collect_empty_csum": formula_format_string_collect_empty_csum,
+    "format_string_rebuild_empty_csum": formula_format_string_rebuild_empty_csum,
+    "ticks_instead_of_datetime": formula_ticks_instead_of_datetime,
+    "unix_ts_instead_of_datetime": formula_unix_ts_instead_of_datetime,
+    "time_checksum_instead_of_datetime": formula_time_checksum_instead_of_datetime,
+    "hmac_md5_at_key": formula_hmac_md5_at_key,
+    "hmac_md5_salt_key": formula_hmac_md5_salt_key,
+    "hmac_md5_device_key": formula_hmac_md5_device_key,
+    "double_md5": formula_double_md5,
+    "lowercase_all": formula_lowercase_all,
+    "url_encoded_timestamp": formula_url_encoded_timestamp,
+    "endpoint_with_underscore": formula_endpoint_with_underscore,
+    "param_name_value_pairs": formula_param_name_value_pairs,
+    "rebuild_exact_url_format": formula_rebuild_exact_url_format,
+    "collect_exact_url_format": formula_collect_exact_url_format,
 }
 
 
@@ -210,7 +371,7 @@ def main():
 
     for name, fn in FORMULAS.items():
         matches, total, results = test_formula(name, fn, samples, session)
-        status = "✓ ALL MATCH" if matches == total else f"{matches}/{total} matched"
+        status = "ALL MATCH" if matches == total else f"{matches}/{total} matched"
         print(f"{name}: {status}")
         for sample_id, result in results:
             if matches > 0 or matches == total:
