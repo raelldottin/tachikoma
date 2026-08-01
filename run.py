@@ -89,7 +89,7 @@ def main():
         action="store",
         dest="auth",
         default=None,
-        help="authentication string (key:name:refreshToken:languageKey)",
+        help="authentication string (name|deviceKey|refreshToken|languageKey|accessToken|userId) — required for game login",
     )
     parser.add_argument(
         "-e",
@@ -98,7 +98,7 @@ def main():
         action="store",
         dest="email",
         default=None,
-        help="email for game login and SMTP sender",
+        help="SMTP sender email for log delivery (not game login — game auth requires -a/--auth)",
     )
     parser.add_argument(
         "-p",
@@ -107,7 +107,7 @@ def main():
         action="store",
         dest="password",
         default=None,
-        help="password for game login and SMTP sender",
+        help="SMTP sender password for log delivery (not game login — game auth requires -a/--auth)",
     )
     parser.add_argument(
         "-r",
