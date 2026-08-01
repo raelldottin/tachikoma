@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Checksum research harness for CollectMarker2 and RebuildAmmo3.
+"""Checksum research harness for CollectMarker2, RebuildAmmo3, and UserEmailPasswordAuthorize4.
 
 Loads captured checksum samples from tests/fixtures/checksum_samples.json,
 resolves session-specific fields (device key, email, salt, access tokens)
@@ -31,11 +31,40 @@ import itertools
 import json
 import os
 import sys
+from dataclasses import dataclass
+from enum import Enum, auto
 from pathlib import Path
 from urllib.parse import quote
 
 
 FIXTURE_PATH = Path(__file__).parent.parent / "tests" / "fixtures" / "checksum_samples.json"
+
+
+class ResultKind(Enum):
+    PREIMAGE = auto()
+    DIGEST = auto()
+
+
+@dataclass(frozen=True)
+class CandidateResult:
+    kind: ResultKind
+    value: bytes | str
+
+
+def evaluate(result: CandidateResult) -> str:
+    """Evaluate a candidate result to its final hex digest for comparison.
+
+    PREIMAGE: hash the value as UTF-8 bytes (or raw bytes if already bytes)
+    DIGEST: use the value directly as the hex digest (already computed)
+    """
+    if result.kind is ResultKind.DIGEST:
+        return str(result.value).lower()
+
+    value = result.value
+    if isinstance(value, str):
+        value = value.encode("utf-8")
+
+    return hashlib.md5(value).hexdigest()
 
 
 def load_fixture():
@@ -133,168 +162,209 @@ def derive_checksum_key(device_key: str, salt: str) -> str:
 
 
 # ─── Candidate formulas ──────────────────────────────────────────────
-# Each formula takes a dict of labeled values and returns a string to hash.
-# The lab computes MD5(result) and compares to the expected checksum.
+# Each formula takes a dict of labeled values and returns a CandidateResult.
+# The lab calls evaluate() on the result to get the final hex digest for comparison.
+# 
+# - PREIMAGE: return CandidateResult(ResultKind.PREIMAGE, constructed_string_or_bytes)
+#   The lab will compute MD5(utf8(preimage)) for comparison.
+# - DIGEST: return CandidateResult(ResultKind.DIGEST, hex_digest_or_bytes)
+#   The lab will use the digest directly (for HMAC, double-MD5, etc.)
+
 
 def formula_device_email_param_ts_at_salt_suffix(p):
-    return p["device_key"] + p["email"] + p["param_value"] + p["clientDateTime"] + p["accessToken"] + p["salt"] + p["suffix"]
+    return CandidateResult(ResultKind.PREIMAGE, p["device_key"] + p["email"] + p["param_value"] + p["clientDateTime"] + p["accessToken"] + p["salt"] + p["suffix"])
+
 
 def formula_device_param_ts_at_salt_suffix(p):
-    return p["device_key"] + p["param_value"] + p["clientDateTime"] + p["accessToken"] + p["salt"] + p["suffix"]
+    return CandidateResult(ResultKind.PREIMAGE, p["device_key"] + p["param_value"] + p["clientDateTime"] + p["accessToken"] + p["salt"] + p["suffix"])
+
 
 def formula_param_ts_at_salt_suffix(p):
-    return p["param_value"] + p["clientDateTime"] + p["accessToken"] + p["salt"] + p["suffix"]
+    return CandidateResult(ResultKind.PREIMAGE, p["param_value"] + p["clientDateTime"] + p["accessToken"] + p["salt"] + p["suffix"])
+
 
 def formula_endpoint_param_ts_at_salt_suffix(p):
-    return p["endpoint"] + p["param_value"] + p["clientDateTime"] + p["accessToken"] + p["salt"] + p["suffix"]
+    return CandidateResult(ResultKind.PREIMAGE, p["endpoint"] + p["param_value"] + p["clientDateTime"] + p["accessToken"] + p["salt"] + p["suffix"])
+
 
 def formula_device_endpoint_param_ts_at_salt_suffix(p):
-    return p["device_key"] + p["endpoint"] + p["param_value"] + p["clientDateTime"] + p["accessToken"] + p["salt"] + p["suffix"]
+    return CandidateResult(ResultKind.PREIMAGE, p["device_key"] + p["endpoint"] + p["param_value"] + p["clientDateTime"] + p["accessToken"] + p["salt"] + p["suffix"])
+
 
 def formula_query_string_salt_suffix(p):
     """Query string as it appears in the URL (without checksum param)."""
     qs = f"{p['param_name']}={p['param_value']}&clientDateTime={p['clientDateTime']}&accessToken={p['accessToken']}"
-    return qs + p["salt"] + p["suffix"]
+    return CandidateResult(ResultKind.PREIMAGE, qs + p["salt"] + p["suffix"])
+
 
 def formula_query_string_suffix(p):
     qs = f"{p['param_name']}={p['param_value']}&clientDateTime={p['clientDateTime']}&accessToken={p['accessToken']}"
-    return qs + p["suffix"]
+    return CandidateResult(ResultKind.PREIMAGE, qs + p["suffix"])
+
 
 def formula_post_body_salt_suffix(p):
     """POST body params (without checksum) + salt + suffix."""
     body = f"{p['param_name']}={p['param_value']}&clientDateTime={p['clientDateTime']}&accessToken={p['accessToken']}"
-    return body + p["salt"] + p["suffix"]
+    return CandidateResult(ResultKind.PREIMAGE, body + p["salt"] + p["suffix"])
+
 
 def formula_url_encoded_body_salt_suffix(p):
     """POST body with URL-encoded timestamp."""
     body = f"{p['param_name']}={p['param_value']}&clientDateTime={quote(p['clientDateTime'])}&accessToken={p['accessToken']}"
-    return body + p["salt"] + p["suffix"]
+    return CandidateResult(ResultKind.PREIMAGE, body + p["salt"] + p["suffix"])
+
 
 def formula_device_query_salt_suffix(p):
     qs = f"{p['param_name']}={p['param_value']}&clientDateTime={p['clientDateTime']}&accessToken={p['accessToken']}"
-    return p["device_key"] + qs + p["salt"] + p["suffix"]
+    return CandidateResult(ResultKind.PREIMAGE, p["device_key"] + qs + p["salt"] + p["suffix"])
+
 
 def formula_sorted_query_salt_suffix(p):
     """Query params sorted alphabetically by key."""
     qs = f"accessToken={p['accessToken']}&clientDateTime={p['clientDateTime']}&{p['param_name']}={p['param_value']}"
-    return qs + p["salt"] + p["suffix"]
+    return CandidateResult(ResultKind.PREIMAGE, qs + p["salt"] + p["suffix"])
+
 
 def formula_values_only_salt_suffix(p):
     """Just the values, no field names."""
-    return p["param_value"] + p["clientDateTime"] + p["accessToken"] + p["salt"] + p["suffix"]
+    return CandidateResult(ResultKind.PREIMAGE, p["param_value"] + p["clientDateTime"] + p["accessToken"] + p["salt"] + p["suffix"])
+
 
 def formula_device_values_salt_suffix(p):
-    return p["device_key"] + p["param_value"] + p["clientDateTime"] + p["accessToken"] + p["salt"] + p["suffix"]
+    return CandidateResult(ResultKind.PREIMAGE, p["device_key"] + p["param_value"] + p["clientDateTime"] + p["accessToken"] + p["salt"] + p["suffix"])
+
 
 def formula_email_param_ts_at_salt_suffix(p):
-    return p["email"] + p["param_value"] + p["clientDateTime"] + p["accessToken"] + p["salt"] + p["suffix"]
+    return CandidateResult(ResultKind.PREIMAGE, p["email"] + p["param_value"] + p["clientDateTime"] + p["accessToken"] + p["salt"] + p["suffix"])
+
 
 def formula_salt_ts_at_suffix(p):
-    return p["salt"] + p["clientDateTime"] + p["accessToken"] + p["suffix"]
+    return CandidateResult(ResultKind.PREIMAGE, p["salt"] + p["clientDateTime"] + p["accessToken"] + p["suffix"])
+
 
 def formula_ts_param_at_salt_suffix(p):
-    return p["clientDateTime"] + p["param_value"] + p["accessToken"] + p["salt"] + p["suffix"]
+    return CandidateResult(ResultKind.PREIMAGE, p["clientDateTime"] + p["param_value"] + p["accessToken"] + p["salt"] + p["suffix"])
 
 
 # ─── Advanced formulas using derived keys and value transformations ───
 
+
 def formula_build_key_then_finalise(p):
     """Two-step: key = md5(salt + at + suffix), checksum = md5(pv + cdt + key + suffix)."""
     key = hashlib.md5((p['salt'] + p['accessToken'] + p['suffix']).encode('utf-8')).hexdigest()
-    return p['param_value'] + p['clientDateTime'] + key + p['suffix']
+    return CandidateResult(ResultKind.PREIMAGE, p['param_value'] + p['clientDateTime'] + key + p['suffix'])
+
 
 def formula_build_key_then_finalise_v2(p):
     """key = md5(at + salt + suffix)."""
     key = hashlib.md5((p['accessToken'] + p['salt'] + p['suffix']).encode('utf-8')).hexdigest()
-    return p['param_value'] + p['clientDateTime'] + key + p['suffix']
+    return CandidateResult(ResultKind.PREIMAGE, p['param_value'] + p['clientDateTime'] + key + p['suffix'])
+
 
 def formula_build_key_then_finalise_v3(p):
     """key = md5(salt + at), checksum = md5(pv + cdt + key + suffix)."""
     key = hashlib.md5((p['salt'] + p['accessToken']).encode('utf-8')).hexdigest()
-    return p['param_value'] + p['clientDateTime'] + key + p['suffix']
+    return CandidateResult(ResultKind.PREIMAGE, p['param_value'] + p['clientDateTime'] + key + p['suffix'])
+
 
 def formula_savy_checksum_as_salt(p):
     """Use SavyChecksum (md5(deviceKey + savysoda)) as the salt."""
     savy = derive_savy_checksum(p['device_key'], p['suffix'])
-    return p['param_value'] + p['clientDateTime'] + p['accessToken'] + savy + p['suffix']
+    return CandidateResult(ResultKind.PREIMAGE, p['param_value'] + p['clientDateTime'] + p['accessToken'] + savy + p['suffix'])
+
 
 def formula_checksum_key_as_salt(p):
     """Use ChecksumKey (md5(deviceKey + salt)) as the salt."""
     ck = derive_checksum_key(p['device_key'], p['salt'])
-    return p['param_value'] + p['clientDateTime'] + p['accessToken'] + ck + p['suffix']
+    return CandidateResult(ResultKind.PREIMAGE, p['param_value'] + p['clientDateTime'] + p['accessToken'] + ck + p['suffix'])
+
 
 def formula_format_string_collect_empty_csum(p):
     """CollectMarker2 format string with empty checksum."""
     fmt = f"starSystemMarkerId={p['param_value']}&checksum=&clientDateTime={p['clientDateTime']}&accessToken={p['accessToken']}"
-    return fmt + p['salt'] + p['suffix']
+    return CandidateResult(ResultKind.PREIMAGE, fmt + p['salt'] + p['suffix'])
+
 
 def formula_format_string_rebuild_empty_csum(p):
     """RebuildAmmo3 format string with empty checksum."""
     fmt = f"ammoCategory={p['param_value']}&clientDateTime={p['clientDateTime']}&checksum=&accessToken={p['accessToken']}"
-    return fmt + p['salt'] + p['suffix']
+    return CandidateResult(ResultKind.PREIMAGE, fmt + p['salt'] + p['suffix'])
+
 
 def formula_ticks_instead_of_datetime(p):
     """Use .NET ticks instead of ISO datetime string."""
     ticks = str(to_ticks(p['clientDateTime']))
-    return p['param_value'] + ticks + p['accessToken'] + p['salt'] + p['suffix']
+    return CandidateResult(ResultKind.PREIMAGE, p['param_value'] + ticks + p['accessToken'] + p['salt'] + p['suffix'])
+
 
 def formula_unix_ts_instead_of_datetime(p):
     """Use Unix timestamp instead of ISO datetime string."""
     ts = str(to_unix_ts(p['clientDateTime']))
-    return p['param_value'] + ts + p['accessToken'] + p['salt'] + p['suffix']
+    return CandidateResult(ResultKind.PREIMAGE, p['param_value'] + ts + p['accessToken'] + p['salt'] + p['suffix'])
+
 
 def formula_time_checksum_instead_of_datetime(p):
     """Use ChecksumTimeForDate result instead of datetime."""
     tc = str(checksum_time_for_date(p['clientDateTime']))
-    return p['param_value'] + tc + p['accessToken'] + p['salt'] + p['suffix']
+    return CandidateResult(ResultKind.PREIMAGE, p['param_value'] + tc + p['accessToken'] + p['salt'] + p['suffix'])
+
 
 def formula_hmac_md5_at_key(p):
     """HMAC-MD5 with accessToken as key, params as message."""
     import hmac
     msg = f"{p['param_value']}{p['clientDateTime']}{p['salt']}{p['suffix']}".encode('utf-8')
-    return hmac.new(p['accessToken'].encode('utf-8'), msg, hashlib.md5).hexdigest()
+    return CandidateResult(ResultKind.DIGEST, hmac.new(p['accessToken'].encode('utf-8'), msg, hashlib.md5).hexdigest())
+
 
 def formula_hmac_md5_salt_key(p):
     """HMAC-MD5 with salt as key."""
     import hmac
     msg = f"{p['param_value']}{p['clientDateTime']}{p['accessToken']}{p['suffix']}".encode('utf-8')
-    return hmac.new(p['salt'].encode('utf-8'), msg, hashlib.md5).hexdigest()
+    return CandidateResult(ResultKind.DIGEST, hmac.new(p['salt'].encode('utf-8'), msg, hashlib.md5).hexdigest())
+
 
 def formula_hmac_md5_device_key(p):
     """HMAC-MD5 with deviceKey as key."""
     import hmac
     msg = f"{p['param_value']}{p['clientDateTime']}{p['accessToken']}{p['suffix']}".encode('utf-8')
-    return hmac.new(p['device_key'].encode('utf-8'), msg, hashlib.md5).hexdigest()
+    return CandidateResult(ResultKind.DIGEST, hmac.new(p['device_key'].encode('utf-8'), msg, hashlib.md5).hexdigest())
+
 
 def formula_double_md5(p):
     """md5(md5(params + salt + suffix))."""
     inner = hashlib.md5((p['param_value'] + p['clientDateTime'] + p['accessToken'] + p['salt'] + p['suffix']).encode('utf-8')).hexdigest()
-    return inner
+    return CandidateResult(ResultKind.DIGEST, inner)
+
 
 def formula_lowercase_all(p):
     """All inputs lowercased."""
-    return (p['param_value'] + p['clientDateTime'] + p['accessToken'] + p['salt'] + p['suffix']).lower()
+    return CandidateResult(ResultKind.PREIMAGE, (p['param_value'] + p['clientDateTime'] + p['accessToken'] + p['salt'] + p['suffix']).lower())
+
 
 def formula_url_encoded_timestamp(p):
     """Timestamp URL-encoded."""
     ts_enc = quote(p['clientDateTime'], safe='')
-    return p['param_value'] + ts_enc + p['accessToken'] + p['salt'] + p['suffix']
+    return CandidateResult(ResultKind.PREIMAGE, p['param_value'] + ts_enc + p['accessToken'] + p['salt'] + p['suffix'])
+
 
 def formula_endpoint_with_underscore(p):
     """Endpoint name with underscore separator."""
-    return p['endpoint'] + '_' + p['param_value'] + p['clientDateTime'] + p['accessToken'] + p['salt'] + p['suffix']
+    return CandidateResult(ResultKind.PREIMAGE, p['endpoint'] + '_' + p['param_value'] + p['clientDateTime'] + p['accessToken'] + p['salt'] + p['suffix'])
+
 
 def formula_param_name_value_pairs(p):
     """paramName=value&clientDateTime=...&accessToken=..."""
-    return f"{p['param_name']}={p['param_value']}&clientDateTime={p['clientDateTime']}&accessToken={p['accessToken']}" + p['salt'] + p['suffix']
+    return CandidateResult(ResultKind.PREIMAGE, f"{p['param_name']}={p['param_value']}&clientDateTime={p['clientDateTime']}&accessToken={p['accessToken']}" + p['salt'] + p['suffix'])
+
 
 def formula_rebuild_exact_url_format(p):
     """RebuildAmmo3 exact URL format with all params including checksum placeholder."""
-    return f"ammoCategory={p['param_value']}&clientDateTime={p['clientDateTime']}&checksum=&accessToken={p['accessToken']}" + p['salt'] + p['suffix']
+    return CandidateResult(ResultKind.PREIMAGE, f"ammoCategory={p['param_value']}&clientDateTime={p['clientDateTime']}&checksum=&accessToken={p['accessToken']}" + p['salt'] + p['suffix'])
+
 
 def formula_collect_exact_url_format(p):
     """CollectMarker2 exact URL format."""
-    return f"starSystemMarkerId={p['param_value']}&checksum=&clientDateTime={p['clientDateTime']}&accessToken={p['accessToken']}" + p['salt'] + p['suffix']
+    return CandidateResult(ResultKind.PREIMAGE, f"starSystemMarkerId={p['param_value']}&checksum=&clientDateTime={p['clientDateTime']}&accessToken={p['accessToken']}" + p['salt'] + p['suffix'])
 
 
 # Registry of all candidate formulas
@@ -346,8 +416,8 @@ def test_formula(name, formula_fn, samples, session):
     results = []
     for sample in samples:
         params = get_sample_params(sample, session)
-        preimage = formula_fn(params)
-        computed = hashlib.md5(preimage.encode("utf-8")).hexdigest()
+        candidate = formula_fn(params)
+        computed = evaluate(candidate)
         expected = sample["expected_checksum"]
         is_match = computed == expected
         if is_match:

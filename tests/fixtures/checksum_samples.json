@@ -6,7 +6,8 @@
     "collect_2": "PSS_AT_COLLECT_2",
     "collect_3": "PSS_AT_COLLECT_3",
     "rebuild_1": "PSS_AT_REBUILD_1",
-    "rebuild_2": "PSS_AT_REBUILD_2"
+    "rebuild_2": "PSS_AT_REBUILD_2",
+    "authorize_1": "PSS_AT_AUTHORIZE_1"
   },
   "samples": [
     {
@@ -48,6 +49,22 @@
       "param_value": "None",
       "clientDateTime": "2026-08-01T00:43:59",
       "expected_checksum": "110abda2f8ec9660b80794197ba4ca81"
+    },
+    {
+      "id": "authorize_1",
+      "endpoint": "UserEmailPasswordAuthorize4",
+      "param_name": "checksum",
+      "param_value": "",
+      "clientDateTime": "2026-08-01T11:11:32",
+      "expected_checksum": "8418e1e0a07c1ed794789df7d8edc6ea",
+      "field_names": [
+        "deviceKey",
+        "email",
+        "password",
+        "languageKey",
+        "isWeb",
+        "accessToken"
+      ]
     }
   ],
   "session_fields": {
