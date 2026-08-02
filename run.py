@@ -96,6 +96,18 @@ def main():
         help="authentication string",
     )
     parser.add_argument(
+        "--login-email",
+        dest="login_email",
+        default=None,
+        help="email for game login (requires --login-password)",
+    )
+    parser.add_argument(
+        "--login-password",
+        dest="login_password",
+        default=None,
+        help="password for game login (requires --login-email)",
+    )
+    parser.add_argument(
         "-e",
         "--email",
         nargs=1,
@@ -129,17 +141,21 @@ def main():
     else:
         device = Device(language="en")
 
-    client = None
+    # Enable email/password login if both provided
+    settings = {}
+    if args.login_email and args.login_password:
+        settings["allow_email_password_login"] = True
 
-    client = authenticate(device)
-    if client:
-        client.getLatestVersion3()
-        client.getTodayLiveOps2()
-        client.listAllDesigns4()
-        client.getShipByUserId()
+    client = Client(device=device, settings=settings)
+
+    if args.login_email and args.login_password:
+        if not client.login(email=args.login_email, password=args.login_password):
+            logging.warning("[authenticate] failed to login")
+            sys.exit(1)
     else:
-        logging.error("Authentication failed. Reprovision the stored refresh token.")
-        sys.exit(1)
+        if not client.login():
+            logging.warning("[authenticate] failed to login")
+            sys.exit(1)
 
     while client:
         client.grabFlyingStarbux()
