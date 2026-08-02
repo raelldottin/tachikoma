@@ -50,68 +50,67 @@ Run the prepared capture script:
 # Ctrl+C to save capture
 ```
 
-The script saves:
-- Full JSON capture with all requests/responses
-- CSV summary with `timestamp,endpoint,checksum,design_versions_at_time`
-- `GetLatestVersion4` responses paired with each checksum endpoint call
+### 2. Extract Static Constants
 
-### 2. Offline Reproduction
+From binary at known RVAs:
+- `0x4F7AAB0` → `SavyChecksum` (salt)
+- `0x4F64F20` → `ChecksumKey`
 
-Once you have captures with `designVersion`:
+Or read from `Configuration` at runtime via Frida/LLDB (anti-attach blocks Frida on non-jailbroken).
+
+### 3. Offline Reproduction Test
+
 ```python
-# Extract constants from capture (or dump at runtime via LLDB)
-SavyChecksum = "..."  # 32-char hex salt
-ChecksumKey = "..."   # static key
-
-# For each captured sample:
-preimage = f"{markerId}{clientDateTime}{designVersion}{ChecksumKey}"
-encrypted = preimage + SavyChecksum
+# Once constants + designVersion known:
+preimage = f"{markerId}{clientDateTime}{designVersion}{checksumKey}"
+encrypted = preimage + savyChecksum  # SavysodaEncryptString
 checksum = md5(encrypted.encode()).hexdigest()
-# Must match captured checksum exactly
 ```
 
-### 3. Verify All 6 Fixtures
+### 4. Verify Against Captured Samples
 
-| Sample | Endpoint | Dynamic Input Needed |
-|--------|----------|---------------------|
-| `collect_1` | CollectMarker2 | designVersion at 2026-08-01T00:17:05 |
-| `collect_2` | CollectMarker2 | designVersion at 2026-08-01T00:17:08 |
-| `collect_3` | CollectMarker2 | designVersion at 2026-08-01T00:46:10 |
-| `rebuild_1` | RebuildAmmo3 | designVersion at 2026-07-31T23:49:19 |
-| `rebuild_2` | RebuildAmmo3 | designVersion at 2026-08-01T00:43:59 |
-| `authorize_1` | UserEmailPasswordAuthorize4 | (no designVersion needed) |
-
-### 4. Implement & Live Test
-
-Once reproduction works:
-1. Add shared `NativeChecksum` module to Tachikoma SDK
-2. Live test one request per endpoint type
-3. Verify state changes (marker collected, ammo rebuilt, login successful)
+- `authorize_1`: UserEmailPasswordAuthorize4 checksum `8418e1e0a07c1ed794789df7d8edc6ea`
+- `collect_1`, `collect_2`, `collect_3`: CollectMarker2 samples
+- `rebuild_1`, `rebuild_2`: RebuildAmmo3 samples
 
 ---
 
-## Files Created
+## Runtime Verification Gates
 
-| File | Purpose |
-|------|---------|
-| `STATIC_ANALYSIS_FINDINGS.md` | Full technical documentation |
-| `scripts/capture_checksum_inputs.py` | mitmproxy capture script |
-| `scripts/run_capture.sh` | Runner script |
-| `scripts/extract_constants.py` | Binary extraction (partial — constants at runtime) |
+### CollectMarker2 — Enable `ENABLE_COLLECT_MARKER` only after:
+
+1. Every historical `CollectMarker2` fixture matches offline.
+2. A newly captured official-client request matches offline.
+3. Tachikoma receives a successful response.
+4. A follow-up read confirms the marker disappeared or the expected resources increased.
+5. A second call produces the expected idempotent/no-op outcome.
+
+### RebuildAmmo3 — Enable `ENABLE_REBUILD_AMMO` only after:
+
+1. Every historical `RebuildAmmo3` fixture matches offline.
+2. A newly captured official-client request matches offline.
+3. Tachikoma receives a successful response.
+4. A follow-up ship-state read confirms ammunition was restored.
+5. A second call produces the expected already-rebuilt/no-op outcome.
+
+### UserEmailPasswordAuthorize4 — Remains blocked
+
+Uses `BuildKeyChecksum → FinaliseChecksumWithDesigns` native pipeline; no offline formula yet.
 
 ---
 
-## Blocked Paths
+## Fixture Runner Separation
 
-| Approach | Status |
-|----------|--------|
-| Extract constants from binary directly | Values not present as plain strings; initialized at runtime via IL2CPP metadata |
-| Frida attach | Blocked by anti-tampering |
-| IL2CppDumper | Incompatible with IL2CPP v31 / Mach-O |
-| Cpp2IL IL body recovery | Partial — gives disassembly + pseudo-IL |
+```python
+SUPPORTED_NATIVE_SAMPLES = {"CollectMarker2", "RebuildAmmo3"}
+
+blocked_samples = [
+    s for s in samples if s["endpoint"] == "UserEmailPasswordAuthorize4"
+]
+```
 
 ---
 
-## Ready to Proceed
+## Implementation Status
 
-Run `./scripts/run_capture.sh` and play the game to capture `GetLatestVersion4` + checksum endpoints in one session. The CSV output will give you the exact `designVersion` for each sample.
+> `CollectMarker2` and `RebuildAmmo3` have recovered checksum formulas and are pending verification, not further reverse engineering. `UserEmailPasswordAuthorize4` remains a separate native-analysis problem, so pre-provisioned `-a` authentication remains the supported login path.

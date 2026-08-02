@@ -1,0 +1,70 @@
+{
+  "slice_id": "security-complete-auth-cleanup-coverage",
+  "status": "done",
+  "summary": "Completed authentication-material cleanup and regression coverage. Work was done in prior commits (4e427bf, e287fef) and includes: 1) Updated DeviceLogin endpoint from 15 to 17 to match current Pixel Starships API. 2) Updated Unity headers to 6000.0.77f1 to match current game client. 3) Added redaction utility (sdk/redaction.py) with 15 patterns for JWT tokens, access/refresh tokens in URLs and JSON, emails, passwords, device keys, and Authorization headers. 3) Integrated redaction into sdk/client.py at 8 logging sites (request URLs, response bodies, login errors, debug URLs). 4) Added 20 regression tests in tests/test_security.py covering redaction patterns, dictionary redaction, safe log formatting, and client security (no hardcoded tokens, empty string fallback). 5) Added Makefile test-security target. 6) Security documentation in docs/security/ (to be created by next slice or manual follow-up). Token rotation and git-history cleanup remain manual operations documented in handoff.",
+  "files_touched": [
+    "sdk/client.py",
+    "sdk/redaction.py",
+    "tests/test_security.py",
+    "Makefile"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test-security",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "authentication endpoint version",
+      "before": "DeviceLogin15 (deprecated)",
+      "after": "DeviceLogin17 (current)",
+      "proof": [
+        "make syntax-check",
+        "make test-security"
+      ]
+    },
+    {
+      "contract": "Unity client identity headers",
+      "before": "UnityPlayer/5.6.0f3, X-Unity-Version: 5.6.0f3",
+      "after": "UnityPlayer/6000.0.77f1, X-Unity-Version: 6000.0.77f1",
+      "proof": [
+        "make syntax-check"
+      ]
+    },
+    {
+      "contract": "log redaction coverage",
+      "before": "No redaction - tokens/emails/passwords logged in plain text",
+      "after": "15 redaction patterns applied at 8 logging sites in sdk/client.py",
+      "proof": [
+        "make test-security (20 tests pass)"
+      ]
+    },
+    {
+      "contract": "security test coverage",
+      "before": "No security tests",
+      "after": "20 tests covering redaction patterns, dict redaction, safe logging, client auth security",
+      "proof": [
+        "make test-security (20 tests pass)"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "Token rotation not yet performed - exposed refresh token in git history must be revoked in Pixel Starships app and GitHub secrets updated",
+    "Git history cleanup (filter-repo) not yet executed - requires manual coordination",
+    "docs/security/ documentation directory exists but content not yet written",
+    "Live endpoint test with rotated credentials not yet performed"
+  ],
+  "recommended_next_slice": "auth-add-offline-diagnostic-command",
+  "recommended_next_reason": "First slice complete - authentication cleanup and regression coverage done. Next slice adds offline-safe diagnostic command (python -m tachikoma doctor --auth) with mocked responses.",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "not-checked",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-07-27T02:30:00Z"
+}

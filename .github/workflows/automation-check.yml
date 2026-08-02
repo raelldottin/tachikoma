@@ -1,0 +1,25 @@
+name: Automation Framework
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  harness:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: make automation-check
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+
+      - run: make syntax-check
+      - run: make git-check

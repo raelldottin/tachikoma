@@ -1,0 +1,20 @@
+repos:
+  - repo: local
+    hooks:
+      - id: python-lint
+        name: python-lint (ruff + ty)
+        entry: make lint
+        language: system
+        types: [python]
+        verbose: true
+      - id: python-tests
+        name: python-tests
+        entry: make test
+        language: system
+        types: [python]
+        verbose: true
+      - id: git-check
+        name: git-check
+        entry: make git-check
+        language: system
+        verbose: true
