@@ -72,15 +72,10 @@ def email_logfile(filename, client, email=None, password=None, recipient=None):
     return True
 
 
-def authenticate(device, email=None, password=None):
+def authenticate(device):
     client = Client(device=device)
 
-    if device.refreshToken:
-        if client.login():
-            return client
-        return False
-
-    if not client.login(email=email, password=password):
+    if not client.login():
         logging.warning("[authenticate] failed to login")
         return False
 
@@ -136,21 +131,15 @@ def main():
 
     client = None
 
-    if device.refreshToken:
-        client = authenticate(device)
-        if client:
-            client.getLatestVersion3()
-            client.getTodayLiveOps2()
-            client.listAllDesigns4()
-            client.getShipByUserId()
+    client = authenticate(device)
+    if client:
+        client.getLatestVersion3()
+        client.getTodayLiveOps2()
+        client.listAllDesigns4()
+        client.getShipByUserId()
     else:
-        decide = input("Input G to login as guest. Input A to login as user : ")
-        if decide == "G":
-            client = authenticate(device)
-        else:
-            email = input("Enter email: ")
-            password = getpass.getpass("Enter password: ")
-            client = authenticate(device, email, password)
+        logging.error("Authentication failed. Reprovision the stored refresh token.")
+        sys.exit(1)
 
     while client:
         client.grabFlyingStarbux()

@@ -254,7 +254,7 @@ class Client(object):
         url = f"{self.baseUrl}/UserService/DeviceLogin17"
         json = self._build_device_login_payload()
 
-        r = requests.post(url, json=json)
+        r = self.session.post(url, json=json)
         if r:
             d = xmltodict.parse(r.content, xml_attribs=True)
             token = self._extract_access_token(r)

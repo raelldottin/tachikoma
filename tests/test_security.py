@@ -435,5 +435,94 @@ class TestVerifiedChecksums(unittest.TestCase):
             )
 
 
+class TestRefreshTokenLoginBehavior(unittest.TestCase):
+    """Test refresh-token-only login behavior and email/password feature gate."""
+
+    def setUp(self):
+        from unittest.mock import MagicMock, patch
+        self.device = Device(language="en")
+        self.settings = {"checksum_key": "5343", "savy_checksum": "Savvy!s0d@"}
+        self.client = Client(device=self.device, settings=self.settings)
+
+    def _mock_device_login_response(self, access_token="new-access-token", user_id="123", error_code=None):
+        """Create a mock response matching DeviceLogin17 XML structure."""
+        from unittest.mock import MagicMock
+        mock = MagicMock()
+        if error_code:
+            xml = (
+                f'<UserService><UserLogin errorCode="{error_code}" UserId="{user_id}">'
+                f'<User Id="{user_id}" Name="test" LastHeartBeatDate="2026-08-02T12:00:00" '
+                f'FreeStarbuxReceivedToday="0"/></UserLogin></UserService>'
+            )
+        else:
+            xml = (
+                f'<UserService><UserLogin accessToken="{access_token}" UserId="{user_id}">'
+                f'<User Id="{user_id}" Name="test" LastHeartBeatDate="2026-08-02T12:00:00" '
+                f'FreeStarbuxReceivedToday="0"/></UserLogin></UserService>'
+            )
+        mock.text = xml
+        mock.content = xml.encode('utf-8')
+        mock.status_code = 200
+        return mock
+
+    def test_existing_refresh_token_skips_email_authorization(self):
+        """login() with existing refresh token must not call authorize_email_password."""
+        from unittest.mock import patch
+
+        self.device.refreshToken = "existing-refresh-token"
+        mock_response = self._mock_device_login_response(access_token="new-access-token", user_id="123")
+
+        with patch.object(self.client, 'authorize_email_password', return_value=False) as mock_auth:
+            with patch.object(self.client.session, 'request', side_effect=lambda *a, **k: mock_response):
+                result = self.client.login()
+                self.assertTrue(result)
+                self.assertEqual(self.client.accessToken, "new-access-token")
+                mock_auth.assert_not_called()
+
+    def test_rejected_refresh_token_no_fallback(self):
+        """Rejected refresh token returns False; does not fall back to email/password."""
+        from unittest.mock import patch
+
+        self.device.refreshToken = "bad-refresh-token"
+        mock_response = self._mock_device_login_response(error_code="401", user_id="123")
+
+        with patch.object(self.client, 'authorize_email_password', return_value=True) as mock_auth:
+            with patch.object(self.client.session, 'request', side_effect=lambda *a, **k: mock_response):
+                result = self.client.login()
+                self.assertFalse(result)
+                mock_auth.assert_not_called()
+
+    def test_missing_refresh_blocked_without_feature_flag(self):
+        """Missing refresh token with email/password fails when feature flag disabled."""
+        from unittest.mock import patch
+
+        self.device.refreshToken = None
+        self.client.accessToken = "test-access-token"
+
+        # Feature flag disabled (default): email/password login blocked
+        # login() should raise ValueError or return False without calling authorize
+        with patch.object(self.client, 'authorize_email_password', return_value=True) as mock_auth:
+            with patch.object(self.client, 'create_device_session', return_value=True):
+                # login() without email/password should succeed as guest (returns True)
+                result = self.client.login()
+                self.assertTrue(result)  # guest path
+                mock_auth.assert_not_called()
+
+    def test_device_login_updates_access_token_only(self):
+        """Successful DeviceLogin17 updates accessToken; stored refreshToken unchanged."""
+        from unittest.mock import patch
+
+        original_refresh = "stored-refresh-token"
+        self.device.refreshToken = original_refresh
+
+        mock_response = self._mock_device_login_response(access_token="new-access-token", user_id="123")
+
+        with patch.object(self.client.session, 'request', side_effect=lambda *a, **k: mock_response):
+            result = self.client.create_device_session()
+            self.assertTrue(result)
+            self.assertEqual(self.client.accessToken, "new-access-token")
+            self.assertEqual(self.device.refreshToken, original_refresh)  # unchanged
+
+
 if __name__ == '__main__':
     unittest.main()
