@@ -385,6 +385,12 @@ class Client(object):
         if not password:
             raise ValueError("login() received email but no password")
 
+        # Feature gate: email/password login requires explicit enablement
+        # (UserEmailPasswordAuthorize4 is static-analysis-derived and unverified)
+        if not self.settings.get("allow_email_password_login", False):
+            logging.warning("[login] email/password login blocked: allow_email_password_login feature flag disabled")
+            return False
+
         # Stage 2: submit email + password to acquire a refresh token
         if not self.authorize_email_password(email, password):
             return False

@@ -492,21 +492,37 @@ class TestRefreshTokenLoginBehavior(unittest.TestCase):
                 self.assertFalse(result)
                 mock_auth.assert_not_called()
 
-    def test_missing_refresh_blocked_without_feature_flag(self):
-        """Missing refresh token with email/password fails when feature flag disabled."""
+    def test_missing_refresh_without_credentials_uses_guest_session(self):
+        """Missing refresh token + no credentials enters guest session (no email auth)."""
         from unittest.mock import patch
 
         self.device.refreshToken = None
         self.client.accessToken = "test-access-token"
 
         # Feature flag disabled (default): email/password login blocked
-        # login() should raise ValueError or return False without calling authorize
+        # login() without email/password should succeed as guest (returns True)
         with patch.object(self.client, 'authorize_email_password', return_value=True) as mock_auth:
             with patch.object(self.client, 'create_device_session', return_value=True):
-                # login() without email/password should succeed as guest (returns True)
                 result = self.client.login()
                 self.assertTrue(result)  # guest path
                 mock_auth.assert_not_called()
+
+    def test_email_password_blocked_by_feature_gate(self):
+        """login(email, password) with no refresh token blocked when feature gate disabled."""
+        from unittest.mock import patch
+
+        self.device.refreshToken = None
+        self.client.accessToken = "test-access-token"
+
+        # Feature flag disabled: calling login() with email/password should fail
+        # without calling authorize_email_password or storing a refresh token
+        with patch.object(self.client, 'authorize_email_password', return_value=True) as mock_auth:
+            with patch.object(self.client, 'create_device_session', return_value=True):
+                result = self.client.login(email="user@example.com", password="password123")
+                self.assertFalse(result)
+                mock_auth.assert_not_called()
+                # Ensure no refresh token was stored
+                self.assertIsNone(self.device.refreshToken)
 
     def test_device_login_updates_access_token_only(self):
         """Successful DeviceLogin17 updates accessToken; stored refreshToken unchanged."""
