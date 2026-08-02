@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from sdk.redaction import redact_secrets, redact_dict, safe_log_message, redact_log
 from sdk.client import Client, ConfigurationError
 from sdk.device import Device
+from sdk.security import checksum_device_login17
 
 
 class TestRedaction(unittest.TestCase):
@@ -341,6 +342,41 @@ class TestThreeStageAuth(unittest.TestCase):
             with self.assertRaises(ValueError) as cm:
                 client.login(email="test@example.com")
             self.assertIn("password", str(cm.exception).lower())
+
+
+class TestVerifiedChecksums(unittest.TestCase):
+    """Test checksum formulas verified against live captures."""
+
+    def test_device_login17_verified_capture_1(self):
+        """DeviceLogin17 formula verified against 2026-08-02 06:00:27 capture."""
+        device_key = '6AD42828-7D06-534D-A461-49658461A614'
+        cdt = '2026-08-02T06:00:27'
+        checksum_key = '5343'
+        savy_checksum = 'Savvy!s0d@'
+        expected = '83add0e8bb967327e87fcb44010293f4'
+
+        result = checksum_device_login17(device_key, cdt, checksum_key, savy_checksum)
+        self.assertEqual(result, expected)
+
+    def test_device_login17_verified_capture_2(self):
+        """DeviceLogin17 formula verified against 2026-08-02 06:04:22 capture."""
+        device_key = '6AD42828-7D06-534D-A461-49658461A614'
+        cdt = '2026-08-02T06:04:22'
+        checksum_key = '5343'
+        savy_checksum = 'Savvy!s0d@'
+        expected = 'cecf22dbc38466aefa02734f020222ac'
+
+        result = checksum_device_login17(device_key, cdt, checksum_key, savy_checksum)
+        self.assertEqual(result, expected)
+
+    def test_device_login17_requires_config(self):
+        """DeviceLogin17 raises UnsupportedNativeChecksum when config missing."""
+        from sdk.security import UnsupportedNativeChecksum
+
+        with self.assertRaises(UnsupportedNativeChecksum):
+            checksum_device_login17("key", "time", "", "savy")
+        with self.assertRaises(UnsupportedNativeChecksum):
+            checksum_device_login17("key", "time", "ck", "")
 
 
 if __name__ == '__main__':

@@ -22,6 +22,7 @@ from .security import (
     ChecksumEmailAuthorize,
     UnsupportedNativeChecksum,
     checksum_user_email_password_authorize4,
+    checksum_device_login17,
 )
 from .dotnet import DotNet
 from .redaction import redact_secrets, safe_log_message
@@ -200,7 +201,14 @@ class Client(object):
 
     def _build_device_login_payload(self):
         """Build the DeviceLogin17 JSON payload for the current device state."""
-        self.checksum = ChecksumCreateDevice(self.device.key, self.device.name)
+        checksum_key = self.settings.get("checksum_key") or "5343"
+        savy_checksum = self.settings.get("savy_checksum") or "Savvy!s0d@"
+        self.checksum = checksum_device_login17(
+            device_key=self.device.key,
+            client_date_time="{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime()),
+            checksum_key=checksum_key,
+            savy_checksum=savy_checksum,
+        )
         return {
             "DeviceKey": self.device.key,
             "AdvertisingKey": "",
