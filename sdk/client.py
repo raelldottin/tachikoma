@@ -766,7 +766,7 @@ class Client(object):
 
     def listAllCharacterDesigns2(self):
         if self.latestVersion:
-            url = f"{self.baseUrl}/CharacterService/ListAllCharacterDesigns2?languageKey={self.device.languageKey}&designVersion={self.latestVersion['SettingService']['GetLatestSetting']['Setting']['@ResearchDesignVersion']}"
+            url = f"{self.baseUrl}/CharacterService/ListAllCharacterDesigns2?languageKey={self.device.languageKey}&designVersion={self.latestVersion['SettingService']['GetLatestSetting']['Setting']['@CharacterDesignVersion']}"
             r = self.request(url, "GET")
             if r:
                 self.allCharacterDesigns = xmltodict.parse(r.content, xml_attribs=True)
