@@ -220,12 +220,12 @@ class Client(object):
             "LanguageKey": "en",
             "RefreshToken": self.device.refreshToken if self.device.refreshToken else "",
             "UserDeviceInfo": {
-                "OsVersion": "Mac OS X 14.2.0",
+                "OsVersion": "Mac OS X 26.5.2",
                 "Locale": "en",
                 "DeviceName": "Mac14,10",
                 "OSBuild": "0",
-                "ClientBuild": "13866",
-                "ClientVersion": "0.998.10",
+                "ClientBuild": "18881",
+                "ClientVersion": "0.999.59",
             },
             "AccessToken": "00000000-0000-0000-0000-000000000000",
         }
