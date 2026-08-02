@@ -144,12 +144,12 @@ class TestClientSecurity(unittest.TestCase):
         self.assertNotIn("1Rqw", source)  # Truncated token fragment
 
     def test_get_access_token_uses_empty_string(self):
-        """getAccessToken should use empty string when no refresh token."""
+        """DeviceLogin17 payload should use empty string when no refresh token."""
         device = Device(language="en")
         client = Client(device=device)
 
         import inspect
-        source = inspect.getsource(client.getAccessToken)
+        source = inspect.getsource(client._build_device_login_payload)
         # Should use empty string as fallback, not a hardcoded token
         # The actual code uses: self.device.refreshToken if self.device.refreshToken else ""
         self.assertIn('else ""', source)
@@ -269,6 +269,78 @@ class TestRebuildAmmoConfig(unittest.TestCase):
         self.assertNotIn("test@example.com", log_output)
 
         logger.removeHandler(handler)
+
+
+class TestThreeStageAuth(unittest.TestCase):
+    """Test three-stage email/password authentication flow."""
+
+    def test_create_device_session_exists(self):
+        """Client should have create_device_session method."""
+        device = Device(language="en")
+        client = Client(device=device)
+        self.assertTrue(hasattr(client, "create_device_session"))
+        self.assertTrue(callable(client.create_device_session))
+
+    def test_authorize_email_password_exists(self):
+        """Client should have authorize_email_password method."""
+        device = Device(language="en")
+        client = Client(device=device)
+        self.assertTrue(hasattr(client, "authorize_email_password"))
+        self.assertTrue(callable(client.authorize_email_password))
+
+    def test_exchange_refresh_token_exists(self):
+        """Client should have exchange_refresh_token method."""
+        device = Device(language="en")
+        client = Client(device=device)
+        self.assertTrue(hasattr(client, "exchange_refresh_token"))
+        self.assertTrue(callable(client.exchange_refresh_token))
+
+    def test_authorize_email_password_missing_checksum_key(self):
+        """authorize_email_password should raise UnsupportedNativeChecksum when checksum_key missing."""
+        from sdk.client import UnsupportedNativeChecksum
+
+        device = Device(language="en")
+        client = Client(device=device, settings={"savy_checksum": "test-savy"})
+        client.accessToken = "test-token"
+
+        with self.assertRaises(UnsupportedNativeChecksum) as cm:
+            client.authorize_email_password("test@example.com", "password123")
+        self.assertNotIn("test-savy", str(cm.exception))
+
+    def test_authorize_email_password_missing_savy_checksum(self):
+        """authorize_email_password should raise UnsupportedNativeChecksum when savy_checksum missing."""
+        from sdk.client import UnsupportedNativeChecksum
+
+        device = Device(language="en")
+        client = Client(device=device, settings={"checksum_key": "test-key"})
+        client.accessToken = "test-token"
+
+        with self.assertRaises(UnsupportedNativeChecksum) as cm:
+            client.authorize_email_password("test@example.com", "password123")
+        self.assertNotIn("test-key", str(cm.exception))
+
+    def test_authorize_email_password_requires_access_token(self):
+        """authorize_email_password should raise ValueError without access token."""
+        device = Device(language="en")
+        client = Client(device=device, settings={"checksum_key": "k", "savy_checksum": "s"})
+
+        with self.assertRaises(ValueError) as cm:
+            client.authorize_email_password("test@example.com", "password123")
+        self.assertIn("access token", str(cm.exception).lower())
+
+    def test_login_raises_without_password_when_email_provided(self):
+        """login() should raise ValueError if email provided but password missing."""
+        from unittest.mock import patch
+
+        device = Device(language="en")
+        device.refreshToken = None  # Force no existing refresh token
+        client = Client(device=device, settings={"checksum_key": "k", "savy_checksum": "s"})
+
+        with patch.object(client, "create_device_session", return_value=True):
+            client.accessToken = "test-token"
+            with self.assertRaises(ValueError) as cm:
+                client.login(email="test@example.com")
+            self.assertIn("password", str(cm.exception).lower())
 
 
 if __name__ == '__main__':

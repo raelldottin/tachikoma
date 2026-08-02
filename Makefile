@@ -1,7 +1,7 @@
 # Use .venv for all Python commands to ensure dependencies are available
 PYTHON = $(shell command -v .venv/bin/python 2>/dev/null || command -v python3 2>/dev/null || echo python3)
 
-.PHONY: automation-check automation-dry-run syntax-check test test-security git-check
+.PHONY: automation-check automation-dry-run syntax-check test test-security git-check lint pre-commit
 
 automation-check:
 	PYTHONDONTWRITEBYTECODE=1 \
@@ -22,3 +22,9 @@ test-security:
 
 git-check:
 	git diff --check
+
+lint:
+	uv run ruff check run.py sdk tests
+	uv run ty check run.py sdk tests
+
+pre-commit: lint syntax-check test git-check

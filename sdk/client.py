@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import urllib.parse
 import time
 import datetime
@@ -18,6 +20,8 @@ from .security import (
     ChecksumTimeForDate,
     ChecksumPasswordWithString,
     ChecksumEmailAuthorize,
+    UnsupportedNativeChecksum,
+    checksum_user_email_password_authorize4,
 )
 from .dotnet import DotNet
 from .redaction import redact_secrets, safe_log_message
@@ -191,13 +195,13 @@ class Client(object):
         return True
 
     def getAccessToken(self):
-        if self.accessToken:
-            return self.accessToken
+        """Backward-compatible accessor — delegates to create_device_session()."""
+        return self.create_device_session()
 
+    def _build_device_login_payload(self):
+        """Build the DeviceLogin17 JSON payload for the current device state."""
         self.checksum = ChecksumCreateDevice(self.device.key, self.device.name)
-
-        url = f"{self.baseUrl}/UserService/DeviceLogin17"
-        json = {
+        return {
             "DeviceKey": self.device.key,
             "AdvertisingKey": "",
             "ClientDateTime": "{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime()),
@@ -218,97 +222,169 @@ class Client(object):
             "AccessToken": "00000000-0000-0000-0000-000000000000",
         }
 
+    @staticmethod
+    def _extract_access_token(response):
+        """Extract the accessToken attribute value from a DeviceLogin17 response."""
+        if (
+            (not response or response.status_code != 200)
+            or ("errorCode" in response.text)
+            or ("accessToken" not in response.text)
+        ):
+            return None
+        return response.text.split('accessToken="')[1].split('"')[0]
+
+    def create_device_session(self) -> bool:
+        """Stage 1: Call DeviceLogin17 without a refresh token.
+
+        Establishes an unauthenticated device session and returns an access token.
+        If the device already has a refresh token, it is included in the payload
+        so DeviceLogin17 creates an authenticated session directly.
+
+        Returns:
+            True if the server returned an access token and user data was parsed.
+        """
+        url = f"{self.baseUrl}/UserService/DeviceLogin17"
+        json = self._build_device_login_payload()
+
         r = requests.post(url, json=json)
         if r:
             d = xmltodict.parse(r.content, xml_attribs=True)
-            if (
-                (not r or r.status_code != 200)
-                or ("errorCode" in r.text)
-                or ("accessToken" not in r.text)
-            ):
+            token = self._extract_access_token(r)
+            if token is None:
                 logging.error("{%s}", redact_secrets(str(d)))
                 self.accessToken = ""
                 return False
+            self.accessToken = token
 
-            self.accessToken = r.text.split('accessToken="')[1].split('"')[0]
         if not self.parseUserLoginData(r):
             return False
 
         return True
 
-    def quickReload(self):
-        self.accessToken = None
-        self.getAccessToken()
+    def authorize_email_password(self, email: str, password: str) -> bool:
+        """Stage 2: Call UserEmailPasswordAuthorize4 to submit email and password.
 
-    def login(self, email=None, password=None):
-        if not self.getAccessToken():
+        Sends the email/password along with the native checksum. On success, the
+        server returns a refreshToken which is persisted to the device.
+
+        Requires checksum_key and savy_checksum configuration settings because the
+        native IL2CPP checksum depends on runtime-only Configuration values.
+
+        Raises:
+            UnsupportedNativeChecksum: If checksum_key or savy_checksum missing.
+            ValueError: If called without an existing access token.
+
+        Returns:
+            True if the server returned a refreshToken.
+        """
+        if not self.accessToken:
+            raise ValueError("authorize_email_password requires an existing access token")
+
+        checksum_key = self.settings.get("checksum_key")
+        savy_checksum = self.settings.get("savy_checksum")
+        if not checksum_key or not savy_checksum:
+            raise UnsupportedNativeChecksum(
+                "UserEmailPasswordAuthorize4 requires checksum_key and savy_checksum "
+                "configuration values compatible with the installed game version."
+            )
+        # login_type text must match the LoginType enum member used by
+        # UserManager.DownloadUserLogin in the current game build.
+        login_type = self.settings.get("login_type") or "EmailPassword"
+
+        ts = self._client_datetime_utc()
+        self.checksum = checksum_user_email_password_authorize4(
+            ts, login_type, checksum_key, savy_checksum
+        )
+
+        post_data = urllib.parse.urlencode({
+            "clientDateTime": ts,
+            "checksum": self.checksum,
+            "deviceKey": self.device.key,
+            "email": email,
+            "password": password,
+            "accessToken": self.accessToken,
+        })
+
+        url = f"{self.baseUrl}/UserService/UserEmailPasswordAuthorize4"
+        r = self.request(url, "POST", data=post_data)
+
+        if r and "errorMessage=" in r.text:
+            logging.error(
+                "[authorize_email_password] failed: %s",
+                redact_secrets(r.text),
+            )
             return False
 
-        # double check if something goes wrong
+        if r and "refreshToken" not in r.text:
+            logging.error(
+                "[authorize_email_password] no refreshToken in response: %s",
+                redact_secrets(r.text),
+            )
+            return False
+
+        self.device.refreshTokenAcquire(
+            r.text.split('refreshToken="')[1].split('"')[0]
+        )
+        return True
+
+    def exchange_refresh_token(self) -> bool:
+        """Stage 3: Call DeviceLogin17 again with the account refresh token.
+
+        After Stage 2 stored a refresh token, this re-invokes DeviceLogin17 with
+        that token to establish a fully authenticated session.
+
+        Returns:
+            True if the server returned an access token and user data was parsed.
+        """
+        self.accessToken = None
+        return self.create_device_session()
+
+    @staticmethod
+    def _client_datetime_utc() -> str:
+        """Return the current UTC time in .NET round-trip "o" format (7 fractional digits)."""
+        return datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.0000000")
+
+    def quickReload(self):
+        self.accessToken = None
+        self.create_device_session()
+
+    def login(self, email=None, password=None):
+        """Orchestrate the three-stage authentication sequence.
+
+        Stage 1: create_device_session() — DeviceLogin17 → access token
+        Stage 2: authorize_email_password() — UserEmailPasswordAuthorize4 → refresh token
+        Stage 3: exchange_refresh_token() — DeviceLogin17 with refresh token
+
+        If the device already has a refresh token, Stage 1 establishes a full
+        session directly and Stages 2-3 are skipped. If only a device session is
+        needed (guest/tutorial), Stage 1 alone suffices.
+        """
+        # Stage 1: create device session
+        if not self.create_device_session():
+            return False
+
         if not self.accessToken:
             return False
 
-        # authorization just fine with refreshToken, we're in da house
-        if self.device.refreshToken and self.accessToken:
-            return True
-
-        # accessToken is enough for guest to play a tutorial
-        if self.accessToken and not email:
-            return True
-
-        # login with credentials and accessToken
-        ts = f"{DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
-        #        ts = "{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime())
-        self.checksum = ChecksumEmailAuthorize(
-            self.device.key, email, ts, self.accessToken, self.salt
-        )
-
-        # if refreshToken was used we get acquire session without credentials
+        # Refresh-token path: device already has a valid refresh token, Stage 1
+        # completed the full session — no email/password needed.
         if self.device.refreshToken:
-            url = f"{self.baseUrl}/UserService/UserEmailPasswordAuthorize2?clientDateTime={ts}&checksum={self.checksum}&deviceKey={self.device.key}&accessToken={self.accessToken}&refreshToken={self.device.refreshToken}"
-            r = self.request(url, "POST")
+            return True
 
-            if r and "Email=" not in r.text:
-                logging.error(
-                    "[login] failed to authenticate with refreshToken: %s", redact_secrets(r.text)
-                )
-                return False
+        # Guest path: no email means a device-only session for the tutorial.
+        if not email:
+            return True
 
-            if not self.parseUserLoginData(r):
-                return False
+        if not password:
+            raise ValueError("login() received email but no password")
 
-        else:
-            if email:
-                self.email = urllib.parse.quote(email)
+        # Stage 2: submit email + password to acquire a refresh token
+        if not self.authorize_email_password(email, password):
+            return False
 
-            url = f"{self.baseUrl}/UserService/UserEmailPasswordAuthorize2?clientDateTime={ts}&checksum={self.checksum}&deviceKey={self.device.key}&email={self.email}&password={password}&accessToken={self.accessToken}"
-            r = self.request(url, "POST")
-
-            if r and "errorMessage=" in r.text:
-                logging.error(
-                    "[login] failed to authorize with credentials with the reason: %s",
-                    redact_secrets(r.text),
-                )
-                return False
-
-            if r and "refreshToken" not in r.text:
-                logging.error(
-                    "[login] failed to acquire refreshToken with the reason: %s", redact_secrets(r.text)
-                )
-                return False
-
-            if r:
-                self.device.refreshTokenAcquire(
-                    r.text.split('refreshToken="')[1].split('"')[0]
-                )
-
-            if r and 'RequireReload="True"' in r.text:
-                return self.quickReload()
-
-        if r and "refreshToken" in r.text:
-            self.device.refreshTokenAcquire(
-                r.text.split('refreshToken="')[1].split('"')[0]
-            )
+        # Stage 3: exchange refresh token for an authenticated session
+        if not self.exchange_refresh_token():
+            return False
 
         return True
 
@@ -1404,7 +1480,7 @@ class Client(object):
 
     def collectDailyReward(self):
         if "LiveOpsService" not in self.todayLiveOps:
-            loging.error(
+            logging.error(
                 "Unable to collect daily reward because of missing Live Ops data."
             )
             return False
