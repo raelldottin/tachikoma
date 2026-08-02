@@ -85,7 +85,12 @@ def checksum_user_email_password_authorize4(
 ) -> str:
     """Compute the UserEmailPasswordAuthorize4 native checksum.
 
-    Verified against one official-client capture (2026-08-02T06:04:20):
+    Live-verified (2026-08-02) against official iOS client captures and e2e three-stage flow:
+        Stage 1: DeviceLogin17 → accessToken
+        Stage 2: UserEmailPasswordAuthorize4 → new refreshToken (verified 5/5 captures + fresh e2e)
+        Stage 3: DeviceLogin17 with new refreshToken → authenticated session
+
+    Formula:
         preimage  = deviceKey + email + clientDateTime + accessToken + checksumKey
         encrypted = preimage + savy_checksum
         checksum  = MD5(encrypted)

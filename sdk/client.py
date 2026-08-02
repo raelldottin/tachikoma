@@ -200,31 +200,38 @@ class Client(object):
         return self.create_device_session()
 
     def _build_device_login_payload(self):
-        """Build the DeviceLogin17 JSON payload for the current device state."""
+        """Build the DeviceLogin17 JSON payload for the current device state.
+        
+        Format matches official iOS client (Unity 6000.0.77f1, build 18054).
+        """
         checksum_key = self.settings.get("checksum_key") or "5343"
         savy_checksum = self.settings.get("savy_checksum") or "Savvy!s0d@"
+        
+        # iOS format: 2026-08-02T17:08:18.835425Z (with microseconds and Z)
+        client_dt = "{0:%Y-%m-%dT%H:%M:%S.%f}Z".format(DotNet.validDateTime())
+        
         self.checksum = checksum_device_login17(
             device_key=self.device.key,
-            client_date_time="{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime()),
+            client_date_time=client_dt,
             checksum_key=checksum_key,
             savy_checksum=savy_checksum,
         )
         return {
             "DeviceKey": self.device.key,
-            "AdvertisingKey": "",
-            "ClientDateTime": "{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime()),
+            "AdvertisingKey": "00000000-0000-0000-0000-000000000000",
+            "ClientDateTime": client_dt,
             "IsJailBroken": False,
             "Checksum": self.checksum,
-            "DeviceType": 2,
+            "DeviceType": 0,  # iOS = 0, Mac = 2 (official iOS client uses 0)
             "Signal": False,
-            "LanguageKey": "en",
+            "LanguageKey": self.device.languageKey or "en",
             "RefreshToken": self.device.refreshToken if self.device.refreshToken else "",
             "UserDeviceInfo": {
-                "OsVersion": "Mac OS X 26.5.2",
+                "OsVersion": "iOS 26.5.2",
                 "Locale": "en",
-                "DeviceName": "Mac14,10",
+                "DeviceName": "iPhone16,2",
                 "OSBuild": "0",
-                "ClientBuild": "18881",
+                "ClientBuild": "18054",
                 "ClientVersion": "0.999.59",
             },
             "AccessToken": "00000000-0000-0000-0000-000000000000",
