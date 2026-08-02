@@ -1,0 +1,28 @@
+{
+  "slice_id": "automation-harden-portability-and-handoffs",
+  "status": "failed",
+  "summary": "Agent failed to produce valid JSON handoff",
+  "files_touched": [],
+  "validations_passed": [],
+  "validations_failed": [],
+  "proof_level": "doc-only",
+  "missing_proof_levels": [
+    "domain-tested",
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [],
+  "residual_risks": [
+    "Agent did not produce valid JSON handoff"
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "unknown",
+  "git_mirror_status": "not-checked",
+  "dirty_paths_outside_scope": [],
+  "timestamp": ""
+}

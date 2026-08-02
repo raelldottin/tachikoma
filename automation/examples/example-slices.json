@@ -1,0 +1,80 @@
+{
+  "version": 1,
+  "policy": {
+    "consecutive_autonomous_limit": 2,
+    "handoff_timeout_seconds": 1800,
+    "agent_command_template": "automation/supervisor/run_agent.sh --repo-root {repo_root} --prompt-file {prompt_file} --context-file {context_file} --handoff-file {handoff_file} --slice-id {slice_id}",
+    "supervisor_owned_paths": [
+      "automation/queue/slices.json",
+      "automation/handoffs/"
+    ]
+  },
+  "slices": [
+    {
+      "slice_id": "today-nonfocus-add-to-focus",
+      "title": "Add to Focus for non-focus derived Continue rows",
+      "status": "done",
+      "priority": 20,
+      "domain": "today",
+      "allowed_paths": [
+        "owlory_xcode/Owlory/Features/Today/",
+        "owlory_xcode/Owlory/Core/Application/",
+        "docs/product/domains/today.md",
+        "docs/workflows/roadmap-status.md",
+        "SecondBrain/"
+      ],
+      "required_validations": [
+        "make architecture",
+        "make test-domain DOMAIN=today",
+        "git diff --check"
+      ],
+      "depends_on": [],
+      "max_files_changed": 12,
+      "notes": "Adjacent approved follow-up after Continue routing polish."
+    },
+    {
+      "slice_id": "today-continue-ui-regression-coverage",
+      "title": "Add regression coverage for Continue Add to Focus interaction",
+      "status": "queued",
+      "priority": 30,
+      "domain": "today",
+      "allowed_paths": [
+        "docs/product/domains/today.md",
+        "owlory_xcode/Owlory/Features/Today/",
+        "owlory_xcode/OwloryCoreTests/",
+        "SecondBrain/"
+      ],
+      "required_validations": [
+        "make architecture",
+        "make test-domain DOMAIN=today",
+        "git diff --check"
+      ],
+      "depends_on": [
+        "today-nonfocus-add-to-focus"
+      ],
+      "max_files_changed": 10,
+      "notes": "Adjacent approved regression slice for the same Today surface."
+    },
+    {
+      "slice_id": "today-continue-copy-proofread",
+      "title": "Proofread Continue copy after the interaction follow-up",
+      "status": "queued",
+      "priority": 40,
+      "domain": "today",
+      "allowed_paths": [
+        "docs/product/domains/today.md",
+        "owlory_xcode/Owlory/Features/Today/",
+        "SecondBrain/"
+      ],
+      "required_validations": [
+        "make architecture",
+        "git diff --check"
+      ],
+      "depends_on": [
+        "today-continue-ui-regression-coverage"
+      ],
+      "max_files_changed": 6,
+      "notes": "Low-risk adjacent polish slice that stays pre-classified in the queue."
+    }
+  ]
+}

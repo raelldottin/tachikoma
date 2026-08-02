@@ -1,14 +1,6 @@
+from __future__ import annotations
+
 import hashlib
-from .dotnet import DotNet
-
-
-class UnsupportedNativeChecksum(RuntimeError):
-    """Raised when an endpoint requires the unrecovered native IL2CPP checksum algorithm.
-
-    The checksum pipeline (BuildKeyChecksum → FinaliseChecksumWithDesigns) has not
-    been reverse-engineered. Live requests with placeholder checksums will fail.
-    """
-    pass
 
 
 def first_stub(dt):
@@ -24,7 +16,7 @@ def ChecksumTimeForDate(dt):
 
 
 def ChecksumCreateDevice(device_key: str, device_type: str) -> str:
-    result = hashlib.md5((device_key + 'DeviceType'+ device_type +'savysoda').encode('utf-8')).hexdigest()
+    result = hashlib.md5((device_key + 'DeviceType' + device_type + 'savysoda').encode('utf-8')).hexdigest()
     return result
 
 
@@ -36,18 +28,138 @@ def ChecksumEmailAuthorize(deviceKey, email, ts, accessToken, salt):
     return hashlib.md5((deviceKey + email + ts + accessToken + salt + 'savysoda').encode('utf-8')).hexdigest()
 
 
-def ChecksumUserEmailPasswordAuthorize4(deviceKey, email, password, ts, languageKey, isWeb, accessToken):
-    """Checksum for UserEmailPasswordAuthorize4 endpoint.
+class UnsupportedNativeChecksum(RuntimeError):
+    """Raised when a native IL2CPP checksum cannot be computed without runtime-only constants.
 
-    REQUIRES the unrecovered native IL2CPP algorithm:
-      BuildKeyChecksum → FinaliseChecksumWithDesigns
-
-    This checksum has not been reproduced offline. Captured checksum
-    8418e1e0a07c1ed794789df7d8edc6ea is a 32-char MD5 hex digest.
-    All 74 permutation-based candidates tested — zero matches.
+    Several PSS endpoints (UserEmailPasswordAuthorize4, RebuildAmmo3, CollectMarker2)
+    require Configuration.ChecksumKey and Configuration.SavyChecksum, which are
+    runtime-initialized and not present in the game binary. These values must be
+    supplied via configuration; without them the checksum cannot be reproduced.
     """
-    raise UnsupportedNativeChecksum(
-        "UserEmailPasswordAuthorize4 requires the unrecovered "
-        "BuildKeyChecksum/FinaliseChecksumWithDesigns algorithm. "
-        "See scripts/checksum_lab.py for research context."
-    )
+    pass
+
+
+def checksum_device_login17(
+    device_key: str,
+    client_date_time: str,
+    checksum_key: str,
+    savy_checksum: str,
+) -> str:
+    """Compute the DeviceLogin17 native checksum.
+
+    Verified against 2 live captures from official iOS client (2026-08-02):
+    - DeviceLogin17: deviceKey + clientDateTime + "DeviceTypeMac" + ChecksumKey
+    - Then SavysodaEncryptString: MD5(preimage + SavyChecksum)
+
+    Args:
+        device_key: Device UUID (e.g., "6AD42828-7D06-534D-A461-49658461A614")
+        client_date_time: Timestamp in "yyyy-MM-ddTHH:mm:ss" format (no microseconds, no Z)
+        checksum_key: Configuration.ChecksumKey = "5343" (runtime-initialized)
+        savy_checksum: Configuration.SavyChecksum = "Savvy!s0d@" (runtime-initialized)
+
+    Returns:
+        32-char MD5 hex digest.
+
+    Raises:
+        UnsupportedNativeChecksum: If checksum_key or savy_checksum is empty/None.
+    """
+    if not checksum_key or not savy_checksum:
+        raise UnsupportedNativeChecksum(
+            "DeviceLogin17 requires checksum_key and savy_checksum "
+            "configuration values compatible with the installed game version."
+        )
+    # Device type enum name for macOS/iOS builds is "DeviceTypeMac"
+    device_type = "DeviceTypeMac"
+    preimage = device_key + client_date_time + device_type + checksum_key
+    encrypted = preimage + savy_checksum
+    return hashlib.md5(encrypted.encode("utf-8")).hexdigest()
+
+
+def checksum_user_email_password_authorize4(
+    device_key: str,
+    email: str,
+    client_date_time: str,
+    access_token: str,
+    checksum_key: str,
+    savy_checksum: str,
+) -> str:
+    """Compute the UserEmailPasswordAuthorize4 native checksum.
+
+    Verified against one official-client capture (2026-08-02T06:04:20):
+        preimage  = deviceKey + email + clientDateTime + accessToken + checksumKey
+        encrypted = preimage + savy_checksum
+        checksum  = MD5(encrypted)
+
+    Note: The password is sent in the URL query string but is NOT part of
+    the checksum preimage.
+
+    Args:
+        device_key: Device UUID (from DeviceLogin17 stage-1 response).
+        email: User email address.
+        client_date_time: Current UTC timestamp "yyyy-MM-ddTHH:mm:ss".
+        access_token: Access token from the stage-1 DeviceLogin17 response.
+        checksum_key: Configuration.ChecksumKey ("5343").
+        savy_checksum: Configuration.SavyChecksum ("Savvy!s0d@").
+
+    Returns:
+        32-char MD5 hex digest.
+
+    Raises:
+        UnsupportedNativeChecksum: If checksum_key or savy_checksum is empty/None.
+    """
+    if not checksum_key or not savy_checksum:
+        raise UnsupportedNativeChecksum(
+            "UserEmailPasswordAuthorize4 requires checksum_key and savy_checksum "
+            "configuration values compatible with the installed game version."
+        )
+    preimage = device_key + email + client_date_time + access_token + checksum_key
+    encrypted = preimage + savy_checksum
+    return hashlib.md5(encrypted.encode("utf-8")).hexdigest()
+
+
+def checksum_rebuild_ammo3(
+    device_key: str,
+    client_date_time: str,
+    ammo_category: str,
+    checksum_key: str,
+    savy_checksum: str,
+) -> str:
+    """Compute the RebuildAmmo3 native checksum.
+
+    WARNING: Formula NOT verified against live captures. Based on static analysis
+    only. Gate behind feature flag until verified.
+    """
+    if not checksum_key or not savy_checksum:
+        raise UnsupportedNativeChecksum(
+            "RebuildAmmo3 requires checksum_key and savy_checksum configuration."
+        )
+    # Provisional: deviceKey + ammoCategory + clientDateTime + ChecksumKey
+    preimage = device_key + ammo_category + client_date_time + checksum_key
+    encrypted = preimage + savy_checksum
+    return hashlib.md5(encrypted.encode("utf-8")).hexdigest()
+
+
+def checksum_collect_marker2(
+    marker_id: str,
+    client_date_time: str,
+    design_version: str,
+    checksum_key: str,
+    savy_checksum: str,
+) -> str:
+    """Compute the CollectMarker2 native checksum.
+
+    WARNING: Formula NOT verified against live captures. Based on static analysis
+    only. Gate behind feature flag until verified.
+
+    Note: design_version comes from Configuration.GetLatestVersion4() at runtime,
+    which returns a server-synced design data version string. The exact format
+    is not yet determined.
+    """
+    if not checksum_key or not savy_checksum:
+        raise UnsupportedNativeChecksum(
+            "CollectMarker2 requires checksum_key and savy_checksum configuration."
+        )
+    # Provisional: markerId + clientDateTime + designVersion + ChecksumKey
+    preimage = marker_id + client_date_time + design_version + checksum_key
+    encrypted = preimage + savy_checksum
+    return hashlib.md5(encrypted.encode("utf-8")).hexdigest()

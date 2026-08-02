@@ -33,8 +33,6 @@ REDACTION_PATTERNS = [
     (re.compile(r'"(?:Email|email)"\s*:\s*"([^"]+@[^"]+)"'), r'"email": "***REDACTED_EMAIL***"'),
     # Access tokens in URLs: accessToken=xxx (exclude quotes from URL values)
     (re.compile(r'(accessToken=)[^&\s"]+'), r'\1***REDACTED***'),
-    # UUID-format access tokens (bare, not in URL — e.g. in error messages or tracebacks)
-    (re.compile(r'\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b', re.IGNORECASE), '***REDACTED_UUID***'),
     # Refresh tokens in URLs: refreshToken=xxx (exclude quotes from URL values)
     (re.compile(r'(refreshToken=)[^&\s"]+'), r'\1***REDACTED***'),
     # Device keys in URLs: deviceKey=xxx (exclude quotes from URL values)

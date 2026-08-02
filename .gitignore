@@ -6,7 +6,8 @@ collectrss.sh
 *.log
 *.app
 config.secrets
-Makefile
+passwords.txt
+.DS_Store
 .venv/
 
 # Generated captures, dumps, binaries, and proxy logs

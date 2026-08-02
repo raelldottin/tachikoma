@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import urllib.parse
 import time
 import datetime
@@ -18,8 +20,9 @@ from .security import (
     ChecksumTimeForDate,
     ChecksumPasswordWithString,
     ChecksumEmailAuthorize,
-    ChecksumUserEmailPasswordAuthorize4,
     UnsupportedNativeChecksum,
+    checksum_user_email_password_authorize4,
+    checksum_device_login17,
 )
 from .dotnet import DotNet
 from .redaction import redact_secrets, safe_log_message
@@ -74,13 +77,12 @@ class Client(object):
     salt = "5343"
     headers = {
         "Accept": "*/*",
-        "Accept-Encoding": "deflate, gzip",
-        "User-Agent": "UnityPlayer/6000.0.77f1 (UnityWebRequest/1.0, libcurl/8.10.1-DEV)",
-        "X-Unity-Version": "6000.0.77f1",
-        "Content-Type": "application/x-www-form-urlencoded",
+        "Accept-Encoding": "identity",
+        "User-Agent": "UnityPlayer/5.6.0f3 (UnityWebRequest/1.0, libcurl/7.51.0-DEV)",
+        "X-Unity-Version": "5.6.0f3",
     }
     # Use the actual base url and implement handling for different services
-    baseUrl = "http://api.pixelstarships.com"
+    baseUrl = "https://api.pixelstarships.com"
 
     # runtime data
     accessToken = None
@@ -122,15 +124,6 @@ class Client(object):
     @sleep_and_retry
     @limits(calls=MAX_CALLS_PER_MINUTE, period=ONE_MINUTE)
     def request(self, url, method, data=None):
-        # For POST without explicit body, mirror the official game client's behaviour:
-        # send query params in the form-urlencoded body, EXCLUDING accessToken
-        # (accessToken stays in the URL query only — including it in the body
-        # causes AddStarbux2 to return "An error occurred." per mitmproxy capture).
-        if method == "POST" and data is None and "?" in url:
-            from urllib.parse import parse_qsl, urlencode
-            params = parse_qsl(url.split("?", 1)[1])
-            params = [(k, v) for k, v in params if k != "accessToken"]
-            data = urlencode(params)
         r = self.session.request(method, url, headers=self.headers, data=data)
 
         if "errorMessage" in r.text:
@@ -202,81 +195,21 @@ class Client(object):
 
         return True
 
-    def _load_user_data_with_preauth_token(self):
-        """Load user data using a pre-provisioned access token.
-
-        Calls GetShipByUserId (auth-light) to verify the token works,
-        then reads user info from ListAllUserDataFirst2 or a cached
-        UserLogin response if provided.
-        """
-        userId = getattr(self.device, "userId", None)
-
-        # If userId is provided, try GetShipByUserId to verify the token
-        if userId:
-            url = f"{self.baseUrl}/ShipService/GetShipByUserId?userId={userId}&accessToken={self.accessToken}"
-            r = self.session.get(url, headers=self.headers)
-            if "errorMessage" in r.text:
-                logging.error(
-                    "Pre-provisioned token rejected by GetShipByUserId: %s",
-                    redact_secrets(r.text),
-                )
-                return False
-
-            # Parse user data from the response
-            try:
-                d = xmltodict.parse(r.content, xml_attribs=True)
-                self.shipByUserId = d
-            except Exception:
-                pass
-
-        # Set up minimal user info so the rest of the pipeline can proceed
-        # The full user object will be populated when getShipByUserId is
-        # called normally after login.
-        if userId:
-            self.user = User(
-                userId,
-                "unknown",
-                datetime.datetime.now(),
-                True,  # pre-provisioned token = authorized
-            )
-            self.info = {"@Name": "unknown", "@Id": str(userId), "@DailyRewardStatus": "0"}
-        else:
-            # No userId provided — can't proceed
-            logging.error(
-                "Pre-provisioned token requires userId in auth string "
-                "(format: name|key|refreshToken|language|accessToken|userId)"
-            )
-            return False
-
-        return True
-
     def getAccessToken(self):
-        if self.accessToken:
-            return True
+        """Backward-compatible accessor — delegates to create_device_session()."""
+        return self.create_device_session()
 
-        # Use pre-provisioned access token if available (bypass DeviceLogin17)
-        if getattr(self.device, "accessToken", None):
-            self.accessToken = self.device.accessToken
-            logging.info(
-                "[%s] Using pre-provisioned access token (bypassing DeviceLogin17)",
-                self.info.get("@Name", "unknown"),
-            )
-            # Fetch user data to populate self.info, self.user, etc.
-            # We need a valid user ID — fetch it via GetShipByUserId or similar
-            # The userId is embedded in the token response from DeviceLogin17,
-            # but with a pre-provisioned token we need to get it another way.
-            # Try calling ListAllUserDataFirst2 with a known userId, or
-            # use the GetShipByUserId endpoint which may return user info.
-            # For now, attempt to parse the user data from a lightweight call.
-            if not self._load_user_data_with_preauth_token():
-                logging.error("Failed to load user data with pre-provisioned token")
-                return False
-            return True
-
-        self.checksum = ChecksumCreateDevice(self.device.key, self.device.name)
-
-        url = f"{self.baseUrl}/UserService/DeviceLogin17"
-        json = {
+    def _build_device_login_payload(self):
+        """Build the DeviceLogin17 JSON payload for the current device state."""
+        checksum_key = self.settings.get("checksum_key") or "5343"
+        savy_checksum = self.settings.get("savy_checksum") or "Savvy!s0d@"
+        self.checksum = checksum_device_login17(
+            device_key=self.device.key,
+            client_date_time="{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime()),
+            checksum_key=checksum_key,
+            savy_checksum=savy_checksum,
+        )
+        return {
             "DeviceKey": self.device.key,
             "AdvertisingKey": "",
             "ClientDateTime": "{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime()),
@@ -287,211 +220,220 @@ class Client(object):
             "LanguageKey": "en",
             "RefreshToken": self.device.refreshToken if self.device.refreshToken else "",
             "UserDeviceInfo": {
-                "OsVersion": "Mac OS X 14.2.0",
+                "OsVersion": "Mac OS X 26.5.2",
                 "Locale": "en",
                 "DeviceName": "Mac14,10",
                 "OSBuild": "0",
-                "ClientBuild": "6400",
-                "ClientVersion": "6000.0.77f1",
+                "ClientBuild": "18881",
+                "ClientVersion": "0.999.59",
             },
             "AccessToken": "00000000-0000-0000-0000-000000000000",
         }
 
-        r = requests.post(url, json=json)
+    @staticmethod
+    def _extract_access_token(response):
+        """Extract the accessToken attribute value from a DeviceLogin17 response."""
+        if (
+            (not response or response.status_code != 200)
+            or ("errorCode" in response.text)
+            or ("accessToken" not in response.text)
+        ):
+            return None
+        return response.text.split('accessToken="')[1].split('"')[0]
+
+    def create_device_session(self) -> bool:
+        """Stage 1: Call DeviceLogin17 without a refresh token.
+
+        Establishes an unauthenticated device session and returns an access token.
+        If the device already has a refresh token, it is included in the payload
+        so DeviceLogin17 creates an authenticated session directly.
+
+        Returns:
+            True if the server returned an access token and user data was parsed.
+        """
+        url = f"{self.baseUrl}/UserService/DeviceLogin17"
+        json = self._build_device_login_payload()
+
+        r = self.session.post(url, json=json)
         if r:
             d = xmltodict.parse(r.content, xml_attribs=True)
-            if (
-                (not r or r.status_code != 200)
-                or ("errorCode" in r.text)
-                or ("accessToken" not in r.text)
-            ):
+            token = self._extract_access_token(r)
+            if token is None:
                 logging.error("{%s}", redact_secrets(str(d)))
                 self.accessToken = ""
                 return False
+            self.accessToken = token
 
-            self.accessToken = r.text.split('accessToken="')[1].split('"')[0]
         if not self.parseUserLoginData(r):
             return False
 
         return True
 
+    def authorize_email_password(self, email: str, password: str) -> bool:
+        """Stage 2: Call UserEmailPasswordAuthorize4 to submit email and password.
+
+        Sends the email/password along with the native checksum. On success, the
+        server returns a refreshToken which is persisted to the device.
+
+        Requires checksum_key and savy_checksum configuration settings because the
+        native IL2CPP checksum depends on runtime-only Configuration values.
+
+        Raises:
+            UnsupportedNativeChecksum: If checksum_key or savy_checksum missing.
+            ValueError: If called without an existing access token.
+
+        Returns:
+            True if the server returned a refreshToken.
+        """
+        if not self.accessToken:
+            raise ValueError("authorize_email_password requires an existing access token")
+
+        checksum_key = self.settings.get("checksum_key") or "5343"
+        savy_checksum = self.settings.get("savy_checksum") or "Savvy!s0d@"
+
+        ts = self._client_datetime_utc()
+        self.checksum = checksum_user_email_password_authorize4(
+            self.device.key,
+            email,
+            ts,
+            self.accessToken,
+            checksum_key,
+            savy_checksum,
+        )
+
+        post_data = urllib.parse.urlencode({
+            "clientDateTime": ts,
+            "checksum": self.checksum,
+            "deviceKey": self.device.key,
+            "email": email,
+            "password": password,
+            "languageKey": self.device.languageKey or "en",
+            "isWeb": "False",
+            "accessToken": self.accessToken,
+        })
+
+        url = f"{self.baseUrl}/UserService/UserEmailPasswordAuthorize4"
+        r = self.request(url, "POST", data=post_data)
+
+        if r and "errorMessage=" in r.text:
+            logging.error(
+                "[authorize_email_password] failed: %s",
+                redact_secrets(r.text),
+            )
+            return False
+
+        if r and "refreshToken" not in r.text:
+            logging.error(
+                "[authorize_email_password] no refreshToken in response: %s",
+                redact_secrets(r.text),
+            )
+            return False
+
+        self.device.refreshTokenAcquire(
+            r.text.split('refreshToken="')[1].split('"')[0]
+        )
+        return True
+
+    def exchange_refresh_token(self) -> bool:
+        """Stage 3: Call DeviceLogin17 again with the account refresh token.
+
+        After Stage 2 stored a refresh token, this re-invokes DeviceLogin17 with
+        that token to establish a fully authenticated session.
+
+        Returns:
+            True if the server returned an access token and user data was parsed.
+        """
+        self.accessToken = None
+        return self.create_device_session()
+
+    @staticmethod
+    def _client_datetime_utc() -> str:
+        """Return the current UTC time in format: yyyy-MM-ddTHH:mm:ss (no fractional seconds, no Z)."""
+        return datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
+
     def quickReload(self):
         self.accessToken = None
-        self.getAccessToken()
+        self.create_device_session()
 
     def login(self, email=None, password=None):
+        """Orchestrate the three-stage authentication sequence.
+
+        Stage 1: create_device_session() — DeviceLogin17 → access token
+        Stage 2: authorize_email_password() — UserEmailPasswordAuthorize4 → refresh token
+        Stage 3: exchange_refresh_token() — DeviceLogin17 with refresh token
+
+        If the device already has a refresh token, Stage 1 establishes a full
+        session directly and Stages 2-3 are skipped. If only a device session is
+        needed (guest/tutorial), Stage 1 alone suffices.
         """
-        Login flow using UserEmailPasswordAuthorize4 (modern email/password auth).
-        
-        Flow:
-        1. Get accessToken (via DeviceLogin17 or pre-provisioned)
-        2. Call UserEmailPasswordAuthorize4 with email/password
-        3. Parse response for refreshToken and UserId
-        4. Call DeviceLogin17 to exchange for fresh accessToken
-        """
-        if not self.getAccessToken():
+        # Stage 1: create device session
+        if not self.create_device_session():
             return False
 
         if not self.accessToken:
             return False
 
-        # If using a pre-provisioned access token AND not doing email/password login,
-        # we can skip the full flow — the token is already valid.
-        if not email and getattr(self.device, "accessToken", None):
+        # Refresh-token path: device already has a valid refresh token, Stage 1
+        # completed the full session — no email/password needed.
+        if self.device.refreshToken:
             return True
 
-        # authorization just fine with refreshToken, we're in da house
-        if not email and self.device.refreshToken and self.accessToken:
+        # Guest path: no email means a device-only session for the tutorial.
+        if not email:
             return True
 
-        # accessToken is enough for guest to play a tutorial
-        if self.accessToken and not email:
-            return True
+        if not password:
+            raise ValueError("login() received email but no password")
 
-        # Step 1: UserEmailPasswordAuthorize4 - email/password login
-        ts = f"{DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
-        checksum = ChecksumUserEmailPasswordAuthorize4(
-            self.device.key, email, password, ts, "en", False, self.accessToken
-        )
-
-        # Build form-urlencoded body (matching official client)
-        body_data = {
-            "clientDateTime": ts,
-            "checksum": str(checksum),
-            "deviceKey": self.device.key,
-            "email": email,
-            "password": password,
-            "languageKey": "en",
-            "isWeb": "False",
-            "accessToken": self.accessToken,
-        }
-
-        url = f"{self.baseUrl}/UserService/UserEmailPasswordAuthorize4"
-        r = self.request(url, "POST", data=body_data)
-
-        if not r or "errorMessage=" in r.text:
-            logging.error(
-                "[login] UserEmailPasswordAuthorize4 failed: %s",
-                redact_secrets(r.text if r else "no response")
-            )
+        # Feature gate: email/password login requires explicit enablement
+        # (UserEmailPasswordAuthorize4 is static-analysis-derived and unverified)
+        if not self.settings.get("allow_email_password_login", False):
+            logging.warning("[login] email/password login blocked: allow_email_password_login feature flag disabled")
             return False
 
-        # Parse response for refreshToken and UserId
-        try:
-            d = xmltodict.parse(r.content, xml_attribs=True)
-            auth_elem = d.get("UserService", {}).get("UserEmailPasswordAuthorize", {})
-            refresh_token = auth_elem.get("@refreshToken")
-            require_reload = auth_elem.get("@RequireReload") == "True"
-            user_id = auth_elem.get("User", {}).get("@Id")
-            
-            if not refresh_token:
-                logging.error("[login] No refreshToken in UserEmailPasswordAuthorize4 response")
-                return False
-                
-            logging.info(f"[login] Got refreshToken, UserId={user_id}, RequireReload={require_reload}")
-            
-            # Store refresh token
-            self.device.refreshTokenAcquire(refresh_token)
-            
-            # Store userId in device for later use
-            self.device.userId = user_id
-            
-        except Exception as e:
-            logging.error(f"[login] Failed to parse UserEmailPasswordAuthorize4 response: {e}")
+        # Stage 2: submit email + password to acquire a refresh token
+        if not self.authorize_email_password(email, password):
             return False
 
-        # Step 2: DeviceLogin17 to exchange refreshToken for fresh accessToken
-        if not self._device_login_with_refresh():
-            return False
-
-        if require_reload:
-            return self.quickReload()
-
-        return True
-
-    def _device_login_with_refresh(self):
-        """Call DeviceLogin17 with refreshToken to get fresh accessToken."""
-        self.checksum = ChecksumCreateDevice(self.device.key, self.device.name)
-
-        json_data = {
-            "DeviceKey": self.device.key,
-            "AdvertisingKey": "",
-            "ClientDateTime": "{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime()),
-            "IsJailBroken": False,
-            "Checksum": self.checksum,
-            "DeviceType": 2,
-            "Signal": False,
-            "LanguageKey": "en",
-            "RefreshToken": self.device.refreshToken if self.device.refreshToken else "",
-            "UserDeviceInfo": {
-                "OsVersion": "Mac OS X 14.2.0",
-                "Locale": "en",
-                "DeviceName": "Mac14,10",
-                "OSBuild": "0",
-                "ClientBuild": "6400",
-                "ClientVersion": "6000.0.77f1",
-            },
-            "AccessToken": "00000000-0000-0000-0000-000000000000",
-        }
-
-        url = f"{self.baseUrl}/UserService/DeviceLogin17"
-        r = requests.post(url, json=json_data, headers=self.headers)
-        
-        if not r or r.status_code != 200:
-            logging.error("[_device_login_with_refresh] HTTP error: %s", r.status_code if r else "no response")
-            return False
-
-        if "errorCode" in r.text or "accessToken" not in r.text:
-            logging.error("[_device_login_with_refresh] Failed: %s", redact_secrets(r.text))
-            return False
-
-        self.accessToken = r.text.split('accessToken="')[1].split('"')[0]
-        
-        if not self.parseUserLoginData(r):
+        # Stage 3: exchange refresh token for an authenticated session
+        if not self.exchange_refresh_token():
             return False
 
         return True
 
     def getLatestVersion3(self):
-        url = f"{self.baseUrl}/SettingService/GetLatestVersion4?languageKey={self.device.languageKey}&deviceType={self.device.deviceType}"
+        url = f"https://api.pixelstarships.com/SettingService/GetLatestVersion3?languageKey={self.device.languageKey}&deviceType=DeviceType{self.device.name}"
         r = self.request(url, "GET")
 
         if r.content:
             self.latestVersion = xmltodict.parse(r.content, xml_attribs=True)
 
     def getTodayLiveOps2(self):
-        url = f"{self.baseUrl}/LiveOpsService/GetTodayLiveOps2?languageKey={self.device.languageKey}&deviceType={self.device.deviceType}"
+        url = f"https://api.pixelstarships.com/LiveOpsService/GetTodayLiveOps2?languageKey={self.device.languageKey}&deviceType=DeviceType{self.device.name}"
         r = self.request(url, "GET")
         if r:
             self.todayLiveOps = xmltodict.parse(r.content, xml_attribs=True)
 
     def listRoomDesigns2(self):
-        url = f"{self.baseUrl}/RoomService/ListRoomDesigns2?languageKey={self.device.languageKey}&designVersion={self.latestVersion['SettingService']['GetLatestSetting']['Setting']['@RoomDesignVersion']}"
+        url = f"https://api.pixelstarships.com/RoomService/ListRoomDesigns2?languageKey={self.device.languageKey}&designVersion={self.latestVersion['SettingService']['GetLatestSetting']['Setting']['@RoomDesignVersion']}"
         r = self.request(url, "GET")
         if r:
             self.roomDesigns = xmltodict.parse(r.content, xml_attribs=True)
 
     def listAllTaskDesigns2(self):
-        url = f"{self.baseUrl}/TaskService/ListAllTaskDesigns2?languageKey={self.device.languageKey}&designVersion={self.latestVersion['SettingService']['GetLatestSetting']['Setting']['@RoomDesignVersion']}"
+        url = f"https://api.pixelstarships.com/TaskService/ListAllTaskDesigns2?languageKey={self.device.languageKey}&designVersion={self.latestVersion['SettingService']['GetLatestSetting']['Setting']['@RoomDesignVersion']}"
         r = self.request(url, "GET")
         if r:
             self.allTaskDesigns = xmltodict.parse(r.content, xml_attribs=True)
 
     def listAllTrainingDesigns2(self):
-        url = f"{self.baseUrl}/TrainingService/ListAllTrainingDesigns2?languageKey={self.device.languageKey}&designVersion={self.latestVersion['SettingService']['GetLatestSetting']['Setting']['@RoomDesignVersion']}"
+        url = f"https://api.pixelstarships.com/TrainingService/ListAllTrainingDesigns2?languageKey={self.device.languageKey}&designVersion={self.latestVersion['SettingService']['GetLatestSetting']['Setting']['@RoomDesignVersion']}"
         r = self.request(url, "GET")
         if r:
             self.trainingDesigns = xmltodict.parse(r.content, xml_attribs=True)
 
     def getShipByUserId(self, userId=0):
-        uid = userId if userId else (self.user.id if hasattr(self, "user") and self.user else 0)
-        if not uid:
-            logging.error(
-                "getShipByUserId called without a valid userId "
-                "(self.user.id not set — check auth string has 6th field)"
-            )
-            return False
-        url = f"{self.baseUrl}/ShipService/GetShipByUserId?userId={uid}&accessToken={self.accessToken}&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
+        url = f"https://api.pixelstarships.com/ShipService/GetShipByUserId?userId={userId if userId else self.user.id}&accessToken={self.accessToken}&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
         r = self.request(url, "GET")
         if r:
             self.shipByUserId = xmltodict.parse(r.content, xml_attribs=True)
@@ -510,25 +452,25 @@ class Client(object):
         return False
 
     def listAchievementsOfAUser(self):
-        url = f"{self.baseUrl}/AchievementService/ListAchievementsOfAUser?accessToken={self.accessToken}&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
+        url = f"https://api.pixelstarships.com/AchievementService/ListAchievementsOfAUser?accessToken={self.accessToken}&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
         r = self.request(url, "GET")
         if r:
             self.achievementsOfAUser = xmltodict.parse(r.content, xml_attribs=True)
 
     def listImportantMessagesForUser(self):
-        url = f"{self.baseUrl}/MessageService/ListImportantMessagesForUser?accessToken={self.accessToken}&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
+        url = f"https://api.pixelstarships.com/MessageService/ListImportantMessagesForUser?accessToken={self.accessToken}&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
         r = self.request(url, "GET")
         if r:
             self.importantMessagesForUser = xmltodict.parse(r.content, xml_attribs=True)
 
     def listUserStarSystems(self):
-        url = f"{self.baseUrl}/GalaxyService/ListUserStarSystems?accessToken={self.accessToken}&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
+        url = f"https://api.pixelstarships.com/GalaxyService/ListUserStarSystems?accessToken={self.accessToken}&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
         r = self.request(url, "GET")
         if r:
             self.userStarSystems = xmltodict.parse(r.content, xml_attribs=True)
 
     def listStarSystemMarkersAndUserMarkers(self):
-        url = f"{self.baseUrl}/GalaxyService/ListStarSystemMarkersAndUserMarkers?accessToken={self.accessToken}"
+        url = f"https://api.pixelstarships.com/GalaxyService/ListStarSystemMarkersAndUserMarkers?accessToken={self.accessToken}"
         r = self.request(url, "GET")
         if r:
             self.starSystemMarkersAndUserMarkers = xmltodict.parse(
@@ -536,7 +478,7 @@ class Client(object):
             )
 
     def listTasksOfAUser(self):
-        url = f"{self.baseUrl}/TaskService/ListTasksOfAUser?accessToken={self.accessToken}&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
+        url = f"https://api.pixelstarships.com/TaskService/ListTasksOfAUser?accessToken={self.accessToken}&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
         r = self.request(url, "GET")
         if r:
             self.tasksOfAUser = xmltodict.parse(r.content, xml_attribs=True)
@@ -551,20 +493,20 @@ class Client(object):
             self.accessToken,
             self.salt,
         )
-        url = f"{self.baseUrl}/MissionService/ListCompletedMissionEvents?clientDateTime={ts}&checksum={checksum}&accessToken={self.accessToken}"
+        url = f"https://api.pixelstarships.com/MissionService/ListCompletedMissionEvents?clientDateTime={ts}&checksum={checksum}&accessToken={self.accessToken}"
         r = self.request(url, "GET")
         if r:
             self.completedMissionEvents = xmltodict.parse(r.content, xml_attribs=True)
 
     def listSituations(self):
-        url = f"{self.baseUrl}/SituationService/ListSituations?accessToken={self.accessToken}&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
+        url = f"https://api.pixelstarships.com/SituationService/ListSituations?accessToken={self.accessToken}&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
         r = self.request(url, "GET")
         if r:
             self.situations = xmltodict.parse(r.content, xml_attribs=True)
 
     def listPvPBattles2(self, take=25, skip=0):
         if self.user.isAuthorized:
-            url = f"{self.baseUrl}/BattleService/ListPvPBattles2?take={take}&skip={skip}&accessToken={self.accessToken}&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
+            url = f"https://api.pixelstarships.com/BattleService/ListPvPBattles2?take={take}&skip={skip}&accessToken={self.accessToken}&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
             r = self.request(url, "GET")
             if r:
                 self.pvpBattles = xmltodict.parse(r.content, xml_attribs=True)
@@ -573,7 +515,7 @@ class Client(object):
 
     def listMissionBattles(self, take=25, skip=0):
         if self.user.isAuthorized:
-            url = f"{self.baseUrl}/BattleService/ListMissionBattles?take={take}&skip={skip}&accessToken={self.accessToken}&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
+            url = f"https://api.pixelstarships.com/BattleService/ListMissionBattles?take={take}&skip={skip}&accessToken={self.accessToken}&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
             r = self.request(url, "GET")
             if r:
                 self.missionBattles = xmltodict.parse(r.content, xml_attribs=True)
@@ -582,7 +524,7 @@ class Client(object):
 
     def listActionTypes2(self):
         if self.user.isAuthorized:
-            url = f"{self.baseUrl}/RoomService/ListActionTypes2?languageKey={self.device.languageKey}&designVersion={self.latestVersion['SettingService']['GetLatestSetting']['Setting']['@ResearchDesignVersion']}"
+            url = f"https://api.pixelstarships.com/RoomService/ListActionTypes2?languageKey={self.device.languageKey}&designVersion={self.latestVersion['SettingService']['GetLatestSetting']['Setting']['@ResearchDesignVersion']}"
             r = self.request(url, "GET")
             if r:
                 self.actionTypes = xmltodict.parse(r.content, xml_attribs=True)
@@ -591,7 +533,7 @@ class Client(object):
 
     def listConditionTypes2(self):
         if self.user.isAuthorized:
-            url = f"{self.baseUrl}/RoomService/ListConditionTypes2?languageKey={self.device.languageKey}&designVersion={self.latestVersion['SettingService']['GetLatestSetting']['Setting']['@ResearchDesignVersion']}"
+            url = f"https://api.pixelstarships.com/RoomService/ListConditionTypes2?languageKey={self.device.languageKey}&designVersion={self.latestVersion['SettingService']['GetLatestSetting']['Setting']['@ResearchDesignVersion']}"
             r = self.request(url, "GET")
             if r:
                 self.conditionTypes = xmltodict.parse(r.content, xml_attribs=True)
@@ -599,14 +541,14 @@ class Client(object):
         return False
 
     def listAllResearches(self):
-        url = f"{self.baseUrl}/ResearchService/ListAllResearches?accessToken={self.accessToken}&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
+        url = f"https://api.pixelstarships.com/ResearchService/ListAllResearches?accessToken={self.accessToken}&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
         r = self.request(url, "GET")
         if r:
             self.allResearches = xmltodict.parse(r.content, xml_attribs=True)
 
     def listItemsOfAShip(self):
         if self.user.isAuthorized:
-            url = f"{self.baseUrl}/ItemService/ListItemsOfAShip?accessToken={self.accessToken}&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
+            url = f"https://api.pixelstarships.com/ItemService/ListItemsOfAShip?accessToken={self.accessToken}&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
             r = self.request(url, "GET")
             if r:
                 self.itemsOfAShip = xmltodict.parse(r.content, xml_attribs=True)
@@ -614,13 +556,13 @@ class Client(object):
         return False
 
     def listRoomsViaAccessToken(self):
-        url = f"{self.baseUrl}/RoomService/ListRoomsViaAccessToken?accessToken={self.accessToken}&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
+        url = f"https://api.pixelstarships.com/RoomService/ListRoomsViaAccessToken?accessToken={self.accessToken}&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
         r = self.request(url, "GET")
         if r:
             self.roomsViaAccessToken = xmltodict.parse(r.content, xml_attribs=True)
 
     def listAllCharactersOfUser(self):
-        url = f"{self.baseUrl}/CharacterService/ListAllCharactersOfUser?accessToken={self.accessToken}&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
+        url = f"https://api.pixelstarships.com/CharacterService/ListAllCharactersOfUser?accessToken={self.accessToken}&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
         r = self.request(url, "GET")
         self.allCharactersOfUser = xmltodict.parse(r.content, xml_attribs=True)
 
@@ -1423,7 +1365,7 @@ class Client(object):
 
     def listAllRoomActionsOfShip(self):
         if self.user.isAuthorized:
-            url = f"{self.baseUrl}/RoomService/ListAllRoomActionsOfShip?accessToken={self.accessToken}&clientDateTime={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}"
+            url = f"https://api.pixelstarships.com/RoomService/ListAllRoomActionsOfShip?accessToken={self.accessToken}&clientDateTime={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}"
             r = self.request(url, "GET")
             if r:
                 self.allRoomActionsOfShip = xmltodict.parse(r.content, xml_attribs=True)
@@ -1431,11 +1373,11 @@ class Client(object):
         return False
 
     def pusherAuth(self):
-        url = f"{self.baseUrl}/UserService/PusherAuth?accessToken={self.accessToken}"
+        url = f"https://api.pixelstarships.com/UserService/PusherAuth?accessToken={self.accessToken}"
         self.request(url, "POST")
 
     def listSystemMessagesForUser3(self, fromMessageId=0, take=10000):
-        url = f"{self.baseUrl}/MessageService/ListSystemMessagesForUser3?fromMessageId={fromMessageId}&take={take}&accessToken={self.accessToken}"
+        url = f"https://api.pixelstarships.com/MessageService/ListSystemMessagesForUser3?fromMessageId={fromMessageId}&take={take}&accessToken={self.accessToken}"
         r = self.request(url, "GET")
         if r:
             self.systemMessagesForUser = xmltodict.parse(r.content, xml_attribs=True)
@@ -1447,7 +1389,7 @@ class Client(object):
 
     def listFriends(self, userId=0):
         if self.user.isAuthorized:
-            url = f"{self.baseUrl}/UserService/ListFriends?UserId={userId if userId else self.info['@Id']}&accessToken={self.accessToken}"
+            url = f"https://api.pixelstarships.com/UserService/ListFriends?UserId={userId if userId else self.info['@Id']}&accessToken={self.accessToken}"
             logging.debug(redact_secrets(url))
             r = self.request(url, "POST")
             if r:
@@ -1458,7 +1400,7 @@ class Client(object):
         return False
 
     def listMessagesForChannelKey(self, channelKey="alliance-43958"):
-        url = f"{self.baseUrl}/MessageService/ListMessagesForChannelKey?channelKey=channelKey={channelKey}&accessToken={self.accessToken}"
+        url = f"https://api.pixelstarships.com/MessageService/ListMessagesForChannelKey?channelKey=channelKey={channelKey}&accessToken={self.accessToken}"
         r = self.request(url, "GET")
         if r:
             self.messagesForChannelKey = xmltodict.parse(r.content, xml_attribs=True)
@@ -1467,13 +1409,13 @@ class Client(object):
         # return False
 
     def findUserRanking(self):
-        url = f"{self.baseUrl}/LadderService/FindUserRanking?accessToken={self.accessToken}"
+        url = f"https://api.pixelstarships.com/LadderService/FindUserRanking?accessToken={self.accessToken}"
         r = self.request(url, "GET")
         if r:
             self.userRanking = xmltodict.parse(r.content, xml_attribs=True)
 
     def activateItem3(self, itemId=0, targetId=0):
-        url = f"{self.baseUrl}/ItemService/ActivateItem3?itemId={itemId}&targetId={targetId}&"
+        url = f"https://api.pixelstarships.com/ItemService/ActivateItem3?itemId={itemId}&targetId={targetId}&"
         r = self.request(url, "POST")
         if r:
             self.item = xmltodict.parse(r.content, xml_attribs=True)
@@ -1485,7 +1427,9 @@ class Client(object):
         logging.info(f"[{self.info['@Name']}] {message} for {price} {currency}.")
 
     def listActiveMarketplaceMessages(self):
-        url = f"{self.baseUrl}/MessageService/ListActiveMarketplaceMessages5?itemSubType=None&rarity=None&currencyType=Unknown&itemDesignId=0&userId={self.user.id}&accessToken={self.accessToken}"
+        url = "https://api.pixelstarships.com/MessageService/ListActiveMarketplaceMessages5?itemSubType=None&rarity=None&currencyType=Unknown&itemDesignId=0&userId={}&accessToken={}".format(
+            self.user.id, self.accessToken
+        )
         r = self.request(url, "GET")
         if r:
             d = xmltodict.parse(r.content, xml_attribs=True)
@@ -1518,7 +1462,10 @@ class Client(object):
         )
 
     def collectAllResources(self):
-        url = f"{self.baseUrl}/RoomService/CollectAllResources?itemType=None&collectDate={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}&accessToken={self.accessToken}"
+        url = "https://api.pixelstarships.com/RoomService/CollectAllResources?itemType=None&collectDate={}&accessToken={}".format(
+            "{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime()),
+            self.accessToken,
+        )
         r = self.request(url, "POST")
         d = xmltodict.parse(r.content, xml_attribs=True)
         if "RoomService" not in d:
@@ -1559,7 +1506,10 @@ class Client(object):
             self.dailyReward = 0
 
         if self.user.isAuthorized and (self.info["@DailyRewardStatus"] != "1"):
-            url = f"{self.baseUrl}/UserService/CollectDailyReward2?dailyRewardStatus=Box&argument={self.dailyRewardArgument}&accessToken={self.accessToken}"
+            url = "https://api.pixelstarships.com/UserService/CollectDailyReward2?dailyRewardStatus=Box&argument={}&accessToken={}".format(
+                self.dailyRewardArgument,
+                self.accessToken,
+            )
 
             r = self.request(url, "POST")
 
@@ -1578,18 +1528,14 @@ class Client(object):
 
     def collectMiningDrone(self, starSystemMarkerId):
         if self.user.isAuthorized and starSystemMarkerId not in self.dronesCollected:
-            ts = "{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime())
-            # Use MD5 checksum with salt from JWT (unityUserId) - same pattern as ChecksumEmailAuthorize
-            # Format: deviceKey + email + starSystemMarkerId + ts + accessToken + salt + 'savysoda'
-            salt = "91cde416c93fb401585d963a556381ca"  # unityUserId from JWT refresh token
-            email = self.info.get("@Email", "unknown@unknown.com")
-            checksum = hashlib.md5(
-                (self.device.key + email + str(starSystemMarkerId) + ts + self.accessToken + salt + "savysoda").encode("utf-8")
-            ).hexdigest()
-            url = f"{self.baseUrl}/GalaxyService/CollectMarker2?starSystemMarkerId={starSystemMarkerId}&checksum={checksum}&clientDateTime={ts}&accessToken={self.accessToken}"
+            url = "https://api.pixelstarships.com/GalaxyService/CollectMarker2?starSystemMarkerId={}&checksum={}&clientDateTime={}&accessToken={}".format(
+                starSystemMarkerId,
+                self.checksum,
+                "{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime()),
+                self.accessToken,
+            )
             r = self.request(url, "POST")
             if "errorMessage=" in r.text:
-                logging.warning(f'[{self.info["@Name"]}] CollectMarker2 failed: {r.text[:200]}')
                 return False
 
             self.dronesCollected[starSystemMarkerId] = 1
@@ -1598,23 +1544,25 @@ class Client(object):
 
     def placeMiningDrone(self, missionDesignId, missionEventId):
         if self.user.isAuthorized:
-            ts = "{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime())
-            # Use HeartBeat4-style checksum (works for pre-provisioned tokens)
-            checksum = ChecksumTimeForDate(DotNet.get_time()) + ChecksumPasswordWithString(self.accessToken)
-            url = f"{self.baseUrl}/MissionService/SelectInstantMission3?missionDesignId={missionDesignId}&missionEventId={missionEventId}&messageId=0&clientDateTime={ts},clientNumber=0&checksum={checksum}&accessToken={self.accessToken}"
+            url = "https://api.pixelstarships.com/MissionService/SelectInstantMission3?missionDesignId={}&missionEventId={}&messageId=0&clientDateTime={},clientNumber=0&checksum={}&accessToken={}".format(
+                missionDesignId,
+                missionEventId,
+                "{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime()),
+                self.checksum,
+                self.accessToken,
+            )
             r = self.request(url, "POST")
             if "errorMessage=" in r.text:
-                logging.warning(f'[{self.info["@Name"]}] SelectInstantMission3 failed: {r.text[:200]}')
                 return False
             return True
         return False
 
     def collectReward2(self, messageId):
-        url = f"{self.baseUrl}/MessageService/CollectReward2?messageId={messageId}&clientDateTime={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}&checksum={ChecksumTimeForDate(DotNet.get_time()) + ChecksumPasswordWithString(self.accessToken)}&accessToken={self.accessToken}"
+        url = f"https://api.pixelstarships.com/MessageService/CollectReward2?messageId={messageId}&clientDateTime={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}&checksum={ChecksumTimeForDate(DotNet.get_time()) + ChecksumPasswordWithString(self.accessToken)}&accessToken={self.accessToken}"
         self.request(url, "POST")
 
     def AddStarbux2(self, quantity=1):
-        url = f"{self.baseUrl}/UserService/AddStarbux2?quantity={quantity}&clientDateTime={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}&checksum={ChecksumTimeForDate(DotNet.get_time()) + ChecksumPasswordWithString(self.accessToken)}&accessToken={self.accessToken}"
+        url = f"https://api.pixelstarships.com/UserService/AddStarbux2?quantity={quantity}&clientDateTime={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}&checksum={ChecksumTimeForDate(DotNet.get_time()) + ChecksumPasswordWithString(self.accessToken)}&accessToken={self.accessToken}"
         r = self.request(url, "POST")
         if r:
             self.starbux = xmltodict.parse(r.content, xml_attribs=True)
@@ -1665,7 +1613,7 @@ class Client(object):
             "ResearchDesigns"
         ]["ResearchDesign"]:
             if i["@ResearchDesignId"] == researchDesignId:
-                url = f"{self.baseUrl}/ResearchService/SpeedUpResearchUsingBoostGauge?researchId={researchId}&accessToken={self.accessToken}&clientDateTime={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}"
+                url = f"https://api.pixelstarships.com/ResearchService/SpeedUpResearchUsingBoostGauge?researchId={researchId}&accessToken={self.accessToken}&clientDateTime={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}"
                 r = self.request(url, "POST")
                 if r and "@errorMessage" in r.text:
                     logging.info(
@@ -1686,7 +1634,7 @@ class Client(object):
 
         for i in self.roomDesigns["RoomDesign"]:
             if i["@RoomDesignId"] == roomDesignId:
-                url = f"{self.baseUrl}/RoomService/SpeedUpRoomConstructionUsingBoostGauge?roomId={roomId}&clientDateTime={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}&accessToken={self.accessToken}"
+                url = f"https://api.pixelstarships.com/RoomService/SpeedUpRoomConstructionUsingBoostGauge?roomId={roomId}&clientDateTime={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}&accessToken={self.accessToken}"
                 r = self.request(url, "POST")
                 if r and "errorMessage" in r.text:
                     logging.info(
@@ -1832,7 +1780,7 @@ class Client(object):
                                 logging.info(
                                     f'[{self.info["@Name"]}] Upgradng {roomName} to {upgradeRoomName}.'
                                 )
-                                url = f"{self.baseUrl}/RoomService/UpgradeRoom2?roomId={roomId}&upgradeRoomDesignId={upgradeRoomDesignId}&accessToken={self.accessToken}"
+                                url = f"https://api.pixelstarships.com/RoomService/UpgradeRoom2?roomId={roomId}&upgradeRoomDesignId={upgradeRoomDesignId}&accessToken={self.accessToken}"
                                 r = self.request(url, "POST")
                                 roomName = ""
                                 upgradeRoomName = ""
@@ -1869,7 +1817,7 @@ class Client(object):
 
     def listAllResearchDesigns2(self):
         if self.latestVersion:
-            url = f"{self.baseUrl}/ResearchService/ListAllResearchDesigns2?languageKey={self.device.languageKey}&designVersion={self.latestVersion['SettingService']['GetLatestSetting']['Setting']['@ResearchDesignVersion']}"
+            url = f"https://api.pixelstarships.com/ResearchService/ListAllResearchDesigns2?languageKey={self.device.languageKey}&designVersion={self.latestVersion['SettingService']['GetLatestSetting']['Setting']['@ResearchDesignVersion']}"
             r = self.request(url, "GET")
             self.allResearchDesigns = xmltodict.parse(r.content, xml_attribs=True)
             if "ResearchService" not in self.allResearchDesigns:
@@ -1878,7 +1826,7 @@ class Client(object):
             return True
 
     def addResearch(self, researchDesignId):
-        url = f"{self.baseUrl}/ResearchService/AddResearch?researchDesignId={researchDesignId}&researchStartDate={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}&accessToken={self.accessToken}"
+        url = f"https://api.pixelstarships.com/ResearchService/AddResearch?researchDesignId={researchDesignId}&researchStartDate={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}&accessToken={self.accessToken}"
         r = self.request(url, "POST")
         if "errorMessage" in r.text:
             return False
