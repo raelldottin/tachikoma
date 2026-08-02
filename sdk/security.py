@@ -76,24 +76,30 @@ def checksum_device_login17(
 
 
 def checksum_user_email_password_authorize4(
+    device_key: str,
+    email: str,
     client_date_time: str,
-    login_type: str,
+    access_token: str,
     checksum_key: str,
     savy_checksum: str,
 ) -> str:
     """Compute the UserEmailPasswordAuthorize4 native checksum.
 
-    Pipeline (from ISIL static analysis — provisional, not verified against a
-    current official-client capture):
-        preimage  = clientDateTime + loginType + checksum_key
+    Verified against one official-client capture (2026-08-02T06:04:20):
+        preimage  = deviceKey + email + clientDateTime + accessToken + checksumKey
         encrypted = preimage + savy_checksum
         checksum  = MD5(encrypted)
 
+    Note: The password is sent in the URL query string but is NOT part of
+    the checksum preimage.
+
     Args:
-        client_date_time: Current timestamp in .NET "o" format (7 fractional digits).
-        login_type: LoginType enum member text used by DownloadUserLogin.
-        checksum_key: Configuration.ChecksumKey (runtime-initialized, not in binary).
-        savy_checksum: Configuration.SavyChecksum (runtime-initialized, not in binary).
+        device_key: Device UUID (from DeviceLogin17 stage-1 response).
+        email: User email address.
+        client_date_time: Current UTC timestamp "yyyy-MM-ddTHH:mm:ss".
+        access_token: Access token from the stage-1 DeviceLogin17 response.
+        checksum_key: Configuration.ChecksumKey ("5343").
+        savy_checksum: Configuration.SavyChecksum ("Savvy!s0d@").
 
     Returns:
         32-char MD5 hex digest.
@@ -106,7 +112,7 @@ def checksum_user_email_password_authorize4(
             "UserEmailPasswordAuthorize4 requires checksum_key and savy_checksum "
             "configuration values compatible with the installed game version."
         )
-    preimage = client_date_time + login_type + checksum_key
+    preimage = device_key + email + client_date_time + access_token + checksum_key
     encrypted = preimage + savy_checksum
     return hashlib.md5(encrypted.encode("utf-8")).hexdigest()
 

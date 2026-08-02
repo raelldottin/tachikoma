@@ -288,20 +288,17 @@ class Client(object):
         if not self.accessToken:
             raise ValueError("authorize_email_password requires an existing access token")
 
-        checksum_key = self.settings.get("checksum_key")
-        savy_checksum = self.settings.get("savy_checksum")
-        if not checksum_key or not savy_checksum:
-            raise UnsupportedNativeChecksum(
-                "UserEmailPasswordAuthorize4 requires checksum_key and savy_checksum "
-                "configuration values compatible with the installed game version."
-            )
-        # login_type text must match the LoginType enum member used by
-        # UserManager.DownloadUserLogin in the current game build.
-        login_type = self.settings.get("login_type") or "EmailPassword"
+        checksum_key = self.settings.get("checksum_key") or "5343"
+        savy_checksum = self.settings.get("savy_checksum") or "Savvy!s0d@"
 
         ts = self._client_datetime_utc()
         self.checksum = checksum_user_email_password_authorize4(
-            ts, login_type, checksum_key, savy_checksum
+            self.device.key,
+            email,
+            ts,
+            self.accessToken,
+            checksum_key,
+            savy_checksum,
         )
 
         post_data = urllib.parse.urlencode({
@@ -310,6 +307,8 @@ class Client(object):
             "deviceKey": self.device.key,
             "email": email,
             "password": password,
+            "languageKey": self.device.languageKey or "en",
+            "isWeb": "False",
             "accessToken": self.accessToken,
         })
 
@@ -349,8 +348,8 @@ class Client(object):
 
     @staticmethod
     def _client_datetime_utc() -> str:
-        """Return the current UTC time in .NET round-trip "o" format (7 fractional digits)."""
-        return datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.0000000")
+        """Return the current UTC time in format: yyyy-MM-ddTHH:mm:ss (no fractional seconds, no Z)."""
+        return datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
 
     def quickReload(self):
         self.accessToken = None
