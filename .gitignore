@@ -9,3 +9,14 @@ config.secrets
 passwords.txt
 .DS_Store
 .venv/
+
+# Generated captures, dumps, binaries, and proxy logs
+/tmp/pss_capture_*/
+*.dylib
+*.dat
+*.dump
+*.pcap
+*.har
+frida_*.log
+cpp2il_output/
+scripts/*.pyc

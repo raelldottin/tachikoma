@@ -13,7 +13,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from sdk.redaction import redact_secrets, redact_dict, safe_log_message, redact_log
-from sdk.client import Client
+from sdk.client import Client, ConfigurationError
 from sdk.device import Device
 
 
@@ -135,7 +135,7 @@ class TestClientSecurity(unittest.TestCase):
         """Client should not have hardcoded fallback token."""
         device = Device(language="en")
         client = Client(device=device)
-        
+
         # Check that getAccessToken doesn't use a hardcoded fallback
         # We can't fully test without mocking, but we can verify the code path
         import inspect
@@ -147,7 +147,7 @@ class TestClientSecurity(unittest.TestCase):
         """getAccessToken should use empty string when no refresh token."""
         device = Device(language="en")
         client = Client(device=device)
-        
+
         import inspect
         source = inspect.getsource(client.getAccessToken)
         # Should use empty string as fallback, not a hardcoded token
@@ -161,24 +161,114 @@ class TestClientSecurity(unittest.TestCase):
         self.assertTrue(hasattr(client_module, 'safe_log_message'))
 
 
-class TestDeviceSecurity(unittest.TestCase):
-    """Test Device class security behavior."""
+class TestRebuildAmmoConfig(unittest.TestCase):
+    """Test rebuildAmmo configuration-driven checksum behavior."""
 
-    def test_device_file_permissions(self):
-        """Device file should not be world-readable."""
-        # This is more of a documentation test - actual permissions
-        # are set at save time
-        device = Device(language="en")
-        self.assertIsNotNone(device.DB)
+    def test_rebuild_ammo_missing_checksum_key(self):
+        """rebuildAmmo should raise ConfigurationError when checksum_key is missing."""
+        from unittest.mock import MagicMock, patch
+        from sdk.client import User, ConfigurationError
 
-    def test_refresh_token_not_logged(self):
-        """Device should not log refresh tokens in plain text."""
         device = Device(language="en")
-        # The save/load methods handle the token
-        # We verify the methods exist
-        self.assertTrue(hasattr(device, 'refreshTokenAcquire'))
-        self.assertTrue(hasattr(device, 'save'))
-        self.assertTrue(hasattr(device, 'load'))
+        client = Client(device=device, settings={
+            "savy_checksum": "test-savy-checksum",
+        })
+        client.accessToken = "test-token-uuid"
+        client.user = User(3430892, "test", None, True)
+        client.info = {"@Email": "test@example.com", "@Name": "test"}
+
+        mock_response = MagicMock()
+        mock_response.text = "<RebuildAmmo/>"
+
+        with patch.object(client.session, 'request', side_effect=lambda *a, **k: mock_response):
+            with self.assertRaises(ConfigurationError) as cm:
+                client.rebuildAmmo()
+            # Exception message should not expose configuration values
+            self.assertNotIn("test-savy-checksum", str(cm.exception))
+
+    def test_rebuild_ammo_missing_savy_checksum(self):
+        """rebuildAmmo should raise ConfigurationError when savy_checksum is missing."""
+        from unittest.mock import MagicMock, patch
+        from sdk.client import User, ConfigurationError
+
+        device = Device(language="en")
+        client = Client(device=device, settings={
+            "checksum_key": "test-checksum-key",
+        })
+        client.accessToken = "test-token-uuid"
+        client.user = User(3430892, "test", None, True)
+        client.info = {"@Email": "test@example.com", "@Name": "test"}
+
+        mock_response = MagicMock()
+        mock_response.text = "<RebuildAmmo/>"
+
+        with patch.object(client.session, 'request', side_effect=lambda *a, **k: mock_response):
+            with self.assertRaises(ConfigurationError) as cm:
+                client.rebuildAmmo()
+            # Exception message should not expose configuration values
+            self.assertNotIn("test-checksum-key", str(cm.exception))
+
+    def test_rebuild_ammo_missing_both_config(self):
+        """rebuildAmmo should raise ConfigurationError when both config values are missing."""
+        from unittest.mock import MagicMock, patch
+        from sdk.client import User, ConfigurationError
+
+        device = Device(language="en")
+        client = Client(device=device, settings={})
+        client.accessToken = "test-token-uuid"
+        client.user = User(3430892, "test", None, True)
+        client.info = {"@Email": "test@example.com", "@Name": "test"}
+
+        mock_response = MagicMock()
+        mock_response.text = "<RebuildAmmo/>"
+
+        with patch.object(client.session, 'request', side_effect=lambda *a, **k: mock_response):
+            with self.assertRaises(ConfigurationError) as cm:
+                client.rebuildAmmo()
+            # Exception message should not expose configuration values
+            self.assertNotIn("test-checksum-key", str(cm.exception))
+            self.assertNotIn("test-savy-checksum", str(cm.exception))
+
+    def test_rebuild_ammo_does_not_log_preimage_or_secrets(self):
+        """rebuildAmmo must not log the checksum preimage, tokens, device identifiers, or checksum secrets."""
+        from unittest.mock import MagicMock, patch
+        from sdk.client import User
+        import logging
+        from io import StringIO
+
+        device = Device(language="en")
+        client = Client(device=device, settings={
+            "checksum_key": "secret-checksum-key",
+            "savy_checksum": "secret-savy-checksum",
+        })
+        client.accessToken = "secret-access-token-uuid"
+        client.user = User(3430892, "test", None, True)
+        client.info = {"@Email": "test@example.com", "@Name": "test"}
+
+        mock_response = MagicMock()
+        mock_response.text = "<RebuildAmmo/>"
+
+        # Capture logs
+        log_stream = StringIO()
+        handler = logging.StreamHandler(log_stream)
+        logger = logging.getLogger("sdk.client")
+        logger.addHandler(handler)
+        logger.setLevel(logging.DEBUG)
+
+        with patch.object(client.session, 'request', side_effect=lambda *a, **k: mock_response):
+            client.rebuildAmmo()
+
+        handler.flush()
+        log_output = log_stream.getvalue()
+
+        # Should not contain secrets
+        self.assertNotIn("secret-checksum-key", log_output)
+        self.assertNotIn("secret-savy-checksum", log_output)
+        self.assertNotIn("secret-access-token-uuid", log_output)
+        self.assertNotIn("test-device-key", log_output)
+        self.assertNotIn("test@example.com", log_output)
+
+        logger.removeHandler(handler)
 
 
 if __name__ == '__main__':
