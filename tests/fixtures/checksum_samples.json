@@ -1,0 +1,77 @@
+{
+  "_comment": "Captured checksum samples from iOS client. Sensitive values replaced with env var names — scripts/checksum_lab.py resolves them at runtime. Never hardcode real values here.",
+  "_note": "A valid checksum formula must reproduce ALL samples exactly. Matching one is insufficient.",
+  "access_token_map": {
+    "collect_1": "PSS_AT_COLLECT_1",
+    "collect_2": "PSS_AT_COLLECT_2",
+    "collect_3": "PSS_AT_COLLECT_3",
+    "rebuild_1": "PSS_AT_REBUILD_1",
+    "rebuild_2": "PSS_AT_REBUILD_2",
+    "authorize_1": "PSS_AT_AUTHORIZE_1"
+  },
+  "samples": [
+    {
+      "id": "collect_1",
+      "endpoint": "CollectMarker2",
+      "param_name": "starSystemMarkerId",
+      "param_value": "58057708",
+      "clientDateTime": "2026-08-01T00:17:05",
+      "expected_checksum": "b614c96fbea71aef215dea6227fe57b2"
+    },
+    {
+      "id": "collect_2",
+      "endpoint": "CollectMarker2",
+      "param_name": "starSystemMarkerId",
+      "param_value": "58057712",
+      "clientDateTime": "2026-08-01T00:17:08",
+      "expected_checksum": "5285f18849205ba48c520adf6a218f69"
+    },
+    {
+      "id": "collect_3",
+      "endpoint": "CollectMarker2",
+      "param_name": "starSystemMarkerId",
+      "param_value": "54120934",
+      "clientDateTime": "2026-08-01T00:46:10",
+      "expected_checksum": "49ce1594990f276dd6edecefd501abb3"
+    },
+    {
+      "id": "rebuild_1",
+      "endpoint": "RebuildAmmo3",
+      "param_name": "ammoCategory",
+      "param_value": "None",
+      "clientDateTime": "2026-07-31T23:49:19",
+      "expected_checksum": "d1afda1d6668cd4d47554aded6f60c26"
+    },
+    {
+      "id": "rebuild_2",
+      "endpoint": "RebuildAmmo3",
+      "param_name": "ammoCategory",
+      "param_value": "None",
+      "clientDateTime": "2026-08-01T00:43:59",
+      "expected_checksum": "110abda2f8ec9660b80794197ba4ca81"
+    },
+    {
+      "id": "authorize_1",
+      "endpoint": "UserEmailPasswordAuthorize4",
+      "param_name": "checksum",
+      "param_value": "",
+      "clientDateTime": "2026-08-01T11:11:32",
+      "expected_checksum": "8418e1e0a07c1ed794789df7d8edc6ea",
+      "field_names": [
+        "deviceKey",
+        "email",
+        "password",
+        "languageKey",
+        "isWeb",
+        "accessToken"
+      ]
+    }
+  ],
+  "session_fields": {
+    "_comment_access_tokens": "Each sample used a different access token (different game sessions). The lab script maps sample id -> env var name.",
+    "device_key_env": "PSS_DEVICE_KEY",
+    "email_env": "PSS_EMAIL",
+    "salt_env": "PSS_CHECKSUM_SALT",
+    "suffix": "savysoda"
+  }
+}
