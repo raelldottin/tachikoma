@@ -39,6 +39,29 @@ class UnsupportedNativeChecksum(RuntimeError):
     pass
 
 
+def checksum_device_type_name() -> str:
+    """Device type enum name used in the checksum preimage for iOS builds.
+
+    Verified endpoint-specific behavior (2026-08-03, 7/7 captures):
+        iOS (DeviceType=0): checksum uses "DeviceTypeIPhone"
+        macOS (DeviceType=2): checksum uses "DeviceTypeMac"
+
+    The app always identifies as iOS (DeviceType=0), so the checksum uses
+    "DeviceTypeIPhone".  This is intentional protocol behavior, not an
+    inconsistency -- do not "clean up" to DeviceTypeMac.
+    """
+    return "DeviceTypeIPhone"
+
+
+def request_device_type_name() -> str:
+    """Device type enum name used in URL query parameters.
+
+    All requests use DeviceType=0 (DeviceTypeIPhone) in URL parameters and
+    POST body DeviceType field, regardless of the platform running the code.
+    """
+    return "DeviceTypeIPhone"
+
+
 def checksum_device_login17(
     device_key: str,
     client_date_time: str,
@@ -47,13 +70,24 @@ def checksum_device_login17(
 ) -> str:
     """Compute the DeviceLogin17 native checksum.
 
-    Verified against 2 live captures from official iOS client (2026-08-02):
-    - DeviceLogin17: deviceKey + clientDateTime + "DeviceTypeMac" + ChecksumKey
-    - Then SavysodaEncryptString: MD5(preimage + SavyChecksum)
+    Verified against 7 live captures from official iOS + macOS clients
+    (2026-08-03):
+    - iOS  (DeviceType=0): DeviceTypeIPhone in checksum preimage
+    - macOS(DeviceType=2): DeviceTypeMac    in checksum preimage
+
+    The client_date_time passed in MUST be stripped to second precision
+    (format "yyyy-MM-ddTHH:mm:ss" -- no microseconds, no Z suffix) because
+    the official client strips the fractional seconds before hashing even
+    though the full-precision timestamp is sent in the request body.
+
+    Formula:
+        preimage  = deviceKey + strippedClientDateTime + DeviceTypeName + ChecksumKey
+        encrypted = preimage + SavyChecksum
+        checksum  = MD5(encrypted)
 
     Args:
-        device_key: Device UUID (e.g., "6AD42828-7D06-534D-A461-49658461A614")
-        client_date_time: Timestamp in "yyyy-MM-ddTHH:mm:ss" format (no microseconds, no Z)
+        device_key: Device UUID (e.g., "CC3C7642-E6FE-4737-88C1-130395760B52")
+        client_date_time: Timestamp in "yyyy-MM-ddTHH:mm:ss" format
         checksum_key: Configuration.ChecksumKey = "5343" (runtime-initialized)
         savy_checksum: Configuration.SavyChecksum = "Savvy!s0d@" (runtime-initialized)
 
@@ -68,8 +102,8 @@ def checksum_device_login17(
             "DeviceLogin17 requires checksum_key and savy_checksum "
             "configuration values compatible with the installed game version."
         )
-    # Device type enum name for macOS/iOS builds is "DeviceTypeMac"
-    device_type = "DeviceTypeMac"
+    # App always identifies as iOS: checksum uses DeviceTypeIPhone
+    device_type = checksum_device_type_name()
     preimage = device_key + client_date_time + device_type + checksum_key
     encrypted = preimage + savy_checksum
     return hashlib.md5(encrypted.encode("utf-8")).hexdigest()

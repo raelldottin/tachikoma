@@ -358,27 +358,41 @@ class TestThreeStageAuth(unittest.TestCase):
 class TestVerifiedChecksums(unittest.TestCase):
     """Test checksum formulas verified against live captures."""
 
-    def test_device_login17_verified_capture_1(self):
-        """DeviceLogin17 formula verified against 2026-08-02 06:00:27 capture."""
-        device_key = '6AD42828-7D06-534D-A461-49658461A614'
-        cdt = '2026-08-02T06:00:27'
+    def test_device_login17_verified_ios_capture_1(self):
+        """DeviceLogin17 iOS formula (DeviceTypeIPhone) verified against
+        2026-08-03 capture index 48.  Timestamp must be stripped to seconds."""
+        device_key = 'CC3C7642-E6FE-4737-88C1-130395760B52'
+        cdt = '2026-08-03T00:40:41'  # stripped from 2026-08-03T00:40:41.326915Z
         checksum_key = '5343'
         savy_checksum = 'Savvy!s0d@'
-        expected = '83add0e8bb967327e87fcb44010293f4'
+        expected = '0fa791a16158ab68592e8614ae4b4e84'
 
         result = checksum_device_login17(device_key, cdt, checksum_key, savy_checksum)
         self.assertEqual(result, expected)
 
-    def test_device_login17_verified_capture_2(self):
-        """DeviceLogin17 formula verified against 2026-08-02 06:04:22 capture."""
-        device_key = '6AD42828-7D06-534D-A461-49658461A614'
-        cdt = '2026-08-02T06:04:22'
+    def test_device_login17_verified_ios_capture_2(self):
+        """DeviceLogin17 iOS formula (DeviceTypeIPhone) verified against
+        2026-08-03 capture index 70."""
+        device_key = 'CC3C7642-E6FE-4737-88C1-130395760B52'
+        cdt = '2026-08-03T00:41:42'  # stripped from 2026-08-03T00:41:42.823767Z
         checksum_key = '5343'
         savy_checksum = 'Savvy!s0d@'
-        expected = 'cecf22dbc38466aefa02734f020222ac'
+        expected = '342fbe00c754dabfdda7487d3d3a5525'
 
         result = checksum_device_login17(device_key, cdt, checksum_key, savy_checksum)
         self.assertEqual(result, expected)
+
+    def test_device_login17_timestamp_must_be_stripped(self):
+        """Regression: checksum with full-precision timestamp must NOT match.
+        The official client strips microseconds + Z before hashing."""
+        device_key = 'CC3C7642-E6FE-4737-88C1-130395760B52'
+        cdt_full = '2026-08-03T00:40:41.326915Z'
+        checksum_key = '5343'
+        savy_checksum = 'Savvy!s0d@'
+        expected = '0fa791a16158ab68592e8614ae4b4e84'
+
+        result = checksum_device_login17(device_key, cdt_full, checksum_key, savy_checksum)
+        self.assertNotEqual(result, expected)
 
     def test_device_login17_requires_config(self):
         """DeviceLogin17 raises UnsupportedNativeChecksum when config missing."""

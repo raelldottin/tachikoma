@@ -203,16 +203,24 @@ class Client(object):
         """Build the DeviceLogin17 JSON payload for the current device state.
         
         Format matches official iOS client (Unity 6000.0.77f1, build 18054).
+
+        Protocol detail (verified 2026-08-03, 7/7 captures):
+        - The full-precision timestamp (with microseconds + Z) is sent in the
+          request body ClientDateTime field.
+        - The checksum preimage uses the timestamp STRIPPED to seconds
+          (no microseconds, no Z suffix).
         """
         checksum_key = self.settings.get("checksum_key") or "5343"
         savy_checksum = self.settings.get("savy_checksum") or "Savvy!s0d@"
         
-        # iOS format: 2026-08-02T17:08:18.835425Z (with microseconds and Z)
+        # Full precision timestamp for the request body
         client_dt = "{0:%Y-%m-%dT%H:%M:%S.%f}Z".format(DotNet.validDateTime())
+        # Stripped to seconds for the checksum preimage
+        client_dt_checksum = client_dt.split(".")[0]
         
         self.checksum = checksum_device_login17(
             device_key=self.device.key,
-            client_date_time=client_dt,
+            client_date_time=client_dt_checksum,
             checksum_key=checksum_key,
             savy_checksum=savy_checksum,
         )
