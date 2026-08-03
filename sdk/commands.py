@@ -58,6 +58,36 @@ class CommandRegistry:
             "Alias for exit",
             args=[],
         )
+        self.register(
+            "device",
+            self._cmd_device,
+            "Manage device key (generate, show, set)",
+            args=["action", "key"],
+        )
+
+    def _cmd_device(self, args: List[str]) -> str:
+        """Manage device key: generate, show, or set a permanent device key."""
+        if not args:
+            return "Usage: device <generate|show|set> [key]"
+        
+        action = args[0].lower()
+        
+        if action == "generate":
+            new_key = self.client.device.generate_device_key()
+            return f"Generated new device key: {new_key}\nSaved to .device file"
+        
+        elif action == "show":
+            return f"Current device key: {self.client.device.key}"
+        
+        elif action == "set":
+            if len(args) < 2:
+                return "Usage: device set <key>"
+            new_key = args[1].upper()
+            self.client.device.set_device_key(new_key)
+            return f"Set device key to: {new_key}\nSaved to .device file"
+        
+        else:
+            return f"Unknown device action: {action}. Use generate, show, or set."
 
     def register(
         self,
