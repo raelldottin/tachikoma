@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import urllib.parse
+import re
 import time
 import datetime
 import collections
@@ -26,6 +27,23 @@ from .security import (
 )
 from .dotnet import DotNet
 from .redaction import redact_secrets, safe_log_message
+
+
+def lowercase_urlencode(params: dict) -> str:
+    """URL-encode with lowercase hex digits to match official iOS client.
+    
+    urllib.parse.urlencode uses uppercase (%3A) but the official client
+    sends lowercase (%3a). Server requires exact byte-for-byte match.
+    """
+    parts = []
+    for k, v in params.items():
+        k_enc = urllib.parse.quote(k, safe='')
+        v_enc = urllib.parse.quote(v, safe='')
+        # Force lowercase hex digits
+        k_enc = re.sub(r'%([0-9A-F]{2})', lambda m: '%' + m.group(1).lower(), k_enc)
+        v_enc = re.sub(r'%([0-9A-F]{2})', lambda m: '%' + m.group(1).lower(), v_enc)
+        parts.append(f'{k_enc}={v_enc}')
+    return '&'.join(parts)
 
 
 class ConfigurationError(RuntimeError):
@@ -316,7 +334,7 @@ class Client(object):
             savy_checksum,
         )
 
-        post_data = urllib.parse.urlencode({
+        post_data = lowercase_urlencode({
             "clientDateTime": ts,
             "checksum": self.checksum,
             "deviceKey": self.device.key,
@@ -326,8 +344,8 @@ class Client(object):
             "isWeb": "False",
             "accessToken": self.accessToken,
         })
-
-        url = f"{self.baseUrl}/UserService/UserEmailPasswordAuthorize4"
+        # Official client sends ALL params in URL query string AND POST body
+        url = f"{self.baseUrl}/UserService/UserEmailPasswordAuthorize4?{post_data}"
         r = self.request(url, "POST", data=post_data)
 
         if r and "errorMessage=" in r.text:
