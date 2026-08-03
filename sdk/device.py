@@ -101,7 +101,7 @@ class Device(object):
         # Case-insensitive matching for known platforms
         lower = name.lower()
         if lower == "iphone" or lower == "ios":
-            return "DeviceTypeIPhone"
+            return "DeviceTypeMac"  # Official iOS client uses DeviceTypeMac (value 2)
         elif lower == "mac" or lower == "macos":
             return "DeviceTypeMac"
         elif lower == "android":

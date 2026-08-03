@@ -1,14 +1,16 @@
 # Pixel Starships Authentication — Operational Documentation
 
 ## Overview
-This document describes the manual provisioning and recovery procedures for Tachikoma's Pixel Starships authentication. Both endpoints are **live-verified** (2026-08-02).
+This document describes the manual provisioning and recovery procedures for Tachikoma's Pixel Starships authentication.
 
 ## Endpoints
 
 | Endpoint | Status | Checksum Formula |
 |----------|--------|------------------|
-| `DeviceLogin17` | Live-verified | `MD5(deviceKey + clientDateTime + "DeviceTypeMac" + "5343" + "Savvy!s0d@")` |
-| `UserEmailPasswordAuthorize4` | Live-verified | `MD5(deviceKey + email + clientDateTime + accessToken + "5343" + "Savvy!s0d@")` |
+| `DeviceLogin17` (with refresh token) | Live-verified | `MD5(deviceKey + clientDateTime + "DeviceTypeMac" + "5343" + "Savvy!s0d@")` |
+| `DeviceLogin17` (without refresh token) | Not verified | — |
+| `UserEmailPasswordAuthorize4` checksum formula | Capture-matched (5/5) | `MD5(deviceKey + email + clientDateTime + accessToken + "5343" + "Savvy!s0d@")` |
+| `UserEmailPasswordAuthorize4` endpoint | **Unverified** — server rejects requests | — |
 
 ## Authentication Flow
 
@@ -20,15 +22,16 @@ DeviceLogin17(refreshToken) → accessToken → authenticated session
 - No email/password required
 - Requires valid `refreshToken` stored in `.device` file or auth string
 
-### Provisioning/Recovery — Email/Password Path (Feature-Gated)
+### Provisioning/Recovery — Email/Password Path (Feature-Gated, Experimental)
 ```
-DeviceLogin17(no refreshToken) → accessToken
-→ UserEmailPasswordAuthorize4(email, password, accessToken) → new refreshToken
-→ DeviceLogin17(new refreshToken) → authenticated session
+DeviceLogin17(no refreshToken) → accessToken  [UNVERIFIED]
+→ UserEmailPasswordAuthorize4(email, password, accessToken) → new refreshToken  [UNVERIFIED]
+→ DeviceLogin17(new refreshToken) → authenticated session  [LIVE-VERIFIED]
 ```
 - Requires `allow_email_password_login = True` in settings
 - Generates a **new** refreshToken (rotates previous)
 - Use for initial provisioning or recovery after manual login invalidation
+- **WARNING**: First two stages currently unverified; server rejects requests
 
 ## Manual Provisioning Procedure
 
@@ -54,12 +57,12 @@ DeviceLogin17(no refreshToken) → accessToken
    - Safari → `http://mitm.it` → Apple → Install
    - Settings → General → About → Certificate Trust Settings → Enable mitmproxy
 
-3. **Force fresh login**
+4. **Force fresh login**
    - Force close Pixel Starships on iPhone
    - Launch app → perform email/password login (not Guest/Apple/Google)
    - Capture appears in `/tmp/pss_capture_multi.json`
 
-4. **Extract refreshToken from capture**
+5. **Extract refreshToken from capture**
    ```bash
    cat /tmp/pss_capture_multi.json | python3 -c "
    import json, re
@@ -72,7 +75,7 @@ DeviceLogin17(no refreshToken) → accessToken
    "
    ```
 
-5. **Build auth string** (6 fields, pipe-delimited):
+6. **Build auth string** (6 fields, pipe-delimited):
    ```
    name|deviceKey|refreshToken|languageKey|accessToken|userId
    ```
@@ -83,14 +86,14 @@ DeviceLogin17(no refreshToken) → accessToken
    - `accessToken`: optional, can be empty
    - `userId`: optional, can be empty
 
-6. **Store as GitHub secret**
+7. **Store as GitHub secret**
    ```bash
    gh secret set PSS_ACCOUNT_1_AUTH_STRING -b "<auth_string_from_step_5>"
    ```
 
 ## Recovery After Manual Login Invalidation
 
-When you log in manually on the iPhone app, the server rotates the refreshToken. Automation will fail with authentication errors.
+When you log in manually on the iPhone app, the server invalidates the prior refreshToken. Automation will fail with authentication errors.
 
 **Recovery procedure:**
 1. Repeat steps 1-6 above (fresh iPhone login + capture)
@@ -119,7 +122,7 @@ client.login(email="user@example.com", password="...")
 | Expired/invalid refreshToken | `login()` returns `False`, no fallback |
 | No refreshToken + no credentials | Guest session (returns `True`) |
 | No refreshToken + email/password + flag disabled | Returns `False`, no request sent |
-| No refreshToken + email/password + flag enabled | Full three-stage flow, new refreshToken stored |
+| No refreshToken + email/password + flag enabled | Three-stage flow attempted (stages 1-2 unverified) |
 
 ## CI/CD Automation
 
