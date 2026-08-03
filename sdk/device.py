@@ -97,16 +97,10 @@ class Device(object):
             self.deviceType = self._resolve_device_type(self.name)
 
     def _resolve_device_type(self, name: str) -> str:
-        """Map auth string name field to valid deviceType enum value."""
-        # Case-insensitive matching for known platforms
-        lower = name.lower()
-        if lower == "iphone" or lower == "ios":
-            return "DeviceTypeMac"  # Official iOS client uses DeviceTypeMac (value 2)
-        elif lower == "mac" or lower == "macos":
-            return "DeviceTypeMac"
-        elif lower == "android":
-            return "DeviceTypeAndroid"
-        # Default to Mac (known working) rather than sending invalid value
-        return "DeviceTypeMac"
+            """Map auth string name field to valid deviceType enum value.
 
-        return True
+            The app always identifies as iOS (DeviceTypeIPhone) regardless
+            of the platform it runs on.  The name field in the auth string
+            is an account label, not a platform identifier.
+            """
+            return "DeviceTypeIPhone"
