@@ -72,12 +72,17 @@ def email_logfile(filename, client, email=None, password=None, recipient=None):
     return True
 
 
-def authenticate(device):
+def authenticate(device, email=None, password=None):
     client = Client(device=device)
 
-    if not client.login():
-        logging.warning("[authenticate] failed to login")
-        return False
+    if email and password:
+        if not client.login(email=email, password=password):
+            logging.warning("[authenticate] failed to login")
+            return False
+    else:
+        if not client.login():
+            logging.warning("[authenticate] failed to login")
+            return False
 
     return client
 
@@ -99,13 +104,7 @@ def main():
         "--login-email",
         dest="login_email",
         default=None,
-        help="email for game login (requires --login-password)",
-    )
-    parser.add_argument(
-        "--login-password",
-        dest="login_password",
-        default=None,
-        help="password for game login (requires --login-email)",
+        help="email for game login (password will be prompted)",
     )
     parser.add_argument(
         "-e",
@@ -141,15 +140,16 @@ def main():
     else:
         device = Device(language="en")
 
-    # Enable email/password login if both provided
+    # Enable email/password login if email provided
     settings = {}
-    if args.login_email and args.login_password:
+    if args.login_email:
         settings["allow_email_password_login"] = True
 
     client = Client(device=device, settings=settings)
 
-    if args.login_email and args.login_password:
-        if not client.login(email=args.login_email, password=args.login_password):
+    if args.login_email:
+        password = getpass.getpass("Game password: ")
+        if not client.login(email=args.login_email, password=password):
             logging.warning("[authenticate] failed to login")
             sys.exit(1)
     else:

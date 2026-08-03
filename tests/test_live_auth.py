@@ -36,7 +36,6 @@ class TestLiveAuth(unittest.TestCase):
             raise unittest.SkipTest("PSS_TEST_EMAIL and PSS_TEST_PASSWORD required")
 
         # Use a dedicated test device
-        cls.device = Device(language="en")
         cls.settings = {
             "checksum_key": "5343",
             "savy_checksum": "Savvy!s0d@",
@@ -47,36 +46,52 @@ class TestLiveAuth(unittest.TestCase):
         if not self.run_live:
             self.skipTest("Live auth tests disabled")
 
-    def test_checksum_matches_captured_offline(self):
-        """Verify checksum formula matches the 5 captured official-client logins."""
-        # These are the captured vectors from the 5 iOS logins on 2026-08-02
-        # DeviceKey is shared across test captures: CC3C7642-E6FE-4737-88C1-130395760B52
-        device_key = "CC3C7642-E6FE-4737-88C1-130395760B52"
-        checksum_key = "5343"
-        savy_checksum = "Savvy!s0d@"
+    def test_email_authorize_checksum_capture_1(self):
+        """Verify checksum formula against synthetic fixture vector."""
+        # This test validates the formula against a known synthetic vector
+        # Real captured vectors should be kept in a private fixture file, not source control
+        device_key = "TEST-DEVICE-0001"
+        email = "fixture@example.invalid"
+        client_datetime = "2026-08-02T12:34:56"
+        access_token = "fixture-access-token"
+        checksum_key = "fixture-key"
+        savy_checksum = "fixture-suffix"
 
-        # Note: We don't have accessToken from historical captures here
-        # The live test below will validate end-to-end
-        # This test documents the verification requirement
-        self.assertEqual(checksum_key, "5343")
-        self.assertEqual(savy_checksum, "Savvy!s0d@")
+        actual = checksum_user_email_password_authorize4(
+            device_key=device_key,
+            email=email,
+            client_date_time=client_datetime,
+            access_token=access_token,
+            checksum_key=checksum_key,
+            savy_checksum=savy_checksum,
+        )
+
+        # This expected value should be replaced with the real computed value
+        # when real fixture data is available
+        expected = "d41d8cd98f00b204e9800998ecf8427e"  # placeholder
+        self.assertEqual(actual, expected)
 
     def test_fresh_email_password_login_e2e(self):
         """Complete three-stage login with fresh credentials against live server."""
-        client = Client(device=self.device, settings=self.settings)
+        device = Device(language="en")
+        client = Client(device=device, settings={
+            "checksum_key": "5343",
+            "savy_checksum": "Savvy!s0d@",
+            "allow_email_password_login": True,
+        })
 
         # This will execute all three stages:
         # Stage 1: DeviceLogin17 -> accessToken
         # Stage 2: UserEmailPasswordAuthorize4 -> refreshToken
         # Stage 3: DeviceLogin17 with refreshToken -> full session
-        success = client.login(email=self.email, password=self.password)
+        success = client.login(email=os.environ["PSS_TEST_EMAIL"], password=os.environ["PSS_TEST_PASSWORD"])
 
         self.assertTrue(success, "Three-stage login should succeed")
 
         # Verify tokens were obtained and stored
         self.assertIsNotNone(client.accessToken, "accessToken should be set")
-        self.assertIsNotNone(self.device.refreshToken, "refreshToken should be stored on device")
-        self.assertTrue(len(self.device.refreshToken) > 50, "refreshToken should be a JWT")
+        self.assertIsNotNone(device.refreshToken, "refreshToken should be stored on device")
+        self.assertTrue(len(device.refreshToken or "") > 50, "refreshToken should be a JWT")
 
         # Verify an authenticated endpoint works
         success = client.getShipByUserId()
@@ -84,16 +99,21 @@ class TestLiveAuth(unittest.TestCase):
 
     def test_negative_wrong_password(self):
         """Wrong password should fail authentication."""
-        client = Client(device=self.device, settings=self.settings)
+        device = Device(language="en")
+        client = Client(device=device, settings={
+            "checksum_key": "5343",
+            "savy_checksum": "Savvy!s0d@",
+            "allow_email_password_login": True,
+        })
 
         # Use a device with no refreshToken to force email/password path
-        self.device.refreshToken = None
+        device.refreshToken = None
 
-        success = client.login(email=self.email, password="definitely-wrong-password")
+        success = client.login(email=os.environ["PSS_TEST_EMAIL"], password="definitely-wrong-password")
         self.assertFalse(success, "Wrong password should be rejected")
 
         # No refreshToken should be stored
-        self.assertIsNone(self.device.refreshToken)
+        self.assertIsNone(device.refreshToken)
 
     def test_negative_corrupted_checksum(self):
         """Corrupted checksum should be rejected by server."""
@@ -110,7 +130,7 @@ class TestLiveAuth(unittest.TestCase):
         from sdk.security import UnsupportedNativeChecksum
 
         with self.assertRaises((UnsupportedNativeChecksum, ValueError)):
-            client.login(email=self.email, password=self.password)
+            client.login(email=os.environ["PSS_TEST_EMAIL"], password=os.environ["PSS_TEST_PASSWORD"])
 
     def test_negative_feature_flag_disabled(self):
         """Feature flag disabled should block email/password without request."""
@@ -124,7 +144,7 @@ class TestLiveAuth(unittest.TestCase):
             },
         )
 
-        success = client.login(email=self.email, password=self.password)
+        success = client.login(email=os.environ["PSS_TEST_EMAIL"], password=os.environ["PSS_TEST_PASSWORD"])
         self.assertFalse(success, "Feature gate should block email/password login")
 
         # No refreshToken should be stored
@@ -134,9 +154,13 @@ class TestLiveAuth(unittest.TestCase):
         """Existing refreshToken should skip email/password endpoint."""
         device = Device(language="en")
         device.refreshToken = "existing-refresh-token"
-        client = Client(device=device, settings=self.settings)
+        client = Client(device=device, settings={
+            "checksum_key": "5343",
+            "savy_checksum": "Savvy!s0d@",
+            "allow_email_password_login": True,
+        })
 
-        success = client.login(email=self.email, password=self.password)
+        success = client.login(email=os.environ["PSS_TEST_EMAIL"], password=os.environ["PSS_TEST_PASSWORD"])
         # Should succeed via refreshToken path (or fail on refresh, but NOT call email/password)
         # We can't easily verify the endpoint wasn't called without mocking,
         # but we verify refreshToken is unchanged
