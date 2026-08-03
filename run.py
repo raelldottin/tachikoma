@@ -97,6 +97,12 @@ def main():
         help="email for game login (password will be prompted)",
     )
     parser.add_argument(
+        "--device-key",
+        dest="device_key",
+        default=None,
+        help="permanent device key to use (if not provided, generates new one)",
+    )
+    parser.add_argument(
         "--smtp-email",
         dest="smtp_email",
         default=None,
@@ -125,9 +131,10 @@ def main():
     if auth_string:
         device = Device(language="en", authentication_string=auth_string)
     else:
-        # Fresh device: don't load from .device file when doing email/password login
         device = Device(language="en")
-        if args.login_email:
+        if args.device_key:
+            device.set_device_key(args.device_key.upper())
+        elif args.login_email:
             # Clear any persisted .device file to start fresh
             try:
                 os.unlink(device.DB)

@@ -17,6 +17,7 @@ class Device(object):
         self, name="Android", key=None, language="en", authentication_string=None
     ):
 
+        # If key provided, use it; otherwise generate new one
         if not key:
             key = "{}-{}-{}-{}-{}".format(
                 "".join(random.choice("0123456789abcdef") for n in range(8)),
@@ -104,3 +105,15 @@ class Device(object):
             is an account label, not a platform identifier.
             """
             return "DeviceTypeIPhone"
+
+    def set_device_key(self, key: str):
+        """Set a permanent device key and save to .device file."""
+        self.key = key
+        self.save()
+
+    def generate_device_key(self) -> str:
+        """Generate a new device key and save it."""
+        import uuid
+        new_key = str(uuid.uuid4()).upper()
+        self.set_device_key(new_key)
+        return new_key

@@ -27,7 +27,7 @@ class TestCommandRegistry(unittest.TestCase):
     def test_register_default_commands(self):
         """Test that default commands are registered."""
         commands = self.registry.list_commands()
-        expected = ["exit", "help", "logout", "quit", "refresh", "ship", "status"]
+        expected = ["device", "exit", "help", "logout", "quit", "refresh", "ship", "status"]
         self.assertEqual(sorted(commands), expected)
 
     def test_is_verified(self):
