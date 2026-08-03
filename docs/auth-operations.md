@@ -8,9 +8,9 @@ This document describes the manual provisioning and recovery procedures for Tach
 | Endpoint | Status | Checksum Formula |
 |----------|--------|------------------|
 | `DeviceLogin17` (with refresh token) | Live-verified | `MD5(deviceKey + clientDateTime + "DeviceTypeMac" + "5343" + "Savvy!s0d@")` |
-| `DeviceLogin17` (without refresh token) | Not verified | — |
+| `DeviceLogin17` (without refresh token) | Live-verified | `MD5(deviceKey + clientDateTime + "DeviceTypeMac" + "5343" + "Savvy!s0d@")` |
 | `UserEmailPasswordAuthorize4` checksum formula | Capture-matched (5/5) | `MD5(deviceKey + email + clientDateTime + accessToken + "5343" + "Savvy!s0d@")` |
-| `UserEmailPasswordAuthorize4` endpoint | **Unverified** — server rejects requests | — |
+| `UserEmailPasswordAuthorize4` endpoint | **Live-verified** (2026-08-03) | — |
 
 ## Authentication Flow
 
@@ -22,16 +22,27 @@ DeviceLogin17(refreshToken) → accessToken → authenticated session
 - No email/password required
 - Requires valid `refreshToken` stored in `.device` file or auth string
 
-### Provisioning/Recovery — Email/Password Path (Feature-Gated, Experimental)
+### Provisioning/Recovery — Email/Password Path (Feature-Gated)
 ```
-DeviceLogin17(no refreshToken) → accessToken  [UNVERIFIED]
-→ UserEmailPasswordAuthorize4(email, password, accessToken) → new refreshToken  [UNVERIFIED]
+DeviceLogin17(no refreshToken) → accessToken  [LIVE-VERIFIED]
+→ UserEmailPasswordAuthorize4(email, password, accessToken) → new refreshToken  [LIVE-VERIFIED]
 → DeviceLogin17(new refreshToken) → authenticated session  [LIVE-VERIFIED]
 ```
 - Requires `allow_email_password_login = True` in settings
 - Generates a **new** refreshToken (rotates previous)
 - Use for initial provisioning or recovery after manual login invalidation
-- **WARNING**: First two stages currently unverified; server rejects requests
+- **All three stages live-verified as of 2026-08-03**
+
+### Three-Stage Flow Verified (2026-08-03)
+```
+Stage 1: DeviceLogin17 (no refreshToken) → accessToken
+Stage 2: UserEmailPasswordAuthorize4(email, password, accessToken) → NEW refreshToken
+Stage 3: DeviceLogin17(new refreshToken) → fresh accessToken + authenticated session
+```
+- Verified via mitmproxy capture (2026-08-03) with fresh iOS login
+- `UserEmailPasswordAuthorize4` returned new refreshToken (`createdDate: 2026-08-03T00:41:41`)
+- `DeviceLogin17` with new refreshToken returned fresh accessToken
+- Authenticated `GetShipByUserId` succeeded
 
 ## Manual Provisioning Procedure
 
@@ -106,7 +117,7 @@ When you log in manually on the iPhone app, the server invalidates the prior ref
 settings = {
     "checksum_key": "5343",
     "savy_checksum": "Savvy!s0d@",
-    "allow_email_password_login": True,  # Enable for provisioning only
+    "allow_email_password_login": True,  # Enable for provisioning/recovery
 }
 client = Client(device=device, settings=settings)
 client.login(email="user@example.com", password="...")
@@ -122,7 +133,7 @@ client.login(email="user@example.com", password="...")
 | Expired/invalid refreshToken | `login()` returns `False`, no fallback |
 | No refreshToken + no credentials | Guest session (returns `True`) |
 | No refreshToken + email/password + flag disabled | Returns `False`, no request sent |
-| No refreshToken + email/password + flag enabled | Three-stage flow attempted (stages 1-2 unverified) |
+| No refreshToken + email/password + flag enabled | Full three-stage flow, new refreshToken stored |
 
 ## CI/CD Automation
 

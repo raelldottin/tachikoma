@@ -409,14 +409,13 @@ class Client(object):
         return True
 
     def getLatestVersion3(self):
-        url = f"https://api.pixelstarships.com/SettingService/GetLatestVersion3?languageKey={self.device.languageKey}&deviceType=DeviceType{self.device.name}"
+        url = f"https://api.pixelstarships.com/SettingService/GetLatestVersion3?languageKey={self.device.languageKey}&deviceType=DeviceTypeIPhone"
         r = self.request(url, "GET")
-
         if r.content:
             self.latestVersion = xmltodict.parse(r.content, xml_attribs=True)
 
     def getTodayLiveOps2(self):
-        url = f"https://api.pixelstarships.com/LiveOpsService/GetTodayLiveOps2?languageKey={self.device.languageKey}&deviceType=DeviceType{self.device.name}"
+        url = f"https://api.pixelstarships.com/LiveOpsService/GetTodayLiveOps2?languageKey={self.device.languageKey}&deviceType=DeviceTypeIPhone"
         r = self.request(url, "GET")
         if r:
             self.todayLiveOps = xmltodict.parse(r.content, xml_attribs=True)
