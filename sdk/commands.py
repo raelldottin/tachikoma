@@ -19,19 +19,19 @@ class CommandRegistry:
         self.register(
             "help",
             self._cmd_help,
-            "Show available commands",
-            args=[],
+            "Show available commands or detailed help for a command",
+            args=["command"],
         )
         self.register(
             "status",
             self._cmd_status,
-            "Show authentication and session status",
+            "Show session state without displaying secrets",
             args=[],
         )
         self.register(
             "ship",
             self._cmd_ship,
-            "Show ship information (rooms, researches, resources)",
+            "Show ship summary, rooms, and research",
             args=[],
         )
         self.register(
@@ -43,13 +43,19 @@ class CommandRegistry:
         self.register(
             "logout",
             self._cmd_logout,
-            "Clear stored session and exit",
+            "Delete stored authentication and end the session",
             args=[],
         )
         self.register(
             "exit",
             self._cmd_exit,
-            "Exit the TUI",
+            "Exit while preserving stored authentication",
+            args=[],
+        )
+        self.register(
+            "quit",
+            self._cmd_exit,
+            "Alias for exit",
             args=[],
         )
 
@@ -84,27 +90,31 @@ class CommandRegistry:
 
     # Command handlers
     def _cmd_help(self, args: List[str]) -> str:
-        """Show available commands."""
+        """Show available commands or detailed help for a command."""
+        if args:
+            name = args[0].lower()
+            cmd = self._commands.get(name)
+            if not cmd:
+                return f"Unknown command: {name}"
+            usage = " ".join([name] + [f"<{a}>" for a in cmd["args"]])
+            status = "✓" if cmd["verified"] else "⚠ (unverified)"
+            return f"Usage: {usage}\n{status} - {cmd['description']}"
+
         lines = ["Available commands:"]
         for name in self.list_commands():
             cmd = self._commands[name]
             status = "✓" if cmd["verified"] else "⚠ (unverified)"
             args_str = " ".join(f"<{a}>" for a in cmd["args"])
             lines.append(f"  {name} {args_str}  {status} - {cmd['description']}")
-        lines.append("\nType 'help <command>' for more details.")
         return "\n".join(lines)
 
     def _cmd_status(self, args: List[str]) -> str:
-        """Show authentication and session status."""
+        """Show authentication and session status without displaying secrets."""
         lines = ["=== Session Status ==="]
         lines.append(f"Authenticated: {self.client.accessToken is not None}")
-        if self.client.accessToken:
-            lines.append(f"Access Token: {self.client.accessToken[:16]}...")
-        lines.append(f"Refresh Token: {'Yes' if self.client.device.refreshToken else 'No'}")
-        if self.client.device.refreshToken:
-            lines.append(f"  Token: {self.client.device.refreshToken[:32]}...")
-        lines.append(f"Device Key: {self.client.device.key}")
-        lines.append(f"Device Type: {self.client.device.name}")
+        lines.append(f"Access token: {'Present' if self.client.accessToken else 'Not present'}")
+        lines.append(f"Refresh token: {'Present' if self.client.device.refreshToken else 'Not present'}")
+        lines.append(f"Device identity: Configured")
         if self.client.info.get("@Name"):
             lines.append(f"Captain: {self.client.info['@Name']}")
         if self.client.credits is not None:
@@ -167,16 +177,16 @@ class CommandRegistry:
 
         self.client.accessToken = None
         if self.client.create_device_session():
-            return f"Session refreshed. New access token: {self.client.accessToken[:16]}..."
+            return "Session refreshed successfully."
         else:
             return "Failed to refresh session. Refresh token may be invalid."
 
     def _cmd_logout(self, args: List[str]) -> str:
-        """Clear stored session."""
+        """Clear stored session and exit."""
         self.client.accessToken = None
         self.client.device.refreshToken = None
         self.client.device.save()
-        return "Logged out. Session cleared."
+        raise SystemExit("Logged out. Stored session cleared.")
 
     def _cmd_exit(self, args: List[str]) -> str:
         """Exit the TUI."""
