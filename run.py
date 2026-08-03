@@ -1,5 +1,6 @@
 import sys
 import getpass
+import os
 from configparser import ConfigParser
 from configparser import NoSectionError
 import smtplib
@@ -124,7 +125,14 @@ def main():
     if auth_string:
         device = Device(language="en", authentication_string=auth_string)
     else:
+        # Fresh device: don't load from .device file when doing email/password login
         device = Device(language="en")
+        if args.login_email:
+            # Clear any persisted .device file to start fresh
+            try:
+                os.unlink(device.DB)
+            except FileNotFoundError:
+                pass
 
     # Enable email/password login if email provided
     settings = {}
