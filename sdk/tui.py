@@ -3,7 +3,9 @@ from __future__ import annotations
 """Interactive TUI command loop for Tachikoma."""
 
 import sys
+import argparse
 import getpass
+from pathlib import Path
 from typing import Optional
 
 from sdk.client import Client
@@ -135,7 +137,33 @@ def run_tui(device: Device) -> int:
     return 0
 
 
+def main() -> int:
+    """CLI entry point for the TUI module."""
+    parser = argparse.ArgumentParser(
+        description="Tachikoma Interactive TUI for Pixel Starships"
+    )
+    parser.add_argument(
+        "--auth-file",
+        help="Path to file containing the authentication string",
+    )
+    parser.add_argument(
+        "-d",
+        "--device-name",
+        default="iOS",
+        help="Device label; protocol requests still identify as iOS",
+    )
+    args = parser.parse_args()
+
+    auth_string = None
+    if args.auth_file:
+        auth_string = Path(args.auth_file).read_text().strip()
+
+    device = Device(
+        name=args.device_name,
+        authentication_string=auth_string,
+    )
+    return run_tui(device)
+
+
 if __name__ == "__main__":
-    # Allow direct execution: python -m sdk.tui
-    device = Device(name="iOS")
-    sys.exit(run_tui(device))
+    raise SystemExit(main())
