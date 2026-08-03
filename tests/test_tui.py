@@ -27,7 +27,7 @@ class TestCommandRegistry(unittest.TestCase):
     def test_register_default_commands(self):
         """Test that default commands are registered."""
         commands = self.registry.list_commands()
-        expected = ["exit", "help", "logout", "refresh", "ship", "status"]
+        expected = ["exit", "help", "logout", "quit", "refresh", "ship", "status"]
         self.assertEqual(sorted(commands), expected)
 
     def test_is_verified(self):
@@ -38,6 +38,7 @@ class TestCommandRegistry(unittest.TestCase):
         self.assertTrue(self.registry.is_verified("refresh"))
         self.assertTrue(self.registry.is_verified("logout"))
         self.assertTrue(self.registry.is_verified("exit"))
+        self.assertTrue(self.registry.is_verified("quit"))
 
     def test_unknown_command(self):
         """Test unknown command returns None."""
@@ -50,6 +51,12 @@ class TestCommandRegistry(unittest.TestCase):
         self.assertIn("help", result)
         self.assertIn("status", result)
 
+    def test_cmd_help_specific(self):
+        """Test help command for specific command."""
+        result = self.registry._cmd_help(["status"])
+        self.assertIn("Usage: status", result)
+        self.assertIn("session state", result)
+
     def test_cmd_status_no_auth(self):
         """Test status command when not authenticated."""
         # Create a fresh client without auth
@@ -59,7 +66,7 @@ class TestCommandRegistry(unittest.TestCase):
 
         result = registry._cmd_status([])
         self.assertIn("Authenticated: False", result)
-        self.assertIn("Refresh Token: No", result)
+        self.assertIn("Refresh token: Not present", result)
 
     def test_cmd_status_with_auth(self):
         """Test status command with authentication."""
@@ -75,10 +82,9 @@ class TestCommandRegistry(unittest.TestCase):
 
         result = registry._cmd_status([])
         self.assertIn("Authenticated: True", result)
-        # Token is truncated to 16 chars + "..."
-        self.assertIn("test-access-toke...", result)
-        self.assertIn("Refresh Token: Yes", result)
-        self.assertIn("TEST-KEY", result)
+        self.assertIn("Access token: Present", result)
+        self.assertIn("Refresh token: Present", result)
+        self.assertIn("Device identity: Configured", result)
         self.assertIn("TestCaptain", result)
         self.assertIn("Credits: 1000", result)
 
@@ -101,12 +107,13 @@ class TestCommandRegistry(unittest.TestCase):
         self.assertEqual(result, "No refresh token stored. Cannot refresh.")
 
     def test_cmd_logout(self):
-        """Test logout command."""
+        """Test logout command raises SystemExit."""
         self.client.accessToken = "test-token"
         self.client.device.refreshToken = "test-refresh"
 
-        result = self.registry._cmd_logout([])
-        self.assertEqual(result, "Logged out. Session cleared.")
+        with self.assertRaises(SystemExit) as cm:
+            self.registry._cmd_logout([])
+        self.assertEqual(str(cm.exception), "Logged out. Stored session cleared.")
         self.assertIsNone(self.client.accessToken)
         self.assertIsNone(self.client.device.refreshToken)
 
@@ -209,9 +216,24 @@ class TestTUI(unittest.TestCase):
 
         # Make input raise KeyboardInterrupt on first call, then return 'exit' to break
         mock_input.side_effect = [KeyboardInterrupt(), "exit"]
-        
+
         tui._command_loop()
         # After KeyboardInterrupt, loop continues and processes 'exit', so running becomes False
+        self.assertFalse(tui.running)
+
+    @patch("sdk.tui.input")
+    @patch("sdk.tui.TUI._authenticate")
+    def test_command_loop_eof(self, mock_auth, mock_input):
+        """Test command loop handles EOFError (Ctrl-D)."""
+        tui = TUI(self.device)
+        tui.client = MagicMock()
+        tui.client.accessToken = "test-token"
+        tui.registry = create_command_registry(tui.client)
+        tui.running = True
+
+        mock_input.side_effect = EOFError()
+
+        tui._command_loop()
         self.assertFalse(tui.running)
 
 

@@ -2,7 +2,7 @@
 """Tachikoma Interactive TUI Entry Point.
 
 Usage:
-    python -m tachikoma.tui
+    python -m sdk.tui
     python scripts/play.py
 """
 
@@ -19,14 +19,14 @@ from sdk.device import Device
 from sdk.tui import run_tui
 
 
-def main():
+def main() -> int:
     parser = argparse.ArgumentParser(
         description="Tachikoma Interactive TUI for Pixel Starships"
     )
     parser.add_argument(
-        "-a",
-        "--auth",
-        help="Authentication string (name|deviceKey|refreshToken|languageKey|accessToken|userId)",
+        "--auth-file",
+        dest="auth_file",
+        help="Path to file containing authentication string",
     )
     parser.add_argument(
         "-d",
@@ -36,10 +36,15 @@ def main():
     )
     args = parser.parse_args()
 
-    if args.auth:
+    auth_string = None
+    if args.auth_file:
+        with open(args.auth_file, "r") as f:
+            auth_string = f.read().strip()
+
+    if auth_string:
         device = Device(
             name=args.device_name,
-            authentication_string=args.auth,
+            authentication_string=auth_string,
         )
     else:
         device = Device(name=args.device_name)

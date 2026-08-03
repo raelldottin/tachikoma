@@ -35,8 +35,26 @@ class TUI:
         self._command_loop()
 
     def _authenticate(self):
-        """Interactive email/password authentication."""
-        print("=== Tachikoma Interactive Login ===")
+        """Authenticate using stored refresh token, then fall back to email/password."""
+        # First try with stored refresh token (if available)
+        if self.device.refreshToken:
+            print("=== Tachikoma Interactive Login ===")
+            print("Attempting to restore session with stored refresh token...")
+            self.client = Client(
+                device=self.device,
+                settings={
+                    "checksum_key": "5343",
+                    "savy_checksum": "Savvy!s0d@",
+                    "allow_email_password_login": True,
+                },
+            )
+            if self.client.login():
+                print("Session restored successfully!")
+                return
+            print("Stored session could not be refreshed. Falling back to email/password login.")
+
+        # Fall back to interactive email/password authentication
+        print("\n=== Tachikoma Interactive Login ===")
         email = input("Email: ").strip()
         if not email:
             print("Email required.")
@@ -83,11 +101,6 @@ class TUI:
                 cmd_name = parts[0].lower()
                 args = parts[1:]
 
-                if cmd_name in ("exit", "quit"):
-                    self.running = False
-                    print("Goodbye!")
-                    break
-
                 cmd = self.registry.get(cmd_name)
                 if not cmd:
                     print(f"Unknown command: {cmd_name}")
@@ -105,9 +118,14 @@ class TUI:
                 except Exception as e:
                     print(f"Error: {e}")
 
-            except (KeyboardInterrupt, EOFError):
-                print("\nUse 'exit' to quit.")
-                continue
+            except KeyboardInterrupt:
+                print("\nInterrupted.")
+                self.running = False
+                break
+            except EOFError:
+                print("\nGoodbye!")
+                self.running = False
+                break
 
 
 def run_tui(device: Device) -> int:
@@ -115,3 +133,9 @@ def run_tui(device: Device) -> int:
     tui = TUI(device)
     tui.run()
     return 0
+
+
+if __name__ == "__main__":
+    # Allow direct execution: python -m sdk.tui
+    device = Device(name="iOS")
+    sys.exit(run_tui(device))
