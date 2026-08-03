@@ -7,12 +7,13 @@ from email.message import EmailMessage
 import argparse
 import logging
 import io
+from pathlib import Path
 from sdk.client import Client
 from sdk.device import Device
 
 
 logfilepath = "tachikoma.log"
-log_catpure_string = io.StringIO()
+log_capture_string = io.StringIO()
 
 logging.basicConfig(
     level=logging.INFO,
@@ -20,7 +21,7 @@ logging.basicConfig(
     handlers=[
         logging.FileHandler(logfilepath),
         logging.StreamHandler(sys.stdout),
-        logging.StreamHandler(log_catpure_string),
+        logging.StreamHandler(log_capture_string),
     ],
 )
 
@@ -51,7 +52,7 @@ def email_logfile(filename, client, email=None, password=None, recipient=None):
     if not logs:
         return False
 
-    logs = log_catpure_string.getvalue()
+    logs = log_capture_string.getvalue()
     subject = f"Pixel Starships Automation Log: {client.user.name if hasattr(client, 'user') else ''}"
     message = EmailMessage()
     message["from"] = email
@@ -68,23 +69,14 @@ def email_logfile(filename, client, email=None, password=None, recipient=None):
         session.quit()
     except:
         logging.exception("Exception occurred", exc_info=True)
-    log_catpure_string.close()
+    log_capture_string.close()
     return True
 
 
-def authenticate(device, email=None, password=None):
-    client = Client(device=device)
-
-    if email and password:
-        if not client.login(email=email, password=password):
-            logging.warning("[authenticate] failed to login")
-            return False
-    else:
-        if not client.login():
-            logging.warning("[authenticate] failed to login")
-            return False
-
-    return client
+def read_auth_file(path: str) -> str:
+    """Read authentication string from file, stripping whitespace."""
+    content = Path(path).read_text().strip()
+    return content
 
 
 def main():
@@ -92,13 +84,10 @@ def main():
         description="Automate trivial tasks in Pixel Starships Mobile Starategy Sci-Fi MMORPG"
     )
     parser.add_argument(
-        "-a",
-        "--auth",
-        nargs=1,
-        action="store",
-        dest="auth",
+        "--auth-file",
+        dest="auth_file",
         default=None,
-        help="authentication string",
+        help="path to file containing authentication string (safer than CLI arg)",
     )
     parser.add_argument(
         "--login-email",
@@ -107,36 +96,33 @@ def main():
         help="email for game login (password will be prompted)",
     )
     parser.add_argument(
-        "-e",
-        "--email",
-        nargs=1,
-        action="store",
-        dest="email",
+        "--smtp-email",
+        dest="smtp_email",
         default=None,
-        help="username for smtp",
+        help="email for SMTP log delivery",
     )
     parser.add_argument(
-        "-p",
-        "--password",
-        nargs=1,
-        action="store",
-        dest="password",
+        "--smtp-password-file",
+        dest="smtp_password_file",
         default=None,
-        help="password for smtp",
+        help="path to file containing SMTP password",
     )
     parser.add_argument(
         "-r",
         "--recipient",
-        nargs=1,
-        action="store",
         dest="recipient",
         default=None,
-        help="recipient for the email log",
+        help="recipient email for log delivery",
     )
     args = parser.parse_args()
 
-    if type(args.auth) == list:
-        device = Device(language="en", authentication_string=args.auth[0])
+    # Load authentication string from file if provided
+    auth_string = None
+    if args.auth_file:
+        auth_string = read_auth_file(args.auth_file)
+
+    if auth_string:
+        device = Device(language="en", authentication_string=auth_string)
     else:
         device = Device(language="en")
 
@@ -173,14 +159,16 @@ def main():
             client.upgradeCharacters()
             logging.info(f'[{client.info["@Name"]}] Finished...')
             break
-    if (
-        type(args.email) == list
-        and type(args.password) == list
-        and type(args.recipient) == list
-    ):
-        email_logfile(
-            logfilepath, client, args.email[0], args.password[0], args.recipient[0]
-        )
+
+    # SMTP log delivery
+    smtp_email = args.smtp_email
+    smtp_password = None
+    if args.smtp_password_file:
+        smtp_password = Path(args.smtp_password_file).read_text().strip()
+    recipient = args.recipient
+
+    if smtp_email and smtp_password and recipient:
+        email_logfile(logfilepath, client, smtp_email, smtp_password, recipient)
     else:
         email_logfile(logfilepath, client)
 

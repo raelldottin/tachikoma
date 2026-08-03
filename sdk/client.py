@@ -391,6 +391,8 @@ class Client(object):
         # Refresh-token path: device already has a valid refresh token, Stage 1
         # completed the full session — no email/password needed.
         if self.device.refreshToken:
+            self.getLatestVersion3()
+            self.getTodayLiveOps2()  # Populate todayLiveOps for downstream calls
             return True
 
         # Guest path: no email means a device-only session for the tutorial.
@@ -414,6 +416,8 @@ class Client(object):
         if not self.exchange_refresh_token():
             return False
 
+        self.getLatestVersion3()
+        self.getTodayLiveOps2()  # Populate todayLiveOps for downstream calls
         return True
 
     def getLatestVersion3(self):

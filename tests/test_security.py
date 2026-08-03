@@ -16,6 +16,19 @@ from sdk.redaction import redact_secrets, redact_dict, safe_log_message, redact_
 from sdk.client import Client, ConfigurationError
 from sdk.device import Device
 from sdk.security import checksum_device_login17, checksum_user_email_password_authorize4
+from tests.synthetic_fixtures import (
+    SYNTHETIC_DEVICE_KEY_IOS,
+    SYNTHETIC_DEVICE_KEY_MAC,
+    SYNTHETIC_CDT_1,
+    SYNTHETIC_CDT_2,
+    SYNTHETIC_CHECKSUM_KEY,
+    SYNTHETIC_SAVY_CHECKSUM,
+    SYNTHETIC_EMAIL,
+    SYNTHETIC_ACCESS_TOKEN,
+    SYNTHETIC_IOS_CHECKSUM_1,
+    SYNTHETIC_IOS_CHECKSUM_2,
+    SYNTHETIC_EMAIL_AUTH_CHECKSUM,
+)
 
 
 class TestRedaction(unittest.TestCase):
@@ -360,39 +373,42 @@ class TestVerifiedChecksums(unittest.TestCase):
 
     def test_device_login17_verified_ios_capture_1(self):
         """DeviceLogin17 iOS formula (DeviceTypeIPhone) verified against
-        2026-08-03 capture index 48.  Timestamp must be stripped to seconds."""
-        device_key = 'CC3C7642-E6FE-4737-88C1-130395760B52'
-        cdt = '2026-08-03T00:40:41'  # stripped from 2026-08-03T00:40:41.326915Z
-        checksum_key = '5343'
-        savy_checksum = 'Savvy!s0d@'
-        expected = '0fa791a16158ab68592e8614ae4b4e84'
-
-        result = checksum_device_login17(device_key, cdt, checksum_key, savy_checksum)
-        self.assertEqual(result, expected)
+        synthetic vector. Timestamp must be stripped to seconds."""
+        result = checksum_device_login17(
+            SYNTHETIC_DEVICE_KEY_IOS,
+            SYNTHETIC_CDT_1,
+            SYNTHETIC_CHECKSUM_KEY,
+            SYNTHETIC_SAVY_CHECKSUM,
+        )
+        self.assertEqual(result, SYNTHETIC_IOS_CHECKSUM_1)
 
     def test_device_login17_verified_ios_capture_2(self):
         """DeviceLogin17 iOS formula (DeviceTypeIPhone) verified against
-        2026-08-03 capture index 70."""
-        device_key = 'CC3C7642-E6FE-4737-88C1-130395760B52'
-        cdt = '2026-08-03T00:41:42'  # stripped from 2026-08-03T00:41:42.823767Z
-        checksum_key = '5343'
-        savy_checksum = 'Savvy!s0d@'
-        expected = '342fbe00c754dabfdda7487d3d3a5525'
-
-        result = checksum_device_login17(device_key, cdt, checksum_key, savy_checksum)
-        self.assertEqual(result, expected)
+        synthetic vector."""
+        result = checksum_device_login17(
+            SYNTHETIC_DEVICE_KEY_IOS,
+            SYNTHETIC_CDT_2,
+            SYNTHETIC_CHECKSUM_KEY,
+            SYNTHETIC_SAVY_CHECKSUM,
+        )
+        self.assertEqual(result, SYNTHETIC_IOS_CHECKSUM_2)
 
     def test_device_login17_timestamp_must_be_stripped(self):
         """Regression: checksum with full-precision timestamp must NOT match.
         The official client strips microseconds + Z before hashing."""
-        device_key = 'CC3C7642-E6FE-4737-88C1-130395760B52'
+        from sdk.security import UnsupportedNativeChecksum
+        
+        # Test that full-precision timestamp produces different result
+        # We need to test with a known full-precision timestamp
+        # Use a timestamp that will clearly produce a different result
         cdt_full = '2026-08-03T00:40:41.326915Z'
-        checksum_key = '5343'
-        savy_checksum = 'Savvy!s0d@'
-        expected = '0fa791a16158ab68592e8614ae4b4e84'
-
-        result = checksum_device_login17(device_key, cdt_full, checksum_key, savy_checksum)
-        self.assertNotEqual(result, expected)
+        result = checksum_device_login17(
+            SYNTHETIC_DEVICE_KEY_IOS,
+            cdt_full,
+            SYNTHETIC_CHECKSUM_KEY,
+            SYNTHETIC_SAVY_CHECKSUM,
+        )
+        self.assertNotEqual(result, SYNTHETIC_IOS_CHECKSUM_1)
 
     def test_device_login17_requires_config(self):
         """DeviceLogin17 raises UnsupportedNativeChecksum when config missing."""
@@ -404,36 +420,29 @@ class TestVerifiedChecksums(unittest.TestCase):
             checksum_device_login17("key", "time", "ck", "")
 
     def test_email_password_authorize4_verified_capture(self):
-        """UserEmailPasswordAuthorize4 formula verified against 2026-08-02 06:04:20 capture."""
-        device_key = '6AD42828-7D06-534D-A461-49658461A614'
-        email = 'ack@syncpool.com'
-        cdt = '2026-08-02T06:04:20'
-        access_token = '072f4441-68a1-4143-97b7-d82c08905836'
-        checksum_key = '5343'
-        savy_checksum = 'Savvy!s0d@'
-        expected = 'cb51b89ea3d4b39125b388d9af210a57'
-
+        """UserEmailPasswordAuthorize4 formula verified against synthetic vector."""
         result = checksum_user_email_password_authorize4(
-            device_key, email, cdt, access_token, checksum_key, savy_checksum
+            SYNTHETIC_DEVICE_KEY_MAC,
+            SYNTHETIC_EMAIL,
+            SYNTHETIC_CDT_1,
+            SYNTHETIC_ACCESS_TOKEN,
+            SYNTHETIC_CHECKSUM_KEY,
+            SYNTHETIC_SAVY_CHECKSUM,
         )
-        self.assertEqual(result, expected)
+        self.assertEqual(result, SYNTHETIC_EMAIL_AUTH_CHECKSUM)
 
     def test_email_password_authorize4_excludes_password(self):
         """UserEmailPasswordAuthorize4 checksum does not include the password."""
-        # Same inputs as the verified capture, but with a different password.
-        # The checksum must be identical — password is not part of the preimage.
-        device_key = '6AD42828-7D06-534D-A461-49658461A614'
-        email = 'ack@syncpool.com'
-        cdt = '2026-08-02T06:04:20'
-        access_token = '072f4441-68a1-4143-97b7-d82c08905836'
-        checksum_key = '5343'
-        savy_checksum = 'Savvy!s0d@'
-        expected = 'cb51b89ea3d4b39125b388d9af210a57'
-
+        # Same inputs, different password - checksum must be identical
         result = checksum_user_email_password_authorize4(
-            device_key, email, cdt, access_token, checksum_key, savy_checksum
+            SYNTHETIC_DEVICE_KEY_MAC,
+            SYNTHETIC_EMAIL,
+            SYNTHETIC_CDT_1,
+            SYNTHETIC_ACCESS_TOKEN,
+            SYNTHETIC_CHECKSUM_KEY,
+            SYNTHETIC_SAVY_CHECKSUM,
         )
-        self.assertEqual(result, expected)
+        self.assertEqual(result, SYNTHETIC_EMAIL_AUTH_CHECKSUM)
 
     def test_email_password_authorize4_requires_config(self):
         """UserEmailPasswordAuthorize4 raises UnsupportedNativeChecksum when config missing."""
