@@ -123,6 +123,41 @@ def main():
     )
     args = parser.parse_args()
 
+    # Validate SMTP configuration before Device/Client creation or network activity
+    smtp_email = args.smtp_email
+    smtp_password_file = args.smtp_password_file
+    recipient = args.recipient
+
+    smtp_args = [smtp_email, smtp_password_file, recipient]
+    smtp_count = sum(1 for a in smtp_args if a is not None)
+
+    smtp_password = None
+    smtp_enabled = False
+
+    if smtp_count == 0:
+        logging.info("Email log delivery is disabled.")
+        smtp_enabled = False
+    elif smtp_count == 3:
+        pw_path = Path(smtp_password_file)
+        if pw_path.is_file():
+            try:
+                pw_content = pw_path.read_text().strip()
+                if pw_content:
+                    smtp_password = pw_content
+                    smtp_enabled = True
+                else:
+                    logging.error("Incomplete SMTP configuration; email delivery was not attempted.")
+                    sys.exit(2)
+            except Exception:
+                logging.error("Incomplete SMTP configuration; email delivery was not attempted.")
+                sys.exit(2)
+        else:
+            logging.error("Incomplete SMTP configuration; email delivery was not attempted.")
+            sys.exit(2)
+    else:
+        logging.error("Incomplete SMTP configuration; email delivery was not attempted.")
+        sys.exit(2)
+
     # Load authentication string from file if provided
     auth_string = None
     if args.auth_file:
@@ -158,34 +193,36 @@ def main():
             logging.warning("[authenticate] failed to login")
             sys.exit(1)
 
+    runtime_failed = False
+
     while client:
         client.grabFlyingStarbux()
         if client.freeStarbuxToday >= client.freeStarbuxMax:
             client.collectTaskReward()
             client.getCrewInfo()
-            client.upgradeResearches()
-            client.upgradeRooms()
+            if not client.upgradeResearches():
+                runtime_failed = True
+            if not client.upgradeRooms():
+                runtime_failed = True
             client.collectDailyReward()
             client.listActiveMarketplaceMessages()
             client.getMessages()
             client.infoBux()
-            client.manageTraining()
+            if not client.manageTraining():
+                runtime_failed = True
             client.getResourceTotals()
             client.upgradeCharacters()
             logging.info(f'[{client.info["@Name"]}] Finished...')
             break
 
-    # SMTP log delivery
-    smtp_email = args.smtp_email
-    smtp_password = None
-    if args.smtp_password_file:
-        smtp_password = Path(args.smtp_password_file).read_text().strip()
-    recipient = args.recipient
-
-    if smtp_email and smtp_password and recipient:
+    # Send log file via SMTP only if SMTP is enabled
+    if smtp_enabled:
         email_logfile(logfilepath, client, smtp_email, smtp_password, recipient)
+
+    if runtime_failed:
+        sys.exit(1)
     else:
-        email_logfile(logfilepath, client)
+        sys.exit(0)
 
 
 if __name__ == "__main__":

@@ -17,16 +17,14 @@ from urllib3.util import Retry
 from ratelimit import limits, sleep_and_retry
 from sdk.device import Device
 from .security import (
-    ChecksumCreateDevice,
     ChecksumTimeForDate,
     ChecksumPasswordWithString,
     ChecksumEmailAuthorize,
-    UnsupportedNativeChecksum,
     checksum_user_email_password_authorize4,
     checksum_device_login17,
 )
 from .dotnet import DotNet
-from .redaction import redact_secrets, safe_log_message
+from .redaction import redact_secrets, safe_log_message  # noqa: F401
 
 
 def lowercase_urlencode(params: dict) -> str:
@@ -49,6 +47,33 @@ def lowercase_urlencode(params: dict) -> str:
 class ConfigurationError(RuntimeError):
     """Raised when required configuration is missing or invalid."""
     pass
+
+
+def _extract_collection(data, item_key: str) -> list[dict]:
+    """Extract and normalize an item collection from raw parsed dict into a list of dicts.
+
+    Supports:
+    - Top-level key matching (data[item_key])
+    - Nested dict matching (e.g. data["RoomService"]["ListRoomDesigns"]["RoomDesigns"][item_key])
+    - Dict to 1-element list conversion
+    - Missing/None/invalid data returning []
+    """
+    if not isinstance(data, dict):
+        return []
+    if item_key in data:
+        val = data[item_key]
+        if isinstance(val, list):
+            return [item for item in val if isinstance(item, dict)]
+        if isinstance(val, dict):
+            return [val]
+        return []
+    for val in data.values():
+        if isinstance(val, dict):
+            res = _extract_collection(val, item_key)
+            if res:
+                return res
+    return []
+
 
 
 DEFAULT_TIMEOUT = 5  # seconds
@@ -145,8 +170,9 @@ class Client(object):
         r = self.session.request(method, url, headers=self.headers, data=data)
 
         if "errorMessage" in r.text:
-            d = xmltodict.parse(r.content, xml_attribs=True)
-            logging.error("[%s] {%s} - {%s}", self.info["@Name"], redact_secrets(url), redact_secrets(str(d)))
+            if "Please upgrade your lab room." not in r.text:
+                d = xmltodict.parse(r.content, xml_attribs=True)
+                logging.error("[%s] {%s} - {%s}", self.info["@Name"], redact_secrets(url), redact_secrets(str(d)))
 
         if "Failed to authorize access token" in r.text:
             logging.info(
@@ -610,14 +636,11 @@ class Client(object):
     def getRoomName(self, roomDesignId):
         if not hasattr(self, "roomDesigns"):
             self.listAllDesigns4()
-            if "RoomDesign" not in self.roomDesigns:
-                self.roomName = ""
-                return False
 
-        design = {}
-        for design in self.roomDesigns["RoomDesign"]:
-            if roomDesignId == design["@RoomDesignId"]:
-                self.roomName = "".join(design["@RoomName"])
+        room_designs = _extract_collection(getattr(self, "roomDesigns", None), "RoomDesign")
+        for design in room_designs:
+            if roomDesignId == design.get("@RoomDesignId"):
+                self.roomName = "".join(design.get("@RoomName", ""))
                 return True
 
         self.roomName = ""
@@ -839,9 +862,15 @@ class Client(object):
 
         if not hasattr(self, "trainingDesigns"):
             self.listAllTrainingDesigns2()
-            if "TrainingDesign" not in self.trainingDesigns:
+
+        raw_td = getattr(self, "trainingDesigns", None)
+        training_designs = _extract_collection(raw_td, "TrainingDesign")
+        if not training_designs:
+            if raw_td is None or not isinstance(raw_td, dict) or "errorMessage" in str(raw_td):
                 logging.error("TrainingDesign data not available.")
                 return False
+            logging.info("Training design data unavailable; skipping training.")
+            return True
 
         roles = {
             "weapons": {
@@ -919,17 +948,17 @@ class Client(object):
                 "secondaryT3": "Olympic Weightlifting",
             },
         }
-        for character in self.allCharactersOfUser["CharacterService"][
-            "ListAllCharactersOfUser"
-        ]["Characters"]["Character"]:
+        characters = _extract_collection(getattr(self, "allCharactersOfUser", None), "Character")
+        rooms = _extract_collection(getattr(self, "roomsViaAccessToken", None), "Room")
+        for character in characters:
             trainingName = ""
             room = {}
-            for room in self.roomsViaAccessToken["RoomService"][
-                "ListRoomsViaAccessToken"
-            ]["Rooms"]["Room"]:
-                if character["@RoomId"] == room["@RoomId"]:
+            for r_item in rooms:
+                if character.get("@RoomId") == r_item.get("@RoomId"):
+                    room = r_item
                     break
-            self.getRoomName(room["@RoomDesignId"])
+            if room.get("@RoomDesignId"):
+                self.getRoomName(room["@RoomDesignId"])
 
             logging.debug(
                 "{0!r} in {1!r}".format(character["@CharacterName"], self.roomName)
@@ -1164,9 +1193,9 @@ class Client(object):
                         )
 
                     trainingDesignId = None
-                    for design in self.trainingDesigns["TrainingDesign"]:
-                        if design["@TrainingName"] == trainingName:
-                            trainingDesignId = design["@TrainingDesignId"]
+                    for design in training_designs:
+                        if design.get("@TrainingName") == trainingName:
+                            trainingDesignId = design.get("@TrainingDesignId")
 
                     if self.addTraining(trainingDesignId, character["@CharacterId"]):
                         logging.info(
@@ -1668,8 +1697,9 @@ class Client(object):
             if not self.listRoomDesigns2():
                 return False
 
-        for i in self.roomDesigns["RoomDesign"]:
-            if i["@RoomDesignId"] == roomDesignId:
+        room_designs = _extract_collection(getattr(self, "roomDesigns", None), "RoomDesign")
+        for i in room_designs:
+            if i.get("@RoomDesignId") == roomDesignId:
                 url = f"https://api.pixelstarships.com/RoomService/SpeedUpRoomConstructionUsingBoostGauge?roomId={roomId}&clientDateTime={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}&accessToken={self.accessToken}"
                 r = self.request(url, "POST")
                 if r and "errorMessage" in r.text:
@@ -1718,53 +1748,55 @@ class Client(object):
         researchingFlag = False
 
         try:
-            for research in self.allResearches["ResearchService"]["ListAllResearches"][
-                "Researches"
-            ]["Research"]:
-                for design in self.allResearchDesigns["ResearchService"][
-                    "ListAllResearchDesigns"
-                ]["ResearchDesigns"]["ResearchDesign"]:
+            all_researches = _extract_collection(getattr(self, "allResearches", None), "Research")
+            all_research_designs = _extract_collection(getattr(self, "allResearchDesigns", None), "ResearchDesign")
+
+            for research in all_researches:
+                for design in all_research_designs:
                     if (
-                        research["@ResearchDesignId"] == design["@ResearchDesignId"]
-                        and design["@ResearchDesignId"] not in designExceptionList
+                        research.get("@ResearchDesignId") == design.get("@ResearchDesignId")
+                        and design.get("@ResearchDesignId") not in designExceptionList
                     ):
-                        if research["@ResearchState"] == "Researching":
+                        if research.get("@ResearchState") == "Researching":
                             logging.info(
-                                f"[{self.info['@Name']}] {''.join(design['@ResearchName'])} is currently being researched."
+                                f"[{self.info['@Name']}] {''.join(design.get('@ResearchName', ''))} is currently being researched."
                             )
                             researchingFlag = True
-                        designExceptionList.append(design["@ResearchDesignId"])
-            for design in self.allResearchDesigns["ResearchService"][
-                "ListAllResearchDesigns"
-            ]["ResearchDesigns"]["ResearchDesign"]:
+                        designExceptionList.append(design.get("@ResearchDesignId"))
+            for design in all_research_designs:
                 if (
-                    design["@ResearchDesignId"] not in designExceptionList
-                    and design["@RootResearchDesignId"] not in rootDesignExceptionList
+                    design.get("@ResearchDesignId") not in designExceptionList
+                    and design.get("@RootResearchDesignId") not in rootDesignExceptionList
                 ):
-                    rootDesigns[design["@RootResearchDesignId"]].append(design)
+                    rootDesigns[design.get("@RootResearchDesignId")].append(design)
                     upgradeList.append(
                         [
-                            design["@ResearchDesignId"],
-                            design["@GasCost"],
-                            design["@StarbuxCost"],
-                            design["@ResearchName"],
+                            design.get("@ResearchDesignId"),
+                            design.get("@GasCost", "0"),
+                            design.get("@StarbuxCost", "0"),
+                            design.get("@ResearchName", ""),
                         ]
                     )
-                    rootDesignExceptionList.append(design["@RootResearchDesignId"])
+                    rootDesignExceptionList.append(design.get("@RootResearchDesignId"))
             self.collectAllResources()
             if not researchingFlag:
                 for researchItem in upgradeList:
                     if int(researchItem[1]) > 0 and int(researchItem[1]) < int(
                         self.gasTotal
                     ):
-                        if self.addResearch(researchItem[0]):
+                        res = self.addResearch(researchItem[0])
+                        if res is True:
                             logging.info(
                                 f"[{self.info['@Name']}] Beginning research for {researchItem[3]}"
                             )
                             researchingFlag = True
                             break
+                        elif res == "LAB_UPGRADE_REQUIRED":
+                            continue
+                        else:
+                            return False
             return True
-        except:
+        except Exception:
             logging.exception("Unable to upgrade research.", exc_info=True)
             return False
 
@@ -1772,38 +1804,43 @@ class Client(object):
         try:
             if not hasattr(self, "roomDesigns"):
                 self.listRoomDesigns2()
-                if "RoomDesign" not in self.roomDesigns:
-                    logging.error("ListRoomDesigns endpoint failed.")
 
-            roomDesigns = self.roomDesigns
+            raw_rd = getattr(self, "roomDesigns", None)
+            room_designs = _extract_collection(raw_rd, "RoomDesign")
+            if not room_designs:
+                logging.info("Room design data unavailable; skipping room upgrades.")
+                if raw_rd is None or not isinstance(raw_rd, dict) or "errorMessage" in str(raw_rd):
+                    return False
+                return True
+
             self.listUpgradingRooms()
             self.getShipByUserId()
-            shipByUserId = self.shipByUserId
+            shipByUserId = getattr(self, "shipByUserId", None)
             if shipByUserId:
-                for room in shipByUserId["ShipService"]["GetShipByUserId"]["Ship"][
-                    "Rooms"
-                ]["Room"]:
-                    roomId = room["@RoomId"]
-                    roomStatus = room["@RoomStatus"]
-                    roomDesignId = room["@RoomDesignId"]
+                rooms = _extract_collection(shipByUserId, "Room")
+                for room in rooms:
+                    roomId = room.get("@RoomId")
+                    roomStatus = room.get("@RoomStatus")
+                    roomDesignId = room.get("@RoomDesignId")
                     roomName = ""
                     upgradeRoomDesignId = ""
                     upgradeRoomName = ""
 
-                    for roomDesignData in roomDesigns["RoomDesign"]:
-                        if roomDesignId == roomDesignData["@RoomDesignId"]:
-                            roomName = "".join(roomDesignData["@RoomName"])
-                        if roomDesignId == roomDesignData["@UpgradeFromRoomDesignId"]:
-                            upgradeRoomDesignId = roomDesignData["@RoomDesignId"]
-                            upgradeRoomName = "".join(roomDesignData["@RoomName"])
-                            cost = roomDesignData["@PriceString"].split(":")
+                    for roomDesignData in room_designs:
+                        if roomDesignId == roomDesignData.get("@RoomDesignId"):
+                            roomName = "".join(roomDesignData.get("@RoomName", ""))
+                        if roomDesignId == roomDesignData.get("@UpgradeFromRoomDesignId"):
+                            upgradeRoomDesignId = roomDesignData.get("@RoomDesignId")
+                            upgradeRoomName = "".join(roomDesignData.get("@RoomName", ""))
+                            cost_str = roomDesignData.get("@PriceString", "")
+                            cost = cost_str.split(":") if cost_str else [""]
                             if (cost[0] == "mineral") and (
-                                int(cost[1]) > int(self.mineralTotal)
+                                len(cost) > 1 and int(cost[1]) > int(self.mineralTotal)
                             ):
                                 continue
 
                             if (cost[0] == "gas") and (
-                                int(cost[1]) > int(self.gasTotal)
+                                len(cost) > 1 and int(cost[1]) > int(self.gasTotal)
                             ):
                                 continue
 
@@ -1830,25 +1867,24 @@ class Client(object):
                     if self.max_room_upgrades:
                         break
             return True
-        except:
-            logging.exception("Unable to upgrade research.", exc_info=True)
+        except Exception:
+            logging.exception("Unable to upgrade rooms.", exc_info=True)
             return False
 
     def listUpgradingRooms(self):
         self.getShipByUserId()
-        shipByUserId = self.shipByUserId
-        roomDesigns = self.roomDesigns
-        if shipByUserId and roomDesigns:
+        shipByUserId = getattr(self, "shipByUserId", None)
+        room_designs = _extract_collection(getattr(self, "roomDesigns", None), "RoomDesign")
+        if shipByUserId and room_designs:
             if "ShipService" not in shipByUserId:
                 logging.debug(f"{shipByUserId=}")
-            for room in shipByUserId["ShipService"]["GetShipByUserId"]["Ship"]["Rooms"][
-                "Room"
-            ]:
-                if room["@RoomStatus"] == "Upgrading":
-                    for roomDesignData in roomDesigns["RoomDesign"]:
-                        if room["@RoomDesignId"] == roomDesignData["@RoomDesignId"]:
+            rooms = _extract_collection(shipByUserId, "Room")
+            for room in rooms:
+                if room.get("@RoomStatus") == "Upgrading":
+                    for roomDesignData in room_designs:
+                        if room.get("@RoomDesignId") == roomDesignData.get("@RoomDesignId"):
                             logging.info(
-                                f"[{self.info['@Name']}] {''.join(roomDesignData['@RoomName'])} is currently being upgraded."
+                                f"[{self.info['@Name']}] {''.join(roomDesignData.get('@RoomName', ''))} is currently being upgraded."
                             )
 
     def listAllResearchDesigns2(self):
@@ -1864,10 +1900,12 @@ class Client(object):
     def addResearch(self, researchDesignId):
         url = f"https://api.pixelstarships.com/ResearchService/AddResearch?researchDesignId={researchDesignId}&researchStartDate={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}&accessToken={self.accessToken}"
         r = self.request(url, "POST")
-        if "errorMessage" in r.text:
+        if r and "Please upgrade your lab room." in r.text:
+            logging.info(f"Skipped research design {researchDesignId}: lab upgrade required.")
+            return "LAB_UPGRADE_REQUIRED"
+        if not r or "errorMessage" in r.text:
             return False
-        else:
-            return True
+        return True
 
     def rebuildAmmo(self):
         """Restock ammo, android, craft, module, and charge items.
