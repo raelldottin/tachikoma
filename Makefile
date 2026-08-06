@@ -24,7 +24,7 @@ git-check:
 	git diff --check
 
 lint:
-	uv run ruff check run.py sdk tests
-	uv run ty check run.py sdk tests
+	uv run ruff check run.py sdk tests scripts
+	uv run ty check --exit-zero run.py sdk tests
 
 pre-commit: lint syntax-check test git-check

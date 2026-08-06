@@ -1,0 +1,59 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Independent Critic Review",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "verdict",
+    "largest_remaining_gap",
+    "severity",
+    "evidence",
+    "quality_bar_failures",
+    "required_next_action"
+  ],
+  "properties": {
+    "verdict": {
+      "type": "string",
+      "enum": [
+        "pass",
+        "fail"
+      ],
+      "description": "Final review verdict: 'pass' when all quality bar criteria and validations pass, 'fail' otherwise."
+    },
+    "largest_remaining_gap": {
+      "type": "string",
+      "description": "One precise, highest-impact unresolved defect. Empty string if verdict is pass."
+    },
+    "severity": {
+      "type": "string",
+      "enum": [
+        "none",
+        "low",
+        "medium",
+        "high",
+        "critical"
+      ],
+      "description": "Severity rating of the largest remaining gap. Must be 'none' if verdict is pass."
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Concrete evidence strings from the diff, tests, lint, or workflow output."
+    },
+    "quality_bar_failures": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 12
+      },
+      "description": "List of quality-bar criteria numbers (1 through 12) that failed."
+    },
+    "required_next_action": {
+      "type": "string",
+      "description": "The smallest actionable step needed to close the largest remaining gap."
+    }
+  }
+}

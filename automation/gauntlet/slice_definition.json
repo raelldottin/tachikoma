@@ -1,0 +1,27 @@
+{
+  "slice_id": "gauntlet-provisioning-dependency-and-secret-contract",
+  "title": "Gauntlet Provisioning Dependency and Secret Contract Pilot",
+  "max_files_changed": 10,
+  "allowed_paths": [
+    ".github/workflows/provision-pss-secrets.yml",
+    "scripts/provision_account_secrets.py",
+    "tests/",
+    "automation/gauntlet/",
+    "automation/prompts/",
+    "automation/schemas/",
+    "automation/tests/",
+    "requirements.txt",
+    "Makefile",
+    "docs/workflows/",
+    "README.template",
+    "README.md"
+  ],
+  "required_validations": [
+    "make automation-check",
+    "make syntax-check",
+    "make test",
+    "make test-security",
+    "make lint",
+    "git diff --check"
+  ]
+}
