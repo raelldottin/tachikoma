@@ -25,17 +25,116 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
       - name: Process account 1
-        run: python run.py -a "${{ secrets.auth_string_first }}" -e "${{ secrets.email_username }}" -p "${{ secrets.email_password }}" -r "${{ secrets.email_recipient }}"
-        continue-on-error: true
+        env:
+          AUTH_STRING: ${{ secrets.auth_string_first }}
+          SMTP_EMAIL: ${{ secrets.email_username }}
+          SMTP_PASSWORD: ${{ secrets.email_password }}
+          RECIPIENT: ${{ secrets.email_recipient }}
+        run: |
+          set -euo pipefail
+          umask 077
+
+          auth_file="$(mktemp)"
+          smtp_password_file="$(mktemp)"
+          trap 'rm -f "$auth_file" "$smtp_password_file"' EXIT
+
+          printf '%s' "$AUTH_STRING" > "$auth_file"
+          printf '%s' "$SMTP_PASSWORD" > "$smtp_password_file"
+
+          python run.py \
+            --auth-file "$auth_file" \
+            --smtp-email "$SMTP_EMAIL" \
+            --smtp-password-file "$smtp_password_file" \
+            --recipient "$RECIPIENT"
+
       - name: Process account 2
-        run: python run.py -a "${{ secrets.auth_string_second }}" -e "${{ secrets.email_username }}" -p "${{ secrets.email_password }}" -r "${{ secrets.email_recipient }}"
-        continue-on-error: true
+        env:
+          AUTH_STRING: ${{ secrets.auth_string_second }}
+          SMTP_EMAIL: ${{ secrets.email_username }}
+          SMTP_PASSWORD: ${{ secrets.email_password }}
+          RECIPIENT: ${{ secrets.email_recipient }}
+        run: |
+          set -euo pipefail
+          umask 077
+
+          auth_file="$(mktemp)"
+          smtp_password_file="$(mktemp)"
+          trap 'rm -f "$auth_file" "$smtp_password_file"' EXIT
+
+          printf '%s' "$AUTH_STRING" > "$auth_file"
+          printf '%s' "$SMTP_PASSWORD" > "$smtp_password_file"
+
+          python run.py \
+            --auth-file "$auth_file" \
+            --smtp-email "$SMTP_EMAIL" \
+            --smtp-password-file "$smtp_password_file" \
+            --recipient "$RECIPIENT"
+
       - name: Process account 3
-        run: python run.py -a "${{ secrets.auth_string_third }}" -e "${{ secrets.email_username }}" -p "${{ secrets.email_password }}" -r "${{ secrets.email_recipient }}"
-        continue-on-error: true
+        env:
+          AUTH_STRING: ${{ secrets.auth_string_third }}
+          SMTP_EMAIL: ${{ secrets.email_username }}
+          SMTP_PASSWORD: ${{ secrets.email_password }}
+          RECIPIENT: ${{ secrets.email_recipient }}
+        run: |
+          set -euo pipefail
+          umask 077
+
+          auth_file="$(mktemp)"
+          smtp_password_file="$(mktemp)"
+          trap 'rm -f "$auth_file" "$smtp_password_file"' EXIT
+
+          printf '%s' "$AUTH_STRING" > "$auth_file"
+          printf '%s' "$SMTP_PASSWORD" > "$smtp_password_file"
+
+          python run.py \
+            --auth-file "$auth_file" \
+            --smtp-email "$SMTP_EMAIL" \
+            --smtp-password-file "$smtp_password_file" \
+            --recipient "$RECIPIENT"
+
       - name: Process account 4
-        run: python run.py -a "${{ secrets.auth_string_fourth }}" -e "${{ secrets.email_username }}" -p "${{ secrets.email_password }}" -r "${{ secrets.email_recipient }}"
-        continue-on-error: true
+        env:
+          AUTH_STRING: ${{ secrets.auth_string_fourth }}
+          SMTP_EMAIL: ${{ secrets.email_username }}
+          SMTP_PASSWORD: ${{ secrets.email_password }}
+          RECIPIENT: ${{ secrets.email_recipient }}
+        run: |
+          set -euo pipefail
+          umask 077
+
+          auth_file="$(mktemp)"
+          smtp_password_file="$(mktemp)"
+          trap 'rm -f "$auth_file" "$smtp_password_file"' EXIT
+
+          printf '%s' "$AUTH_STRING" > "$auth_file"
+          printf '%s' "$SMTP_PASSWORD" > "$smtp_password_file"
+
+          python run.py \
+            --auth-file "$auth_file" \
+            --smtp-email "$SMTP_EMAIL" \
+            --smtp-password-file "$smtp_password_file" \
+            --recipient "$RECIPIENT"
+
       - name: Process account 5
-        run: python run.py -a "${{ secrets.auth_string_fifth }}" -e "${{ secrets.email_username }}" -p "${{ secrets.email_password }}" -r "${{ secrets.email_recipient }}"
-        continue-on-error: true
+        env:
+          AUTH_STRING: ${{ secrets.auth_string_fifth }}
+          SMTP_EMAIL: ${{ secrets.email_username }}
+          SMTP_PASSWORD: ${{ secrets.email_password }}
+          RECIPIENT: ${{ secrets.email_recipient }}
+        run: |
+          set -euo pipefail
+          umask 077
+
+          auth_file="$(mktemp)"
+          smtp_password_file="$(mktemp)"
+          trap 'rm -f "$auth_file" "$smtp_password_file"' EXIT
+
+          printf '%s' "$AUTH_STRING" > "$auth_file"
+          printf '%s' "$SMTP_PASSWORD" > "$smtp_password_file"
+
+          python run.py \
+            --auth-file "$auth_file" \
+            --smtp-email "$SMTP_EMAIL" \
+            --smtp-password-file "$smtp_password_file" \
+            --recipient "$RECIPIENT"
