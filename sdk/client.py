@@ -16,6 +16,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util import Retry
 from ratelimit import limits, sleep_and_retry
 from sdk.device import Device
+from sdk import security
 from .security import (
     ChecksumTimeForDate,
     ChecksumPasswordWithString,
@@ -170,9 +171,13 @@ class Client(object):
         r = self.session.request(method, url, headers=self.headers, data=data)
 
         if "errorMessage" in r.text:
-            if "Please upgrade your lab room." not in r.text:
+            text_lower = r.text.lower()
+            if "please upgrade your lab room" in text_lower or "storage is full" in text_lower:
                 d = xmltodict.parse(r.content, xml_attribs=True)
-                logging.error("[%s] {%s} - {%s}", self.info["@Name"], redact_secrets(url), redact_secrets(str(d)))
+                logging.warning("[%s] {%s} - {%s}", self.info.get("@Name", ""), redact_secrets(url), redact_secrets(str(d)))
+            else:
+                d = xmltodict.parse(r.content, xml_attribs=True)
+                logging.error("[%s] {%s} - {%s}", self.info.get("@Name", ""), redact_secrets(url), redact_secrets(str(d)))
 
         if "Failed to authorize access token" in r.text:
             logging.info(
@@ -245,10 +250,10 @@ class Client(object):
         else:
             self.dailyReward = 0
 
-        if not self.device.refreshToken:
-            myName = "guest"
-        else:
+        if user_dict.get("@UserType") == "Verified":
             myName = user_dict.get("@Name", "")
+        else:
+            myName = "guest"
 
         if "@FreeStarbuxReceivedToday" in user_dict:
             try:
@@ -267,7 +272,7 @@ class Client(object):
             userId,
             myName,
             LastHeartBeat,
-            self.device.refreshToken,
+            user_dict.get("@UserType") == "Verified" or bool(self.device.refreshToken),
         )
 
         return True
@@ -1476,6 +1481,85 @@ class Client(object):
     def pusherAuth(self):
         url = f"https://api.pixelstarships.com/UserService/PusherAuth?accessToken={self.accessToken}"
         self.request(url, "POST")
+
+    # PVP Battle Operations
+    def createBattle(self):
+        if not self.user.isAuthorized:
+            return False
+            
+        try:
+            hp = int(self.info.get("Hp", "0"))
+        except ValueError:
+            hp = 40
+        client_hp = hp * 100
+        
+        checksum_key = self.settings.get("checksum_key") or "5343"
+        savy_checksum = self.settings.get("savy_checksum") or "Savvy!s0d@"
+        
+        client_dt = '{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())
+        client_dt_checksum = client_dt.split(".")[0]
+        
+        checksum = security.checksum_create_battle9(client_dt_checksum, checksum_key, savy_checksum)
+        
+        url = f"{self.baseUrl}/BattleService/CreateBattle9?clientHp={client_hp}&clientDateTime={client_dt}&checksum={checksum}&accessToken={self.accessToken}"
+        r = self.request(url, "POST")
+        
+        if r and "errorMessage" not in r.text:
+            d = xmltodict.parse(r.content, xml_attribs=True)
+            if "BattleService" in d and "CreateBattle" in d["BattleService"] and "Battle" in d["BattleService"]["CreateBattle"]:
+                battle_data = d["BattleService"]["CreateBattle"]["Battle"]
+                logging.info("[%s] Found PVP Opponent! Battle ID: %s", self.info.get("@Name", "guest"), battle_data.get("@BattleId"))
+                return battle_data
+        return False
+
+    def acceptBattle(self, battle_id):
+        if not self.user.isAuthorized:
+            return False
+            
+        savy_checksum = self.settings.get("savy_checksum") or "Savvy!s0d@"
+        
+        client_dt = '{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())
+        client_dt_checksum = client_dt.split(".")[0]
+        
+        checksum = security.checksum_accept_battle5(self.accessToken, str(battle_id), client_dt_checksum, savy_checksum)
+        
+        url = f"{self.baseUrl}/BattleService/AcceptBattle5?battleId={battle_id}&itemDesignId=0&clientDateTime={client_dt}&checksum={checksum}&accessToken={self.accessToken}"
+        r = self.request(url, "POST")
+        
+        if r and "errorMessage" not in r.text:
+            logging.info("[%s] Accepted PVP Battle %s", self.info.get("@Name", "guest"), battle_id)
+            return True
+        return False
+
+    def finaliseBattle(self, battle_id, client_outcome_type, client_end_frame, attacking_ship_hp):
+        if not self.user.isAuthorized:
+            return False
+            
+        checksum_key = self.settings.get("checksum_key") or "5343"
+        savy_checksum = self.settings.get("savy_checksum") or "Savvy!s0d@"
+        client_version = self.settings.get("client_version") or "0.999.59"
+        client_result_string = ""
+        
+        checksum = security.checksum_finalise_battle15(
+            battle_id=str(battle_id),
+            client_outcome_type=str(client_outcome_type),
+            client_end_frame=str(client_end_frame),
+            client_result_string=client_result_string,
+            attacking_ship_hp=str(attacking_ship_hp),
+            client_version=client_version,
+            access_token=self.accessToken,
+            checksum_key=checksum_key,
+            savy_checksum=savy_checksum
+        )
+
+        url = f"{self.baseUrl}/BattleService/FinaliseBattle15?battleId={battle_id}&clientOutcomeType={client_outcome_type}&clientEndFrame={client_end_frame}&clientResultString={client_result_string}&attackingShipHp={attacking_ship_hp}&checksum={checksum}&clientVersion={client_version}&accessToken={self.accessToken}"
+        r = self.request(url, "POST", body=None)
+        
+        if r and "errorMessage" not in r.text:
+            logging.info("[%s] Finalized PVP Battle %s", self.info.get("@Name", "guest"), battle_id)
+            return True
+            
+        return False
 
     def listSystemMessagesForUser3(self, fromMessageId=0, take=10000):
         url = f"https://api.pixelstarships.com/MessageService/ListSystemMessagesForUser3?fromMessageId={fromMessageId}&take={take}&accessToken={self.accessToken}"

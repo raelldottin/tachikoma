@@ -144,7 +144,7 @@ class CommandRegistry:
         lines.append(f"Authenticated: {self.client.accessToken is not None}")
         lines.append(f"Access token: {'Present' if self.client.accessToken else 'Not present'}")
         lines.append(f"Refresh token: {'Present' if self.client.device.refreshToken else 'Not present'}")
-        lines.append(f"Device identity: Configured")
+        lines.append("Device identity: Configured")
         if self.client.info.get("@Name"):
             lines.append(f"Captain: {self.client.info['@Name']}")
         if self.client.credits is not None:

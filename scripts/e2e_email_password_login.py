@@ -5,13 +5,14 @@ Stage 1: DeviceLogin17 → get accessToken
 Stage 2: UserEmailPasswordAuthorize4 → get refreshToken
 Stage 3: DeviceLogin17 with refreshToken → full session
 """
-import sys, os, re, json
+import sys
+import re
+import json
 sys.path.insert(0, ".")
 
 from sdk.device import Device
 from sdk.client import Client
 from sdk.redaction import redact_secrets
-import requests
 
 # Load captured refresh token from private fixture (in-memory only, never print)
 with open("/tmp/pss_capture.json") as f:

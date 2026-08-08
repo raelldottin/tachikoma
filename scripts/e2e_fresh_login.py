@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """Test full e2e flow: fresh device → email/password → refresh exchange."""
-import sys, os, re, json, urllib.parse
+import sys
 sys.path.insert(0, ".")
 
 from sdk.device import Device
 from sdk.client import Client
-import requests
 
 # Use a fresh device (no refresh token)
 device = Device(language="en")

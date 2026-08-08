@@ -12,7 +12,6 @@ are stored in the .data section. The RVA is the relative virtual address within 
 binary's memory layout.
 """
 
-import struct
 import sys
 import os
 

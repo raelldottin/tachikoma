@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Trigger a DeviceLogin17 request to capture the preimage."""
-import sys, os
+import sys
 sys.path.insert(0, ".")
 
 from sdk.device import Device

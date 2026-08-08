@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from sdk.redaction import redact_secrets, redact_dict, safe_log_message, redact_log
 from sdk.client import Client, ConfigurationError
 from sdk.device import Device
-from sdk.security import checksum_device_login17, checksum_user_email_password_authorize4
+from sdk.security import checksum_device_login17, checksum_user_email_password_authorize4, checksum_finalise_battle15
 from tests.synthetic_fixtures import (
     SYNTHETIC_DEVICE_KEY_IOS,
     SYNTHETIC_DEVICE_KEY_MAC,
@@ -181,7 +181,7 @@ class TestRebuildAmmoConfig(unittest.TestCase):
     def test_rebuild_ammo_missing_checksum_key(self):
         """rebuildAmmo should raise ConfigurationError when checksum_key is missing."""
         from unittest.mock import MagicMock, patch
-        from sdk.client import User, ConfigurationError
+        from sdk.client import User
 
         device = Device(language="en")
         client = Client(device=device, settings={
@@ -203,7 +203,7 @@ class TestRebuildAmmoConfig(unittest.TestCase):
     def test_rebuild_ammo_missing_savy_checksum(self):
         """rebuildAmmo should raise ConfigurationError when savy_checksum is missing."""
         from unittest.mock import MagicMock, patch
-        from sdk.client import User, ConfigurationError
+        from sdk.client import User
 
         device = Device(language="en")
         client = Client(device=device, settings={
@@ -225,7 +225,7 @@ class TestRebuildAmmoConfig(unittest.TestCase):
     def test_rebuild_ammo_missing_both_config(self):
         """rebuildAmmo should raise ConfigurationError when both config values are missing."""
         from unittest.mock import MagicMock, patch
-        from sdk.client import User, ConfigurationError
+        from sdk.client import User
 
         device = Device(language="en")
         client = Client(device=device, settings={})
@@ -312,36 +312,37 @@ class TestThreeStageAuth(unittest.TestCase):
     def test_authorize_email_password_missing_checksum_key(self):
         """authorize_email_password should use hardcoded fallback for checksum_key."""
         from sdk.security import UnsupportedNativeChecksum
+        from unittest.mock import patch
 
         device = Device(language="en")
         client = Client(device=device, settings={"savy_checksum": "Savvy!s0d@"})
         client.accessToken = "test-token"
 
-        # With hardcoded fallback "5343", the call should not raise.
-        # It will fail at the network layer (no mock), but the checksum is built.
-        # Verify the checksum was computed by checking it's a 32-char hex string.
-        try:
-            client.authorize_email_password("test@example.com", "password123")
-        except UnsupportedNativeChecksum:
-            self.fail("Should not raise UnsupportedNativeChecksum with fallback")
-        except Exception:
-            pass  # Network errors are expected without mocking
+        with patch.object(client, "request", side_effect=Exception("Mocked")):
+            try:
+                client.authorize_email_password("test@example.com", "password123")
+            except UnsupportedNativeChecksum:
+                self.fail("Should not raise UnsupportedNativeChecksum with fallback")
+            except Exception:
+                pass  # Network errors are expected
         self.assertTrue(client.checksum and len(client.checksum) == 32)
 
     def test_authorize_email_password_missing_savy_checksum(self):
         """authorize_email_password should use hardcoded fallback for savy_checksum."""
         from sdk.security import UnsupportedNativeChecksum
+        from unittest.mock import patch
 
         device = Device(language="en")
         client = Client(device=device, settings={"checksum_key": "5343"})
         client.accessToken = "test-token"
 
-        try:
-            client.authorize_email_password("test@example.com", "password123")
-        except UnsupportedNativeChecksum:
-            self.fail("Should not raise UnsupportedNativeChecksum with fallback")
-        except Exception:
-            pass  # Network errors are expected without mocking
+        with patch.object(client, "request", side_effect=Exception("Mocked")):
+            try:
+                client.authorize_email_password("test@example.com", "password123")
+            except UnsupportedNativeChecksum:
+                self.fail("Should not raise UnsupportedNativeChecksum with fallback")
+            except Exception:
+                pass  # Network errors are expected
         self.assertTrue(client.checksum and len(client.checksum) == 32)
 
     def test_authorize_email_password_requires_access_token(self):
@@ -396,7 +397,6 @@ class TestVerifiedChecksums(unittest.TestCase):
     def test_device_login17_timestamp_must_be_stripped(self):
         """Regression: checksum with full-precision timestamp must NOT match.
         The official client strips microseconds + Z before hashing."""
-        from sdk.security import UnsupportedNativeChecksum
         
         # Test that full-precision timestamp produces different result
         # We need to test with a known full-precision timestamp
@@ -457,12 +457,52 @@ class TestVerifiedChecksums(unittest.TestCase):
                 "key", "em", "ts", "at", "ck", ""
             )
 
+    def test_checksum_finalise_battle15(self):
+        """FinaliseBattle15 formula verified against synthetic vector."""
+        # preimage = battleId + clientOutcomeType + clientEndFrame + clientResultString + attackingShipHp + clientVersion + accessToken + "5343"
+        # MD5(preimage + "Savvy!s0d@")
+        battle_id = "4028975"
+        client_outcome_type = "1"
+        client_end_frame = "2400"
+        client_result_string = ""
+        attacking_ship_hp = "24.31"
+        client_version = "0.999.59"
+        access_token = "466f7d82-0bd8-48d1-90f6-2466c3e873b0"
+        checksum_key = "5343"
+        savy_checksum = "Savvy!s0d@"
+
+        preimage = (
+            battle_id
+            + client_outcome_type
+            + client_end_frame
+            + client_result_string
+            + attacking_ship_hp
+            + client_version
+            + access_token
+            + checksum_key
+        )
+        encrypted = preimage + savy_checksum
+        import hashlib
+        expected_md5 = hashlib.md5(encrypted.encode("utf-8")).hexdigest()
+
+        result = checksum_finalise_battle15(
+            battle_id,
+            client_outcome_type,
+            client_end_frame,
+            client_result_string,
+            attacking_ship_hp,
+            client_version,
+            access_token,
+            checksum_key,
+            savy_checksum,
+        )
+        self.assertEqual(result, expected_md5)
+
 
 class TestRefreshTokenLoginBehavior(unittest.TestCase):
     """Test refresh-token-only login behavior and email/password feature gate."""
 
     def setUp(self):
-        from unittest.mock import MagicMock, patch
         self.device = Device(language="en")
         self.settings = {"checksum_key": "5343", "savy_checksum": "Savvy!s0d@"}
         self.client = Client(device=self.device, settings=self.settings)

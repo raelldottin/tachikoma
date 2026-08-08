@@ -29,7 +29,6 @@ Usage:
 """
 
 import hashlib
-import itertools
 import json
 import os
 import sys
@@ -458,7 +457,7 @@ def main():
             print("All samples reproduced. Ready for live validation.")
             return 0
 
-    print(f"\nNo formula matched all samples.")
+    print("\nNo formula matched all samples.")
     print(f"Best: {best_formula} with {best_matches}/{len(samples)} matches")
     print("\nThe checksum may use value transformations (lowercasing, URL encoding,")
     print("Unix timestamps, ticks, field-name prefixes, nested hashing, or binary bytes)")

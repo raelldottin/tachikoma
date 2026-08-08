@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 import sys
+import argparse
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -171,8 +172,11 @@ def provision_account(account_name: str, email: str, password: str, refresh_toke
             raise RuntimeError(sanitized_msg) from None
         raise
 
-
 def main():
+    parser = argparse.ArgumentParser(description="Provision and rotate account secrets")
+    parser.add_argument("--output-dir", help="Directory to write temporary auth strings", default=None)
+    args, _ = parser.parse_known_args()
+
     slots = inspect_account_slots()
 
     configured_slots = {i: s for i, s in slots.items() if s['status'] == 'CONFIGURED'}
@@ -204,8 +208,15 @@ def main():
         s = slots[i]
         if s['status'] == 'CONFIGURED':
             try:
-                provision_account(f"account_{i}", s['email'], s['password'], s['refresh_token'])
+                new_token = provision_account(f"account_{i}", s['email'], s['password'], s['refresh_token'])
                 results[i] = 'SUCCESS'
+                if args.output_dir:
+                    os.makedirs(args.output_dir, exist_ok=True)
+                    # Auth string format: name|key|refreshToken|languageKey|accessToken|userId
+                    # For provisioning output, we just need Android|iOS_key|token|en
+                    auth_str = f"Android|CC3C7642-E6FE-4737-88C1-130395760B52|{new_token}|en"
+                    with open(os.path.join(args.output_dir, f"auth_{i}.txt"), "w") as f:
+                        f.write(auth_str)
             except (RuntimeError, ValueError, KeyError, AttributeError, OSError) as e:
                 extra_sec = {s['email'], s['password'], s['refresh_token']}
                 sanitized_err = redact_secrets(str(e), dynamic_secrets=extra_sec)

@@ -131,7 +131,6 @@ def read_mitmproxy_capture(capture_path):
         return None
 
     import json
-    from urllib.parse import urlsplit, parse_qs
 
     with open(capture_path, "r") as f:
         lines = f.readlines()

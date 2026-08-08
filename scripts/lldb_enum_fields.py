@@ -121,7 +121,7 @@ def enumerate_config_fields(debugger, command, result, internal_dict):
                         # Flag if it's one of our targets
                         fn_lower = field_name.lower() if field_name else ""
                         if 'checksum' in fn_lower or 'savy' in fn_lower or 'key' in fn_lower:
-                            result.PutCString(f"    *** TARGET FIELD ***")
+                            result.PutCString("    *** TARGET FIELD ***")
                     else:
                         result.PutCString(f"    [string at 0x{string_ptr:x} but could not decode]")
 
