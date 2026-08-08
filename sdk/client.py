@@ -185,57 +185,90 @@ class Client(object):
         return r
 
     def parseUserLoginData(self, r):
-        if "UserService" not in r.text:
+        if not r or not r.content:
             logging.error("Failed to login.")
             return False
 
-        d = xmltodict.parse(r.content, xml_attribs=True)
+        try:
+            d = xmltodict.parse(r.content, xml_attribs=True)
+        except Exception:
+            logging.error("Failed to login.")
+            return False
 
-        # heartbeat should only be sent after 60 seconds of network inactivity with the server
-        # we need perform date comparison to verify that 60 seconds has not elapsed
-        LastHeartBeat = datetime.datetime.strptime(
-            d["UserService"]["UserLogin"]["User"]["@LastHeartBeatDate"],
-            "%Y-%m-%dT%H:%M:%S",
-        )
+        if not isinstance(d, dict):
+            logging.error("Failed to login.")
+            return False
 
-        self.info = d["UserService"]["UserLogin"]["User"]
+        user_login = d.get("UserLogin")
+        if user_login is None and "UserService" in d and isinstance(d["UserService"], dict):
+            user_login = d["UserService"].get("UserLogin")
+
+        if not user_login or not isinstance(user_login, dict):
+            logging.error("Failed to login.")
+            return False
+
+        user_dict = user_login.get("User")
+        if not user_dict or not isinstance(user_dict, dict):
+            logging.error("Failed to login.")
+            return False
+
+        last_hb_str = user_dict.get("@LastHeartBeatDate")
+        if last_hb_str:
+            try:
+                LastHeartBeat = datetime.datetime.strptime(
+                    last_hb_str.split(".")[0],
+                    "%Y-%m-%dT%H:%M:%S",
+                )
+            except ValueError:
+                LastHeartBeat = datetime.datetime.now()
+        else:
+            LastHeartBeat = datetime.datetime.now()
+
+        self.info = user_dict
         if "@Name" not in self.info:
             self.info["@Name"] = ""
         logging.info("[%s] Authenticated...", self.info["@Name"])
-        userId = d["UserService"]["UserLogin"]["@UserId"]
-        if "@Credits" in d["UserService"]["UserLogin"]["User"]:
-            self.credits = int(d["UserService"]["UserLogin"]["User"]["@Credits"])
-        if "@DailyRewardStatus" in d["UserService"]["UserLogin"]["User"]:
-            self.dailyReward = int(
-                d["UserService"]["UserLogin"]["User"]["@DailyRewardStatus"]
-            )
+
+        userId = user_login.get("@UserId") or user_dict.get("@Id") or "0"
+
+        if "@Credits" in user_dict:
+            try:
+                self.credits = int(user_dict["@Credits"])
+            except (ValueError, TypeError):
+                self.credits = 0
+
+        if "@DailyRewardStatus" in user_dict:
+            try:
+                self.dailyReward = int(user_dict["@DailyRewardStatus"])
+            except (ValueError, TypeError):
+                self.dailyReward = 0
         else:
             self.dailyReward = 0
 
         if not self.device.refreshToken:
             myName = "guest"
         else:
-            myName = d["UserService"]["UserLogin"]["User"]["@Name"]
+            myName = user_dict.get("@Name", "")
 
-        if "FreeStarbuxReceivedToday" in r.text:
-            self.freeStarbuxToday = int(
-                r.text.split('FreeStarbuxReceivedToday="')[1].split('"')[0]
-            )
+        if "@FreeStarbuxReceivedToday" in user_dict:
+            try:
+                self.freeStarbuxToday = int(user_dict["@FreeStarbuxReceivedToday"])
+            except (ValueError, TypeError):
+                pass
+        elif "FreeStarbuxReceivedToday" in r.text:
+            try:
+                self.freeStarbuxToday = int(
+                    r.text.split('FreeStarbuxReceivedToday="')[1].split('"')[0]
+                )
+            except Exception:
+                pass
 
-        # keep it
-        # Store User details here.
         self.user = User(
             userId,
             myName,
             LastHeartBeat,
             self.device.refreshToken,
         )
-
-        self.info = d["UserService"]["UserLogin"]["User"]
-        try:
-            self.credits = d["UserService"]["UserLogin"]["User"]["@Credits"]
-        except KeyError:
-            pass
 
         return True
 
@@ -294,7 +327,6 @@ class Client(object):
         """Extract the accessToken attribute value from a DeviceLogin17 response."""
         if (
             (not response or response.status_code != 200)
-            or ("errorCode" in response.text)
             or ("accessToken" not in response.text)
         ):
             return None
@@ -1228,205 +1260,209 @@ class Client(object):
         self.request(url, "POST")
 
     def upgradeCharacters(self):
-        character_names = []
+        try:
+            character_names = []
 
-        if not self.allCharactersOfUser:
-            self.listAllCharactersOfUser()
+            if not self.allCharactersOfUser:
+                self.listAllCharactersOfUser()
 
-        if not self.allCharactersOfUser["CharacterService"]["ListAllCharactersOfUser"]:
-            logging.error("ListAllCharactersOfUser endpoint failed.")
-            return False
+            if not hasattr(self, "itemsOfAShip"):
+                self.listItemsOfAShip()
 
-        if not hasattr(self, "itemsOfAShip"):
-            self.listItemsOfAShip()
+            if not hasattr(self, "allCharacterDesigns"):
+                self.listAllCharacterDesigns2()
 
-        if "CharacterService" not in self.allCharactersOfUser:
-            return False
+            crewCostsPerLevel = [
+                0,
+                90,
+                270,
+                450,
+                630,
+                810,
+                1020,
+                1230,
+                1440,
+                1650,
+                1860,
+                2130,
+                2400,
+                2670,
+                2940,
+                3210,
+                3540,
+                3870,
+                4200,
+                4530,
+                4860,
+                5220,
+                5580,
+                5940,
+                6300,
+                6660,
+                7050,
+                7440,
+                7830,
+                8220,
+                8610,
+                9030,
+                9450,
+                9870,
+                10290,
+                10710,
+                11160,
+                11610,
+                12060,
+                12510,
+            ]
+            crewCosts = list(accumulate(crewCostsPerLevel))
+            legendaryCrewCosts = [cost * 3 for cost in crewCosts]
 
-        if not hasattr(self, "allCharacterDesigns"):
-            self.listAllCharacterDesigns2()
+            legendaryCrewGasCosts = [
+                0,
+                130000,
+                162500,
+                195000,
+                227500,
+                260000,
+                292500,
+                325000,
+                357500,
+                390000,
+                422500,
+                455000,
+                487500,
+                520000,
+                552500,
+                585000,
+                617500,
+                650000,
+                682500,
+                715000,
+                747500,
+                780000,
+                812500,
+                845000,
+                877500,
+                910000,
+                942000,
+                975000,
+                1007500,
+                1040000,
+                1072500,
+                1105000,
+                1137500,
+                1170000,
+                1202500,
+                1235000,
+                1267500,
+                1300000,
+                1332500,
+                1365000,
+            ]
+            crewGasCosts = [
+                0,
+                0,
+                17,
+                33,
+                65,
+                130,
+                325,
+                650,
+                1300,
+                3200,
+                6500,
+                9700,
+                13000,
+                19500,
+                26000,
+                35700,
+                43800,
+                52000,
+                61700,
+                71500,
+                84500,
+                104000,
+                117000,
+                130000,
+                156000,
+                175000,
+                201000,
+                227000,
+                253000,
+                279000,
+                312000,
+                351000,
+                383000,
+                422000,
+                468000,
+                507000,
+                552000,
+                604000,
+                650000,
+                715000,
+            ]
 
-        crewCostsPerLevel = [
-            0,
-            90,
-            270,
-            450,
-            630,
-            810,
-            1020,
-            1230,
-            1440,
-            1650,
-            1860,
-            2130,
-            2400,
-            2670,
-            2940,
-            3210,
-            3540,
-            3870,
-            4200,
-            4530,
-            4860,
-            5220,
-            5580,
-            5940,
-            6300,
-            6660,
-            7050,
-            7440,
-            7830,
-            8220,
-            8610,
-            9030,
-            9450,
-            9870,
-            10290,
-            10710,
-            11160,
-            11610,
-            12060,
-            12510,
-        ]
-        crewCosts = list(accumulate(crewCostsPerLevel))
-        legendaryCrewCosts = [cost * 3 for cost in crewCosts]
+            characters = _extract_collection(getattr(self, "allCharactersOfUser", {}), "Character")
+            character_designs = _extract_collection(getattr(self, "allCharacterDesigns", {}), "CharacterDesign")
 
-        legendaryCrewGasCosts = [
-            0,
-            130000,
-            162500,
-            195000,
-            227500,
-            260000,
-            292500,
-            325000,
-            357500,
-            390000,
-            422500,
-            455000,
-            487500,
-            520000,
-            552500,
-            585000,
-            617500,
-            650000,
-            682500,
-            715000,
-            747500,
-            780000,
-            812500,
-            845000,
-            877500,
-            910000,
-            942000,
-            975000,
-            1007500,
-            1040000,
-            1072500,
-            1105000,
-            1137500,
-            1170000,
-            1202500,
-            1235000,
-            1267500,
-            1300000,
-            1332500,
-            1365000,
-        ]
-        crewGasCosts = [
-            0,
-            0,
-            17,
-            33,
-            65,
-            130,
-            325,
-            650,
-            1300,
-            3200,
-            6500,
-            9700,
-            13000,
-            19500,
-            26000,
-            35700,
-            43800,
-            52000,
-            61700,
-            71500,
-            84500,
-            104000,
-            117000,
-            130000,
-            156000,
-            175000,
-            201000,
-            227000,
-            253000,
-            279000,
-            312000,
-            351000,
-            383000,
-            422000,
-            468000,
-            507000,
-            552000,
-            604000,
-            650000,
-            715000,
-        ]
-
-        for character in self.allCharactersOfUser["CharacterService"][
-            "ListAllCharactersOfUser"
-        ]["Characters"]["Character"]:
-            # if character['@Level'] == '40':
-            #    for characterDesign in self.allCharacterDesigns['CharacterService']['ListAllCharacterDesigns']['CharacterDesigns']['CharacterDesign']:
-            #        if character['@CharacterDesignId'] == characterDesign['@CharacterDesignId']:
-            #            logging.warn(f"{character['@CharacterName']=} {character['@Level']=} {character['@Xp']=} {characterDesign['@Rarity']=}")
-
-            if character["@RoomId"] != "0" and character["@Level"] != "40":
-                for characterDesign in self.allCharacterDesigns["CharacterService"][
-                    "ListAllCharacterDesigns"
-                ]["CharacterDesigns"]["CharacterDesign"]:
-                    if (
-                        character["@CharacterDesignId"]
-                        == characterDesign["@CharacterDesignId"]
-                    ):
-                        character_names.append(character["@CharacterName"])
-                        logging.debug(f"{len(crewCosts)=} {len(legendaryCrewCosts)=}")
-                        if int(character["@Xp"]) >= (
-                            legendaryCrewCosts[int(character["@Level"])]
-                            if characterDesign["@Rarity"] == "Legendary"
-                            else crewCosts[int(character["@Level"])]
+            for character in characters:
+                if character.get("@RoomId") != "0" and character.get("@Level") != "40":
+                    for characterDesign in character_designs:
+                        if (
+                            character.get("@CharacterDesignId")
+                            == characterDesign.get("@CharacterDesignId")
                         ):
-                            self.collectAllResources()
-                            date_to_check = datetime.datetime.strptime(
-                                character["@AvailableDate"], "%Y-%m-%dT%H:%M:%S"
-                            )
-                            current_datetime = datetime.datetime.now()
-                            if (
-                                legendaryCrewGasCosts[int(character["@Level"])]
-                                if characterDesign["@Rarity"] == "Legendary"
-                                else crewGasCosts[int(character["@Level"])]
-                            ) <= int(self.gasTotal) and (
-                                date_to_check <= current_datetime
-                            ):
-                                logging.info(
-                                    f"[{self.info['@Name']}] Upgrading {character['@CharacterName']} to level {int(character['@Level']) + 1} costing {legendaryCrewGasCosts[int(character['@Level'])] if characterDesign['@Rarity'] == 'Legendary' else crewGasCosts[int(character['@Level'])]}/{self.gasTotal} gas and {int(character['@Xp'])}/{legendaryCrewCosts[int(character['@Level'])] if characterDesign['@Rarity'] == 'Legendary' else crewCosts[int(character['@Level'])]} xp."
-                                )
-                                self.upgradeCharacter(character["@CharacterId"])
-                            logging.debug(
-                                f"{character['@CharacterName']=} {character['@Level']=} {character['@Xp']=} {characterDesign['@Rarity']=}"
-                            )
-                            logging.debug(
-                                f"XP cost: {legendaryCrewCosts[int(character['@Level'])] if characterDesign['@Rarity'] == 'Legendary' else crewCosts[int(character['@Level'])]}"
-                            )
+                            character_names.append(character.get("@CharacterName", ""))
+                            logging.debug(f"{len(crewCosts)=} {len(legendaryCrewCosts)=}")
+                            try:
+                                lvl = int(character.get("@Level", 0))
+                                xp = int(character.get("@Xp", 0))
+                            except (ValueError, TypeError):
+                                continue
 
-        if character_names:
-            logging.info(
-                f"[{self.info['@Name']}] The following characters are below level 40: {', '.join(character_names)}"
-            )
-        return True
+                            rarity = characterDesign.get("@Rarity", "")
+                            xp_cost = (
+                                legendaryCrewCosts[lvl]
+                                if rarity == "Legendary"
+                                else crewCosts[lvl]
+                            )
+                            if xp >= xp_cost:
+                                self.collectAllResources()
+                                date_str = character.get("@AvailableDate", "")
+                                try:
+                                    date_to_check = datetime.datetime.strptime(
+                                        date_str.split(".")[0], "%Y-%m-%dT%H:%M:%S"
+                                    )
+                                except ValueError:
+                                    date_to_check = datetime.datetime.now()
+                                current_datetime = datetime.datetime.now()
+                                gas_cost = (
+                                    legendaryCrewGasCosts[lvl]
+                                    if rarity == "Legendary"
+                                    else crewGasCosts[lvl]
+                                )
+                                try:
+                                    gas_avail = int(self.gasTotal)
+                                except (ValueError, TypeError):
+                                    gas_avail = 0
+
+                                if gas_cost <= gas_avail and date_to_check <= current_datetime:
+                                    char_id = character.get("@CharacterId")
+                                    char_name = character.get("@CharacterName", "")
+                                    logging.info(
+                                        f"[{self.info.get('@Name', '')}] Upgrading {char_name} to level {lvl + 1} costing {gas_cost}/{self.gasTotal} gas and {xp}/{xp_cost} xp."
+                                    )
+                                    if char_id:
+                                        self.upgradeCharacter(char_id)
+
+            if character_names:
+                logging.info(
+                    f"[{self.info.get('@Name', '')}] The following characters are below level 40: {', '.join(character_names)}"
+                )
+            return True
+        except Exception as e:
+            logging.error(f"upgradeCharacters failed: {redact_secrets(str(e))}")
+            return False
 
     def listAllRoomActionsOfShip(self):
         if self.user.isAuthorized:
@@ -1486,37 +1522,49 @@ class Client(object):
             self.item = xmltodict.parse(r.content, xml_attribs=True)
 
     def print_market_data(self, v):
-        message = "".join(v["@Message"])
-        currency = v["@ActivityArgument"].split(":")[0]
-        price = v["@ActivityArgument"].split(":")[1]
-        logging.info(f"[{self.info['@Name']}] {message} for {price} {currency}.")
+        if not isinstance(v, dict):
+            return
+        message = v.get("@Message", "")
+        if isinstance(message, list):
+            message = "".join(message)
+        activity_arg = v.get("@ActivityArgument", "")
+        if activity_arg and isinstance(activity_arg, str) and ":" in activity_arg:
+            parts = activity_arg.split(":")
+            currency = parts[0]
+            price = parts[1] if len(parts) > 1 else ""
+            logging.info(f"[{self.info.get('@Name', '')}] {message} for {price} {currency}.")
+        else:
+            logging.info(f"[{self.info.get('@Name', '')}] {message}.")
 
     def listActiveMarketplaceMessages(self):
+        user_id = getattr(self.user, "id", "0") if hasattr(self, "user") and self.user else "0"
         url = "https://api.pixelstarships.com/MessageService/ListActiveMarketplaceMessages5?itemSubType=None&rarity=None&currencyType=Unknown&itemDesignId=0&userId={}&accessToken={}".format(
-            self.user.id, self.accessToken
+            user_id, self.accessToken
         )
-        r = self.request(url, "GET")
-        if r:
-            d = xmltodict.parse(r.content, xml_attribs=True)
+        try:
+            r = self.request(url, "GET")
+            if not r or not r.content:
+                return False
             if "errorMessage=" in r.text:
                 logging.error(f"An error occurred: {r.text}.")
                 return False
-            if d["MessageService"]["ListActiveMarketplaceMessages"]["Messages"] is None:
-                logging.debug(
-                    f'[{self.info["@Name"]}] You have no items listed on the marketplace.'
-                )
+            d = xmltodict.parse(r.content, xml_attribs=True)
+            if not isinstance(d, dict):
                 return False
 
-            for v in d["MessageService"]["ListActiveMarketplaceMessages"][
-                "Messages"
-            ].values():
-                if isinstance(v, dict):
-                    self.print_market_data(v)
-                elif isinstance(v, list):
-                    for i in v:
-                        if isinstance(i, dict):
-                            self.print_market_data(i)
-        return True
+            messages = _extract_collection(d, "Message")
+            if not messages:
+                logging.debug(
+                    f'[{self.info.get("@Name", "")}] You have no items listed on the marketplace.'
+                )
+                return True
+
+            for msg in messages:
+                self.print_market_data(msg)
+            return True
+        except Exception as e:
+            logging.error(f"listActiveMarketplaceMessages failed: {redact_secrets(str(e))}")
+            return False
 
     def infoBux(self):
         logging.info(
@@ -1531,19 +1579,55 @@ class Client(object):
             "{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime()),
             self.accessToken,
         )
-        r = self.request(url, "POST")
-        d = xmltodict.parse(r.content, xml_attribs=True)
-        if "RoomService" not in d:
+        try:
+            r = self.request(url, "POST")
+            if not r or not r.content:
+                return False
+            d = xmltodict.parse(r.content, xml_attribs=True)
+            if not isinstance(d, dict):
+                return False
+        except Exception as e:
+            logging.error(f"collectAllResources failed: {redact_secrets(str(e))}")
             return False
-        self.mineralTotal = d["RoomService"]["CollectResources"]["Items"]["Item"][0][
-            "@Quantity"
-        ]
-        self.gasTotal = d["RoomService"]["CollectResources"]["Items"]["Item"][1][
-            "@Quantity"
-        ]
 
-        if "User" in d["RoomService"]["CollectResources"]:
-            self.credits = d["RoomService"]["CollectResources"]["User"]["@Credits"]
+        items = _extract_collection(d, "Item")
+        mineral = None
+        gas = None
+        for item in items:
+            t = (item.get("@Type") or item.get("@ItemType") or "").lower()
+            qty = str(item.get("@Quantity", "0"))
+            if "mineral" in t:
+                mineral = qty
+            elif "gas" in t:
+                gas = qty
+
+        if items:
+            if mineral is None and gas is None:
+                mineral = str(items[0].get("@Quantity", "0"))
+                if len(items) > 1:
+                    gas = str(items[1].get("@Quantity", "0"))
+            elif mineral is None:
+                for item in items:
+                    t = (item.get("@Type") or item.get("@ItemType") or "").lower()
+                    if "gas" not in t:
+                        mineral = str(item.get("@Quantity", "0"))
+                        break
+            elif gas is None:
+                for item in items:
+                    t = (item.get("@Type") or item.get("@ItemType") or "").lower()
+                    if "mineral" not in t:
+                        gas = str(item.get("@Quantity", "0"))
+                        break
+
+        self.mineralTotal = mineral if mineral is not None else "0"
+        self.gasTotal = gas if gas is not None else "0"
+
+        try:
+            user_node = d.get("RoomService", {}).get("CollectResources", {}).get("User", {})
+            if isinstance(user_node, dict) and "@Credits" in user_node:
+                self.credits = user_node["@Credits"]
+        except Exception:
+            pass
 
         self.rssCollectedTimestamp = time.time()
         return True
@@ -1557,39 +1641,46 @@ class Client(object):
         )
 
     def collectDailyReward(self):
-        if "LiveOpsService" not in self.todayLiveOps:
-            logging.error(
-                "Unable to collect daily reward because of missing Live Ops data."
-            )
-            return False
-        self.dailyRewardArgument = self.todayLiveOps["LiveOpsService"][
-            "GetTodayLiveOps"
-        ]["LiveOps"]["@DailyRewardArgument"]
-        if datetime.datetime.now().time() == datetime.time(
-            hour=0, minute=0, tzinfo=datetime.timezone.utc
-        ):
-            self.dailyReward = 0
+        try:
+            if not getattr(self, "todayLiveOps", None) or "LiveOpsService" not in self.todayLiveOps:
+                logging.error(
+                    "Unable to collect daily reward because of missing Live Ops data."
+                )
+                return False
+            live_ops = self.todayLiveOps.get("LiveOpsService", {}).get("GetTodayLiveOps", {}).get("LiveOps", {})
+            if isinstance(live_ops, dict) and "@DailyRewardArgument" in live_ops:
+                self.dailyRewardArgument = live_ops["@DailyRewardArgument"]
 
-        if self.user.isAuthorized and (self.info["@DailyRewardStatus"] != "1"):
-            url = "https://api.pixelstarships.com/UserService/CollectDailyReward2?dailyRewardStatus=Box&argument={}&accessToken={}".format(
-                self.dailyRewardArgument,
-                self.accessToken,
-            )
-
-            r = self.request(url, "POST")
-
-            if "You already collected this reward" in r.text:
-                self.dailyRewardTimestamp = time.time()
-                self.dailyReward = 1
+            if self.info.get("@DailyRewardStatus") == "1":
                 logging.info(
-                    f"[{self.info['@Name']}] You have already collected the daily reward from the dropship."
+                    f"[{self.info.get('@Name', '')}] Daily reward already collected today."
+                )
+                return True
+
+            if self.user.isAuthorized:
+                url = "https://api.pixelstarships.com/UserService/CollectDailyReward2?dailyRewardStatus=Box&argument={}&accessToken={}".format(
+                    getattr(self, "dailyRewardArgument", ""),
+                    self.accessToken,
                 )
 
-            logging.info(
-                f"[{self.info['@Name']}] You have collected the daily reward from the dropship."
-            )
-            return True
-        return False
+                r = self.request(url, "POST")
+                if r:
+                    if "You already collected this reward" in r.text:
+                        self.dailyRewardTimestamp = time.time()
+                        self.dailyReward = 1
+                        logging.info(
+                            f"[{self.info.get('@Name', '')}] You have already collected the daily reward from the dropship."
+                        )
+                        return True
+
+                    logging.info(
+                        f"[{self.info.get('@Name', '')}] You have collected the daily reward from the dropship."
+                    )
+                    return True
+            return False
+        except Exception as e:
+            logging.error(f"collectDailyReward failed: {redact_secrets(str(e))}")
+            return False
 
     def collectMiningDrone(self, starSystemMarkerId):
         if self.user.isAuthorized and starSystemMarkerId not in self.dronesCollected:
@@ -1651,14 +1742,20 @@ class Client(object):
                 return True
             logging.debug(f"[{self.info['@Name']}] {quantity=}")
             self.AddStarbux2(quantity)
-            if "UserService" not in self.starbux:
+
+            if not isinstance(getattr(self, "starbux", None), dict):
                 self.quickReload()
                 return False
-            self.freeStarbuxToday = int(
-                self.starbux["UserService"]["AddStarbux"]["User"][
-                    "@FreeStarbuxReceivedToday"
-                ]
-            )
+
+            try:
+                user_node = self.starbux.get("UserService", {}).get("AddStarbux", {}).get("User", {})
+                if not isinstance(user_node, dict) or "@FreeStarbuxReceivedToday" not in user_node:
+                    self.quickReload()
+                    return False
+                self.freeStarbuxToday = int(user_node["@FreeStarbuxReceivedToday"])
+            except (ValueError, TypeError, AttributeError):
+                self.quickReload()
+                return False
 
             logging.info(
                 f'[{self.info["@Name"]}] You have collected a total of {self.freeStarbuxToday} starbux today.'
@@ -1957,94 +2054,79 @@ class Client(object):
         return True
 
     def getCrewInfo(self):
-        character_list = []
-        self.listAllCharactersOfUser()
-        if not self.allCharactersOfUser["CharacterService"]["ListAllCharactersOfUser"]:
-            logging.error("ListAllCharactersOfUser endpoint failed.")
+        try:
+            character_list = []
+            self.listAllCharactersOfUser()
+            characters = _extract_collection(getattr(self, "allCharactersOfUser", {}), "Character")
+            if not characters:
+                if not getattr(self, "allCharactersOfUser", {}):
+                    logging.error("ListAllCharactersOfUser endpoint failed.")
+                    return False
+                return True
+            for character in characters:
+                name = character.get("@CharacterName")
+                if name:
+                    character_list.append(name)
+            if character_list:
+                logging.info(
+                    f"[{self.info.get('@Name', '')}] List of characters: {', '.join(character_list)}"
+                )
+            return True
+        except Exception as e:
+            logging.error(f"getCrewInfo failed: {redact_secrets(str(e))}")
             return False
-        for character in self.allCharactersOfUser["CharacterService"][
-            "ListAllCharactersOfUser"
-        ]["Characters"]["Character"]:
-            character_list.append(character["@CharacterName"])
-        if character_list:
-            logging.info(
-                f"[{self.info['@Name']}] List of characters: {', '.join(character_list)}"
-            )
-        return True
 
     def getMessages(self):
-        if not self.listSystemMessagesForUser3():
-            return False
-        if not self.systemMessagesForUser["MessageService"][
-            "ListSystemMessagesForUser"
-        ]["Messages"]:
-            return True
+        try:
+            if not self.listSystemMessagesForUser3():
+                return False
 
-        if isinstance(
-            self.systemMessagesForUser["MessageService"]["ListSystemMessagesForUser"][
-                "Messages"
-            ]["Message"],
-            dict,
-        ):
-            message = self.systemMessagesForUser["MessageService"][
-                "ListSystemMessagesForUser"
-            ]["Messages"]["Message"]
-            if (
-                "@ActivityArgument" in message
-                and message["@ActivityArgument"] != "None"
-                and message["@ActivityArgument"] != ""
-            ):
-                logging.info(
-                    f"[{self.info['@Name']}] {message['@Message']}{''.join([' ', message['@ActivityArgument'].split(':')[1]])}{''.join([' ', message['@ActivityArgument'].split(':')[0]])} is collectable."
-                )
-                if message["@ActivityArgument"].split(":")[0] not in [
-                    "gas",
-                    "mineral",
-                ]:
-                    self.collectReward2(message["@MessageId"])
-            else:
-                self.actionMessage(message["@MessageId"])
-        elif isinstance(
-            self.systemMessagesForUser["MessageService"]["ListSystemMessagesForUser"][
-                "Messages"
-            ]["Message"],
-            list,
-        ):
-            for message in self.systemMessagesForUser["MessageService"][
-                "ListSystemMessagesForUser"
-            ]["Messages"]["Message"]:
-                if (
-                    message["@ActivityArgument"] != "None"
-                    and message["@ActivityArgument"] != ""
-                ):
+            messages = _extract_collection(getattr(self, "systemMessagesForUser", {}), "Message")
+            if not messages:
+                return True
+
+            for message in messages:
+                activity_arg = message.get("@ActivityArgument", "")
+                message_text = message.get("@Message", "")
+                message_id = message.get("@MessageId")
+
+                if activity_arg and activity_arg != "None" and isinstance(activity_arg, str) and ":" in activity_arg:
+                    parts = activity_arg.split(":")
+                    arg_type = parts[0]
+                    arg_val = parts[1] if len(parts) > 1 else ""
                     logging.info(
-                        f"[{self.info['@Name']}] {message['@Message']}{''.join([' ', message['@ActivityArgument'].split(':')[1]])}{''.join([' ', message['@ActivityArgument'].split(':')[0]])} is collectable."
+                        f"[{self.info.get('@Name', '')}] {message_text} {arg_val} {arg_type} is collectable."
                     )
-                    if message["@ActivityArgument"].split(":")[0] not in [
-                        "gas",
-                        "mineral",
-                    ]:
-                        self.collectReward2(message["@MessageId"])
+                    if arg_type not in ["gas", "mineral"] and message_id:
+                        self.collectReward2(message_id)
                 else:
-                    logging.info(f"[{self.info['@Name']}] {message['@Message']}")
-                    self.actionMessage(message["@MessageId"])
-        return True
+                    logging.info(f"[{self.info.get('@Name', '')}] {message_text}")
+                    if message_id:
+                        self.actionMessage(message_id)
+            return True
+        except Exception as e:
+            logging.error(f"getMessages failed: {redact_secrets(str(e))}")
+            return False
 
     def listFinishTasks(self):
-        self.listTasksOfAUser()
-        self.listAllTaskDesigns2()
-        for task in self.tasksOfAUser["TaskService"]["ListTasksOfAUser"]["Tasks"][
-            "Task"
-        ]:
-            logging.debug(f"{task=}")
-            if task["@Collected"] == "true":
-                for taskDesign in self.allTaskDesigns["TaskService"][
-                    "ListAllTaskDesigns"
-                ]["TaskDesigns"]["TaskDesign"]:
-                    if taskDesign["@TaskDesignId"] == task["@TaskDesignId"]:
-                        logging.info(
-                            f"[{self.info['@Name']}] Completed task to {taskDesign['@Description']}."
-                        )
+        try:
+            self.listTasksOfAUser()
+            self.listAllTaskDesigns2()
+            tasks = _extract_collection(getattr(self, "tasksOfAUser", {}), "Task")
+            task_designs = _extract_collection(getattr(self, "allTaskDesigns", {}), "TaskDesign")
+
+            for task in tasks:
+                logging.debug(f"{task=}")
+                if task.get("@Collected") == "true":
+                    for taskDesign in task_designs:
+                        if taskDesign.get("@TaskDesignId") == task.get("@TaskDesignId"):
+                            logging.info(
+                                f"[{self.info.get('@Name', '')}] Completed task to {taskDesign.get('@Description', '')}."
+                            )
+            return True
+        except Exception as e:
+            logging.error(f"listFinishTasks failed: {redact_secrets(str(e))}")
+            return False
 
     def collectTaskCompletion(self, taskDesignId):
         url = f"{self.baseUrl}/TaskService/CollectTaskCompletion?taskDesignId={taskDesignId}&accessToken={self.accessToken}"
@@ -2061,23 +2143,25 @@ class Client(object):
         return True
 
     def collectTaskReward(self):
-        self.listTasksOfAUser()
-        self.listAllTaskDesigns2()
-        if "TaskService" not in self.tasksOfAUser:
+        try:
+            self.listTasksOfAUser()
+            self.listAllTaskDesigns2()
+            tasks = _extract_collection(getattr(self, "tasksOfAUser", {}), "Task")
+            task_designs = _extract_collection(getattr(self, "allTaskDesigns", {}), "TaskDesign")
+
+            for task in tasks:
+                if task.get("@Collected") == "false" and task.get("@ProgressValue") != "0":
+                    for taskDesign in task_designs:
+                        if taskDesign.get("@TaskDesignId") == task.get("@TaskDesignId"):
+                            if task.get("@ProgressValue") == taskDesign.get("@ObjectiveAmount"):
+                                if self.collectTaskCompletion(task.get("@TaskDesignId")):
+                                    logging.info(
+                                        f"[{self.info.get('@Name', '')}] Collecting reward for objective: {taskDesign.get('@Name', '')}."
+                                    )
+            return True
+        except Exception as e:
+            logging.error(f"collectTaskReward failed: {redact_secrets(str(e))}")
             return False
-        for task in self.tasksOfAUser["TaskService"]["ListTasksOfAUser"]["Tasks"][
-            "Task"
-        ]:
-            if task["@Collected"] == "false" and task["@ProgressValue"] != "0":
-                for taskDesign in self.allTaskDesigns["TaskService"][
-                    "ListAllTaskDesigns"
-                ]["TaskDesigns"]["TaskDesign"]:
-                    if taskDesign["@TaskDesignId"] == task["@TaskDesignId"]:
-                        if task["@ProgressValue"] == taskDesign["@ObjectiveAmount"]:
-                            if self.collectTaskCompletion(task["@TaskDesignId"]):
-                                logging.info(
-                                    f"[{self.info['@Name']}] Collecting reward for objective: {taskDesign['@Name']}."
-                                )
 
     def heartbeat(self):
         if (

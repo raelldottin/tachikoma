@@ -11,6 +11,7 @@ import io
 from pathlib import Path
 from sdk.client import Client
 from sdk.device import Device
+from sdk.redaction import redact_secrets
 
 
 logfilepath = "tachikoma.log"
@@ -196,23 +197,97 @@ def main():
     runtime_failed = False
 
     while client:
-        client.grabFlyingStarbux()
-        if client.freeStarbuxToday >= client.freeStarbuxMax:
-            client.collectTaskReward()
-            client.getCrewInfo()
-            if not client.upgradeResearches():
+        try:
+            client.grabFlyingStarbux()
+        except Exception as e:
+            logging.error(f"grabFlyingStarbux failed: {redact_secrets(str(e))}")
+            runtime_failed = True
+
+        if getattr(client, "freeStarbuxToday", 0) >= getattr(client, "freeStarbuxMax", 0):
+            try:
+                res = client.collectTaskReward()
+                if res is False:
+                    runtime_failed = True
+            except Exception as e:
+                logging.error(f"collectTaskReward failed: {redact_secrets(str(e))}")
                 runtime_failed = True
-            if not client.upgradeRooms():
+
+            try:
+                res = client.getCrewInfo()
+                if res is False:
+                    runtime_failed = True
+            except Exception as e:
+                logging.error(f"getCrewInfo failed: {redact_secrets(str(e))}")
                 runtime_failed = True
-            client.collectDailyReward()
-            client.listActiveMarketplaceMessages()
-            client.getMessages()
-            client.infoBux()
-            if not client.manageTraining():
+
+            try:
+                res = client.upgradeResearches()
+                if res is False:
+                    runtime_failed = True
+            except Exception as e:
+                logging.error(f"upgradeResearches failed: {redact_secrets(str(e))}")
                 runtime_failed = True
-            client.getResourceTotals()
-            client.upgradeCharacters()
-            logging.info(f'[{client.info["@Name"]}] Finished...')
+
+            try:
+                res = client.upgradeRooms()
+                if res is False:
+                    runtime_failed = True
+            except Exception as e:
+                logging.error(f"upgradeRooms failed: {redact_secrets(str(e))}")
+                runtime_failed = True
+
+            try:
+                res = client.collectDailyReward()
+                if res is False:
+                    runtime_failed = True
+            except Exception as e:
+                logging.error(f"collectDailyReward failed: {redact_secrets(str(e))}")
+                runtime_failed = True
+
+            try:
+                res = client.listActiveMarketplaceMessages()
+                if res is False:
+                    runtime_failed = True
+            except Exception as e:
+                logging.error(f"listActiveMarketplaceMessages failed: {redact_secrets(str(e))}")
+                runtime_failed = True
+
+            try:
+                res = client.getMessages()
+                if res is False:
+                    runtime_failed = True
+            except Exception as e:
+                logging.error(f"getMessages failed: {redact_secrets(str(e))}")
+                runtime_failed = True
+
+            try:
+                client.infoBux()
+            except Exception as e:
+                logging.error(f"infoBux failed: {redact_secrets(str(e))}")
+
+            try:
+                res = client.manageTraining()
+                if res is False:
+                    runtime_failed = True
+            except Exception as e:
+                logging.error(f"manageTraining failed: {redact_secrets(str(e))}")
+                runtime_failed = True
+
+            try:
+                client.getResourceTotals()
+            except Exception as e:
+                logging.error(f"getResourceTotals failed: {redact_secrets(str(e))}")
+
+            try:
+                res = client.upgradeCharacters()
+                if res is False:
+                    runtime_failed = True
+            except Exception as e:
+                logging.error(f"upgradeCharacters failed: {redact_secrets(str(e))}")
+                runtime_failed = True
+
+            char_name = client.info.get("@Name", "") if isinstance(getattr(client, "info", None), dict) else ""
+            logging.info(f'[{char_name}] Finished...')
             break
 
     # Send log file via SMTP only if SMTP is enabled

@@ -193,8 +193,15 @@ def main():
             print(redact_secrets(err_msg), file=sys.stderr)
             results[i] = 'PARTIAL_CONFIG_FAILED'
 
+    if partial_slots:
+        for i in range(1, 6):
+            if i in results:
+                print(f"Account {i}: {results[i]}")
+        sys.exit(1)
+
     # Five Accounts Independent Processing Contract
-    for i, s in slots.items():
+    for i in range(1, 6):
+        s = slots[i]
         if s['status'] == 'CONFIGURED':
             try:
                 provision_account(f"account_{i}", s['email'], s['password'], s['refresh_token'])

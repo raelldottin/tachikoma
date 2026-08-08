@@ -83,3 +83,57 @@
 - **Largest remaining gap**: Pending independent critic review for Round 1.
 - **Residual risks**: Pre-existing dirt in working tree contains minor import cleanup edits in 4 files within allowed paths (`sdk/client.py`, `tests/test_crew_leveling.py`, `tests/test_security.py`, `tests/test_tui.py`) and 14 files outside allowed paths (`scripts/`, `sdk/commands.py`, `sdk/dotnet.py`, `sdk/tui.py`). All tests pass and dirt does not interfere with baseline integrity.
 - **Final stopping reason**: Implementation complete and verified across all required validation commands. Ready for independent critic review.
+
+---
+
+# Slice 3: End-to-End Live Validation & Fixes — Baseline Survey & Outcomes
+
+## Baseline Survey
+- **Baseline Commit SHA**: `ba7b93a87db35baf424cf986c022aed1b751a091`
+- **Branch**: `main`
+- **Upstream status**: `## main`
+- **Initial repository dirt**:
+  - **Modified (17 files)**: `scripts/checksum_lab.py`, `scripts/debug_authorize4.py`, `scripts/e2e_email_password_login.py`, `scripts/e2e_fresh_login.py`, `scripts/extract_constants.py`, `scripts/lldb_enum_fields.py`, `scripts/lldb_search_checksum.py`, `scripts/provision_github_account_secret.py`, `scripts/test_captured_flow.py`, `scripts/test_captured_token.py`, `scripts/trigger_login.py`, `sdk/commands.py`, `sdk/dotnet.py`, `sdk/tui.py`, `tests/test_crew_leveling.py`, `tests/test_security.py`, `tests/test_tui.py`
+  - **Untracked (4 paths)**: `.agents/`, `ORIGINAL_REQUEST.md`, `pyproject.toml`, `uv.lock`
+
+## Final Validation Commands and Outcomes
+- `make automation-check`: PASSED (Exit 0, 37/37 tests OK)
+- `make syntax-check`: PASSED (Exit 0)
+- `make test`: PASSED (Exit 0, 148 tests run: 147 OK, 1 skipped)
+- `make test-security`: PASSED (Exit 0, 41/41 tests OK)
+- `make lint`: PASSED (Exit 0, ruff check clean, ty exit-zero)
+- `git diff --check`: PASSED (Exit 0)
+
+## Test Counts
+- **Total tests passing**: 225 tests (37 automation, 147 unit (1 skipped), 41 security)
+  - **Automation tests**: 37/37 passed
+  - **Unit tests**: 147/148 passed (14 new deterministic tests added in `tests/test_e2e_live_fixes.py`, 1 skipped: `test_ratelimit_decorator_handles_unexpected_exceptions`)
+  - **Security tests**: 41/41 passed
+
+## Known Failures
+- None (All 225 automated tests pass cleanly).
+
+## Active Gauntlet Slice Tracking
+- **Active gauntlet slice**: `e2e-live-validation-and-fixes`
+- **Allowed paths**:
+  - `sdk/client.py`
+  - `scripts/provision_account_secrets.py`
+  - `.github/workflows/`
+  - `run.py`
+  - `tests/`
+  - `automation/gauntlet/workbench.md`
+- **Files changed budget**: `max_files_changed: 10`
+- **Builder round count**: Round 1
+- **Critic round count**: Round 0
+- **Files changed (6 files)**:
+  - `sdk/client.py`
+  - `scripts/provision_account_secrets.py`
+  - `.github/workflows/daily-run.yml`
+  - `run.py`
+  - `tests/test_e2e_live_fixes.py`
+  - `automation/gauntlet/workbench.md`
+- **Highest proof level reached**: Implementation & All Mandatory Validations Complete
+- **Critic verdict**: Pending (Round 1)
+- **Largest remaining gap**: None
+- **Residual risks**: Live workflow execution relies on GitHub Secrets configured in repository settings. Mocked unit tests verify all parsed XML shapes and provisioning edge cases without network traffic.
+- **Final stopping reason**: Implementation complete and verified across all required validation commands.
