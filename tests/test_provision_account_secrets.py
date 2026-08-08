@@ -201,8 +201,8 @@ class TestProvisionAccountSecrets(unittest.TestCase):
             self.assertNotIn(secret_password, combined_output)
             self.assertNotIn(secret_email, combined_output)
 
-    @patch("sdk.client.Client")
-    @patch("sdk.device.Device")
+    @patch("scripts.provision_account_secrets.Client")
+    @patch("scripts.provision_account_secrets.Device")
     def test_mocked_failed_token_rotation_sanitized(self, mock_device_cls, mock_client_cls):
         """Verify useful redacted error message when token rotation raises an exception."""
         mock_device = MagicMock()

@@ -202,3 +202,77 @@ def checksum_collect_marker2(
     preimage = marker_id + client_date_time + design_version + checksum_key
     encrypted = preimage + savy_checksum
     return hashlib.md5(encrypted.encode("utf-8")).hexdigest()
+
+
+def checksum_create_battle9(
+    client_date_time: str,
+    checksum_key: str,
+    savy_checksum: str,
+) -> str:
+    """Compute the CreateBattle9 native checksum.
+
+    Formula (verified via mitmproxy):
+        preimage  = clientDateTime + ChecksumKey
+        encrypted = preimage + savy_checksum
+        checksum  = MD5(encrypted)
+    """
+    if not checksum_key or not savy_checksum:
+        raise UnsupportedNativeChecksum(
+            "CreateBattle9 requires checksum_key and savy_checksum configuration."
+        )
+    preimage = client_date_time + checksum_key
+    encrypted = preimage + savy_checksum
+    return hashlib.md5(encrypted.encode("utf-8")).hexdigest()
+
+
+def checksum_finalise_battle15(
+    battle_id: str,
+    client_outcome_type: str,
+    client_end_frame: str,
+    client_result_string: str,
+    attacking_ship_hp: str,
+    client_version: str,
+    access_token: str,
+    checksum_key: str = "5343",
+    savy_checksum: str = "Savvy!s0d@",
+) -> str:
+    """Compute the FinaliseBattle15 native checksum."""
+    if not checksum_key or not savy_checksum:
+        raise ValueError(
+            "FinaliseBattle15 requires checksum_key and savy_checksum "
+            "to be initialized in Client.settings"
+        )
+    preimage = (
+        str(battle_id)
+        + str(client_outcome_type)
+        + str(client_end_frame)
+        + str(client_result_string)
+        + str(attacking_ship_hp)
+        + str(client_version)
+        + str(access_token)
+        + str(checksum_key)
+    )
+    encrypted = preimage + savy_checksum
+    return hashlib.md5(encrypted.encode("utf-8")).hexdigest()
+
+
+def checksum_accept_battle5(
+    access_token: str,
+    battle_id: str,
+    client_date_time: str,
+    savy_checksum: str,
+) -> str:
+    """Compute the AcceptBattle5 native checksum.
+
+    Formula (verified via mitmproxy):
+        preimage  = accessToken + battleId + clientDateTime
+        encrypted = preimage + savy_checksum
+        checksum  = MD5(encrypted)
+    """
+    if not savy_checksum:
+        raise UnsupportedNativeChecksum(
+            "AcceptBattle5 requires savy_checksum configuration."
+        )
+    preimage = access_token + battle_id + client_date_time
+    encrypted = preimage + savy_checksum
+    return hashlib.md5(encrypted.encode("utf-8")).hexdigest()

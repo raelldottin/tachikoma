@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Test: use captured access token for Stage 2, then captured refresh token for Stage 3."""
-import sys, os, re, json, urllib.parse
+import sys
+import re
+import json
 sys.path.insert(0, ".")
 
 from sdk.device import Device
 from sdk.client import Client
-import requests
 
 # Load captures
 with open("/tmp/pss_capture.json") as f:

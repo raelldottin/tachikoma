@@ -242,7 +242,25 @@ class TestE2ELiveFixes(unittest.TestCase):
         self.assertFalse(res)
         self.client.quickReload.assert_called_once()
 
-    # 8. Provisioning Script Fixes
+    # 8. Request Handling Fixes
+
+    def test_request_handles_storage_full_gracefully(self):
+        """request method logs 'storage is full' as a warning instead of an error."""
+        xml = b'<CollectReward errorMessage="You cannot collect this reward as your storage is full."/>'
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.content = xml
+        mock_response.text = xml.decode("utf-8")
+        
+        self.client.session = MagicMock()
+        self.client.session.request.return_value = mock_response
+
+        with patch("logging.warning") as mock_warn, patch("logging.error") as mock_err:
+            self.client.request("https://api.pixelstarships.com/MessageService/CollectReward2", "POST")
+            mock_warn.assert_called_once()
+            mock_err.assert_not_called()
+
+    # 9. Provisioning Script Fixes
 
     def test_provision_zero_accounts_safe_exit(self):
         """provision_account_secrets main exits 0 safely when no accounts are configured."""

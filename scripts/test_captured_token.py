@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Test: use the captured access token (from the same session as the refresh token)."""
-import sys, os, re, json, urllib.parse, hashlib
+import sys
+import re
+import json
+import urllib.parse
 sys.path.insert(0, ".")
 
 from sdk.device import Device
@@ -37,7 +40,7 @@ checksum = checksum_user_email_password_authorize4(
 )
 print(f"\nUsing captured timestamp: {ts}")
 print(f"Checksum: {checksum}")
-print(f"Expected: cb51b89ea3d4b39125b388d9af210a57")
+print("Expected: cb51b89ea3d4b39125b388d9af210a57")
 
 # Send request
 post_data = urllib.parse.urlencode({

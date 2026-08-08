@@ -7,7 +7,6 @@ from datetime import datetime, timezone, timedelta
 
 from sdk.crew_leveling import (
     UpgradeBlockReason,
-    UpgradeDecision,
     parse_server_datetime,
     get_xp_required,
     get_gas_required,
@@ -343,7 +342,6 @@ class TestConstants(unittest.TestCase):
         self.assertEqual(MAX_CHARACTER_LEVEL, 40)
 
     def test_legendary_xp_multiplier(self):
-        from sdk.crew_leveling import LEGENDARY_XP_MULTIPLIER
         self.assertEqual(LEGENDARY_XP_MULTIPLIER, 3)
 
     def test_standard_xp_has_expected_levels(self):

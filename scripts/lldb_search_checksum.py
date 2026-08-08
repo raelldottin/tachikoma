@@ -2,7 +2,6 @@
 """LLDB Python script to search all classes for fields containing 'checksum' or 'savy'."""
 
 import lldb
-import struct
 
 
 def _call(debugger, frame, expr):

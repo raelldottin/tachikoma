@@ -3,7 +3,6 @@ from __future__ import annotations
 """Tests for the TUI module."""
 
 import sys
-import io
 import unittest
 from unittest.mock import patch, MagicMock, call
 
@@ -11,7 +10,7 @@ from unittest.mock import patch, MagicMock, call
 sys.path.insert(0, "/Users/raelldottin/Documents/Personal/tachikoma")
 
 from sdk.tui import TUI, run_tui
-from sdk.commands import CommandRegistry, create_command_registry
+from sdk.commands import create_command_registry
 from sdk.client import Client
 from sdk.device import Device
 

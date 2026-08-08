@@ -53,12 +53,12 @@ class TestRoomDesignShapeGuards(unittest.TestCase):
     """Test room design response shape handling (R3)."""
 
     def setUp(self):
-        self.device = MagicMock(spec=Device)
+        self.device = MagicMock(spec=Device)  # type: ignore
         self.device.languageKey = "en"
         self.client = Client(device=self.device)
 
     def test_room_designs_missing(self):
-        self.client.listRoomDesigns2 = MagicMock(return_value=True)
+        self.client.listRoomDesigns2 = MagicMock(return_value=True)  # type: ignore
         self.client.roomDesigns = None
         with patch("logging.info") as mock_info:
             res = self.client.upgradeRooms()
@@ -66,7 +66,7 @@ class TestRoomDesignShapeGuards(unittest.TestCase):
             mock_info.assert_any_call("Room design data unavailable; skipping room upgrades.")
 
     def test_room_designs_empty_collection(self):
-        self.client.listRoomDesigns2 = MagicMock(return_value=True)
+        self.client.listRoomDesigns2 = MagicMock(return_value=True)  # type: ignore
         self.client.roomDesigns = {"RoomDesign": []}
         with patch("logging.info") as mock_info:
             res = self.client.upgradeRooms()
@@ -74,7 +74,7 @@ class TestRoomDesignShapeGuards(unittest.TestCase):
             mock_info.assert_any_call("Room design data unavailable; skipping room upgrades.")
 
     def test_room_designs_single_dict(self):
-        self.client.listRoomDesigns2 = MagicMock(return_value=True)
+        self.client.listRoomDesigns2 = MagicMock(return_value=True)  # type: ignore
         self.client.roomDesigns = {
             "RoomDesign": {
                 "@RoomDesignId": "101",
@@ -83,8 +83,8 @@ class TestRoomDesignShapeGuards(unittest.TestCase):
                 "@PriceString": "mineral:100",
             }
         }
-        self.client.listUpgradingRooms = MagicMock()
-        self.client.getShipByUserId = MagicMock()
+        self.client.listUpgradingRooms = MagicMock()  # type: ignore
+        self.client.getShipByUserId = MagicMock()  # type: ignore
         self.client.shipByUserId = {
             "ShipService": {
                 "GetShipByUserId": {
@@ -103,14 +103,14 @@ class TestRoomDesignShapeGuards(unittest.TestCase):
             }
         }
         self.client.mineralTotal = 500
-        self.client.request = MagicMock(return_value=MagicMock(text="<UpgradeRoom2/>"))
-        self.client.collectAllResources = MagicMock()
+        self.client.request = MagicMock(return_value=MagicMock(text="<UpgradeRoom2/>"))  # type: ignore
+        self.client.collectAllResources = MagicMock()  # type: ignore
 
         res = self.client.upgradeRooms()
         self.assertTrue(res)
 
     def test_room_designs_list_of_dicts(self):
-        self.client.listRoomDesigns2 = MagicMock(return_value=True)
+        self.client.listRoomDesigns2 = MagicMock(return_value=True)  # type: ignore
         self.client.roomDesigns = {
             "RoomDesign": [
                 {
@@ -121,8 +121,8 @@ class TestRoomDesignShapeGuards(unittest.TestCase):
                 }
             ]
         }
-        self.client.listUpgradingRooms = MagicMock()
-        self.client.getShipByUserId = MagicMock()
+        self.client.listUpgradingRooms = MagicMock()  # type: ignore
+        self.client.getShipByUserId = MagicMock()  # type: ignore
         self.client.shipByUserId = {
             "ShipService": {
                 "GetShipByUserId": {
@@ -139,14 +139,14 @@ class TestRoomDesignShapeGuards(unittest.TestCase):
             }
         }
         self.client.mineralTotal = 500
-        self.client.request = MagicMock(return_value=MagicMock(text="<UpgradeRoom2/>"))
-        self.client.collectAllResources = MagicMock()
+        self.client.request = MagicMock(return_value=MagicMock(text="<UpgradeRoom2/>"))  # type: ignore
+        self.client.collectAllResources = MagicMock()  # type: ignore
 
         res = self.client.upgradeRooms()
         self.assertTrue(res)
 
     def test_room_designs_endpoint_error(self):
-        self.client.listRoomDesigns2 = MagicMock(return_value=True)
+        self.client.listRoomDesigns2 = MagicMock(return_value=True)  # type: ignore
         self.client.roomDesigns = {"errorMessage": "Server error"}
         with patch("logging.info") as mock_info:
             res = self.client.upgradeRooms()
@@ -154,7 +154,7 @@ class TestRoomDesignShapeGuards(unittest.TestCase):
             mock_info.assert_any_call("Room design data unavailable; skipping room upgrades.")
 
     def test_room_designs_invalid_schema(self):
-        self.client.listRoomDesigns2 = MagicMock(return_value=True)
+        self.client.listRoomDesigns2 = MagicMock(return_value=True)  # type: ignore
         self.client.roomDesigns = "invalid_string_response"
         with patch("logging.info") as mock_info:
             res = self.client.upgradeRooms()
@@ -162,14 +162,14 @@ class TestRoomDesignShapeGuards(unittest.TestCase):
             mock_info.assert_any_call("Room design data unavailable; skipping room upgrades.")
 
     def test_room_upgrade_exception_message(self):
-        self.client.listRoomDesigns2 = MagicMock(side_effect=RuntimeError("unexpected crash"))
+        self.client.listRoomDesigns2 = MagicMock(side_effect=RuntimeError("unexpected crash"))  # type: ignore
         with patch("logging.exception") as mock_log_exc:
             res = self.client.upgradeRooms()
             self.assertFalse(res)
             mock_log_exc.assert_called_once_with("Unable to upgrade rooms.", exc_info=True)
 
     def test_list_upgrading_rooms_safe_with_single_dict_or_missing(self):
-        self.client.getShipByUserId = MagicMock()
+        self.client.getShipByUserId = MagicMock()  # type: ignore
         self.client.shipByUserId = {
             "ShipService": {
                 "GetShipByUserId": {
@@ -190,14 +190,14 @@ class TestResearchOutcomeClassification(unittest.TestCase):
     """Test research lab upgrade skip vs failure classification (R4)."""
 
     def setUp(self):
-        self.device = MagicMock(spec=Device)
+        self.device = MagicMock(spec=Device)  # type: ignore
         self.client = Client(device=self.device)
         self.client.accessToken = "synthetic_token"
 
     def test_add_research_lab_upgrade_required_logged_as_skip(self):
-        mock_resp = MagicMock()
+        mock_resp = MagicMock()  # type: ignore
         mock_resp.text = '<AddResearch errorMessage="Please upgrade your lab room."/>'
-        self.client.request = MagicMock(return_value=mock_resp)
+        self.client.request = MagicMock(return_value=mock_resp)  # type: ignore
 
         with patch("logging.info") as mock_info, patch("logging.error") as mock_error:
             res = self.client.addResearch("42")
@@ -206,8 +206,8 @@ class TestResearchOutcomeClassification(unittest.TestCase):
             mock_error.assert_not_called()
 
     def test_upgrade_researches_lab_upgrade_skip_continues(self):
-        self.client.listAllResearches = MagicMock()
-        self.client.listAllResearchDesigns2 = MagicMock()
+        self.client.listAllResearches = MagicMock()  # type: ignore
+        self.client.listAllResearchDesigns2 = MagicMock()  # type: ignore
         self.client.allResearches = {"Research": []}
         self.client.allResearchDesigns = {
             "ResearchDesign": [
@@ -227,7 +227,7 @@ class TestResearchOutcomeClassification(unittest.TestCase):
                 },
             ]
         }
-        self.client.collectAllResources = MagicMock()
+        self.client.collectAllResources = MagicMock()  # type: ignore
         self.client.gasTotal = 1000
 
         # First research returns lab upgrade required, second succeeds
@@ -236,23 +236,23 @@ class TestResearchOutcomeClassification(unittest.TestCase):
                 return "LAB_UPGRADE_REQUIRED"
             return True
 
-        self.client.addResearch = MagicMock(side_effect=mock_add_research)
+        self.client.addResearch = MagicMock(side_effect=mock_add_research)  # type: ignore
 
         res = self.client.upgradeResearches()
         self.assertTrue(res)
         self.assertEqual(self.client.addResearch.call_count, 2)
 
     def test_add_research_unexpected_endpoint_error(self):
-        mock_resp = MagicMock()
+        mock_resp = MagicMock()  # type: ignore
         mock_resp.text = '<AddResearch errorMessage="Database connection failed"/>'
-        self.client.request = MagicMock(return_value=mock_resp)
+        self.client.request = MagicMock(return_value=mock_resp)  # type: ignore
 
         res = self.client.addResearch("42")
         self.assertFalse(res)
 
     def test_upgrade_researches_unexpected_failure_returns_false(self):
-        self.client.listAllResearches = MagicMock()
-        self.client.listAllResearchDesigns2 = MagicMock()
+        self.client.listAllResearches = MagicMock()  # type: ignore
+        self.client.listAllResearchDesigns2 = MagicMock()  # type: ignore
         self.client.allResearches = {"Research": []}
         self.client.allResearchDesigns = {
             "ResearchDesign": {
@@ -263,9 +263,9 @@ class TestResearchOutcomeClassification(unittest.TestCase):
                 "@ResearchName": "Gas Crafting",
             }
         }
-        self.client.collectAllResources = MagicMock()
+        self.client.collectAllResources = MagicMock()  # type: ignore
         self.client.gasTotal = 1000
-        self.client.addResearch = MagicMock(return_value=False)
+        self.client.addResearch = MagicMock(return_value=False)  # type: ignore
 
         res = self.client.upgradeResearches()
         self.assertFalse(res)
@@ -275,15 +275,15 @@ class TestTrainingShapeGuards(unittest.TestCase):
     """Test training data shape handling and outcome reporting (R5)."""
 
     def setUp(self):
-        self.device = MagicMock(spec=Device)
+        self.device = MagicMock(spec=Device)  # type: ignore
         self.client = Client(device=self.device)
-        self.client.listAllCharactersOfUser = MagicMock(return_value=True)
+        self.client.listAllCharactersOfUser = MagicMock(return_value=True)  # type: ignore
         self.client.allCharactersOfUser = {"CharacterService": {"ListAllCharactersOfUser": {"Characters": {"Character": []}}}}
-        self.client.listAllCharacterDesigns2 = MagicMock(return_value=True)
+        self.client.listAllCharacterDesigns2 = MagicMock(return_value=True)  # type: ignore
         self.client.allCharacterDesigns = {"CharacterService": {"ListAllCharacterDesigns": {"CharacterDesigns": {"CharacterDesign": []}}}}
-        self.client.listRoomsViaAccessToken = MagicMock(return_value=True)
+        self.client.listRoomsViaAccessToken = MagicMock(return_value=True)  # type: ignore
         self.client.roomsViaAccessToken = {"RoomService": {"ListRoomsViaAccessToken": {"Rooms": {"Room": []}}}}
-        self.client.listAllTrainingDesigns2 = MagicMock(return_value=True)
+        self.client.listAllTrainingDesigns2 = MagicMock(return_value=True)  # type: ignore
 
     def test_training_designs_missing(self):
         self.client.trainingDesigns = {}
@@ -319,7 +319,7 @@ class TestSMTPPreValidation(unittest.TestCase):
     @patch("run.Client")
     @patch("run.Device")
     def test_smtp_disabled_when_no_flags(self, mock_device, mock_client):
-        mock_cli_inst = MagicMock()
+        mock_cli_inst = MagicMock()  # type: ignore
         mock_cli_inst.login.return_value = True
         mock_cli_inst.freeStarbuxToday = 10
         mock_cli_inst.freeStarbuxMax = 10
@@ -427,7 +427,7 @@ class TestSMTPPreValidation(unittest.TestCase):
         tmp_pwd_file = Path("tests_scratch_valid_pw.txt")
         tmp_pwd_file.write_text("synthetic_secret_password\n")
         try:
-            mock_cli_inst = MagicMock()
+            mock_cli_inst = MagicMock()  # type: ignore
             mock_cli_inst.login.return_value = True
             mock_cli_inst.freeStarbuxToday = 10
             mock_cli_inst.freeStarbuxMax = 10
@@ -462,7 +462,7 @@ class TestExitCodeAggregation(unittest.TestCase):
     @patch("run.Client")
     @patch("run.Device")
     def test_exit_0_on_success_and_skips(self, mock_device, mock_client):
-        mock_cli_inst = MagicMock()
+        mock_cli_inst = MagicMock()  # type: ignore
         mock_cli_inst.login.return_value = True
         mock_cli_inst.freeStarbuxToday = 10
         mock_cli_inst.freeStarbuxMax = 10
@@ -480,7 +480,7 @@ class TestExitCodeAggregation(unittest.TestCase):
     @patch("run.Client")
     @patch("run.Device")
     def test_exit_1_on_unexpected_room_failure_and_continues_training(self, mock_device, mock_client):
-        mock_cli_inst = MagicMock()
+        mock_cli_inst = MagicMock()  # type: ignore
         mock_cli_inst.login.return_value = True
         mock_cli_inst.freeStarbuxToday = 10
         mock_cli_inst.freeStarbuxMax = 10
@@ -500,7 +500,7 @@ class TestExitCodeAggregation(unittest.TestCase):
     @patch("run.Client")
     @patch("run.Device")
     def test_exit_1_on_unexpected_training_failure(self, mock_device, mock_client):
-        mock_cli_inst = MagicMock()
+        mock_cli_inst = MagicMock()  # type: ignore
         mock_cli_inst.login.return_value = True
         mock_cli_inst.freeStarbuxToday = 10
         mock_cli_inst.freeStarbuxMax = 10
@@ -518,7 +518,7 @@ class TestExitCodeAggregation(unittest.TestCase):
     @patch("run.Client")
     @patch("run.Device")
     def test_independent_actions_continue_after_research_failure(self, mock_device, mock_client):
-        mock_cli_inst = MagicMock()
+        mock_cli_inst = MagicMock()  # type: ignore
         mock_cli_inst.login.return_value = True
         mock_cli_inst.freeStarbuxToday = 10
         mock_cli_inst.freeStarbuxMax = 10

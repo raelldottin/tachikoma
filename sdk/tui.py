@@ -2,7 +2,6 @@ from __future__ import annotations
 
 """Interactive TUI command loop for Tachikoma."""
 
-import sys
 import argparse
 import getpass
 from pathlib import Path

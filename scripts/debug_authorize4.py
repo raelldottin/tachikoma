@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Debug: compare our UserEmailPasswordAuthorize4 request against the capture."""
-import sys, os, re, json, hashlib, urllib.parse
+import sys
+import re
+import json
+import hashlib
+import urllib.parse
 sys.path.insert(0, ".")
 
 from sdk.device import Device
@@ -26,7 +30,7 @@ print(f"  email: {captured_query['email']}")
 print(f"  languageKey: {captured_query['languageKey']}")
 print(f"  isWeb: {captured_query['isWeb']}")
 print(f"  accessToken: {captured_query['accessToken']}")
-print(f"  password: [REDACTED]")
+print("  password: [REDACTED]")
 
 # Now compute our checksum with the SAME captured values
 our_checksum = checksum_user_email_password_authorize4(
@@ -37,7 +41,7 @@ our_checksum = checksum_user_email_password_authorize4(
     "5343",
     "Savvy!s0d@",
 )
-print(f"\n=== CHECKSUM COMPARISON ===")
+print("\n=== CHECKSUM COMPARISON ===")
 print(f"Captured: {captured_query['checksum']}")
 print(f"Our:      {our_checksum}")
 print(f"Match:    {captured_query['checksum'] == our_checksum}")
@@ -48,7 +52,7 @@ device.refreshToken = re.findall(r'refreshToken="([^"]+)"', captures[7][1]["text
 client = Client(device=device, settings={"checksum_key": "5343", "savy_checksum": "Savvy!s0d@"})
 client.create_device_session()
 
-print(f"\n=== OUR STAGE 1 RESULT ===")
+print("\n=== OUR STAGE 1 RESULT ===")
 print(f"Access token: {client.accessToken}")
 print(f"Device key: {device.key}")
 
@@ -62,17 +66,17 @@ our_cs = checksum_user_email_password_authorize4(
     "5343",
     "Savvy!s0d@",
 )
-print(f"\n=== OUR COMPUTED CHECKSUM ===")
+print("\n=== OUR COMPUTED CHECKSUM ===")
 print(f"  clientDateTime: {ts}")
 print(f"  checksum: {our_cs}")
 print(f"  deviceKey: {device.key}")
-print(f"  email: ack@syncpool.com")
+print("  email: ack@syncpool.com")
 print(f"  accessToken: {client.accessToken}")
 
 # Verify our checksum independently
 preimage = device.key + "ack@syncpool.com" + ts + client.accessToken + "5343"
 verify = hashlib.md5((preimage + "Savvy!s0d@").encode()).hexdigest()
-print(f"\n=== INDEPENDENT VERIFICATION ===")
+print("\n=== INDEPENDENT VERIFICATION ===")
 print(f"  preimage: {preimage[:80]}...")
 print(f"  MD5:      {verify}")
 print(f"  Match:    {verify == our_cs}")
@@ -90,7 +94,7 @@ post_data = urllib.parse.urlencode({
 })
 
 url = f"{client.baseUrl}/UserService/UserEmailPasswordAuthorize4"
-print(f"\n=== MANUAL REQUEST ===")
+print("\n=== MANUAL REQUEST ===")
 print(f"POST {url}")
 r = requests.post(url, data=post_data)
 print(f"Status: {r.status_code}")
