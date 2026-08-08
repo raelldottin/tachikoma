@@ -11,20 +11,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
         with:
           fetch-depth: 2
       - run: git checkout HEAD^2
         if: ${{ github.event_name == 'pull_request' }}
       - name: Setup Python version 3.9
-        uses: actions/setup-python@v2
+        uses: actions/setup-python@v5
         with:
-          python-version: 3.9
+          python-version: '3.9'
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
       - name: Process account 1
+        continue-on-error: true
         env:
           AUTH_STRING: ${{ secrets.auth_string_first }}
           SMTP_EMAIL: ${{ secrets.email_username }}
@@ -48,6 +49,7 @@ jobs:
             --recipient "$RECIPIENT"
 
       - name: Process account 2
+        continue-on-error: true
         env:
           AUTH_STRING: ${{ secrets.auth_string_second }}
           SMTP_EMAIL: ${{ secrets.email_username }}
@@ -71,6 +73,7 @@ jobs:
             --recipient "$RECIPIENT"
 
       - name: Process account 3
+        continue-on-error: true
         env:
           AUTH_STRING: ${{ secrets.auth_string_third }}
           SMTP_EMAIL: ${{ secrets.email_username }}
@@ -94,6 +97,7 @@ jobs:
             --recipient "$RECIPIENT"
 
       - name: Process account 4
+        continue-on-error: true
         env:
           AUTH_STRING: ${{ secrets.auth_string_fourth }}
           SMTP_EMAIL: ${{ secrets.email_username }}
@@ -117,6 +121,7 @@ jobs:
             --recipient "$RECIPIENT"
 
       - name: Process account 5
+        continue-on-error: true
         env:
           AUTH_STRING: ${{ secrets.auth_string_fifth }}
           SMTP_EMAIL: ${{ secrets.email_username }}
