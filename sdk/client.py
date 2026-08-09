@@ -2289,50 +2289,59 @@ class Client(object):
         return False
 
     def createStarBattle5(self, clientHp: int, searchNumber: int = 0, value: int = 0) -> bool:
-        """Create a star battle (PvP matchmaking).
-        
-        Uses CreateStarBattle5 endpoint with checksum.
-        Requires checksum_key and savy_checksum configuration settings.
-        """
-        checksum_key = self.settings.get("checksum_key")
-        savy_checksum = self.settings.get("savy_checksum")
+            """Create a star battle (PvP matchmaking).
 
-        if not checksum_key or not savy_checksum:
-            raise ConfigurationError(
-                "CreateStarBattle5 requires checksum_key and savy_checksum configuration "
-                "values compatible with the installed game version."
+            Uses CreateStarBattle5 endpoint with checksum.
+            Requires checksum_key and savy_checksum configuration settings.
+
+            Checksum formula (URL parameter order):
+            preimage = clientHp + clientDateTime + accessToken + searchNumber + value + checksum_key
+            encrypted = preimage + savy_checksum
+            checksum = MD5(encrypted)
+            """
+            checksum_key = self.settings.get("checksum_key")
+            savy_checksum = self.settings.get("savy_checksum")
+
+            if not checksum_key or not savy_checksum:
+                raise ConfigurationError(
+                    "CreateStarBattle5 requires checksum_key and savy_checksum configuration "
+                    "values compatible with the installed game version."
+                )
+
+            if not self.accessToken:
+                raise ConfigurationError("CreateStarBattle5 requires accessToken (must be logged in)")
+
+            ts = "{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime())
+            # CreateStarBattle5 checksum: all URL parameters in order
+            preimage = (
+                str(clientHp)
+                + ts
+                + self.accessToken
+                + str(searchNumber)
+                + str(value)
+                + checksum_key
             )
-
-        ts = "{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime())
-        # CreateStarBattle5 checksum: clientHp + clientDateTime + searchNumber + value + checksumKey
-        preimage = (
-            str(clientHp)
-            + ts
-            + str(searchNumber)
-            + str(value)
-            + checksum_key
-        )
-        encrypted = preimage + savy_checksum
-        checksum = hashlib.md5(encrypted.encode("utf-8")).hexdigest()
+            encrypted = preimage + savy_checksum
+            checksum = hashlib.md5(encrypted.encode("utf-8")).hexdigest()
         
-        url = f"{self.baseUrl}/BattleService/CreateStarBattle5?clientHp={clientHp}&clientDateTime={ts}&checksum={checksum}&accessToken={self.accessToken}&searchNumber={searchNumber}&value={value}"
-        logging.debug(redact_secrets(f"{url=}"))
-        r = self.request(url, "POST")
-        if r and "errorMessage=" in r.text:
-            logging.warning(f'[{self.info["@Name"]}] CreateStarBattle5 failed: {r.text[:200]}')
+            url = f"{self.baseUrl}/BattleService/CreateStarBattle5?clientHp={clientHp}&clientDateTime={ts}&checksum={checksum}&accessToken={self.accessToken}&searchNumber={searchNumber}&value={value}"
+            logging.debug(redact_secrets(f"{url=}"))
+            r = self.request(url, "POST")
+            if r and "errorMessage=" in r.text:
+                logging.warning(f'[{self.info["@Name"]}] CreateStarBattle5 failed: {r.text[:200]}')
+                return False
+        
+            if r:
+                self.createStarBattle5Result = xmltodict.parse(r.content, xml_attribs=True)
+                # Extract battleId from response for subsequent calls
+                try:
+                    battle_id = self.createStarBattle5Result["BattleService"]["CreateStarBattle5"]["@battleId"]
+                    self.lastBattleId = battle_id
+                    logging.info(f'[{self.info["@Name"]}] Created battle: {battle_id}')
+                except (KeyError, TypeError):
+                    pass
+                return True
             return False
-        
-        if r:
-            self.createStarBattle5Result = xmltodict.parse(r.content, xml_attribs=True)
-            # Extract battleId from response for subsequent calls
-            try:
-                battle_id = self.createStarBattle5Result["BattleService"]["CreateStarBattle5"]["@battleId"]
-                self.lastBattleId = battle_id
-                logging.info(f'[{self.info["@Name"]}] Created battle: {battle_id}')
-            except (KeyError, TypeError):
-                pass
-            return True
-        return False
 
     def verifyBattle2(
         self,
