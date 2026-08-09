@@ -123,12 +123,11 @@ def main():
         help="recipient email for log delivery",
     )
     parser.add_argument(
-        "-b",
-        "--battles",
-        dest="battles",
-        type=int,
-        default=0,
-        help="number of PVP battles to automate",
+        "--run-battle",
+        dest="run_battle",
+        action="store_true",
+        default=False,
+        help="run end-to-end ship battle (CreateStarBattle5 -> VerifyBattle2 -> FinaliseBattle15)",
     )
     args = parser.parse_args()
 
@@ -171,9 +170,6 @@ def main():
     auth_string = None
     if args.auth_file:
         auth_string = read_auth_file(args.auth_file)
-        if not auth_string and not args.device_key and not args.login_email:
-            logging.info("No accounts configured. Safe exit 0.")
-            sys.exit(0)
 
     if auth_string:
         device = Device(language="en", authentication_string=auth_string)
@@ -207,6 +203,26 @@ def main():
 
     runtime_failed = False
 
+    # Run battle if requested
+    if args.run_battle:
+        try:
+            res = client.runBattleEndToEnd()
+            if res is False:
+                runtime_failed = True
+        except Exception as e:
+            logging.error(f"runBattleEndToEnd failed: {redact_secrets(str(e))}")
+            runtime_failed = True
+
+    # Purchase Scorched Pod if affordable
+    try:
+        res = client.purchaseScorchedPodIfAffordable()
+        if res is False:
+            logging.info("Scorched Pod not purchased (not found, insufficient Starbux, or error)")
+    except Exception as e:
+        logging.error(f"purchaseScorchedPodIfAffordable failed: {redact_secrets(str(e))}")
+        runtime_failed = True
+
+    # Run the normal automation loop
     while client:
         try:
             client.grabFlyingStarbux()
@@ -297,39 +313,9 @@ def main():
                 logging.error(f"upgradeCharacters failed: {redact_secrets(str(e))}")
                 runtime_failed = True
 
-            if args.battles > 0:
-                logging.info(f"[{client.info.get('@Name', 'guest')}] Starting {args.battles} PVP Battles...")
-                import time
-                import random
-                for _ in range(args.battles):
-                    try:
-                        battle = client.createBattle()
-                        if battle:
-                            battle_id = battle.get("@BattleId")
-                            if client.acceptBattle(battle_id):
-                                # Simulate battle duration (e.g. 60 seconds = 2400 frames)
-                                duration_seconds = random.randint(45, 85)
-                                frames = duration_seconds * 40
-                                
-                                # Randomize HP lost slightly
-                                hp_loss = round(random.uniform(10.0, 39.9), 2)
-                                
-                                logging.info(f"[{client.info.get('@Name', 'guest')}] Simulating battle {battle_id} for {duration_seconds}s...")
-                                time.sleep(1) # We mock time in tests, keep sleep small in development
-                                
-                                client.finaliseBattle(
-                                    battle_id=battle_id, 
-                                    client_outcome_type=1, # Victory
-                                    client_end_frame=frames, 
-                                    attacking_ship_hp=hp_loss
-                                )
-                    except Exception as e:
-                        logging.error(f"PVP Battle automation failed: {redact_secrets(str(e))}")
-                        runtime_failed = True
-
-            char_name = client.info.get("@Name", "") if isinstance(getattr(client, "info", None), dict) else ""
-            logging.info(f'[{char_name}] Finished...')
-            break
+        char_name = client.info.get("@Name", "") if isinstance(getattr(client, "info", None), dict) else ""
+        logging.info(f'[{char_name}] Finished...')
+        break
 
     # Send log file via SMTP only if SMTP is enabled
     if smtp_enabled:
