@@ -309,3 +309,45 @@ def checksum_character_draw(
     preimage = draw_design_id + client_date_time + checksum_key
     encrypted = preimage + savy_checksum
     return hashlib.md5(encrypted.encode("utf-8")).hexdigest()
+
+
+def checksum_purchase_catalog2(
+    argument: str,
+    client_date_time: str,
+    access_token: str,
+    checksum_key: str,
+    savy_checksum: str,
+) -> str:
+    """Compute the ShopService/PurchaseCatalog2 native checksum for purchasing items from shop.
+
+    URL: /ShopService/PurchaseCatalog2?argument={0}&clientDateTime={1}&checksum={2}&accessToken={3}
+    Parameters before checksum in URL: argument, clientDateTime, accessToken
+
+    Formula:
+        preimage  = argument + clientDateTime + accessToken + checksumKey
+        encrypted = preimage + savyChecksum
+        checksum  = MD5(encrypted)
+
+    Args:
+        argument: The catalog item argument (e.g., "1291" for Scorched Pod)
+        client_date_time: Current UTC timestamp "yyyy-MM-ddTHH:mm:ss"
+        access_token: Current session access token
+        checksum_key: Configuration.ChecksumKey ("5343")
+        savy_checksum: Configuration.SavyChecksum ("Savvy!s0d@")
+
+    Returns:
+        32-char MD5 hex digest.
+
+    Raises:
+        UnsupportedNativeChecksum: If checksum_key or savy_checksum is empty/None.
+    """
+    if not checksum_key or not savy_checksum:
+        raise UnsupportedNativeChecksum(
+            "PurchaseCatalog2 requires checksum_key and savy_checksum "
+            "configuration values compatible with the installed game version."
+        )
+
+    # URL parameter order before checksum: argument, clientDateTime, accessToken
+    preimage = argument + client_date_time + access_token + checksum_key
+    encrypted = preimage + savy_checksum
+    return hashlib.md5(encrypted.encode("utf-8")).hexdigest()

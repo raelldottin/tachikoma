@@ -16,6 +16,7 @@ TARGET_PATHS = [
     "/GalaxyService/CollectMarker2",
     "/RoomService/RebuildAmmo3",
     "/UserService/UserEmailPasswordAuthorize4",
+    "/ShopService/PurchaseCatalog2",
 ]
 
 class CaptureChecksumInputs:
