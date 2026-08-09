@@ -2498,6 +2498,8 @@ class Client(object):
                 if mx_i > 0:
                     logging.debug(f"[{self.info.get('@Name', '')}] Ship HP: {cur_i}/{mx_i} = {cur_i/mx_i:.2%} (from {cur_attr}/{max_attr})")
                     return cur_i / mx_i
+            elif cur is not None and mx is None:
+                logging.warning(f"[{self.info.get('@Name', '')}] Found {cur_attr}={cur} but missing {max_attr}; cannot compute HP fraction")
 
         # Fall back to summing room HP if ship-level attributes are absent.
         rooms = ship.get("Rooms", {}).get("Room", [])
