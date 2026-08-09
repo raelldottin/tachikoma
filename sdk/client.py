@@ -2491,6 +2491,7 @@ class Client(object):
         for cur_attr, max_attr in candidates:
             cur = ship.get(cur_attr)
             mx = ship.get(max_attr)
+            logging.warning(f"[{self.info.get('@Name', '')}] Checking {cur_attr}/{max_attr}: cur={cur}, mx={mx}")
             if cur is not None and mx is not None:
                 try:
                     cur_i = int(cur)
