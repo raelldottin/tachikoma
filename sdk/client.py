@@ -2503,11 +2503,13 @@ class Client(object):
         rooms = ship.get("Rooms", {}).get("Room", [])
         if isinstance(rooms, dict):
             rooms = [rooms]
+        logging.warning(f"[{self.info.get('@Name', '')}] Checking {len(rooms)} rooms for HP data...")
         total_cur = 0
         total_max = 0
-        for room in rooms:
+        for i, room in enumerate(rooms):
             cur = room.get("@Hp")
             mx = room.get("@MaxHp")
+            logging.warning(f"[{self.info.get('@Name', '')}] Room {i}: keys={list(room.keys()) if isinstance(room, dict) else 'not dict'}, @Hp={cur}, @MaxHp={mx}")
             if cur is None or mx is None:
                 continue
             try:
