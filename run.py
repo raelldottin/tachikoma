@@ -115,6 +115,12 @@ def main():
         help="recipient email for log delivery",
     )
     parser.add_argument(
+        "--password-file",
+        dest="password_file",
+        default=None,
+        help="path to file containing game password (for CI automation)",
+    )
+    parser.add_argument(
         "--run-battle",
         dest="run_battle",
         action="store_true",
@@ -184,7 +190,15 @@ def main():
     client = Client(device=device, settings=settings)
 
     if args.login_email:
-        password = getpass.getpass("Game password: ")
+        if args.password_file:
+            pw_path = Path(args.password_file)
+            if pw_path.is_file():
+                password = pw_path.read_text().strip()
+            else:
+                logging.error("Password file not found")
+                sys.exit(2)
+        else:
+            password = getpass.getpass("Game password: ")
         if not client.login(email=args.login_email, password=password):
             logging.warning("[authenticate] failed to login")
             sys.exit(1)
