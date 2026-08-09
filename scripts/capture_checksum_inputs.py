@@ -17,6 +17,7 @@ TARGET_PATHS = [
     "/RoomService/RebuildAmmo3",
     "/UserService/UserEmailPasswordAuthorize4",
     "/ShopService/PurchaseCatalog2",
+    "/LibeOpsService/GetCatalogQuantity",
 ]
 
 class CaptureChecksumInputs:

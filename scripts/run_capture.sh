@@ -32,6 +32,7 @@ echo "   - Collect markers (CollectMarker2)"
 echo "   - Rebuild ammo (RebuildAmmo3)"
 echo "   - Email/password login if testing (UserEmailPasswordAuthorize4)"
 echo "   - Purchase Scorched Pod (PurchaseCatalog2)"
+echo "   - Get catalog quantities (GetCatalogQuantity)"
 echo ""
 echo "4. Press Ctrl+C here to stop capture and save"
 echo ""
@@ -50,6 +51,7 @@ TARGET_PATHS = [
     "/RoomService/RebuildAmmo3",
     "/UserService/UserEmailPasswordAuthorize4",
     "/ShopService/PurchaseCatalog2",
+    "/LibeOpsService/GetCatalogQuantity",
 ]
 
 class CaptureChecksumInputs:

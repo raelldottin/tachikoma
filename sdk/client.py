@@ -1888,6 +1888,42 @@ class Client(object):
         logging.info(f'[{self.info["@Name"]}] Purchasing Scorched Pod (Cost: {cost} Starbux, Argument: 1291)')
         return self.purchaseCatalogItem("1291")
 
+    def getCatalogQuantity(self) -> dict:
+        """Get available catalog quantities from the shop.
+
+        Endpoint: /LibeOpsService/GetCatalogQuantity?clientDateTime={}&checksum={}&accessToken={}
+        Checksum: MD5(clientDateTime + accessToken + ChecksumKey + SavyChecksum)
+
+        Returns:
+            Dict with catalog quantities, or empty dict on failure
+        """
+        from sdk.security import checksum_get_catalog_quantity
+
+        ts = "{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime())
+        settings = self.settings or {}
+        checksum_key = settings.get("checksum_key", "5343")
+        savy_checksum = settings.get("savy_checksum", "Savvy!s0d@")
+
+        if not self.accessToken:
+            raise ConfigurationError("getCatalogQuantity requires accessToken (must be logged in)")
+
+        checksum = checksum_get_catalog_quantity(
+            client_date_time=ts,
+            access_token=self.accessToken,
+            checksum_key=checksum_key,
+            savy_checksum=savy_checksum,
+        )
+
+        url = f"https://api.pixelstarships.com/LibeOpsService/GetCatalogQuantity?clientDateTime={ts}&checksum={checksum}&accessToken={self.accessToken}"
+        r = self.request(url, "POST")
+
+        if r:
+            result = xmltodict.parse(r.content, xml_attribs=True)
+            logging.info(f'[{self.info["@Name"]}] GetCatalogQuantity result: {result}')
+            return result
+
+        return {}
+
     # Determine the boost gauge before attempting to speed up a room
     def speedUpResearchUsingBoostGauge(self, researchId, researchDesignId):
         if not hasattr(self, "allResearchDesigns"):
