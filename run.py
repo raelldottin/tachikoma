@@ -122,6 +122,12 @@ def main():
         help="recipient email for log delivery",
     )
     parser.add_argument(
+        "--password-file",
+        dest="password_file",
+        default=None,
+        help="path to file containing game password (for CI automation)",
+    )
+    parser.add_argument(
         "--run-battle",
         dest="run_battle",
         action="store_true",
