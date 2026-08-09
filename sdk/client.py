@@ -2190,3 +2190,307 @@ class Client(object):
             return True
 
         return False
+
+    def createStarBattle5(self, clientHp: int, searchNumber: int = 0, value: int = 0) -> bool:
+        """Create a star battle (PvP matchmaking).
+        
+        Uses CreateStarBattle5 endpoint with checksum.
+        Requires checksum_key and savy_checksum configuration settings.
+        """
+        checksum_key = self.settings.get("checksum_key")
+        savy_checksum = self.settings.get("savy_checksum")
+
+        if not checksum_key or not savy_checksum:
+            raise ConfigurationError(
+                "CreateStarBattle5 requires checksum_key and savy_checksum configuration "
+                "values compatible with the installed game version."
+            )
+
+        ts = "{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime())
+        # CreateStarBattle5 checksum: clientHp + clientDateTime + searchNumber + value + checksumKey
+        preimage = (
+            str(clientHp)
+            + ts
+            + str(searchNumber)
+            + str(value)
+            + checksum_key
+        )
+        encrypted = preimage + savy_checksum
+        checksum = hashlib.md5(encrypted.encode("utf-8")).hexdigest()
+        
+        url = f"{self.baseUrl}/BattleService/CreateStarBattle5?clientHp={clientHp}&clientDateTime={ts}&checksum={checksum}&accessToken={self.accessToken}&searchNumber={searchNumber}&value={value}"
+        logging.debug(redact_secrets(f"{url=}"))
+        r = self.request(url, "POST")
+        if r and "errorMessage=" in r.text:
+            logging.warning(f'[{self.info["@Name"]}] CreateStarBattle5 failed: {r.text[:200]}')
+            return False
+        
+        if r:
+            self.createStarBattle5Result = xmltodict.parse(r.content, xml_attribs=True)
+            # Extract battleId from response for subsequent calls
+            try:
+                battle_id = self.createStarBattle5Result["BattleService"]["CreateStarBattle5"]["@battleId"]
+                self.lastBattleId = battle_id
+                logging.info(f'[{self.info["@Name"]}] Created battle: {battle_id}')
+            except (KeyError, TypeError):
+                pass
+            return True
+        return False
+
+    def verifyBattle2(
+        self,
+        battleId: str,
+        clientOutcomeType: int,
+        clientEndFrame: int,
+        clientResultString: str,
+        attackingShipHp: int,
+        syncStatus: int = 0,
+        battleSyncEntity: str = "",
+        syncErrorType: int = 0,
+        description: str = "",
+        score: int = 0,
+    ) -> bool:
+        """Verify battle result with the server.
+        
+        Uses VerifyBattle2 endpoint with checksum.
+        Requires checksum_key and savy_checksum configuration settings.
+        """
+        checksum_key = self.settings.get("checksum_key")
+        savy_checksum = self.settings.get("savy_checksum")
+
+        if not checksum_key or not savy_checksum:
+            raise ConfigurationError(
+                "VerifyBattle2 requires checksum_key and savy_checksum configuration "
+                "values compatible with the installed game version."
+            )
+
+        ts = "{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime())
+        # VerifyBattle2 checksum: battleId + clientOutcomeType + clientEndFrame + clientResultString + attackingShipHp + syncStatus + battleSyncEntity + syncErrorType + description + score + checksumKey
+        preimage = (
+            battleId
+            + str(clientOutcomeType)
+            + str(clientEndFrame)
+            + clientResultString
+            + str(attackingShipHp)
+            + str(syncStatus)
+            + battleSyncEntity
+            + str(syncErrorType)
+            + description
+            + str(score)
+            + checksum_key
+        )
+        encrypted = preimage + savy_checksum
+        checksum = hashlib.md5(encrypted.encode("utf-8")).hexdigest()
+        
+        url = (
+            f"{self.baseUrl}/BattleService/VerifyBattle2?"
+            f"battleId={battleId}&clientOutcomeType={clientOutcomeType}&clientEndFrame={clientEndFrame}"
+            f"&clientResultString={urllib.parse.quote(clientResultString)}&attackingShipHp={attackingShipHp}"
+            f"&checksum={checksum}&syncStatus={syncStatus}&battleSyncEntity={urllib.parse.quote(battleSyncEntity)}"
+            f"&syncErrorType={syncErrorType}&description={urllib.parse.quote(description)}&score={score}"
+            f"&accessToken={self.accessToken}"
+        )
+        logging.debug(redact_secrets(f"{url=}"))
+        r = self.request(url, "POST")
+        if r and "errorMessage=" in r.text:
+            logging.warning(f'[{self.info["@Name"]}] VerifyBattle2 failed: {r.text[:200]}')
+            return False
+        
+        if r:
+            self.verifyBattle2Result = xmltodict.parse(r.content, xml_attribs=True)
+        return True
+
+    def finaliseBattle15(
+        self,
+        battleId: str,
+        clientOutcomeType: int,
+        clientEndFrame: int,
+        clientResultString: str,
+        attackingShipHp: int,
+        clientVersion: str = "0.999.59",
+    ) -> bool:
+        """Finalise battle with the server (FinaliseBattle15 endpoint).
+        
+        Uses the templated FinaliseBattle15 endpoint with checksum.
+        This is the final step to complete a battle.
+        Requires checksum_key and savy_checksum configuration settings.
+        """
+        checksum_key = self.settings.get("checksum_key")
+        savy_checksum = self.settings.get("savy_checksum")
+
+        if not checksum_key or not savy_checksum:
+            raise ConfigurationError(
+                "FinaliseBattle15 requires checksum_key and savy_checksum configuration "
+                "values compatible with the installed game version."
+            )
+
+        ts = "{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime())
+        # FinaliseBattle15 checksum (from static analysis of IL2CPP metadata):
+        # preimage = battleId + clientOutcomeType + clientEndFrame + clientResultString + attackingShipHp + clientVersion + accessToken + checksumKey
+        # encrypted = preimage + savyChecksum
+        # checksum = MD5(encrypted)
+        access_token = self.accessToken or ""
+        preimage = (
+            battleId
+            + str(clientOutcomeType)
+            + str(clientEndFrame)
+            + clientResultString
+            + str(attackingShipHp)
+            + clientVersion
+            + access_token
+            + checksum_key
+        )
+        encrypted = preimage + savy_checksum
+        checksum = hashlib.md5(encrypted.encode("utf-8")).hexdigest()
+        
+        # URL template: /BattleService/{0}?battleId={1}&clientOutcomeType={2}&clientEndFrame={3}&clientResultString={4}&attackingShipHp={5}&checksum={6}&clientVersion={7}&accessToken={8}
+        # Where {0} = "FinaliseBattle15"
+        url = (
+            f"{self.baseUrl}/BattleService/FinaliseBattle15?"
+            f"battleId={battleId}&clientOutcomeType={clientOutcomeType}&clientEndFrame={clientEndFrame}"
+            f"&clientResultString={urllib.parse.quote(clientResultString)}&attackingShipHp={attackingShipHp}"
+            f"&checksum={checksum}&clientVersion={urllib.parse.quote(clientVersion)}&accessToken={self.accessToken}"
+        )
+        logging.debug(redact_secrets(f"{url=}"))
+        r = self.request(url, "POST")
+        if r and "errorMessage=" in r.text:
+            logging.warning(f'[{self.info["@Name"]}] FinaliseBattle15 failed: {r.text[:200]}')
+            return False
+        
+        if r:
+            self.finaliseBattle15Result = xmltodict.parse(r.content, xml_attribs=True)
+            logging.info(f'[{self.info["@Name"]}] Battle finalised successfully: {battleId}')
+        return True
+
+    def getShipHpFraction(self) -> float:
+        """Return the ship's current HP as a fraction of max (0.0-1.0).
+
+        Computes HP from the room layout: each room contributes its current
+        HP (sum of character @Hp values) versus its max capacity. If the ship
+        data is unavailable, returns -1.0 so callers can distinguish "unknown"
+        from "not full".
+        """
+        if not hasattr(self, "shipByUserId") or not self.shipByUserId:
+            if not self.getShipByUserId():
+                return -1.0
+        try:
+            ship = self.shipByUserId["ShipService"]["GetShipByUserId"]["Ship"]
+        except (KeyError, TypeError):
+            return -1.0
+
+        # PSS Ship records the current/max hull capacity as attributes.
+        # Common field names seen in captures: @Hp / @MaxHp, or @HullHp /
+        # @HullMaxHp. Use whichever pair is present.
+        candidates = [
+            ("@Hp", "@MaxHp"),
+            ("@HullHp", "@HullMaxHp"),
+            ("@CurrentHp", "@MaxHp"),
+        ]
+        for cur_attr, max_attr in candidates:
+            cur = ship.get(cur_attr)
+            mx = ship.get(max_attr)
+            if cur is not None and mx is not None:
+                try:
+                    cur_i = int(cur)
+                    mx_i = int(mx)
+                except (ValueError, TypeError):
+                    continue
+                if mx_i > 0:
+                    return cur_i / mx_i
+
+        # Fall back to summing room HP if ship-level attributes are absent.
+        rooms = ship.get("Rooms", {}).get("Room", [])
+        if isinstance(rooms, dict):
+            rooms = [rooms]
+        total_cur = 0
+        total_max = 0
+        for room in rooms:
+            cur = room.get("@Hp")
+            mx = room.get("@MaxHp")
+            if cur is None or mx is None:
+                continue
+            try:
+                total_cur += int(cur)
+                total_max += int(mx)
+            except (ValueError, TypeError):
+                continue
+        if total_max > 0:
+            return total_cur / total_max
+        return -1.0
+
+    def runBattleEndToEnd(self, clientHp: int = 100000) -> bool:
+        """Execute a complete ship battle end-to-end.
+
+        Flow:
+        0. Pre-flight: only start if ship HP is 100%
+        1. CreateStarBattle5 - initiate PvP battle matchmaking
+        2. VerifyBattle2 - submit battle result (simulated win)
+        3. FinaliseBattle15 - finalize battle with server
+
+        This uses the checksum formulas derived from static analysis of the IL2CPP binary
+        and verified against the universal checksum pattern across all PSS endpoints.
+        """
+        logging.info(f'[{self.info.get("@Name", "")}] Starting end-to-end battle flow...')
+
+        # Step 0: Pre-flight - only battle at full ship HP
+        hp_fraction = self.getShipHpFraction()
+        if hp_fraction < 0:
+            logging.warning(
+                f'[{self.info.get("@Name", "")}] Ship HP unavailable; cannot confirm 100%. Aborting battle.'
+            )
+            return False
+        if hp_fraction < 1.0:
+            logging.info(
+                f'[{self.info.get("@Name", "")}] Ship HP at {hp_fraction:.0%}; not 100%. Skipping battle.'
+            )
+            return False
+        logging.info(f'[{self.info.get("@Name", "")}] Ship HP at 100%; proceeding to battle.')
+
+        # Step 1: Create battle
+        if not self.createStarBattle5(clientHp=clientHp):
+            logging.error(f'[{self.info.get("@Name", "")}] Failed to create battle')
+            return False
+        
+        battleId = getattr(self, "lastBattleId", None)
+        if not battleId:
+            logging.error(f'[{self.info.get("@Name", "")}] No battleId returned from CreateStarBattle5')
+            return False
+        
+        logging.info(f'[{self.info.get("@Name", "")}] Battle created: {battleId}')
+        
+        # Step 2: Verify battle (simulate a win)
+        # clientOutcomeType: 1=Victory, 2=Defeat, 3=Draw
+        # clientEndFrame: final frame number
+        # clientResultString: battle replay data
+        # attackingShipHp: remaining HP of attacking ship
+        if not self.verifyBattle2(
+            battleId=battleId,
+            clientOutcomeType=1,  # Victory
+            clientEndFrame=100,
+            clientResultString="simulated_battle_data",
+            attackingShipHp=clientHp,
+            syncStatus=0,
+            battleSyncEntity="",
+            syncErrorType=0,
+            description="",
+            score=1000,
+        ):
+            logging.error(f'[{self.info.get("@Name", "")}] Failed to verify battle')
+            return False
+        
+        logging.info(f'[{self.info.get("@Name", "")}] Battle verified')
+        
+        # Step 3: Finalise battle
+        if not self.finaliseBattle15(
+            battleId=battleId,
+            clientOutcomeType=1,
+            clientEndFrame=100,
+            clientResultString="simulated_battle_data",
+            attackingShipHp=clientHp,
+            clientVersion="0.999.59",
+        ):
+            logging.error(f'[{self.info.get("@Name", "")}] Failed to finalise battle')
+            return False
+        
+        logging.info(f'[{self.info.get("@Name", "")}] End-to-end battle completed successfully!')
+        return True
