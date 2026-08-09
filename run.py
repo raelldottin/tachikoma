@@ -28,14 +28,14 @@ logging.basicConfig(
 
 def email_logfile(filename, client, email=None, password=None, recipient=None):
     """Send log file via email.
-    
+
     Only sends if all three parameters (email, password, recipient) are provided.
     Does NOT fall back to config.secrets - SMTP must be explicitly configured via CLI args.
     """
     if not (email and password and recipient):
         logging.debug("SMTP details not provided; skipping email delivery.")
         return False
-    
+
     try:
         with open(filename, "rb") as f:
             logs = f.read()
@@ -152,17 +152,13 @@ def main():
                     smtp_password = pw_content
                     smtp_enabled = True
                 else:
-                    logging.error("Incomplete SMTP configuration; email delivery was not attempted.")
-                    sys.exit(2)
-            except Exception:
-                logging.error("Incomplete SMTP configuration; email delivery was not attempted.")
-                sys.exit(2)
+                    logging.warning("SMTP password file empty; email delivery disabled.")
+            except Exception as e:
+                logging.warning(f"Failed to read SMTP password file: {e}; email delivery disabled.")
         else:
-            logging.error("Incomplete SMTP configuration; email delivery was not attempted.")
-            sys.exit(2)
+            logging.warning("SMTP password file not found; email delivery disabled.")
     else:
-        logging.error("Incomplete SMTP configuration; email delivery was not attempted.")
-        sys.exit(2)
+        logging.warning("Incomplete SMTP configuration (need all 3: --smtp-email, --smtp-password-file, --recipient); email delivery disabled.")
 
     # Load authentication string from file if provided
     auth_string = None
