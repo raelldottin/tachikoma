@@ -116,11 +116,17 @@ def main():
         help="path to file containing SMTP password",
     )
     parser.add_argument(
-        "-r",
         "--recipient",
         dest="recipient",
         default=None,
         help="recipient email for log delivery",
+    )
+    parser.add_argument(
+        "--run-battle",
+        dest="run_battle",
+        action="store_true",
+        default=False,
+        help="run end-to-end ship battle (CreateStarBattle5 -> VerifyBattle2 -> FinaliseBattle15)",
     )
     args = parser.parse_args()
 
@@ -194,8 +200,27 @@ def main():
             logging.warning("[authenticate] failed to login")
             sys.exit(1)
 
+    # Run battle if requested
     runtime_failed = False
+    if args.run_battle:
+        try:
+            res = client.runBattleEndToEnd()
+            if res is False:
+                runtime_failed = True
+        except Exception as e:
+            logging.error(f"runBattleEndToEnd failed: {redact_secrets(str(e))}")
+            runtime_failed = True
 
+    # Purchase Scorched Pod if affordable
+    try:
+        res = client.purchaseScorchedPodIfAffordable()
+        if res is False:
+            logging.info("Scorched Pod not purchased (not found, insufficient Starbux, or error)")
+    except Exception as e:
+        logging.error(f"purchaseScorchedPodIfAffordable failed: {redact_secrets(str(e))}")
+        runtime_failed = True
+
+    # Run the normal automation loop
     while client:
         try:
             client.grabFlyingStarbux()
