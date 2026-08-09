@@ -1765,6 +1765,99 @@ class Client(object):
             return True
         return False
 
+    def purchaseDrawWithStarbux(self, drawDesignId: str) -> bool:
+        """Purchase a draw (pod) using Starbux.
+        
+        Endpoint: CharacterService/Draw?drawDesignId={drawDesignId}&clientDateTime={}&checksum={}&accessToken={}
+        Checksum: MD5(drawDesignId + clientDateTime + ChecksumKey + SavyChecksum)
+        
+        Args:
+            drawDesignId: The ID of the draw design to purchase (e.g., "Scorched Pod")
+            
+        Returns:
+            True if purchase successful, False otherwise
+        """
+        from sdk.security import checksum_character_draw
+        
+        ts = "{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime())
+        settings = self.settings or {}
+        checksum_key = settings.get("checksum_key", "5343")
+        savy_checksum = settings.get("savy_checksum", "Savvy!s0d@")
+        
+        checksum = checksum_character_draw(
+            draw_design_id=drawDesignId,
+            client_date_time=ts,
+            checksum_key=checksum_key,
+            savy_checksum=savy_checksum,
+        )
+        
+        url = f"https://api.pixelstarships.com/CharacterService/Draw?drawDesignId={drawDesignId}&clientDateTime={ts}&checksum={checksum}&accessToken={self.accessToken}"
+        r = self.request(url, "POST")
+        
+        if r:
+            result = xmltodict.parse(r.content, xml_attribs=True)
+            logging.info(f'[{self.info["@Name"]}] Draw purchase result: {result}')
+            
+            # Check for error
+            if "CharacterService" in result:
+                draw_result = result["CharacterService"].get("Draw", {})
+                if "@errorCode" in draw_result and draw_result["@errorCode"] != "0":
+                    logging.error(f'[{self.info["@Name"]}] Draw purchase failed: {draw_result.get("@errorMessage", "Unknown error")}')
+                    return False
+            
+            # Refresh designs to get updated state
+            self.listAllDesigns4()
+            return True
+        
+        return False
+
+    def purchaseScorchedPodIfAffordable(self) -> bool:
+        """Purchase Scorched Pod from Shop if user has enough Starbux.
+        
+        Finds the Scorched Pod draw design ID from cached designs and attempts purchase.
+        
+        Returns:
+            True if purchased, False otherwise (not enough Starbux, not found, or error)
+        """
+        # Ensure designs are loaded
+        if not hasattr(self, "drawDesigns") or not self.drawDesigns:
+            if not self.listAllDesigns4():
+                logging.error(f'[{self.info["@Name"]}] Failed to load draw designs')
+                return False
+        
+        # Find Scorched Pod in draw designs
+        scorched_pod_id = None
+        draw_designs = _extract_collection(self.drawDesigns, "DrawDesign")
+        for design in draw_designs:
+            name = design.get("@DrawName", "") or design.get("@Name", "")
+            if "Scorched" in name and "Pod" in name:
+                scorched_pod_id = design.get("@DrawDesignId")
+                break
+        
+        if not scorched_pod_id:
+            logging.warning(f'[{self.info["@Name"]}] Scorched Pod not found in draw designs')
+            return False
+        
+        # Check Starbux balance
+        try:
+            starbux = int(self.info.get("@Starbux", "0"))
+        except (ValueError, TypeError):
+            starbux = 0
+        
+        # Get Scorched Pod cost
+        cost = 0
+        for design in draw_designs:
+            if design.get("@DrawDesignId") == scorched_pod_id:
+                cost = int(design.get("@StarbuxCost", "0"))
+                break
+        
+        if starbux < cost:
+            logging.info(f'[{self.info["@Name"]}] Not enough Starbux for Scorched Pod: have {starbux}, need {cost}')
+            return False
+        
+        logging.info(f'[{self.info["@Name"]}] Purchasing Scorched Pod (ID: {scorched_pod_id}, Cost: {cost} Starbux)')
+        return self.purchaseDrawWithStarbux(scorched_pod_id)
+
     # Determine the boost gauge before attempting to speed up a room
     def speedUpResearchUsingBoostGauge(self, researchId, researchDesignId):
         if not hasattr(self, "allResearchDesigns"):

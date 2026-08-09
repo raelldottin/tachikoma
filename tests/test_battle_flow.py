@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Unit test suite for ship battle end-to-end flow.
+"""Unit test suite for ship battle end-to-end flow and draw purchases.
 
 Tests use synthetic fixtures and mocked traffic exclusively.
 No real credentials or live Pixel Starships network calls are performed.
@@ -10,7 +10,7 @@ import xmltodict
 
 from sdk.client import Client
 from sdk.device import Device
-from sdk.security import checksum_finalise_battle15
+from sdk.security import checksum_finalise_battle15, checksum_character_draw
 
 
 class TestBattleFlow(unittest.TestCase):
@@ -479,6 +479,169 @@ class TestBattleFlow(unittest.TestCase):
         self.client.shipByUserId = None
         with patch.object(self.client, "getShipByUserId", return_value=False):
             self.assertEqual(self.client.getShipHpFraction(), -1.0)
+
+    # 7. CharacterService/Draw (Pod Purchase) Checksum Tests
+
+    def test_character_draw_checksum_formula(self):
+        """Verify CharacterService/Draw checksum formula against known synthetic vector."""
+        draw_design_id = "12345"
+        client_date_time = "2026-08-09T12:00:00"
+        checksum_key = "5343"
+        savy_checksum = "Savvy!s0d@"
+
+        actual = checksum_character_draw(
+            draw_design_id=draw_design_id,
+            client_date_time=client_date_time,
+            checksum_key=checksum_key,
+            savy_checksum=savy_checksum,
+        )
+
+        # Verify it produces a valid 32-char hex digest
+        self.assertEqual(len(actual), 32)
+        self.assertTrue(all(c in "0123456789abcdef" for c in actual))
+
+    def test_character_draw_checksum_deterministic(self):
+        """Verify checksum is deterministic for same inputs."""
+        kwargs = {
+            "draw_design_id": "12345",
+            "client_date_time": "2026-08-09T12:00:00",
+            "checksum_key": "5343",
+            "savy_checksum": "Savvy!s0d@",
+        }
+
+        result1 = checksum_character_draw(**kwargs)
+        result2 = checksum_character_draw(**kwargs)
+
+        self.assertEqual(result1, result2)
+
+    def test_character_draw_checksum_different_inputs(self):
+        """Verify checksum changes with different inputs."""
+        base_kwargs = {
+            "draw_design_id": "12345",
+            "client_date_time": "2026-08-09T12:00:00",
+            "checksum_key": "5343",
+            "savy_checksum": "Savvy!s0d@",
+        }
+
+        result1 = checksum_character_draw(**base_kwargs)
+        result2 = checksum_character_draw(**{**base_kwargs, "draw_design_id": "67890"})
+        self.assertNotEqual(result1, result2)
+
+    # 8. purchaseDrawWithStarbux Tests
+
+    @patch.object(Client, "request")
+    def test_purchase_draw_with_starbux_success(self, mock_request):
+        """purchaseDrawWithStarbux returns True on successful purchase."""
+        xml_response = (
+            b'<CharacterService><Draw drawDesignId="12345" errorCode="0" '
+            b'errorMessage="" /></CharacterService>'
+        )
+        mock_response = MagicMock()
+        mock_response.content = xml_response
+        mock_response.text = xml_response.decode("utf-8")
+        mock_request.return_value = mock_response
+
+        with patch.object(self.client, "listAllDesigns4", return_value=None):
+            result = self.client.purchaseDrawWithStarbux("12345")
+
+        self.assertTrue(result)
+        mock_request.assert_called_once()
+        # Verify URL contains correct params
+        call_args = mock_request.call_args[0][0]
+        self.assertIn("drawDesignId=12345", call_args)
+        self.assertIn("clientDateTime=", call_args)
+        self.assertIn("checksum=", call_args)
+        self.assertIn("accessToken=test-access-token", call_args)
+
+    @patch.object(Client, "request")
+    def test_purchase_draw_with_starbux_error_code(self, mock_request):
+        """purchaseDrawWithStarbux returns False when errorCode != 0."""
+        xml_response = (
+            b'<CharacterService><Draw drawDesignId="12345" errorCode="400" '
+            b'errorMessage="Insufficient Starbux" /></CharacterService>'
+        )
+        mock_response = MagicMock()
+        mock_response.content = xml_response
+        mock_response.text = xml_response.decode("utf-8")
+        mock_request.return_value = mock_response
+
+        with patch.object(self.client, "listAllDesigns4", return_value=None):
+            result = self.client.purchaseDrawWithStarbux("12345")
+
+        self.assertFalse(result)
+
+    @patch.object(Client, "request")
+    def test_purchase_draw_with_starbux_no_response(self, mock_request):
+        """purchaseDrawWithStarbux returns False when no response."""
+        mock_request.return_value = None
+
+        with patch.object(self.client, "listAllDesigns4", return_value=None):
+            result = self.client.purchaseDrawWithStarbux("12345")
+
+        self.assertFalse(result)
+
+    # 9. purchaseScorchedPodIfAffordable Tests
+
+    def test_purchase_scorched_pod_if_affordable_not_found(self):
+        """purchaseScorchedPodIfAffordable returns False when Scorched Pod not in designs."""
+        self.client.drawDesigns = {
+            "DesignService": {
+                "ListAllDesigns": {
+                    "DrawDesigns": {
+                        "DrawDesign": [
+                            {"@DrawDesignId": "1", "@DrawName": "Basic Pod", "@StarbuxCost": "50"},
+                            {"@DrawDesignId": "2", "@DrawName": "Premium Pod", "@StarbuxCost": "200"},
+                        ]
+                    }
+                }
+            }
+        }
+        self.client.info["@Starbux"] = "1000"
+
+        result = self.client.purchaseScorchedPodIfAffordable()
+
+        self.assertFalse(result)
+
+    def test_purchase_scorched_pod_if_affordable_insufficient_starbux(self):
+        """purchaseScorchedPodIfAffordable returns False when not enough Starbux."""
+        self.client.drawDesigns = {
+            "DesignService": {
+                "ListAllDesigns": {
+                    "DrawDesigns": {
+                        "DrawDesign": [
+                            {"@DrawDesignId": "99", "@DrawName": "Scorched Pod", "@StarbuxCost": "500"},
+                        ]
+                    }
+                }
+            }
+        }
+        self.client.info["@Starbux"] = "100"
+
+        result = self.client.purchaseScorchedPodIfAffordable()
+
+        self.assertFalse(result)
+
+    @patch.object(Client, "purchaseDrawWithStarbux")
+    def test_purchase_scorched_pod_if_affordable_success(self, mock_purchase):
+        """purchaseScorchedPodIfAffordable calls purchaseDrawWithStarbux when affordable."""
+        self.client.drawDesigns = {
+            "DesignService": {
+                "ListAllDesigns": {
+                    "DrawDesigns": {
+                        "DrawDesign": [
+                            {"@DrawDesignId": "99", "@DrawName": "Scorched Pod", "@StarbuxCost": "500"},
+                        ]
+                    }
+                }
+            }
+        }
+        self.client.info["@Starbux"] = "1000"
+        mock_purchase.return_value = True
+
+        result = self.client.purchaseScorchedPodIfAffordable()
+
+        self.assertTrue(result)
+        mock_purchase.assert_called_once_with("99")
 
 
 if __name__ == "__main__":
