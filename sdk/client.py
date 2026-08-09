@@ -2526,6 +2526,34 @@ class Client(object):
             logging.debug(f"[{self.info.get('@Name', '')}] Ship HP from rooms: {total_cur}/{total_max} = {total_cur/total_max:.2%}")
             return total_cur / total_max
         logging.warning(f"[{self.info.get('@Name', '')}] No HP data found in ship or rooms")
+        
+        # Fall back to ship design data for max HP
+        ship_design_id = ship.get("@ShipDesignId")
+        if ship_design_id and hasattr(self, "shipDesigns"):
+            logging.warning(f"[{self.info.get('@Name', '')}] Checking ship design {ship_design_id} for max HP...")
+            designs = self.shipDesigns.get("ShipDesign", [])
+            if isinstance(designs, dict):
+                designs = [designs]
+            for design in designs:
+                if design.get("@ShipDesignId") == ship_design_id:
+                    # Look for max HP fields in ship design
+                    for hp_field in ["@MaxHp", "@Hp", "@HullHp", "@HullMaxHp", "@HpMax"]:
+                        mx = design.get(hp_field)
+                        if mx is not None:
+                            try:
+                                mx_i = int(mx)
+                                if mx_i > 0:
+                                    cur = ship.get("@Hp")
+                                    if cur is not None:
+                                        try:
+                                            cur_i = int(cur)
+                                            logging.warning(f"[{self.info.get('@Name', '')}] Ship HP from design {ship_design_id}: {cur_i}/{mx_i} = {cur_i/mx_i:.2%} (from {hp_field})")
+                                            return cur_i / mx_i
+                                        except (ValueError, TypeError):
+                                            pass
+                            except (ValueError, TypeError):
+                                continue
+        logging.warning(f"[{self.info.get('@Name', '')}] No HP data found in ship, rooms, or design")
         return -1.0
 
     def runBattleEndToEnd(self, clientHp: int = 100000) -> bool:
