@@ -2485,6 +2485,8 @@ class Client(object):
             ("@Hp", "@MaxHp"),
             ("@HullHp", "@HullMaxHp"),
             ("@CurrentHp", "@MaxHp"),
+            # @Shield might represent max HP (some games use shield as max HP)
+            ("@Hp", "@Shield"),
         ]
         for cur_attr, max_attr in candidates:
             cur = ship.get(cur_attr)
