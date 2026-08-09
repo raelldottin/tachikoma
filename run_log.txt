@@ -1,0 +1,399 @@
+Runs daily	Set up job	﻿2026-08-08T10:46:19.1478555Z Current runner version: '2.336.0'
+Runs daily	Set up job	2026-08-08T10:46:19.1509397Z ##[group]Runner Image Provisioner
+Runs daily	Set up job	2026-08-08T10:46:19.1510407Z Hosted Compute Agent
+Runs daily	Set up job	2026-08-08T10:46:19.1511064Z Version: 20260707.563
+Runs daily	Set up job	2026-08-08T10:46:19.1511721Z Commit: 02667638d2b423fbc733a8e32a88b44996a3ba6e
+Runs daily	Set up job	2026-08-08T10:46:19.1512532Z Build Date: 2026-07-07T19:33:50Z
+Runs daily	Set up job	2026-08-08T10:46:19.1513248Z Worker ID: {dfd22d34-cb4f-453b-9a38-ca97489d7efb}
+Runs daily	Set up job	2026-08-08T10:46:19.1514109Z Azure Region: northcentralus
+Runs daily	Set up job	2026-08-08T10:46:19.1514791Z ##[endgroup]
+Runs daily	Set up job	2026-08-08T10:46:19.1516586Z ##[group]Operating System
+Runs daily	Set up job	2026-08-08T10:46:19.1517287Z Ubuntu
+Runs daily	Set up job	2026-08-08T10:46:19.1517876Z 24.04.4
+Runs daily	Set up job	2026-08-08T10:46:19.1518478Z LTS
+Runs daily	Set up job	2026-08-08T10:46:19.1519059Z ##[endgroup]
+Runs daily	Set up job	2026-08-08T10:46:19.1519646Z ##[group]Runner Image
+Runs daily	Set up job	2026-08-08T10:46:19.1520274Z Image: ubuntu-24.04
+Runs daily	Set up job	2026-08-08T10:46:19.1520949Z Version: 20260720.247.2
+Runs daily	Set up job	2026-08-08T10:46:19.1522024Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20260720.247/images/ubuntu/Ubuntu2404-Readme.md
+Runs daily	Set up job	2026-08-08T10:46:19.1523780Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20260720.247
+Runs daily	Set up job	2026-08-08T10:46:19.1524848Z ##[endgroup]
+Runs daily	Set up job	2026-08-08T10:46:19.1526358Z ##[group]GITHUB_TOKEN Permissions
+Runs daily	Set up job	2026-08-08T10:46:19.1529406Z Contents: read
+Runs daily	Set up job	2026-08-08T10:46:19.1530085Z Metadata: read
+Runs daily	Set up job	2026-08-08T10:46:19.1530716Z Packages: read
+Runs daily	Set up job	2026-08-08T10:46:19.1531287Z ##[endgroup]
+Runs daily	Set up job	2026-08-08T10:46:19.1533533Z Secret source: Actions
+Runs daily	Set up job	2026-08-08T10:46:19.1535263Z Prepare workflow directory
+Runs daily	Set up job	2026-08-08T10:46:19.1863898Z Prepare all required actions
+Runs daily	Set up job	2026-08-08T10:46:19.1913434Z Getting action download info
+Runs daily	Set up job	2026-08-08T10:46:19.4128529Z Download action repository 'actions/checkout@v4' (SHA:11d5960a326750d5838078e36cf38b85af677262)
+Runs daily	Set up job	2026-08-08T10:46:19.8417474Z Download action repository 'actions/setup-python@v5' (SHA:a26af69be951a213d495a4c3e4e4022e16d87065)
+Runs daily	Set up job	2026-08-08T10:46:20.0273518Z Complete job name: Runs daily
+Runs daily	Checkout	﻿2026-08-08T10:46:20.0988033Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+Runs daily	Checkout	2026-08-08T10:46:20.0997014Z ##[group]Run actions/checkout@v4
+Runs daily	Checkout	2026-08-08T10:46:20.0997869Z with:
+Runs daily	Checkout	2026-08-08T10:46:20.0998482Z   fetch-depth: 2
+Runs daily	Checkout	2026-08-08T10:46:20.0999082Z   repository: raelldottin/tachikoma
+Runs daily	Checkout	2026-08-08T10:46:20.1002935Z   token: ***
+Runs daily	Checkout	2026-08-08T10:46:20.1003539Z   ssh-strict: true
+Runs daily	Checkout	2026-08-08T10:46:20.1004095Z   ssh-user: git
+Runs daily	Checkout	2026-08-08T10:46:20.1004733Z   persist-credentials: true
+Runs daily	Checkout	2026-08-08T10:46:20.1005365Z   clean: true
+Runs daily	Checkout	2026-08-08T10:46:20.1006126Z   sparse-checkout-cone-mode: true
+Runs daily	Checkout	2026-08-08T10:46:20.1006812Z   fetch-tags: false
+Runs daily	Checkout	2026-08-08T10:46:20.1007390Z   show-progress: true
+Runs daily	Checkout	2026-08-08T10:46:20.1007994Z   lfs: false
+Runs daily	Checkout	2026-08-08T10:46:20.1008558Z   submodules: false
+Runs daily	Checkout	2026-08-08T10:46:20.1009255Z   set-safe-directory: true
+Runs daily	Checkout	2026-08-08T10:46:20.1009963Z   allow-unsafe-pr-checkout: false
+Runs daily	Checkout	2026-08-08T10:46:20.1010747Z ##[endgroup]
+Runs daily	Checkout	2026-08-08T10:46:20.2149171Z Syncing repository: raelldottin/tachikoma
+Runs daily	Checkout	2026-08-08T10:46:20.2152757Z ##[group]Getting Git version info
+Runs daily	Checkout	2026-08-08T10:46:20.2154031Z Working directory is '/home/runner/work/tachikoma/tachikoma'
+Runs daily	Checkout	2026-08-08T10:46:20.2156119Z [command]/usr/bin/git version
+Runs daily	Checkout	2026-08-08T10:46:20.2421292Z git version 2.54.0
+Runs daily	Checkout	2026-08-08T10:46:20.2441891Z ##[endgroup]
+Runs daily	Checkout	2026-08-08T10:46:20.2454749Z Temporarily overriding HOME='/home/runner/work/_temp/a2455d89-5617-4847-8b8e-db26b32959c2' before making global git config changes
+Runs daily	Checkout	2026-08-08T10:46:20.2457361Z Adding repository directory to the temporary git global config as a safe directory
+Runs daily	Checkout	2026-08-08T10:46:20.2461510Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/tachikoma/tachikoma
+Runs daily	Checkout	2026-08-08T10:46:20.2520683Z Deleting the contents of '/home/runner/work/tachikoma/tachikoma'
+Runs daily	Checkout	2026-08-08T10:46:20.2540158Z ##[group]Initializing the repository
+Runs daily	Checkout	2026-08-08T10:46:20.2543620Z [command]/usr/bin/git init /home/runner/work/tachikoma/tachikoma
+Runs daily	Checkout	2026-08-08T10:46:20.2681635Z hint: Using 'master' as the name for the initial branch. This default branch name
+Runs daily	Checkout	2026-08-08T10:46:20.2683493Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+Runs daily	Checkout	2026-08-08T10:46:20.2684944Z hint: to use in all of your new repositories, which will suppress this warning,
+Runs daily	Checkout	2026-08-08T10:46:20.2686430Z hint: call:
+Runs daily	Checkout	2026-08-08T10:46:20.2687194Z hint:
+Runs daily	Checkout	2026-08-08T10:46:20.2688323Z hint: 	git config --global init.defaultBranch <name>
+Runs daily	Checkout	2026-08-08T10:46:20.2689360Z hint:
+Runs daily	Checkout	2026-08-08T10:46:20.2690296Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+Runs daily	Checkout	2026-08-08T10:46:20.2691711Z hint: 'development'. The just-created branch can be renamed via this command:
+Runs daily	Checkout	2026-08-08T10:46:20.2692958Z hint:
+Runs daily	Checkout	2026-08-08T10:46:20.2693700Z hint: 	git branch -m <name>
+Runs daily	Checkout	2026-08-08T10:46:20.2694576Z hint:
+Runs daily	Checkout	2026-08-08T10:46:20.2695660Z hint: Disable this message with "git config set advice.defaultBranchName false"
+Runs daily	Checkout	2026-08-08T10:46:20.2697289Z Initialized empty Git repository in /home/runner/work/tachikoma/tachikoma/.git/
+Runs daily	Checkout	2026-08-08T10:46:20.2700061Z [command]/usr/bin/git remote add origin https://github.com/raelldottin/tachikoma
+Runs daily	Checkout	2026-08-08T10:46:20.2737819Z ##[endgroup]
+Runs daily	Checkout	2026-08-08T10:46:20.2739336Z ##[group]Disabling automatic garbage collection
+Runs daily	Checkout	2026-08-08T10:46:20.2740756Z [command]/usr/bin/git config --local gc.auto 0
+Runs daily	Checkout	2026-08-08T10:46:20.2769763Z ##[endgroup]
+Runs daily	Checkout	2026-08-08T10:46:20.2771190Z ##[group]Setting up auth
+Runs daily	Checkout	2026-08-08T10:46:20.2775452Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+Runs daily	Checkout	2026-08-08T10:46:20.2807631Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+Runs daily	Checkout	2026-08-08T10:46:20.3162196Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+Runs daily	Checkout	2026-08-08T10:46:20.3187335Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+Runs daily	Checkout	2026-08-08T10:46:20.3377273Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+Runs daily	Checkout	2026-08-08T10:46:20.3406509Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+Runs daily	Checkout	2026-08-08T10:46:20.3605589Z [command]/usr/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+Runs daily	Checkout	2026-08-08T10:46:20.3640474Z ##[endgroup]
+Runs daily	Checkout	2026-08-08T10:46:20.3642048Z ##[group]Fetching the repository
+Runs daily	Checkout	2026-08-08T10:46:20.3651786Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=2 origin +312670799a14c0119283a8e4cfed8de225cdfdc9:refs/remotes/origin/main
+Runs daily	Checkout	2026-08-08T10:46:20.7572737Z From https://github.com/raelldottin/tachikoma
+Runs daily	Checkout	2026-08-08T10:46:20.7574883Z  * [new ref]         312670799a14c0119283a8e4cfed8de225cdfdc9 -> origin/main
+Runs daily	Checkout	2026-08-08T10:46:20.7606976Z ##[endgroup]
+Runs daily	Checkout	2026-08-08T10:46:20.7609006Z ##[group]Determining the checkout info
+Runs daily	Checkout	2026-08-08T10:46:20.7610944Z ##[endgroup]
+Runs daily	Checkout	2026-08-08T10:46:20.7615401Z [command]/usr/bin/git sparse-checkout disable
+Runs daily	Checkout	2026-08-08T10:46:20.7664802Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+Runs daily	Checkout	2026-08-08T10:46:20.7697426Z ##[group]Checking out the ref
+Runs daily	Checkout	2026-08-08T10:46:20.7703108Z [command]/usr/bin/git checkout --progress --force -B main refs/remotes/origin/main
+Runs daily	Checkout	2026-08-08T10:46:20.7802326Z Switched to a new branch 'main'
+Runs daily	Checkout	2026-08-08T10:46:20.7804229Z branch 'main' set up to track 'origin/main'.
+Runs daily	Checkout	2026-08-08T10:46:20.7817761Z ##[endgroup]
+Runs daily	Checkout	2026-08-08T10:46:20.7852681Z [command]/usr/bin/git log -1 --format=%H
+Runs daily	Checkout	2026-08-08T10:46:20.7875586Z 312670799a14c0119283a8e4cfed8de225cdfdc9
+Runs daily	Setup Python version 3.9	﻿2026-08-08T10:46:20.8248504Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+Runs daily	Setup Python version 3.9	2026-08-08T10:46:20.8254462Z ##[group]Run actions/setup-python@v5
+Runs daily	Setup Python version 3.9	2026-08-08T10:46:20.8255978Z with:
+Runs daily	Setup Python version 3.9	2026-08-08T10:46:20.8257244Z   python-version: 3.9
+Runs daily	Setup Python version 3.9	2026-08-08T10:46:20.8258339Z   check-latest: false
+Runs daily	Setup Python version 3.9	2026-08-08T10:46:20.8267736Z   token: ***
+Runs daily	Setup Python version 3.9	2026-08-08T10:46:20.8268827Z   update-environment: true
+Runs daily	Setup Python version 3.9	2026-08-08T10:46:20.8270068Z   allow-prereleases: false
+Runs daily	Setup Python version 3.9	2026-08-08T10:46:20.8271206Z   freethreaded: false
+Runs daily	Setup Python version 3.9	2026-08-08T10:46:20.8272329Z ##[endgroup]
+Runs daily	Setup Python version 3.9	2026-08-08T10:46:20.9607382Z ##[group]Installed versions
+Runs daily	Setup Python version 3.9	2026-08-08T10:46:20.9688881Z Version 3.9 was not found in the local cache
+Runs daily	Setup Python version 3.9	2026-08-08T10:46:20.9830753Z (node:2355) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+Runs daily	Setup Python version 3.9	2026-08-08T10:46:20.9835380Z (Use `node --trace-deprecation ...` to show where the warning was created)
+Runs daily	Setup Python version 3.9	2026-08-08T10:46:21.5319135Z Version 3.9 is available for downloading
+Runs daily	Setup Python version 3.9	2026-08-08T10:46:21.5320786Z Download from "https://github.com/actions/python-versions/releases/download/3.9.25-19039189640/python-3.9.25-linux-24.04-x64.tar.gz"
+Runs daily	Setup Python version 3.9	2026-08-08T10:46:22.0329908Z Extract downloaded archive
+Runs daily	Setup Python version 3.9	2026-08-08T10:46:22.0444658Z [command]/usr/bin/tar xz --warning=no-unknown-keyword --overwrite -C /home/runner/work/_temp/29396efe-5951-4995-a719-a20c8fff94c2 -f /home/runner/work/_temp/fe9d6d0e-0df9-4053-aa6f-b774ff1e2681
+Runs daily	Setup Python version 3.9	2026-08-08T10:46:23.5811560Z Execute installation script
+Runs daily	Setup Python version 3.9	2026-08-08T10:46:23.5918580Z Check if Python hostedtoolcache folder exist...
+Runs daily	Setup Python version 3.9	2026-08-08T10:46:23.5919586Z Create Python 3.9.25 folder
+Runs daily	Setup Python version 3.9	2026-08-08T10:46:23.5933488Z Copy Python binaries to hostedtoolcache folder
+Runs daily	Setup Python version 3.9	2026-08-08T10:46:23.8400511Z Create additional symlinks (Required for the UsePythonVersion Azure Pipelines task and the setup-python GitHub Action)
+Runs daily	Setup Python version 3.9	2026-08-08T10:46:23.8435856Z Upgrading pip...
+Runs daily	Setup Python version 3.9	2026-08-08T10:46:26.5072546Z Looking in links: /tmp/tmp2f8a48o2
+Runs daily	Setup Python version 3.9	2026-08-08T10:46:26.5075290Z Requirement already satisfied: setuptools in /opt/hostedtoolcache/Python/3.9.25/x64/lib/python3.9/site-packages (79.0.1)
+Runs daily	Setup Python version 3.9	2026-08-08T10:46:26.5080978Z Requirement already satisfied: pip in /opt/hostedtoolcache/Python/3.9.25/x64/lib/python3.9/site-packages (23.0.1)
+Runs daily	Setup Python version 3.9	2026-08-08T10:46:27.6513088Z Collecting pip
+Runs daily	Setup Python version 3.9	2026-08-08T10:46:27.6940102Z Downloading pip-26.0.1-py3-none-any.whl (1.8 MB)
+Runs daily	Setup Python version 3.9	2026-08-08T10:46:27.8399516Z ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.8/1.8 MB 12.5 MB/s eta 0:00:00
+Runs daily	Setup Python version 3.9	2026-08-08T10:46:27.8400308Z 
+Runs daily	Setup Python version 3.9	2026-08-08T10:46:27.8922517Z Installing collected packages: pip
+Runs daily	Setup Python version 3.9	2026-08-08T10:46:27.8923562Z Attempting uninstall: pip
+Runs daily	Setup Python version 3.9	2026-08-08T10:46:27.8928793Z Found existing installation: pip 23.0.1
+Runs daily	Setup Python version 3.9	2026-08-08T10:46:28.0099664Z Uninstalling pip-23.0.1:
+Runs daily	Setup Python version 3.9	2026-08-08T10:46:28.0153908Z Successfully uninstalled pip-23.0.1
+Runs daily	Setup Python version 3.9	2026-08-08T10:46:28.6944106Z Successfully installed pip-26.0.1
+Runs daily	Setup Python version 3.9	2026-08-08T10:46:28.7620996Z Create complete file
+Runs daily	Setup Python version 3.9	2026-08-08T10:46:28.7669855Z Successfully set up CPython (3.9.25)
+Runs daily	Setup Python version 3.9	2026-08-08T10:46:28.7670935Z ##[endgroup]
+Runs daily	Install dependencies	﻿2026-08-08T10:46:28.8217500Z ##[group]Run python -m pip install --upgrade pip
+Runs daily	Install dependencies	2026-08-08T10:46:28.8218325Z ^[[36;1mpython -m pip install --upgrade pip^[[0m
+Runs daily	Install dependencies	2026-08-08T10:46:28.8218807Z ^[[36;1mpip install -r requirements.txt^[[0m
+Runs daily	Install dependencies	2026-08-08T10:46:28.8256821Z shell: /usr/bin/bash -e {0}
+Runs daily	Install dependencies	2026-08-08T10:46:28.8257322Z env:
+Runs daily	Install dependencies	2026-08-08T10:46:28.8257748Z   pythonLocation: /opt/hostedtoolcache/Python/3.9.25/x64
+Runs daily	Install dependencies	2026-08-08T10:46:28.8258374Z   PKG_CONFIG_PATH: /opt/hostedtoolcache/Python/3.9.25/x64/lib/pkgconfig
+Runs daily	Install dependencies	2026-08-08T10:46:28.8258953Z   Python_ROOT_DIR: /opt/hostedtoolcache/Python/3.9.25/x64
+Runs daily	Install dependencies	2026-08-08T10:46:28.8259453Z   Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.9.25/x64
+Runs daily	Install dependencies	2026-08-08T10:46:28.8259955Z   Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.9.25/x64
+Runs daily	Install dependencies	2026-08-08T10:46:28.8260436Z   LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.9.25/x64/lib
+Runs daily	Install dependencies	2026-08-08T10:46:28.8260897Z ##[endgroup]
+Runs daily	Install dependencies	2026-08-08T10:46:29.1248324Z Requirement already satisfied: pip in /opt/hostedtoolcache/Python/3.9.25/x64/lib/python3.9/site-packages (26.0.1)
+Runs daily	Install dependencies	2026-08-08T10:46:29.6363326Z Collecting certifi==2022.12.7 (from -r requirements.txt (line 1))
+Runs daily	Install dependencies	2026-08-08T10:46:29.6678433Z   Downloading certifi-2022.12.7-py3-none-any.whl.metadata (2.9 kB)
+Runs daily	Install dependencies	2026-08-08T10:46:29.7974541Z Collecting charset-normalizer==3.0.1 (from -r requirements.txt (line 2))
+Runs daily	Install dependencies	2026-08-08T10:46:29.8024231Z   Downloading charset_normalizer-3.0.1-cp39-cp39-manylinux_2_17_x86_64.manylinux2014_x86_64.whl.metadata (27 kB)
+Runs daily	Install dependencies	2026-08-08T10:46:30.0370720Z Collecting idna==3.4 (from -r requirements.txt (line 3))
+Runs daily	Install dependencies	2026-08-08T10:46:30.0413017Z   Downloading idna-3.4-py3-none-any.whl.metadata (9.8 kB)
+Runs daily	Install dependencies	2026-08-08T10:46:30.1173563Z Collecting ratelimit==2.2.1 (from -r requirements.txt (line 4))
+Runs daily	Install dependencies	2026-08-08T10:46:30.1214986Z   Downloading ratelimit-2.2.1.tar.gz (5.3 kB)
+Runs daily	Install dependencies	2026-08-08T10:46:30.1656061Z   Installing build dependencies: started
+Runs daily	Install dependencies	2026-08-08T10:46:31.1815693Z   Installing build dependencies: finished with status 'done'
+Runs daily	Install dependencies	2026-08-08T10:46:31.1825929Z   Getting requirements to build wheel: started
+Runs daily	Install dependencies	2026-08-08T10:46:31.7288786Z   Getting requirements to build wheel: finished with status 'done'
+Runs daily	Install dependencies	2026-08-08T10:46:31.7301610Z   Preparing metadata (pyproject.toml): started
+Runs daily	Install dependencies	2026-08-08T10:46:31.9415365Z   Preparing metadata (pyproject.toml): finished with status 'done'
+Runs daily	Install dependencies	2026-08-08T10:46:32.0725842Z Collecting requests==2.28.2 (from -r requirements.txt (line 5))
+Runs daily	Install dependencies	2026-08-08T10:46:32.0770114Z   Downloading requests-2.28.2-py3-none-any.whl.metadata (4.6 kB)
+Runs daily	Install dependencies	2026-08-08T10:46:32.1113832Z Collecting urllib3==1.26.14 (from -r requirements.txt (line 6))
+Runs daily	Install dependencies	2026-08-08T10:46:32.1155889Z   Downloading urllib3-1.26.14-py2.py3-none-any.whl.metadata (47 kB)
+Runs daily	Install dependencies	2026-08-08T10:46:32.1319721Z Collecting xmltodict==0.13.0 (from -r requirements.txt (line 7))
+Runs daily	Install dependencies	2026-08-08T10:46:32.1360019Z   Downloading xmltodict-0.13.0-py2.py3-none-any.whl.metadata (7.7 kB)
+Runs daily	Install dependencies	2026-08-08T10:46:32.1597123Z Downloading certifi-2022.12.7-py3-none-any.whl (155 kB)
+Runs daily	Install dependencies	2026-08-08T10:46:32.1698419Z Downloading charset_normalizer-3.0.1-cp39-cp39-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (198 kB)
+Runs daily	Install dependencies	2026-08-08T10:46:32.1779313Z Downloading idna-3.4-py3-none-any.whl (61 kB)
+Runs daily	Install dependencies	2026-08-08T10:46:32.1841964Z Downloading requests-2.28.2-py3-none-any.whl (62 kB)
+Runs daily	Install dependencies	2026-08-08T10:46:32.1902445Z Downloading urllib3-1.26.14-py2.py3-none-any.whl (140 kB)
+Runs daily	Install dependencies	2026-08-08T10:46:32.1966785Z Downloading xmltodict-0.13.0-py2.py3-none-any.whl (10.0 kB)
+Runs daily	Install dependencies	2026-08-08T10:46:32.2067920Z Building wheels for collected packages: ratelimit
+Runs daily	Install dependencies	2026-08-08T10:46:32.2075864Z   Building wheel for ratelimit (pyproject.toml): started
+Runs daily	Install dependencies	2026-08-08T10:46:32.3987960Z   Building wheel for ratelimit (pyproject.toml): finished with status 'done'
+Runs daily	Install dependencies	2026-08-08T10:46:32.3994269Z   Created wheel for ratelimit: filename=ratelimit-2.2.1-py3-none-any.whl size=5971 sha256=c138d11fe1194731257694dce1e2be776194d33faa5e1436cce2afa00c74c53c
+Runs daily	Install dependencies	2026-08-08T10:46:32.3995902Z   Stored in directory: /home/runner/.cache/pip/wheels/14/1e/97/126009a0884bdf7e26436cace73d9a4f4596dada4fdc4950ce
+Runs daily	Install dependencies	2026-08-08T10:46:32.4015648Z Successfully built ratelimit
+Runs daily	Install dependencies	2026-08-08T10:46:32.4195180Z Installing collected packages: ratelimit, charset-normalizer, xmltodict, urllib3, idna, certifi, requests
+Runs daily	Install dependencies	2026-08-08T10:46:32.6258523Z 
+Runs daily	Install dependencies	2026-08-08T10:46:32.6278702Z Successfully installed certifi-2022.12.7 charset-normalizer-3.0.1 idna-3.4 ratelimit-2.2.1 requests-2.28.2 urllib3-1.26.14 xmltodict-0.13.0
+Runs daily	Process account 1	﻿2026-08-08T10:46:32.7059873Z ##[group]Run set -euo pipefail
+Runs daily	Process account 1	2026-08-08T10:46:32.7060385Z ^[[36;1mset -euo pipefail^[[0m
+Runs daily	Process account 1	2026-08-08T10:46:32.7060721Z ^[[36;1mumask 077^[[0m
+Runs daily	Process account 1	2026-08-08T10:46:32.7061072Z ^[[36;1m^[[0m
+Runs daily	Process account 1	2026-08-08T10:46:32.7061376Z ^[[36;1mauth_file="$(mktemp)"^[[0m
+Runs daily	Process account 1	2026-08-08T10:46:32.7061787Z ^[[36;1msmtp_password_file="$(mktemp)"^[[0m
+Runs daily	Process account 1	2026-08-08T10:46:32.7062282Z ^[[36;1mtrap 'rm -f "$auth_file" "$smtp_password_file"' EXIT^[[0m
+Runs daily	Process account 1	2026-08-08T10:46:32.7062675Z ^[[36;1m^[[0m
+Runs daily	Process account 1	2026-08-08T10:46:32.7063071Z ^[[36;1mprintf '%s' "$AUTH_STRING" > "$auth_file"^[[0m
+Runs daily	Process account 1	2026-08-08T10:46:32.7063667Z ^[[36;1mprintf '%s' "$SMTP_PASSWORD" > "$smtp_password_file"^[[0m
+Runs daily	Process account 1	2026-08-08T10:46:32.7064127Z ^[[36;1m^[[0m
+Runs daily	Process account 1	2026-08-08T10:46:32.7064456Z ^[[36;1mpython run.py \^[[0m
+Runs daily	Process account 1	2026-08-08T10:46:32.7064857Z ^[[36;1m  --auth-file "$auth_file" \^[[0m
+Runs daily	Process account 1	2026-08-08T10:46:32.7065242Z ^[[36;1m  --smtp-email "$SMTP_EMAIL" \^[[0m
+Runs daily	Process account 1	2026-08-08T10:46:32.7065851Z ^[[36;1m  --smtp-password-file "$smtp_password_file" \^[[0m
+Runs daily	Process account 1	2026-08-08T10:46:32.7066279Z ^[[36;1m  --recipient "$RECIPIENT"^[[0m
+Runs daily	Process account 1	2026-08-08T10:46:32.7100569Z shell: /usr/bin/bash -e {0}
+Runs daily	Process account 1	2026-08-08T10:46:32.7101541Z env:
+Runs daily	Process account 1	2026-08-08T10:46:32.7101983Z   pythonLocation: /opt/hostedtoolcache/Python/3.9.25/x64
+Runs daily	Process account 1	2026-08-08T10:46:32.7102541Z   PKG_CONFIG_PATH: /opt/hostedtoolcache/Python/3.9.25/x64/lib/pkgconfig
+Runs daily	Process account 1	2026-08-08T10:46:32.7103114Z   Python_ROOT_DIR: /opt/hostedtoolcache/Python/3.9.25/x64
+Runs daily	Process account 1	2026-08-08T10:46:32.7103635Z   Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.9.25/x64
+Runs daily	Process account 1	2026-08-08T10:46:32.7104103Z   Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.9.25/x64
+Runs daily	Process account 1	2026-08-08T10:46:32.7104640Z   LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.9.25/x64/lib
+Runs daily	Process account 1	2026-08-08T10:46:32.7107495Z   AUTH_STRING: ***
+Runs daily	Process account 1	2026-08-08T10:46:32.7107905Z   SMTP_EMAIL: ***
+Runs daily	Process account 1	2026-08-08T10:46:32.7108256Z   SMTP_PASSWORD: ***
+Runs daily	Process account 1	2026-08-08T10:46:32.7108639Z   RECIPIENT: ***
+Runs daily	Process account 1	2026-08-08T10:46:32.7109042Z ##[endgroup]
+Runs daily	Process account 1	2026-08-08T10:46:33.1090906Z 2026-08-08 10:46:33,107 [ERROR] {{'UserLogin': {'@errorCode': '400', '@errorMessage': 'a****REDACTED_EMAIL***', 'User': {'@Id': '9181430', '@Name': '.ack', '@LastAlertDate': '2022-03-26T00:19:20.52', '@Email': '***REDACTED_EMAIL***', '@UserType': 'Verified', '@GenderType': 'Male', '@RaceType': 'Black', '@Credits': '1064', '@ProfileImageUrl': '', '@Trophy': '2440', '@GameCenterName': '', '@CompletedMissionDesigns': '1,53,54,55,56,104,105,106,107,237,238,241,315,239,108,109,110,111,279,10,20,21,22,23,24,25,26,27,280,211,215,216,281,282,196,316,197,199,200,329,384', '@LanguageKey': 'en', '@TutorialStatus': '71', '@IconSpriteId': '655', '@TipStatus': '24156757999', '@AllianceMembership': 'Ensign', '@CrewDonated': '102', '@CrewReceived': '61', '@FreeStarbuxReceivedToday': '0', '@DailyRewardStatus': '0', '@HeroBonusChance': '0', '@GameCenterFriendCount': '25', '@CompletedMissionEventIds': '2,131,132,133,139,135,490,492,491,496,494,493,953,499,498,930,929,1303,1302,1755,698,501,500,515,514,512,505,507,506,1498,1497,20,516,32,33,34,35,36,37,38,39,1500,1499,1205,1234,1235,1502,1501,1504,1503,1294,1758,1757,1297,1312,1314,1776,1848', '@UnlockedShipDesignIds': '162,233', '@UnlockedCharacterDesignIds': '251,84,27,312,55,290,86,51,394,104,54,396,283,259,377,308,78,66,232,400,70,101,23,9,289,163,36,106,285,335,61,83,301,305,59,65,194,257,291,26,284,398,44,24,56,315,72,198,314,397,60,71,20,191,310,48,292,64,296,53,401,286,99,57,393,13,306,25,318,21,46,295', '@Status': '2097664', '@UserSourceAdsPlatformType': 'Unknown', '@AdsPlatformUserId': '', '@LastCatalogPurchaseDate': '2023-09-06T00:00:01', '@VipExpiryDate': '2023-01-02T01:46:39', '@ChallengeWins': '0', '@ChallengeLosses': '0', '@LoadingPercentage': '0', '@AllianceSupplyDonation': '0', '@TotalSupplyDonation': '0', '@DailyMissionsAttempted': '', '@PurchaseRewardPoints': '0', '@UsedRewardPoints': '0', '@GooglePlayName': '', '@TournamentRewardPoints': '2', '@AllianceScore': '0', '@ChampionshipScore': '0', '@DailyChallengeWinStreak': '0', '@DrawsUsedToday': '0', '@ActivatedPromotions': '', '@PVPAttackWins': '246', '@PVPAttackLosses': '67', '@PVPAttackDraws': '3', '@PVPDefenceDraws': '0', '@PVPDefenceWins': '62', '@PVPDefenceLosses': '112', '@HighestTrophy': '2544', '@ChatAppearance': '0', '@AuthenticationType': 'JWT', '@DailyPVPAttacks': '0', '@ExploredStarSystemIds': '', '@TournamentBonusScore': '0', '@SituationOccurrencesToday': '0', '@Flags': '0', '@EmailVerificationStatus': 'IsEmailVerified', '@BoostAmount': '0', '@PassPoints': '0', '@AllianceScoreAtStartOfDay': '0', '@TaskRerollCount': '0', '@LeagueType': 'Standard', '@DailyPvPDefence': '0', '@TrophyGained': '0', '@UnlockedSkinKeys': '', '@RewardsCollectable': 'false', '@RewardsCollectableAmount': '0', '@IsUnderAge': 'false', '@TotalBattleSearches': '0', '@CreatorCode': '', '@DrawsString': '', '@PvPContinuousLosses': '0', '@EngagementCooldownEndDate': '1900-01-01T00:00:00', '@MatchingStatus': 'Active', '@ShipDesignId': '233', '@AllianceName': 'Band of Pirates', '@AllianceSpriteId': '2321', '@Ranking': '0', '@TournamentResetDate': '2022-06-01T00:09:37', '@AllianceJoinDate': '2022-03-26T12:23:27', '@LastPurchaseDate': '', '@LastHeartBeatDate': '2026-08-08T10:46:33', '@LastRewardActionDate': '2022-03-21T19:54:50', '@CooldownExpiry': '2022-04-14T13:19:19', '@CreationDate': '2022-03-21T19:54:50', '@LastLoginDate': '2026-08-08T10:46:33', '@LastVipClaimDate': '2023-01-02T00:00:00', '@AllianceId': '43958', '@ChallengeDesignId': '0', '@LastChallengeDesignId': '0', '@CaptainCharacterDesignId': '251', '@AllianceQualifyDivisionDesignId': '4', '@BlockAuthAttemptsUntilDate': '2022-12-27T22:01:04', '@BoostEndDate': '2000-01-01T00:00:00', '@CreatorSupportDate': '1900-01-01T00:00:00', '@LastBoostDate': '2023-12-05T20:08:15', '@UpdateDate': '2026-08-08T07:50:45', '@OwnerUserId': '0', '@RibbonSpriteId': '0', 'Alliance': {'@AllianceId': '43958', '@AllianceName': 'Band of Pirates', '@MinTrophyRequired': '2000', '@RequiresApproval': 'true', '@AllianceDescription': 'Merry Band of Pirates. More info coming soon.', '@AllianceCountryCode': '', '@EnableWars': 'true', '@Score': '0', '@ChampionshipScore': '0', '@MinScoreContribution': '0', '@Trophy': '0', '@Ranking': '0', '@AllianceSpriteId': '2321', '@ChannelId': '48301', '@NumberOfMembers': '74', '@NumberOfApprovedMembers': '0', '@AllianceShipUserId': '9188184', '@ImmunityDate': '2025-04-01T02:59:29', '@DivisionDesignId': '0'}, 'UserSeason': {'@UserSeasonId': '5639550', '@SeasonDesignId': '35', '@UserId': '9181430', '@Points': '45', '@UnlockedRewardDesignIds': '', '@PurchaseVIPDate': '2000-01-01T00:00:00', '@PurchaseVIPStatus': 'None'}}}}}
+Runs daily	Process account 1	2026-08-08T10:46:33.1107397Z 2026-08-08 10:46:33,107 [WARNING] [authenticate] failed to login
+Runs daily	Process account 1	2026-08-08T10:46:33.1263385Z ##[error]Process completed with exit code 1.
+Runs daily	Process account 2	﻿2026-08-08T10:46:33.1318579Z ##[group]Run set -euo pipefail
+Runs daily	Process account 2	2026-08-08T10:46:33.1319079Z ^[[36;1mset -euo pipefail^[[0m
+Runs daily	Process account 2	2026-08-08T10:46:33.1319492Z ^[[36;1mumask 077^[[0m
+Runs daily	Process account 2	2026-08-08T10:46:33.1319794Z ^[[36;1m^[[0m
+Runs daily	Process account 2	2026-08-08T10:46:33.1320143Z ^[[36;1mauth_file="$(mktemp)"^[[0m
+Runs daily	Process account 2	2026-08-08T10:46:33.1320570Z ^[[36;1msmtp_password_file="$(mktemp)"^[[0m
+Runs daily	Process account 2	2026-08-08T10:46:33.1321010Z ^[[36;1mtrap 'rm -f "$auth_file" "$smtp_password_file"' EXIT^[[0m
+Runs daily	Process account 2	2026-08-08T10:46:33.1321432Z ^[[36;1m^[[0m
+Runs daily	Process account 2	2026-08-08T10:46:33.1321785Z ^[[36;1mprintf '%s' "$AUTH_STRING" > "$auth_file"^[[0m
+Runs daily	Process account 2	2026-08-08T10:46:33.1322248Z ^[[36;1mprintf '%s' "$SMTP_PASSWORD" > "$smtp_password_file"^[[0m
+Runs daily	Process account 2	2026-08-08T10:46:33.1322722Z ^[[36;1m^[[0m
+Runs daily	Process account 2	2026-08-08T10:46:33.1323013Z ^[[36;1mpython run.py \^[[0m
+Runs daily	Process account 2	2026-08-08T10:46:33.1323395Z ^[[36;1m  --auth-file "$auth_file" \^[[0m
+Runs daily	Process account 2	2026-08-08T10:46:33.1323797Z ^[[36;1m  --smtp-email "$SMTP_EMAIL" \^[[0m
+Runs daily	Process account 2	2026-08-08T10:46:33.1324242Z ^[[36;1m  --smtp-password-file "$smtp_password_file" \^[[0m
+Runs daily	Process account 2	2026-08-08T10:46:33.1324726Z ^[[36;1m  --recipient "$RECIPIENT"^[[0m
+Runs daily	Process account 2	2026-08-08T10:46:33.1354490Z shell: /usr/bin/bash -e {0}
+Runs daily	Process account 2	2026-08-08T10:46:33.1355025Z env:
+Runs daily	Process account 2	2026-08-08T10:46:33.1355448Z   pythonLocation: /opt/hostedtoolcache/Python/3.9.25/x64
+Runs daily	Process account 2	2026-08-08T10:46:33.1356098Z   PKG_CONFIG_PATH: /opt/hostedtoolcache/Python/3.9.25/x64/lib/pkgconfig
+Runs daily	Process account 2	2026-08-08T10:46:33.1356614Z   Python_ROOT_DIR: /opt/hostedtoolcache/Python/3.9.25/x64
+Runs daily	Process account 2	2026-08-08T10:46:33.1357139Z   Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.9.25/x64
+Runs daily	Process account 2	2026-08-08T10:46:33.1357643Z   Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.9.25/x64
+Runs daily	Process account 2	2026-08-08T10:46:33.1358083Z   LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.9.25/x64/lib
+Runs daily	Process account 2	2026-08-08T10:46:33.1360790Z   AUTH_STRING: ***
+Runs daily	Process account 2	2026-08-08T10:46:33.1361179Z   SMTP_EMAIL: ***
+Runs daily	Process account 2	2026-08-08T10:46:33.1361590Z   SMTP_PASSWORD: ***
+Runs daily	Process account 2	2026-08-08T10:46:33.1361947Z   RECIPIENT: ***
+Runs daily	Process account 2	2026-08-08T10:46:33.1362288Z ##[endgroup]
+Runs daily	Process account 2	2026-08-08T10:46:33.3292571Z 2026-08-08 10:46:33,326 [ERROR] {{'UserLogin': {'@errorCode': '400', '@errorMessage': 'a****REDACTED_EMAIL***', 'User': {'@Id': '9181430', '@Name': '.ack', '@LastAlertDate': '2022-03-26T00:19:20.52', '@Email': '***REDACTED_EMAIL***', '@UserType': 'Verified', '@GenderType': 'Male', '@RaceType': 'Black', '@Credits': '1064', '@ProfileImageUrl': '', '@Trophy': '2440', '@GameCenterName': '', '@CompletedMissionDesigns': '1,53,54,55,56,104,105,106,107,237,238,241,315,239,108,109,110,111,279,10,20,21,22,23,24,25,26,27,280,211,215,216,281,282,196,316,197,199,200,329,384', '@LanguageKey': 'en', '@TutorialStatus': '71', '@IconSpriteId': '655', '@TipStatus': '24156757999', '@AllianceMembership': 'Ensign', '@CrewDonated': '102', '@CrewReceived': '61', '@FreeStarbuxReceivedToday': '0', '@DailyRewardStatus': '0', '@HeroBonusChance': '0', '@GameCenterFriendCount': '25', '@CompletedMissionEventIds': '2,131,132,133,139,135,490,492,491,496,494,493,953,499,498,930,929,1303,1302,1755,698,501,500,515,514,512,505,507,506,1498,1497,20,516,32,33,34,35,36,37,38,39,1500,1499,1205,1234,1235,1502,1501,1504,1503,1294,1758,1757,1297,1312,1314,1776,1848', '@UnlockedShipDesignIds': '162,233', '@UnlockedCharacterDesignIds': '251,84,27,312,55,290,86,51,394,104,54,396,283,259,377,308,78,66,232,400,70,101,23,9,289,163,36,106,285,335,61,83,301,305,59,65,194,257,291,26,284,398,44,24,56,315,72,198,314,397,60,71,20,191,310,48,292,64,296,53,401,286,99,57,393,13,306,25,318,21,46,295', '@Status': '2097664', '@UserSourceAdsPlatformType': 'Unknown', '@AdsPlatformUserId': '', '@LastCatalogPurchaseDate': '2023-09-06T00:00:01', '@VipExpiryDate': '2023-01-02T01:46:39', '@ChallengeWins': '0', '@ChallengeLosses': '0', '@LoadingPercentage': '0', '@AllianceSupplyDonation': '0', '@TotalSupplyDonation': '0', '@DailyMissionsAttempted': '', '@PurchaseRewardPoints': '0', '@UsedRewardPoints': '0', '@GooglePlayName': '', '@TournamentRewardPoints': '2', '@AllianceScore': '0', '@ChampionshipScore': '0', '@DailyChallengeWinStreak': '0', '@DrawsUsedToday': '0', '@ActivatedPromotions': '', '@PVPAttackWins': '246', '@PVPAttackLosses': '67', '@PVPAttackDraws': '3', '@PVPDefenceDraws': '0', '@PVPDefenceWins': '62', '@PVPDefenceLosses': '112', '@HighestTrophy': '2544', '@ChatAppearance': '0', '@AuthenticationType': 'JWT', '@DailyPVPAttacks': '0', '@ExploredStarSystemIds': '', '@TournamentBonusScore': '0', '@SituationOccurrencesToday': '0', '@Flags': '0', '@EmailVerificationStatus': 'IsEmailVerified', '@BoostAmount': '0', '@PassPoints': '0', '@AllianceScoreAtStartOfDay': '0', '@TaskRerollCount': '0', '@LeagueType': 'Standard', '@DailyPvPDefence': '0', '@TrophyGained': '0', '@UnlockedSkinKeys': '', '@RewardsCollectable': 'false', '@RewardsCollectableAmount': '0', '@IsUnderAge': 'false', '@TotalBattleSearches': '0', '@CreatorCode': '', '@DrawsString': '', '@PvPContinuousLosses': '0', '@EngagementCooldownEndDate': '1900-01-01T00:00:00', '@MatchingStatus': 'Active', '@ShipDesignId': '233', '@AllianceName': 'Band of Pirates', '@AllianceSpriteId': '2321', '@Ranking': '0', '@TournamentResetDate': '2022-06-01T00:09:37', '@AllianceJoinDate': '2022-03-26T12:23:27', '@LastPurchaseDate': '', '@LastHeartBeatDate': '2026-08-08T10:46:33', '@LastRewardActionDate': '2022-03-21T19:54:50', '@CooldownExpiry': '2022-04-14T13:19:19', '@CreationDate': '2022-03-21T19:54:50', '@LastLoginDate': '2026-08-08T10:46:33', '@LastVipClaimDate': '2023-01-02T00:00:00', '@AllianceId': '43958', '@ChallengeDesignId': '0', '@LastChallengeDesignId': '0', '@CaptainCharacterDesignId': '251', '@AllianceQualifyDivisionDesignId': '4', '@BlockAuthAttemptsUntilDate': '2022-12-27T22:01:04', '@BoostEndDate': '2000-01-01T00:00:00', '@CreatorSupportDate': '1900-01-01T00:00:00', '@LastBoostDate': '2023-12-05T20:08:15', '@UpdateDate': '2026-08-08T07:50:45', '@OwnerUserId': '0', '@RibbonSpriteId': '0', 'Alliance': {'@AllianceId': '43958', '@AllianceName': 'Band of Pirates', '@MinTrophyRequired': '2000', '@RequiresApproval': 'true', '@AllianceDescription': 'Merry Band of Pirates. More info coming soon.', '@AllianceCountryCode': '', '@EnableWars': 'true', '@Score': '0', '@ChampionshipScore': '0', '@MinScoreContribution': '0', '@Trophy': '0', '@Ranking': '0', '@AllianceSpriteId': '2321', '@ChannelId': '48301', '@NumberOfMembers': '74', '@NumberOfApprovedMembers': '0', '@AllianceShipUserId': '9188184', '@ImmunityDate': '2025-04-01T02:59:29', '@DivisionDesignId': '0'}, 'UserSeason': {'@UserSeasonId': '5639550', '@SeasonDesignId': '35', '@UserId': '9181430', '@Points': '45', '@UnlockedRewardDesignIds': '', '@PurchaseVIPDate': '2000-01-01T00:00:00', '@PurchaseVIPStatus': 'None'}}}}}
+Runs daily	Process account 2	2026-08-08T10:46:33.3312126Z 2026-08-08 10:46:33,326 [WARNING] [authenticate] failed to login
+Runs daily	Process account 2	2026-08-08T10:46:33.3459521Z ##[error]Process completed with exit code 1.
+Runs daily	Process account 3	﻿2026-08-08T10:46:33.3494786Z ##[group]Run set -euo pipefail
+Runs daily	Process account 3	2026-08-08T10:46:33.3495275Z ^[[36;1mset -euo pipefail^[[0m
+Runs daily	Process account 3	2026-08-08T10:46:33.3495652Z ^[[36;1mumask 077^[[0m
+Runs daily	Process account 3	2026-08-08T10:46:33.3496213Z ^[[36;1m^[[0m
+Runs daily	Process account 3	2026-08-08T10:46:33.3496573Z ^[[36;1mauth_file="$(mktemp)"^[[0m
+Runs daily	Process account 3	2026-08-08T10:46:33.3496961Z ^[[36;1msmtp_password_file="$(mktemp)"^[[0m
+Runs daily	Process account 3	2026-08-08T10:46:33.3497432Z ^[[36;1mtrap 'rm -f "$auth_file" "$smtp_password_file"' EXIT^[[0m
+Runs daily	Process account 3	2026-08-08T10:46:33.3497917Z ^[[36;1m^[[0m
+Runs daily	Process account 3	2026-08-08T10:46:33.3498240Z ^[[36;1mprintf '%s' "$AUTH_STRING" > "$auth_file"^[[0m
+Runs daily	Process account 3	2026-08-08T10:46:33.3498766Z ^[[36;1mprintf '%s' "$SMTP_PASSWORD" > "$smtp_password_file"^[[0m
+Runs daily	Process account 3	2026-08-08T10:46:33.3499180Z ^[[36;1m^[[0m
+Runs daily	Process account 3	2026-08-08T10:46:33.3499529Z ^[[36;1mpython run.py \^[[0m
+Runs daily	Process account 3	2026-08-08T10:46:33.3499905Z ^[[36;1m  --auth-file "$auth_file" \^[[0m
+Runs daily	Process account 3	2026-08-08T10:46:33.3500298Z ^[[36;1m  --smtp-email "$SMTP_EMAIL" \^[[0m
+Runs daily	Process account 3	2026-08-08T10:46:33.3500782Z ^[[36;1m  --smtp-password-file "$smtp_password_file" \^[[0m
+Runs daily	Process account 3	2026-08-08T10:46:33.3501254Z ^[[36;1m  --recipient "$RECIPIENT"^[[0m
+Runs daily	Process account 3	2026-08-08T10:46:33.3531732Z shell: /usr/bin/bash -e {0}
+Runs daily	Process account 3	2026-08-08T10:46:33.3532124Z env:
+Runs daily	Process account 3	2026-08-08T10:46:33.3532571Z   pythonLocation: /opt/hostedtoolcache/Python/3.9.25/x64
+Runs daily	Process account 3	2026-08-08T10:46:33.3533151Z   PKG_CONFIG_PATH: /opt/hostedtoolcache/Python/3.9.25/x64/lib/pkgconfig
+Runs daily	Process account 3	2026-08-08T10:46:33.3533684Z   Python_ROOT_DIR: /opt/hostedtoolcache/Python/3.9.25/x64
+Runs daily	Process account 3	2026-08-08T10:46:33.3534194Z   Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.9.25/x64
+Runs daily	Process account 3	2026-08-08T10:46:33.3534716Z   Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.9.25/x64
+Runs daily	Process account 3	2026-08-08T10:46:33.3535221Z   LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.9.25/x64/lib
+Runs daily	Process account 3	2026-08-08T10:46:33.3538087Z   AUTH_STRING: ***
+Runs daily	Process account 3	2026-08-08T10:46:33.3538508Z   SMTP_EMAIL: ***
+Runs daily	Process account 3	2026-08-08T10:46:33.3538900Z   SMTP_PASSWORD: ***
+Runs daily	Process account 3	2026-08-08T10:46:33.3539259Z   RECIPIENT: ***
+Runs daily	Process account 3	2026-08-08T10:46:33.3539622Z ##[endgroup]
+Runs daily	Process account 3	2026-08-08T10:46:33.5228530Z 2026-08-08 10:46:33,521 [ERROR] {{'UserLogin': {'@errorCode': '400', '@errorMessage': 'a****REDACTED_EMAIL***', 'User': {'@Id': '9181430', '@Name': '.ack', '@LastAlertDate': '2022-03-26T00:19:20.52', '@Email': '***REDACTED_EMAIL***', '@UserType': 'Verified', '@GenderType': 'Male', '@RaceType': 'Black', '@Credits': '1064', '@ProfileImageUrl': '', '@Trophy': '2440', '@GameCenterName': '', '@CompletedMissionDesigns': '1,53,54,55,56,104,105,106,107,237,238,241,315,239,108,109,110,111,279,10,20,21,22,23,24,25,26,27,280,211,215,216,281,282,196,316,197,199,200,329,384', '@LanguageKey': 'en', '@TutorialStatus': '71', '@IconSpriteId': '655', '@TipStatus': '24156757999', '@AllianceMembership': 'Ensign', '@CrewDonated': '102', '@CrewReceived': '61', '@FreeStarbuxReceivedToday': '0', '@DailyRewardStatus': '0', '@HeroBonusChance': '0', '@GameCenterFriendCount': '25', '@CompletedMissionEventIds': '2,131,132,133,139,135,490,492,491,496,494,493,953,499,498,930,929,1303,1302,1755,698,501,500,515,514,512,505,507,506,1498,1497,20,516,32,33,34,35,36,37,38,39,1500,1499,1205,1234,1235,1502,1501,1504,1503,1294,1758,1757,1297,1312,1314,1776,1848', '@UnlockedShipDesignIds': '162,233', '@UnlockedCharacterDesignIds': '251,84,27,312,55,290,86,51,394,104,54,396,283,259,377,308,78,66,232,400,70,101,23,9,289,163,36,106,285,335,61,83,301,305,59,65,194,257,291,26,284,398,44,24,56,315,72,198,314,397,60,71,20,191,310,48,292,64,296,53,401,286,99,57,393,13,306,25,318,21,46,295', '@Status': '2097664', '@UserSourceAdsPlatformType': 'Unknown', '@AdsPlatformUserId': '', '@LastCatalogPurchaseDate': '2023-09-06T00:00:01', '@VipExpiryDate': '2023-01-02T01:46:39', '@ChallengeWins': '0', '@ChallengeLosses': '0', '@LoadingPercentage': '0', '@AllianceSupplyDonation': '0', '@TotalSupplyDonation': '0', '@DailyMissionsAttempted': '', '@PurchaseRewardPoints': '0', '@UsedRewardPoints': '0', '@GooglePlayName': '', '@TournamentRewardPoints': '2', '@AllianceScore': '0', '@ChampionshipScore': '0', '@DailyChallengeWinStreak': '0', '@DrawsUsedToday': '0', '@ActivatedPromotions': '', '@PVPAttackWins': '246', '@PVPAttackLosses': '67', '@PVPAttackDraws': '3', '@PVPDefenceDraws': '0', '@PVPDefenceWins': '62', '@PVPDefenceLosses': '112', '@HighestTrophy': '2544', '@ChatAppearance': '0', '@AuthenticationType': 'JWT', '@DailyPVPAttacks': '0', '@ExploredStarSystemIds': '', '@TournamentBonusScore': '0', '@SituationOccurrencesToday': '0', '@Flags': '0', '@EmailVerificationStatus': 'IsEmailVerified', '@BoostAmount': '0', '@PassPoints': '0', '@AllianceScoreAtStartOfDay': '0', '@TaskRerollCount': '0', '@LeagueType': 'Standard', '@DailyPvPDefence': '0', '@TrophyGained': '0', '@UnlockedSkinKeys': '', '@RewardsCollectable': 'false', '@RewardsCollectableAmount': '0', '@IsUnderAge': 'false', '@TotalBattleSearches': '0', '@CreatorCode': '', '@DrawsString': '', '@PvPContinuousLosses': '0', '@EngagementCooldownEndDate': '1900-01-01T00:00:00', '@MatchingStatus': 'Active', '@ShipDesignId': '233', '@AllianceName': 'Band of Pirates', '@AllianceSpriteId': '2321', '@Ranking': '0', '@TournamentResetDate': '2022-06-01T00:09:37', '@AllianceJoinDate': '2022-03-26T12:23:27', '@LastPurchaseDate': '', '@LastHeartBeatDate': '2026-08-08T10:46:33', '@LastRewardActionDate': '2022-03-21T19:54:50', '@CooldownExpiry': '2022-04-14T13:19:19', '@CreationDate': '2022-03-21T19:54:50', '@LastLoginDate': '2026-08-08T10:46:33', '@LastVipClaimDate': '2023-01-02T00:00:00', '@AllianceId': '43958', '@ChallengeDesignId': '0', '@LastChallengeDesignId': '0', '@CaptainCharacterDesignId': '251', '@AllianceQualifyDivisionDesignId': '4', '@BlockAuthAttemptsUntilDate': '2022-12-27T22:01:04', '@BoostEndDate': '2000-01-01T00:00:00', '@CreatorSupportDate': '1900-01-01T00:00:00', '@LastBoostDate': '2023-12-05T20:08:15', '@UpdateDate': '2026-08-08T07:50:45', '@OwnerUserId': '0', '@RibbonSpriteId': '0', 'Alliance': {'@AllianceId': '43958', '@AllianceName': 'Band of Pirates', '@MinTrophyRequired': '2000', '@RequiresApproval': 'true', '@AllianceDescription': 'Merry Band of Pirates. More info coming soon.', '@AllianceCountryCode': '', '@EnableWars': 'true', '@Score': '0', '@ChampionshipScore': '0', '@MinScoreContribution': '0', '@Trophy': '0', '@Ranking': '0', '@AllianceSpriteId': '2321', '@ChannelId': '48301', '@NumberOfMembers': '74', '@NumberOfApprovedMembers': '0', '@AllianceShipUserId': '9188184', '@ImmunityDate': '2025-04-01T02:59:29', '@DivisionDesignId': '0'}, 'UserSeason': {'@UserSeasonId': '5639550', '@SeasonDesignId': '35', '@UserId': '9181430', '@Points': '45', '@UnlockedRewardDesignIds': '', '@PurchaseVIPDate': '2000-01-01T00:00:00', '@PurchaseVIPStatus': 'None'}}}}}
+Runs daily	Process account 3	2026-08-08T10:46:33.5241581Z 2026-08-08 10:46:33,521 [WARNING] [authenticate] failed to login
+Runs daily	Process account 3	2026-08-08T10:46:33.5394929Z ##[error]Process completed with exit code 1.
+Runs daily	Process account 4	﻿2026-08-08T10:46:33.5432176Z ##[group]Run set -euo pipefail
+Runs daily	Process account 4	2026-08-08T10:46:33.5432718Z ^[[36;1mset -euo pipefail^[[0m
+Runs daily	Process account 4	2026-08-08T10:46:33.5433098Z ^[[36;1mumask 077^[[0m
+Runs daily	Process account 4	2026-08-08T10:46:33.5433436Z ^[[36;1m^[[0m
+Runs daily	Process account 4	2026-08-08T10:46:33.5433792Z ^[[36;1mauth_file="$(mktemp)"^[[0m
+Runs daily	Process account 4	2026-08-08T10:46:33.5434166Z ^[[36;1msmtp_password_file="$(mktemp)"^[[0m
+Runs daily	Process account 4	2026-08-08T10:46:33.5434691Z ^[[36;1mtrap 'rm -f "$auth_file" "$smtp_password_file"' EXIT^[[0m
+Runs daily	Process account 4	2026-08-08T10:46:33.5435160Z ^[[36;1m^[[0m
+Runs daily	Process account 4	2026-08-08T10:46:33.5435516Z ^[[36;1mprintf '%s' "$AUTH_STRING" > "$auth_file"^[[0m
+Runs daily	Process account 4	2026-08-08T10:46:33.5436256Z ^[[36;1mprintf '%s' "$SMTP_PASSWORD" > "$smtp_password_file"^[[0m
+Runs daily	Process account 4	2026-08-08T10:46:33.5436804Z ^[[36;1m^[[0m
+Runs daily	Process account 4	2026-08-08T10:46:33.5437127Z ^[[36;1mpython run.py \^[[0m
+Runs daily	Process account 4	2026-08-08T10:46:33.5437570Z ^[[36;1m  --auth-file "$auth_file" \^[[0m
+Runs daily	Process account 4	2026-08-08T10:46:33.5438142Z ^[[36;1m  --smtp-email "$SMTP_EMAIL" \^[[0m
+Runs daily	Process account 4	2026-08-08T10:46:33.5438633Z ^[[36;1m  --smtp-password-file "$smtp_password_file" \^[[0m
+Runs daily	Process account 4	2026-08-08T10:46:33.5439109Z ^[[36;1m  --recipient "$RECIPIENT"^[[0m
+Runs daily	Process account 4	2026-08-08T10:46:33.5469552Z shell: /usr/bin/bash -e {0}
+Runs daily	Process account 4	2026-08-08T10:46:33.5470010Z env:
+Runs daily	Process account 4	2026-08-08T10:46:33.5470431Z   pythonLocation: /opt/hostedtoolcache/Python/3.9.25/x64
+Runs daily	Process account 4	2026-08-08T10:46:33.5471025Z   PKG_CONFIG_PATH: /opt/hostedtoolcache/Python/3.9.25/x64/lib/pkgconfig
+Runs daily	Process account 4	2026-08-08T10:46:33.5471545Z   Python_ROOT_DIR: /opt/hostedtoolcache/Python/3.9.25/x64
+Runs daily	Process account 4	2026-08-08T10:46:33.5472100Z   Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.9.25/x64
+Runs daily	Process account 4	2026-08-08T10:46:33.5472591Z   Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.9.25/x64
+Runs daily	Process account 4	2026-08-08T10:46:33.5473051Z   LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.9.25/x64/lib
+Runs daily	Process account 4	2026-08-08T10:46:33.5482314Z   AUTH_STRING: ***
+Runs daily	Process account 4	2026-08-08T10:46:33.5482832Z   SMTP_EMAIL: ***
+Runs daily	Process account 4	2026-08-08T10:46:33.5483330Z   SMTP_PASSWORD: ***
+Runs daily	Process account 4	2026-08-08T10:46:33.5483690Z   RECIPIENT: ***
+Runs daily	Process account 4	2026-08-08T10:46:33.5484066Z ##[endgroup]
+Runs daily	Process account 4	2026-08-08T10:46:33.7201452Z 2026-08-08 10:46:33,717 [ERROR] {{'UserLogin': {'@errorCode': '400', '@errorMessage': 'a****REDACTED_EMAIL***', 'User': {'@Id': '9181430', '@Name': '.ack', '@LastAlertDate': '2022-03-26T00:19:20.52', '@Email': '***REDACTED_EMAIL***', '@UserType': 'Verified', '@GenderType': 'Male', '@RaceType': 'Black', '@Credits': '1064', '@ProfileImageUrl': '', '@Trophy': '2440', '@GameCenterName': '', '@CompletedMissionDesigns': '1,53,54,55,56,104,105,106,107,237,238,241,315,239,108,109,110,111,279,10,20,21,22,23,24,25,26,27,280,211,215,216,281,282,196,316,197,199,200,329,384', '@LanguageKey': 'en', '@TutorialStatus': '71', '@IconSpriteId': '655', '@TipStatus': '24156757999', '@AllianceMembership': 'Ensign', '@CrewDonated': '102', '@CrewReceived': '61', '@FreeStarbuxReceivedToday': '0', '@DailyRewardStatus': '0', '@HeroBonusChance': '0', '@GameCenterFriendCount': '25', '@CompletedMissionEventIds': '2,131,132,133,139,135,490,492,491,496,494,493,953,499,498,930,929,1303,1302,1755,698,501,500,515,514,512,505,507,506,1498,1497,20,516,32,33,34,35,36,37,38,39,1500,1499,1205,1234,1235,1502,1501,1504,1503,1294,1758,1757,1297,1312,1314,1776,1848', '@UnlockedShipDesignIds': '162,233', '@UnlockedCharacterDesignIds': '251,84,27,312,55,290,86,51,394,104,54,396,283,259,377,308,78,66,232,400,70,101,23,9,289,163,36,106,285,335,61,83,301,305,59,65,194,257,291,26,284,398,44,24,56,315,72,198,314,397,60,71,20,191,310,48,292,64,296,53,401,286,99,57,393,13,306,25,318,21,46,295', '@Status': '2097664', '@UserSourceAdsPlatformType': 'Unknown', '@AdsPlatformUserId': '', '@LastCatalogPurchaseDate': '2023-09-06T00:00:01', '@VipExpiryDate': '2023-01-02T01:46:39', '@ChallengeWins': '0', '@ChallengeLosses': '0', '@LoadingPercentage': '0', '@AllianceSupplyDonation': '0', '@TotalSupplyDonation': '0', '@DailyMissionsAttempted': '', '@PurchaseRewardPoints': '0', '@UsedRewardPoints': '0', '@GooglePlayName': '', '@TournamentRewardPoints': '2', '@AllianceScore': '0', '@ChampionshipScore': '0', '@DailyChallengeWinStreak': '0', '@DrawsUsedToday': '0', '@ActivatedPromotions': '', '@PVPAttackWins': '246', '@PVPAttackLosses': '67', '@PVPAttackDraws': '3', '@PVPDefenceDraws': '0', '@PVPDefenceWins': '62', '@PVPDefenceLosses': '112', '@HighestTrophy': '2544', '@ChatAppearance': '0', '@AuthenticationType': 'JWT', '@DailyPVPAttacks': '0', '@ExploredStarSystemIds': '', '@TournamentBonusScore': '0', '@SituationOccurrencesToday': '0', '@Flags': '0', '@EmailVerificationStatus': 'IsEmailVerified', '@BoostAmount': '0', '@PassPoints': '0', '@AllianceScoreAtStartOfDay': '0', '@TaskRerollCount': '0', '@LeagueType': 'Standard', '@DailyPvPDefence': '0', '@TrophyGained': '0', '@UnlockedSkinKeys': '', '@RewardsCollectable': 'false', '@RewardsCollectableAmount': '0', '@IsUnderAge': 'false', '@TotalBattleSearches': '0', '@CreatorCode': '', '@DrawsString': '', '@PvPContinuousLosses': '0', '@EngagementCooldownEndDate': '1900-01-01T00:00:00', '@MatchingStatus': 'Active', '@ShipDesignId': '233', '@AllianceName': 'Band of Pirates', '@AllianceSpriteId': '2321', '@Ranking': '0', '@TournamentResetDate': '2022-06-01T00:09:37', '@AllianceJoinDate': '2022-03-26T12:23:27', '@LastPurchaseDate': '', '@LastHeartBeatDate': '2026-08-08T10:46:33', '@LastRewardActionDate': '2022-03-21T19:54:50', '@CooldownExpiry': '2022-04-14T13:19:19', '@CreationDate': '2022-03-21T19:54:50', '@LastLoginDate': '2026-08-08T10:46:33', '@LastVipClaimDate': '2023-01-02T00:00:00', '@AllianceId': '43958', '@ChallengeDesignId': '0', '@LastChallengeDesignId': '0', '@CaptainCharacterDesignId': '251', '@AllianceQualifyDivisionDesignId': '4', '@BlockAuthAttemptsUntilDate': '2022-12-27T22:01:04', '@BoostEndDate': '2000-01-01T00:00:00', '@CreatorSupportDate': '1900-01-01T00:00:00', '@LastBoostDate': '2023-12-05T20:08:15', '@UpdateDate': '2026-08-08T07:50:45', '@OwnerUserId': '0', '@RibbonSpriteId': '0', 'Alliance': {'@AllianceId': '43958', '@AllianceName': 'Band of Pirates', '@MinTrophyRequired': '2000', '@RequiresApproval': 'true', '@AllianceDescription': 'Merry Band of Pirates. More info coming soon.', '@AllianceCountryCode': '', '@EnableWars': 'true', '@Score': '0', '@ChampionshipScore': '0', '@MinScoreContribution': '0', '@Trophy': '0', '@Ranking': '0', '@AllianceSpriteId': '2321', '@ChannelId': '48301', '@NumberOfMembers': '74', '@NumberOfApprovedMembers': '0', '@AllianceShipUserId': '9188184', '@ImmunityDate': '2025-04-01T02:59:29', '@DivisionDesignId': '0'}, 'UserSeason': {'@UserSeasonId': '5639550', '@SeasonDesignId': '35', '@UserId': '9181430', '@Points': '45', '@UnlockedRewardDesignIds': '', '@PurchaseVIPDate': '2000-01-01T00:00:00', '@PurchaseVIPStatus': 'None'}}}}}
+Runs daily	Process account 4	2026-08-08T10:46:33.7221247Z 2026-08-08 10:46:33,717 [WARNING] [authenticate] failed to login
+Runs daily	Process account 4	2026-08-08T10:46:33.7370635Z ##[error]Process completed with exit code 1.
+Runs daily	Process account 5	﻿2026-08-08T10:46:33.7407297Z ##[group]Run set -euo pipefail
+Runs daily	Process account 5	2026-08-08T10:46:33.7407801Z ^[[36;1mset -euo pipefail^[[0m
+Runs daily	Process account 5	2026-08-08T10:46:33.7408156Z ^[[36;1mumask 077^[[0m
+Runs daily	Process account 5	2026-08-08T10:46:33.7408531Z ^[[36;1m^[[0m
+Runs daily	Process account 5	2026-08-08T10:46:33.7408907Z ^[[36;1mauth_file="$(mktemp)"^[[0m
+Runs daily	Process account 5	2026-08-08T10:46:33.7409293Z ^[[36;1msmtp_password_file="$(mktemp)"^[[0m
+Runs daily	Process account 5	2026-08-08T10:46:33.7409780Z ^[[36;1mtrap 'rm -f "$auth_file" "$smtp_password_file"' EXIT^[[0m
+Runs daily	Process account 5	2026-08-08T10:46:33.7410274Z ^[[36;1m^[[0m
+Runs daily	Process account 5	2026-08-08T10:46:33.7410626Z ^[[36;1mprintf '%s' "$AUTH_STRING" > "$auth_file"^[[0m
+Runs daily	Process account 5	2026-08-08T10:46:33.7411136Z ^[[36;1mprintf '%s' "$SMTP_PASSWORD" > "$smtp_password_file"^[[0m
+Runs daily	Process account 5	2026-08-08T10:46:33.7411572Z ^[[36;1m^[[0m
+Runs daily	Process account 5	2026-08-08T10:46:33.7411934Z ^[[36;1mpython run.py \^[[0m
+Runs daily	Process account 5	2026-08-08T10:46:33.7412330Z ^[[36;1m  --auth-file "$auth_file" \^[[0m
+Runs daily	Process account 5	2026-08-08T10:46:33.7412719Z ^[[36;1m  --smtp-email "$SMTP_EMAIL" \^[[0m
+Runs daily	Process account 5	2026-08-08T10:46:33.7413226Z ^[[36;1m  --smtp-password-file "$smtp_password_file" \^[[0m
+Runs daily	Process account 5	2026-08-08T10:46:33.7413706Z ^[[36;1m  --recipient "$RECIPIENT"^[[0m
+Runs daily	Process account 5	2026-08-08T10:46:33.7443966Z shell: /usr/bin/bash -e {0}
+Runs daily	Process account 5	2026-08-08T10:46:33.7444356Z env:
+Runs daily	Process account 5	2026-08-08T10:46:33.7444804Z   pythonLocation: /opt/hostedtoolcache/Python/3.9.25/x64
+Runs daily	Process account 5	2026-08-08T10:46:33.7445343Z   PKG_CONFIG_PATH: /opt/hostedtoolcache/Python/3.9.25/x64/lib/pkgconfig
+Runs daily	Process account 5	2026-08-08T10:46:33.7446175Z   Python_ROOT_DIR: /opt/hostedtoolcache/Python/3.9.25/x64
+Runs daily	Process account 5	2026-08-08T10:46:33.7446719Z   Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.9.25/x64
+Runs daily	Process account 5	2026-08-08T10:46:33.7447170Z   Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.9.25/x64
+Runs daily	Process account 5	2026-08-08T10:46:33.7447748Z   LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.9.25/x64/lib
+Runs daily	Process account 5	2026-08-08T10:46:33.7450741Z   AUTH_STRING: ***
+Runs daily	Process account 5	2026-08-08T10:46:33.7451199Z   SMTP_EMAIL: ***
+Runs daily	Process account 5	2026-08-08T10:46:33.7451542Z   SMTP_PASSWORD: ***
+Runs daily	Process account 5	2026-08-08T10:46:33.7451937Z   RECIPIENT: ***
+Runs daily	Process account 5	2026-08-08T10:46:33.7452279Z ##[endgroup]
+Runs daily	Process account 5	2026-08-08T10:46:34.7243379Z 2026-08-08 10:46:34,723 [INFO] [.ack] Authenticated...
+Runs daily	Process account 5	2026-08-08T10:46:34.8765540Z 2026-08-08 10:46:34,876 [INFO] [.ack] You have collected a total of 3 starbux today.
+Runs daily	Process account 5	2026-08-08T10:49:34.9434836Z 2026-08-08 10:49:34,943 [INFO] [.ack] You have collected a total of 8 starbux today.
+Runs daily	Process account 5	2026-08-08T10:52:35.0045291Z 2026-08-08 10:52:35,004 [INFO] [.ack] You have collected a total of 10 starbux today.
+Runs daily	Process account 5	2026-08-08T10:52:35.2126123Z 2026-08-08 10:52:35,212 [INFO] [.ack] List of characters: .ack, Paul, Jesus, Arctic Pole Boy, Cat Boy, Qtarian Healer, Emily, Simon, Tiffany, David, Red Ninja, Fed Medic, Gray Virtuoso, Robyna Hoots, Good student, Evil General, Mr Egggg, Visiri Capt'n, Roborob, Female Citizen, Gentleman, Cross-eyed Mary
+Runs daily	Process account 5	2026-08-08T10:52:35.5355396Z 2026-08-08 10:52:35,535 [INFO] Skipped research design 3: lab upgrade required.
+Runs daily	Process account 5	2026-08-08T10:52:35.5868972Z 2026-08-08 10:52:35,586 [INFO] Skipped research design 63: lab upgrade required.
+Runs daily	Process account 5	2026-08-08T10:52:35.6497674Z 2026-08-08 10:52:35,649 [INFO] Skipped research design 100: lab upgrade required.
+Runs daily	Process account 5	2026-08-08T10:52:35.7464773Z 2026-08-08 10:52:35,746 [INFO] [.ack] Beginning research for Ammo Recycling II
+Runs daily	Process account 5	2026-08-08T10:52:36.0708873Z 2026-08-08 10:52:36,070 [INFO] [.ack] Upgradng Armor Lv5 to Armor Lv6.
+Runs daily	Process account 5	2026-08-08T10:52:36.2499745Z 2026-08-08 10:52:36,249 [INFO] [.ack] Upgradng Armor Lv5 to Armor Lv6.
+Runs daily	Process account 5	2026-08-08T10:52:36.9748509Z 2026-08-08 10:52:36,974 [INFO] [.ack] You have collected the daily reward from the dropship.
+Runs daily	Process account 5	2026-08-08T10:52:37.0614607Z 2026-08-08 10:52:37,060 [INFO] [.ack] Listing for 46 Gold (Au) expired. 101x11 item is collectable.
+Runs daily	Process account 5	2026-08-08T10:52:37.1259381Z 2026-08-08 10:52:37,125 [ERROR] [.ack] {https://api.pixelstarships.com/MessageService/CollectReward2?messageId=476183328&clientDateTime=2026-08-08T10:52:37&checksum=2132&accessToken=***REDACTED***} - {{'CollectReward': {'@errorMessage': 'You cannot collect this reward as your storage is full.'}}}
+Runs daily	Process account 5	2026-08-08T10:52:37.1261841Z 2026-08-08 10:52:37,125 [INFO] [.ack] Listing for 45 Gold (Au) expired. 101x1 item is collectable.
+Runs daily	Process account 5	2026-08-08T10:52:37.1925246Z 2026-08-08 10:52:37,192 [ERROR] [.ack] {https://api.pixelstarships.com/MessageService/CollectReward2?messageId=475756265&clientDateTime=2026-08-08T10:52:37&checksum=2132&accessToken=***REDACTED***} - {{'CollectReward': {'@errorMessage': 'You cannot collect this reward as your storage is full.'}}}
+Runs daily	Process account 5	2026-08-08T10:52:37.1929252Z 2026-08-08 10:52:37,192 [INFO] [.ack] Sold 1 Large Gas Crate to 听风盗月童. 400000 mineral is collectable.
+Runs daily	Process account 5	2026-08-08T10:52:37.1930428Z 2026-08-08 10:52:37,192 [INFO] [.ack] Sold 1 Small Mineral Crate to Clicksmaru. 400000 gas is collectable.
+Runs daily	Process account 5	2026-08-08T10:52:37.1931608Z 2026-08-08 10:52:37,192 [INFO] [.ack] Sold 1 Medium Gas Crate to Clicksmaru. 400000 gas is collectable.
+Runs daily	Process account 5	2026-08-08T10:52:37.1932981Z 2026-08-08 10:52:37,192 [INFO] [.ack] Sold 1 Medium Gas Crate to Clicksmaru. 400000 gas is collectable.
+Runs daily	Process account 5	2026-08-08T10:52:37.1934106Z 2026-08-08 10:52:37,192 [INFO] [.ack] Sold 1 Medium Gas Crate to Clicksmaru. 400000 gas is collectable.
+Runs daily	Process account 5	2026-08-08T10:52:37.1935116Z 2026-08-08 10:52:37,192 [INFO] [.ack] A total of 10 free starbux was collected today.
+Runs daily	Process account 5	2026-08-08T10:52:37.1936506Z 2026-08-08 10:52:37,192 [INFO] [.ack] You have a total of 1064 starbux.
+Runs daily	Process account 5	2026-08-08T10:52:37.5314061Z 2026-08-08 10:52:37,531 [INFO] [.ack] There is a total of 34620 minerals on your ship.
+Runs daily	Process account 5	2026-08-08T10:52:37.5314858Z 2026-08-08 10:52:37,531 [INFO] [.ack] There is a total of 15000 gas on your ship.
+Runs daily	Process account 5	2026-08-08T10:52:37.6279869Z 2026-08-08 10:52:37,627 [INFO] [.ack] The following characters are below level 40: .ack, Paul, Jesus, Cat Boy, Qtarian Healer, Emily, Simon, Tiffany, David, Red Ninja, Fed Medic, Gray Virtuoso, Good student, Visiri Capt'n, Roborob
+Runs daily	Process account 5	2026-08-08T10:52:37.6281015Z 2026-08-08 10:52:37,627 [INFO] [.ack] Finished...
+Runs daily	Post Setup Python version 3.9	﻿2026-08-08T10:52:38.8672501Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+Runs daily	Post Setup Python version 3.9	2026-08-08T10:52:38.8673781Z Post job cleanup.
+Runs daily	Post Setup Python version 3.9	2026-08-08T10:52:38.9883560Z (node:2637) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+Runs daily	Post Setup Python version 3.9	2026-08-08T10:52:38.9884797Z (Use `node --trace-deprecation ...` to show where the warning was created)
+Runs daily	Post Checkout	﻿2026-08-08T10:52:39.0109776Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+Runs daily	Post Checkout	2026-08-08T10:52:39.0111846Z Post job cleanup.
+Runs daily	Post Checkout	2026-08-08T10:52:39.0985451Z [command]/usr/bin/git version
+Runs daily	Post Checkout	2026-08-08T10:52:39.1029728Z git version 2.54.0
+Runs daily	Post Checkout	2026-08-08T10:52:39.1071761Z Temporarily overriding HOME='/home/runner/work/_temp/e1fe591c-5afb-45e3-be8b-0f829fac73ed' before making global git config changes
+Runs daily	Post Checkout	2026-08-08T10:52:39.1073123Z Adding repository directory to the temporary git global config as a safe directory
+Runs daily	Post Checkout	2026-08-08T10:52:39.1079171Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/tachikoma/tachikoma
+Runs daily	Post Checkout	2026-08-08T10:52:39.1118385Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+Runs daily	Post Checkout	2026-08-08T10:52:39.1161777Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+Runs daily	Post Checkout	2026-08-08T10:52:39.1389788Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+Runs daily	Post Checkout	2026-08-08T10:52:39.1417507Z http.https://github.com/.extraheader
+Runs daily	Post Checkout	2026-08-08T10:52:39.1430478Z [command]/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
+Runs daily	Post Checkout	2026-08-08T10:52:39.1480992Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+Runs daily	Post Checkout	2026-08-08T10:52:39.1709928Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+Runs daily	Post Checkout	2026-08-08T10:52:39.1746177Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+Runs daily	Complete job	﻿2026-08-08T10:52:39.2143971Z Cleaning up orphan processes
+Runs daily	Complete job	2026-08-08T10:52:39.2408455Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@v4, actions/setup-python@v5. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/

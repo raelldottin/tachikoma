@@ -172,7 +172,7 @@ class Client(object):
 
         if "errorMessage" in r.text:
             text_lower = r.text.lower()
-            if "please upgrade your lab room" in text_lower or "storage is full" in text_lower:
+            if "please upgrade your lab room" in text_lower or "storage is full" in text_lower or "unfinalised battle" in text_lower:
                 d = xmltodict.parse(r.content, xml_attribs=True)
                 logging.warning("[%s] {%s} - {%s}", self.info.get("@Name", ""), redact_secrets(url), redact_secrets(str(d)))
             else:
@@ -507,6 +507,13 @@ class Client(object):
         if r.content:
             self.latestVersion = xmltodict.parse(r.content, xml_attribs=True)
 
+    def _get_design_version(self, key: str, default: str = "1") -> str:
+        """Safely extract a design version from latestVersion."""
+        try:
+            return self.latestVersion["SettingService"]["GetLatestSetting"]["Setting"][key]
+        except (TypeError, KeyError):
+            return default
+
     def getTodayLiveOps2(self):
         url = f"https://api.pixelstarships.com/LiveOpsService/GetTodayLiveOps2?languageKey={self.device.languageKey}&deviceType=DeviceTypeIPhone"
         r = self.request(url, "GET")
@@ -514,19 +521,19 @@ class Client(object):
             self.todayLiveOps = xmltodict.parse(r.content, xml_attribs=True)
 
     def listRoomDesigns2(self):
-        url = f"https://api.pixelstarships.com/RoomService/ListRoomDesigns2?languageKey={self.device.languageKey}&designVersion={self.latestVersion['SettingService']['GetLatestSetting']['Setting']['@RoomDesignVersion']}"
+        url = f"https://api.pixelstarships.com/RoomService/ListRoomDesigns2?languageKey={self.device.languageKey}&designVersion={self._get_design_version('@RoomDesignVersion')}"
         r = self.request(url, "GET")
         if r:
             self.roomDesigns = xmltodict.parse(r.content, xml_attribs=True)
 
     def listAllTaskDesigns2(self):
-        url = f"https://api.pixelstarships.com/TaskService/ListAllTaskDesigns2?languageKey={self.device.languageKey}&designVersion={self.latestVersion['SettingService']['GetLatestSetting']['Setting']['@RoomDesignVersion']}"
+        url = f"https://api.pixelstarships.com/TaskService/ListAllTaskDesigns2?languageKey={self.device.languageKey}&designVersion={self._get_design_version('@RoomDesignVersion')}"
         r = self.request(url, "GET")
         if r:
             self.allTaskDesigns = xmltodict.parse(r.content, xml_attribs=True)
 
     def listAllTrainingDesigns2(self):
-        url = f"https://api.pixelstarships.com/TrainingService/ListAllTrainingDesigns2?languageKey={self.device.languageKey}&designVersion={self.latestVersion['SettingService']['GetLatestSetting']['Setting']['@RoomDesignVersion']}"
+        url = f"https://api.pixelstarships.com/TrainingService/ListAllTrainingDesigns2?languageKey={self.device.languageKey}&designVersion={self._get_design_version('@RoomDesignVersion')}"
         r = self.request(url, "GET")
         if r:
             self.trainingDesigns = xmltodict.parse(r.content, xml_attribs=True)
@@ -622,8 +629,8 @@ class Client(object):
         return False
 
     def listActionTypes2(self):
-        if self.user.isAuthorized:
-            url = f"https://api.pixelstarships.com/RoomService/ListActionTypes2?languageKey={self.device.languageKey}&designVersion={self.latestVersion['SettingService']['GetLatestSetting']['Setting']['@ResearchDesignVersion']}"
+        if self.user.isAuthorized and not getattr(self, "actionTypes", {}):
+            url = f"https://api.pixelstarships.com/RoomService/ListActionTypes2?languageKey={self.device.languageKey}&designVersion={self._get_design_version('@ResearchDesignVersion')}"
             r = self.request(url, "GET")
             if r:
                 self.actionTypes = xmltodict.parse(r.content, xml_attribs=True)
@@ -631,8 +638,8 @@ class Client(object):
         return False
 
     def listConditionTypes2(self):
-        if self.user.isAuthorized:
-            url = f"https://api.pixelstarships.com/RoomService/ListConditionTypes2?languageKey={self.device.languageKey}&designVersion={self.latestVersion['SettingService']['GetLatestSetting']['Setting']['@ResearchDesignVersion']}"
+        if self.user.isAuthorized and not getattr(self, "conditionTypes", {}):
+            url = f"https://api.pixelstarships.com/RoomService/ListConditionTypes2?languageKey={self.device.languageKey}&designVersion={self._get_design_version('@ResearchDesignVersion')}"
             r = self.request(url, "GET")
             if r:
                 self.conditionTypes = xmltodict.parse(r.content, xml_attribs=True)
@@ -854,8 +861,8 @@ class Client(object):
         return True
 
     def listAllCharacterDesigns2(self):
-        if self.latestVersion:
-            url = f"{self.baseUrl}/CharacterService/ListAllCharacterDesigns2?languageKey={self.device.languageKey}&designVersion={self.latestVersion['SettingService']['GetLatestSetting']['Setting']['@CharacterDesignVersion']}"
+        if self.latestVersion and not getattr(self, "allCharacterDesigns", {}):
+            url = f"{self.baseUrl}/CharacterService/ListAllCharacterDesigns2?languageKey={self.device.languageKey}&designVersion={self._get_design_version('@CharacterDesignVersion')}"
             r = self.request(url, "GET")
             if r:
                 self.allCharacterDesigns = xmltodict.parse(r.content, xml_attribs=True)
@@ -1553,7 +1560,7 @@ class Client(object):
         )
 
         url = f"{self.baseUrl}/BattleService/FinaliseBattle15?battleId={battle_id}&clientOutcomeType={client_outcome_type}&clientEndFrame={client_end_frame}&clientResultString={client_result_string}&attackingShipHp={attacking_ship_hp}&checksum={checksum}&clientVersion={client_version}&accessToken={self.accessToken}"
-        r = self.request(url, "POST", body=None)
+        r = self.request(url, "POST")
         
         if r and "errorMessage" not in r.text:
             logging.info("[%s] Finalized PVP Battle %s", self.info.get("@Name", "guest"), battle_id)
@@ -2069,8 +2076,8 @@ class Client(object):
                             )
 
     def listAllResearchDesigns2(self):
-        if self.latestVersion:
-            url = f"https://api.pixelstarships.com/ResearchService/ListAllResearchDesigns2?languageKey={self.device.languageKey}&designVersion={self.latestVersion['SettingService']['GetLatestSetting']['Setting']['@ResearchDesignVersion']}"
+        if self.latestVersion and not getattr(self, "allResearchDesigns", {}):
+            url = f"https://api.pixelstarships.com/ResearchService/ListAllResearchDesigns2?languageKey={self.device.languageKey}&designVersion={self._get_design_version('@ResearchDesignVersion')}"
             r = self.request(url, "GET")
             self.allResearchDesigns = xmltodict.parse(r.content, xml_attribs=True)
             if "ResearchService" not in self.allResearchDesigns:
