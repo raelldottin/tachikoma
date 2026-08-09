@@ -166,8 +166,11 @@ def checksum_rebuild_ammo3(
 ) -> str:
     """Compute the RebuildAmmo3 native checksum.
 
-    Formula matches FinaliseBattle15 pattern (parameters in URL order before checksum):
-    preimage  = deviceKey + email + ammoCategory + clientDateTime + accessToken + checksumKey
+    Formula matches URL parameter order (parameters before checksum in URL):
+    URL: /RoomService/RebuildAmmo3?ammoCategory={0}&clientDateTime={1}&checksum={2}&accessToken={3}
+    Parameters before checksum: ammoCategory, clientDateTime, accessToken
+    
+    preimage  = ammoCategory + clientDateTime + accessToken + checksumKey
     encrypted = preimage + savyChecksum
     checksum  = MD5(encrypted)
     """
@@ -175,7 +178,8 @@ def checksum_rebuild_ammo3(
         raise UnsupportedNativeChecksum(
             "RebuildAmmo3 requires checksum_key and savy_checksum configuration."
         )
-    preimage = device_key + email + ammo_category + client_date_time + access_token + checksum_key
+    # URL parameter order before checksum: ammoCategory, clientDateTime, accessToken
+    preimage = ammo_category + client_date_time + access_token + checksum_key
     encrypted = preimage + savy_checksum
     return hashlib.md5(encrypted.encode("utf-8")).hexdigest()
 
