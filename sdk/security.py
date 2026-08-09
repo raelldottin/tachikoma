@@ -399,6 +399,8 @@ def checksum_create_star_battle5(
     access_token: str,
     search_number: str,
     value: str,
+    device_key: str,
+    email: str,
     checksum_key: str,
     savy_checksum: str,
 ) -> str:
@@ -407,8 +409,8 @@ def checksum_create_star_battle5(
     URL: /BattleService/CreateStarBattle5?clientHp={0}&clientDateTime={1}&checksum={2}&accessToken={3}&searchNumber={4}&value={5}
     Parameters before checksum in URL: clientHp, clientDateTime, accessToken, searchNumber, value
 
-    Formula (matches FinaliseBattle15 pattern - includes deviceKey and email from config):
-    preimage  = clientHp + clientDateTime + accessToken + searchNumber + value + checksumKey
+    Formula (original implementation with deviceKey and email):
+    preimage  = clientHp + clientDateTime + accessToken + searchNumber + value + deviceKey + email + checksumKey
     encrypted = preimage + savyChecksum
     checksum  = MD5(encrypted)
 
@@ -418,6 +420,8 @@ def checksum_create_star_battle5(
         access_token: Current session access token
         search_number: Search number as string (e.g., "0")
         value: Value as string (e.g., "0")
+        device_key: Device UUID
+        email: User email
         checksum_key: Configuration.ChecksumKey ("5343")
         savy_checksum: Configuration.SavyChecksum ("Savvy!s0d@")
 
@@ -433,7 +437,7 @@ def checksum_create_star_battle5(
             "configuration values compatible with the installed game version."
         )
 
-    # URL parameter order before checksum: clientHp, clientDateTime, accessToken, searchNumber, value
-    preimage = client_hp + client_date_time + access_token + search_number + value + checksum_key
+    # Original implementation includes deviceKey and email
+    preimage = client_hp + client_date_time + access_token + search_number + value + device_key + email + checksum_key
     encrypted = preimage + savy_checksum
     return hashlib.md5(encrypted.encode("utf-8")).hexdigest()
