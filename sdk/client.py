@@ -2530,10 +2530,16 @@ class Client(object):
         # Fall back to ship design data for max HP
         ship_design_id = ship.get("@ShipDesignId")
         logging.warning(f"[{self.info.get('@Name', '')}] ShipDesignId from ship data: {ship_design_id}")
-        logging.warning(f"[{self.info.get('@Name', '')}] hasattr shipDesigns: {hasattr(self, 'shipDesigns')}")
-        if hasattr(self, "shipDesigns"):
-            logging.warning(f"[{self.info.get('@Name', '')}] shipDesigns keys: {list(self.shipDesigns.keys()) if isinstance(self.shipDesigns, dict) else 'not dict'}")
-        if ship_design_id and hasattr(self, "shipDesigns"):
+        
+        # Ensure ship designs are loaded
+        if not hasattr(self, "shipDesigns") or not self.shipDesigns:
+            logging.warning(f"[{self.info.get('@Name', '')}] Loading ship designs...")
+            if not self.listAllDesigns4():
+                logging.warning(f"[{self.info.get('@Name', '')}] Failed to load ship designs")
+            else:
+                logging.warning(f"[{self.info.get('@Name', '')}] Ship designs loaded successfully")
+        
+        if ship_design_id and hasattr(self, "shipDesigns") and self.shipDesigns:
             logging.warning(f"[{self.info.get('@Name', '')}] Checking ship design {ship_design_id} for max HP...")
             designs = self.shipDesigns.get("ShipDesign", [])
             logging.warning(f"[{self.info.get('@Name', '')}] Ship designs count: {len(designs) if isinstance(designs, list) else 'not list'}")
