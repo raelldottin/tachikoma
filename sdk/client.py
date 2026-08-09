@@ -2456,98 +2456,56 @@ class Client(object):
         return True
 
     def getShipHpFraction(self) -> float:
-        """Return the ship's current HP as a fraction of max (0.0-1.0).
+            """Return the ship's current HP as a fraction of max (0.0-1.0).
 
-        Computes HP from the room layout: each room contributes its current
-        HP (sum of character @Hp values) versus its max capacity. If the ship
-        data is unavailable, returns -1.0 so callers can distinguish "unknown"
-        from "not full".
-        """
-        logging.debug(f"[{self.info.get('@Name', '')}] Getting ship HP fraction...")
-        if not hasattr(self, "shipByUserId") or not self.shipByUserId:
-            logging.debug(f"[{self.info.get('@Name', '')}] shipByUserId not cached, fetching...")
-            if not self.getShipByUserId():
-                logging.warning(f"[{self.info.get('@Name', '')}] getShipByUserId() failed")
-                return -1.0
-            else:
-                logging.debug(f"[{self.info.get('@Name', '')}] getShipByUserId() succeeded")
-        try:
-            ship = self.shipByUserId["ShipService"]["GetShipByUserId"]["Ship"]
-            logging.warning(f"[{self.info.get('@Name', '')}] Ship data keys: {list(ship.keys()) if isinstance(ship, dict) else 'not dict'}")
-        except (KeyError, TypeError) as e:
-            logging.warning(f"[{self.info.get('@Name', '')}] Ship data structure error: {e}")
-            return -1.0
-
-        # PSS Ship records the current/max hull capacity as attributes.
-        # Common field names seen in captures: @Hp / @MaxHp, or @HullHp /
-        # @HullMaxHp. Use whichever pair is present.
-        candidates = [
-            ("@Hp", "@MaxHp"),
-            ("@HullHp", "@HullMaxHp"),
-            ("@CurrentHp", "@MaxHp"),
-            # @Shield might represent max HP (some games use shield as max HP)
-            ("@Hp", "@Shield"),
-        ]
-        for cur_attr, max_attr in candidates:
-            cur = ship.get(cur_attr)
-            mx = ship.get(max_attr)
-            logging.warning(f"[{self.info.get('@Name', '')}] Checking {cur_attr}/{max_attr}: cur={cur}, mx={mx}")
-            if cur is not None and mx is not None:
-                try:
-                    cur_i = int(cur)
-                    mx_i = int(mx)
-                except (ValueError, TypeError):
-                    continue
-                if mx_i > 0:
-                    logging.debug(f"[{self.info.get('@Name', '')}] Ship HP: {cur_i}/{mx_i} = {cur_i/mx_i:.2%} (from {cur_attr}/{max_attr})")
-                    return cur_i / mx_i
-            elif cur is not None and mx is None:
-                logging.warning(f"[{self.info.get('@Name', '')}] Found {cur_attr}={cur} but missing {max_attr}; cannot compute HP fraction")
-
-        # Fall back to summing room HP if ship-level attributes are absent.
-        rooms = ship.get("Rooms", {}).get("Room", [])
-        if isinstance(rooms, dict):
-            rooms = [rooms]
-        logging.warning(f"[{self.info.get('@Name', '')}] Checking {len(rooms)} rooms for HP data...")
-        total_cur = 0
-        total_max = 0
-        for i, room in enumerate(rooms):
-            cur = room.get("@Hp")
-            mx = room.get("@MaxHp")
-            logging.warning(f"[{self.info.get('@Name', '')}] Room {i}: keys={list(room.keys()) if isinstance(room, dict) else 'not dict'}, @Hp={cur}, @MaxHp={mx}")
-            if cur is None or mx is None:
-                continue
+            Ship design is the authoritative source for max HP. The ship data
+            provides current HP (@Hp), while the ship design provides max HP.
+            """
+            logging.debug(f"[{self.info.get('@Name', '')}] Getting ship HP fraction...")
+        
+            # Get current HP from ship data
+            if not hasattr(self, "shipByUserId") or not self.shipByUserId:
+                if not self.getShipByUserId():
+                    logging.warning(f"[{self.info.get('@Name', '')}] getShipByUserId() failed")
+                    return -1.0
+        
             try:
-                total_cur += int(cur)
-                total_max += int(mx)
+                ship = self.shipByUserId["ShipService"]["GetShipByUserId"]["Ship"]
+            except (KeyError, TypeError) as e:
+                logging.warning(f"[{self.info.get('@Name', '')}] Ship data structure error: {e}")
+                return -1.0
+
+            # Get current HP from ship data
+            cur = ship.get("@Hp")
+            if cur is None:
+                logging.warning(f"[{self.info.get('@Name', '')}] No @Hp in ship data")
+                return -1.0
+            try:
+                cur_i = int(cur)
             except (ValueError, TypeError):
-                continue
-        if total_max > 0:
-            logging.debug(f"[{self.info.get('@Name', '')}] Ship HP from rooms: {total_cur}/{total_max} = {total_cur/total_max:.2%}")
-            return total_cur / total_max
-        logging.warning(f"[{self.info.get('@Name', '')}] No HP data found in ship or rooms")
-        
-        # Fall back to ship design data for max HP
-        ship_design_id = ship.get("@ShipDesignId")
-        logging.warning(f"[{self.info.get('@Name', '')}] ShipDesignId from ship data: {ship_design_id}")
-        
-        # Ensure ship designs are loaded
-        if not hasattr(self, "shipDesigns") or not self.shipDesigns:
-            logging.warning(f"[{self.info.get('@Name', '')}] Loading ship designs...")
-            if not self.listAllDesigns4():
-                logging.warning(f"[{self.info.get('@Name', '')}] Failed to load ship designs")
-            else:
-                logging.warning(f"[{self.info.get('@Name', '')}] Ship designs loaded successfully")
-        
-        if ship_design_id and hasattr(self, "shipDesigns") and self.shipDesigns:
-            logging.warning(f"[{self.info.get('@Name', '')}] Checking ship design {ship_design_id} for max HP...")
+                logging.warning(f"[{self.info.get('@Name', '')}] Invalid @Hp value: {cur}")
+                return -1.0
+
+            # Get max HP from ship design
+            ship_design_id = ship.get("@ShipDesignId")
+            if not ship_design_id:
+                logging.warning(f"[{self.info.get('@Name', '')}] No @ShipDesignId in ship data")
+                return -1.0
+
+            # Ensure ship designs are loaded
+            if not hasattr(self, "shipDesigns") or not self.shipDesigns:
+                logging.warning(f"[{self.info.get('@Name', '')}] Loading ship designs...")
+                if not self.listAllDesigns4():
+                    logging.warning(f"[{self.info.get('@Name', '')}] Failed to load ship designs")
+                    return -1.0
+                logging.debug(f"[{self.info.get('@Name', '')}] Ship designs loaded successfully")
+
             designs = self.shipDesigns.get("ShipDesign", [])
-            logging.warning(f"[{self.info.get('@Name', '')}] Ship designs count: {len(designs) if isinstance(designs, list) else 'not list'}")
             if isinstance(designs, dict):
                 designs = [designs]
+        
             for design in designs:
-                if design.get("@ShipDesignId") == ship_design_id:
-                    logging.warning(f"[{self.info.get('@Name', '')}] Found matching design: {design}")
+                if design.get("@ShipDesignId") == ship.get("@ShipDesignId"):
                     # Look for max HP fields in ship design
                     for hp_field in ["@MaxHp", "@Hp", "@HullHp", "@HullMaxHp", "@HpMax"]:
                         mx = design.get(hp_field)
@@ -2555,18 +2513,14 @@ class Client(object):
                             try:
                                 mx_i = int(mx)
                                 if mx_i > 0:
-                                    cur = ship.get("@Hp")
-                                    if cur is not None:
-                                        try:
-                                            cur_i = int(cur)
-                                            logging.warning(f"[{self.info.get('@Name', '')}] Ship HP from design {ship_design_id}: {cur_i}/{mx_i} = {cur_i/mx_i:.2%} (from {hp_field})")
-                                            return cur_i / mx_i
-                                        except (ValueError, TypeError):
-                                            pass
+                                    cur_i = int(ship.get("@Hp", 0))
+                                    logging.debug(f"[{self.info.get('@Name', '')}] Ship HP from design: {cur_i}/{mx_i} = {cur_i/mx_i:.2%} (from {hp_field})")
+                                    return cur_i / mx_i
                             except (ValueError, TypeError):
                                 continue
-        logging.warning(f"[{self.info.get('@Name', '')}] No HP data found in ship, rooms, or design")
-        return -1.0
+        
+            logging.warning(f"[{self.info.get('@Name', '')}] No max HP found in ship design")
+            return -1.0
 
     def runBattleEndToEnd(self, clientHp: int = 100000) -> bool:
         """Execute a complete ship battle end-to-end.
