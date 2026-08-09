@@ -2106,8 +2106,8 @@ class Client(object):
         Uses RebuildAmmo3 with checksum derived from configuration values.
         Requires checksum_key and savy_checksum configuration settings.
 
-        Checksum formula (derived from URL parameter order):
-        preimage = ammoCategory + clientDateTime + checksum_key
+        Checksum formula (from live captures, matching original implementation):
+        preimage = deviceKey + email + ammoCategory + clientDateTime + checksum_key
         encrypted = preimage + savy_checksum
         checksum = MD5(encrypted)
         """
@@ -2137,12 +2137,16 @@ class Client(object):
                     f'[{self.info["@Name"]}] Restocking {ammoCategory.lower()} items.'
                 )
             ts = "{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime())
-            
-            # RebuildAmmo3 checksum: ammoCategory + clientDateTime + checksum_key
-            preimage = ammoCategory + ts + checksum_key
+            email = self.info.get("@Email", "unknown@unknown.com")
+            preimage = (
+                self.device.key
+                + email
+                + ammoCategory
+                + ts
+                + checksum_key
+            )
             encrypted = preimage + savy_checksum
             checksum = hashlib.md5(encrypted.encode("utf-8")).hexdigest()
-            
             url = f"{self.baseUrl}/RoomService/RebuildAmmo3?ammoCategory={ammoCategory}&clientDateTime={ts}&checksum={checksum}&accessToken={self.accessToken}"
             logging.debug(redact_secrets(f"{url=}"))
             r = self.request(url, "POST")
