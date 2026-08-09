@@ -2106,8 +2106,8 @@ class Client(object):
         Uses RebuildAmmo3 with checksum derived from configuration values.
         Requires checksum_key and savy_checksum configuration settings.
 
-        Checksum formula (from live captures, matching original implementation):
-        preimage = deviceKey + email + ammoCategory + clientDateTime + checksum_key
+        Checksum formula (from live captures, matching FinaliseBattle15 pattern):
+        preimage = deviceKey + email + ammoCategory + clientDateTime + accessToken + checksum_key
         encrypted = preimage + savy_checksum
         checksum = MD5(encrypted)
         """
@@ -2120,6 +2120,9 @@ class Client(object):
                 "RebuildAmmo3 requires checksum_key and savy_checksum configuration "
                 "values compatible with the installed game version."
             )
+
+        if not self.accessToken:
+            raise ConfigurationError("RebuildAmmo3 requires accessToken (must be logged in)")
 
         ammoCategories = [
             "None",
@@ -2143,6 +2146,7 @@ class Client(object):
                 + email
                 + ammoCategory
                 + ts
+                + self.accessToken
                 + checksum_key
             )
             encrypted = preimage + savy_checksum
