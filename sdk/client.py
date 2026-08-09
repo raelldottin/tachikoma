@@ -2294,8 +2294,8 @@ class Client(object):
             Uses CreateStarBattle5 endpoint with checksum.
             Requires checksum_key and savy_checksum configuration settings.
 
-            Checksum formula (URL parameter order):
-            preimage = clientHp + clientDateTime + accessToken + searchNumber + value + checksum_key
+            Checksum formula (matches FinaliseBattle15 pattern - all params in URL order before checksum):
+            preimage = clientHp + clientDateTime + accessToken + searchNumber + value + deviceKey + email + checksum_key
             encrypted = preimage + savy_checksum
             checksum = MD5(encrypted)
             """
@@ -2312,13 +2312,16 @@ class Client(object):
                 raise ConfigurationError("CreateStarBattle5 requires accessToken (must be logged in)")
 
             ts = "{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime())
-            # CreateStarBattle5 checksum: all URL parameters in order
+            email = self.info.get("@Email", "unknown@unknown.com")
+            # CreateStarBattle5 checksum: URL params + device key + email + checksum_key
             preimage = (
                 str(clientHp)
                 + ts
                 + self.accessToken
                 + str(searchNumber)
                 + str(value)
+                + self.device.key
+                + email
                 + checksum_key
             )
             encrypted = preimage + savy_checksum
