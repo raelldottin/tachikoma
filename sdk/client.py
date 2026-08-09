@@ -16,7 +16,6 @@ from requests.adapters import HTTPAdapter
 from urllib3.util import Retry
 from ratelimit import limits, sleep_and_retry
 from sdk.device import Device
-from sdk import security
 from .security import (
     ChecksumTimeForDate,
     ChecksumPasswordWithString,
@@ -171,13 +170,9 @@ class Client(object):
         r = self.session.request(method, url, headers=self.headers, data=data)
 
         if "errorMessage" in r.text:
-            text_lower = r.text.lower()
-            if "please upgrade your lab room" in text_lower or "storage is full" in text_lower or "unfinalised battle" in text_lower:
+            if "Please upgrade your lab room." not in r.text:
                 d = xmltodict.parse(r.content, xml_attribs=True)
-                logging.warning("[%s] {%s} - {%s}", self.info.get("@Name", ""), redact_secrets(url), redact_secrets(str(d)))
-            else:
-                d = xmltodict.parse(r.content, xml_attribs=True)
-                logging.error("[%s] {%s} - {%s}", self.info.get("@Name", ""), redact_secrets(url), redact_secrets(str(d)))
+                logging.error("[%s] {%s} - {%s}", self.info["@Name"], redact_secrets(url), redact_secrets(str(d)))
 
         if "Failed to authorize access token" in r.text:
             logging.info(
@@ -250,10 +245,10 @@ class Client(object):
         else:
             self.dailyReward = 0
 
-        if user_dict.get("@UserType") == "Verified":
-            myName = user_dict.get("@Name", "")
-        else:
+        if not self.device.refreshToken:
             myName = "guest"
+        else:
+            myName = user_dict.get("@Name", "")
 
         if "@FreeStarbuxReceivedToday" in user_dict:
             try:
@@ -272,7 +267,7 @@ class Client(object):
             userId,
             myName,
             LastHeartBeat,
-            user_dict.get("@UserType") == "Verified" or bool(self.device.refreshToken),
+            self.device.refreshToken,
         )
 
         return True
@@ -507,13 +502,6 @@ class Client(object):
         if r.content:
             self.latestVersion = xmltodict.parse(r.content, xml_attribs=True)
 
-    def _get_design_version(self, key: str, default: str = "1") -> str:
-        """Safely extract a design version from latestVersion."""
-        try:
-            return self.latestVersion["SettingService"]["GetLatestSetting"]["Setting"][key]
-        except (TypeError, KeyError):
-            return default
-
     def getTodayLiveOps2(self):
         url = f"https://api.pixelstarships.com/LiveOpsService/GetTodayLiveOps2?languageKey={self.device.languageKey}&deviceType=DeviceTypeIPhone"
         r = self.request(url, "GET")
@@ -521,19 +509,19 @@ class Client(object):
             self.todayLiveOps = xmltodict.parse(r.content, xml_attribs=True)
 
     def listRoomDesigns2(self):
-        url = f"https://api.pixelstarships.com/RoomService/ListRoomDesigns2?languageKey={self.device.languageKey}&designVersion={self._get_design_version('@RoomDesignVersion')}"
+        url = f"https://api.pixelstarships.com/RoomService/ListRoomDesigns2?languageKey={self.device.languageKey}&designVersion={self.latestVersion['SettingService']['GetLatestSetting']['Setting']['@RoomDesignVersion']}"
         r = self.request(url, "GET")
         if r:
             self.roomDesigns = xmltodict.parse(r.content, xml_attribs=True)
 
     def listAllTaskDesigns2(self):
-        url = f"https://api.pixelstarships.com/TaskService/ListAllTaskDesigns2?languageKey={self.device.languageKey}&designVersion={self._get_design_version('@RoomDesignVersion')}"
+        url = f"https://api.pixelstarships.com/TaskService/ListAllTaskDesigns2?languageKey={self.device.languageKey}&designVersion={self.latestVersion['SettingService']['GetLatestSetting']['Setting']['@RoomDesignVersion']}"
         r = self.request(url, "GET")
         if r:
             self.allTaskDesigns = xmltodict.parse(r.content, xml_attribs=True)
 
     def listAllTrainingDesigns2(self):
-        url = f"https://api.pixelstarships.com/TrainingService/ListAllTrainingDesigns2?languageKey={self.device.languageKey}&designVersion={self._get_design_version('@RoomDesignVersion')}"
+        url = f"https://api.pixelstarships.com/TrainingService/ListAllTrainingDesigns2?languageKey={self.device.languageKey}&designVersion={self.latestVersion['SettingService']['GetLatestSetting']['Setting']['@RoomDesignVersion']}"
         r = self.request(url, "GET")
         if r:
             self.trainingDesigns = xmltodict.parse(r.content, xml_attribs=True)
@@ -629,8 +617,8 @@ class Client(object):
         return False
 
     def listActionTypes2(self):
-        if self.user.isAuthorized and not getattr(self, "actionTypes", {}):
-            url = f"https://api.pixelstarships.com/RoomService/ListActionTypes2?languageKey={self.device.languageKey}&designVersion={self._get_design_version('@ResearchDesignVersion')}"
+        if self.user.isAuthorized:
+            url = f"https://api.pixelstarships.com/RoomService/ListActionTypes2?languageKey={self.device.languageKey}&designVersion={self.latestVersion['SettingService']['GetLatestSetting']['Setting']['@ResearchDesignVersion']}"
             r = self.request(url, "GET")
             if r:
                 self.actionTypes = xmltodict.parse(r.content, xml_attribs=True)
@@ -638,8 +626,8 @@ class Client(object):
         return False
 
     def listConditionTypes2(self):
-        if self.user.isAuthorized and not getattr(self, "conditionTypes", {}):
-            url = f"https://api.pixelstarships.com/RoomService/ListConditionTypes2?languageKey={self.device.languageKey}&designVersion={self._get_design_version('@ResearchDesignVersion')}"
+        if self.user.isAuthorized:
+            url = f"https://api.pixelstarships.com/RoomService/ListConditionTypes2?languageKey={self.device.languageKey}&designVersion={self.latestVersion['SettingService']['GetLatestSetting']['Setting']['@ResearchDesignVersion']}"
             r = self.request(url, "GET")
             if r:
                 self.conditionTypes = xmltodict.parse(r.content, xml_attribs=True)
@@ -861,8 +849,8 @@ class Client(object):
         return True
 
     def listAllCharacterDesigns2(self):
-        if self.latestVersion and not getattr(self, "allCharacterDesigns", {}):
-            url = f"{self.baseUrl}/CharacterService/ListAllCharacterDesigns2?languageKey={self.device.languageKey}&designVersion={self._get_design_version('@CharacterDesignVersion')}"
+        if self.latestVersion:
+            url = f"{self.baseUrl}/CharacterService/ListAllCharacterDesigns2?languageKey={self.device.languageKey}&designVersion={self.latestVersion['SettingService']['GetLatestSetting']['Setting']['@CharacterDesignVersion']}"
             r = self.request(url, "GET")
             if r:
                 self.allCharacterDesigns = xmltodict.parse(r.content, xml_attribs=True)
@@ -1489,85 +1477,6 @@ class Client(object):
         url = f"https://api.pixelstarships.com/UserService/PusherAuth?accessToken={self.accessToken}"
         self.request(url, "POST")
 
-    # PVP Battle Operations
-    def createBattle(self):
-        if not self.user.isAuthorized:
-            return False
-            
-        try:
-            hp = int(self.info.get("Hp", "0"))
-        except ValueError:
-            hp = 40
-        client_hp = hp * 100
-        
-        checksum_key = self.settings.get("checksum_key") or "5343"
-        savy_checksum = self.settings.get("savy_checksum") or "Savvy!s0d@"
-        
-        client_dt = '{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())
-        client_dt_checksum = client_dt.split(".")[0]
-        
-        checksum = security.checksum_create_battle9(client_dt_checksum, checksum_key, savy_checksum)
-        
-        url = f"{self.baseUrl}/BattleService/CreateBattle9?clientHp={client_hp}&clientDateTime={client_dt}&checksum={checksum}&accessToken={self.accessToken}"
-        r = self.request(url, "POST")
-        
-        if r and "errorMessage" not in r.text:
-            d = xmltodict.parse(r.content, xml_attribs=True)
-            if "BattleService" in d and "CreateBattle" in d["BattleService"] and "Battle" in d["BattleService"]["CreateBattle"]:
-                battle_data = d["BattleService"]["CreateBattle"]["Battle"]
-                logging.info("[%s] Found PVP Opponent! Battle ID: %s", self.info.get("@Name", "guest"), battle_data.get("@BattleId"))
-                return battle_data
-        return False
-
-    def acceptBattle(self, battle_id):
-        if not self.user.isAuthorized:
-            return False
-            
-        savy_checksum = self.settings.get("savy_checksum") or "Savvy!s0d@"
-        
-        client_dt = '{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())
-        client_dt_checksum = client_dt.split(".")[0]
-        
-        checksum = security.checksum_accept_battle5(self.accessToken, str(battle_id), client_dt_checksum, savy_checksum)
-        
-        url = f"{self.baseUrl}/BattleService/AcceptBattle5?battleId={battle_id}&itemDesignId=0&clientDateTime={client_dt}&checksum={checksum}&accessToken={self.accessToken}"
-        r = self.request(url, "POST")
-        
-        if r and "errorMessage" not in r.text:
-            logging.info("[%s] Accepted PVP Battle %s", self.info.get("@Name", "guest"), battle_id)
-            return True
-        return False
-
-    def finaliseBattle(self, battle_id, client_outcome_type, client_end_frame, attacking_ship_hp):
-        if not self.user.isAuthorized:
-            return False
-            
-        checksum_key = self.settings.get("checksum_key") or "5343"
-        savy_checksum = self.settings.get("savy_checksum") or "Savvy!s0d@"
-        client_version = self.settings.get("client_version") or "0.999.59"
-        client_result_string = ""
-        
-        checksum = security.checksum_finalise_battle15(
-            battle_id=str(battle_id),
-            client_outcome_type=str(client_outcome_type),
-            client_end_frame=str(client_end_frame),
-            client_result_string=client_result_string,
-            attacking_ship_hp=str(attacking_ship_hp),
-            client_version=client_version,
-            access_token=self.accessToken,
-            checksum_key=checksum_key,
-            savy_checksum=savy_checksum
-        )
-
-        url = f"{self.baseUrl}/BattleService/FinaliseBattle15?battleId={battle_id}&clientOutcomeType={client_outcome_type}&clientEndFrame={client_end_frame}&clientResultString={client_result_string}&attackingShipHp={attacking_ship_hp}&checksum={checksum}&clientVersion={client_version}&accessToken={self.accessToken}"
-        r = self.request(url, "POST")
-        
-        if r and "errorMessage" not in r.text:
-            logging.info("[%s] Finalized PVP Battle %s", self.info.get("@Name", "guest"), battle_id)
-            return True
-            
-        return False
-
     def listSystemMessagesForUser3(self, fromMessageId=0, take=10000):
         url = f"https://api.pixelstarships.com/MessageService/ListSystemMessagesForUser3?fromMessageId={fromMessageId}&take={take}&accessToken={self.accessToken}"
         r = self.request(url, "GET")
@@ -1856,6 +1765,99 @@ class Client(object):
             return True
         return False
 
+    def purchaseDrawWithStarbux(self, drawDesignId: str) -> bool:
+        """Purchase a draw (pod) using Starbux.
+        
+        Endpoint: CharacterService/Draw?drawDesignId={drawDesignId}&clientDateTime={}&checksum={}&accessToken={}
+        Checksum: MD5(drawDesignId + clientDateTime + ChecksumKey + SavyChecksum)
+        
+        Args:
+            drawDesignId: The ID of the draw design to purchase (e.g., "Scorched Pod")
+            
+        Returns:
+            True if purchase successful, False otherwise
+        """
+        from sdk.security import checksum_character_draw
+        
+        ts = "{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime())
+        settings = self.settings or {}
+        checksum_key = settings.get("checksum_key", "5343")
+        savy_checksum = settings.get("savy_checksum", "Savvy!s0d@")
+        
+        checksum = checksum_character_draw(
+            draw_design_id=drawDesignId,
+            client_date_time=ts,
+            checksum_key=checksum_key,
+            savy_checksum=savy_checksum,
+        )
+        
+        url = f"https://api.pixelstarships.com/CharacterService/Draw?drawDesignId={drawDesignId}&clientDateTime={ts}&checksum={checksum}&accessToken={self.accessToken}"
+        r = self.request(url, "POST")
+        
+        if r:
+            result = xmltodict.parse(r.content, xml_attribs=True)
+            logging.info(f'[{self.info["@Name"]}] Draw purchase result: {result}')
+            
+            # Check for error
+            if "CharacterService" in result:
+                draw_result = result["CharacterService"].get("Draw", {})
+                if "@errorCode" in draw_result and draw_result["@errorCode"] != "0":
+                    logging.error(f'[{self.info["@Name"]}] Draw purchase failed: {draw_result.get("@errorMessage", "Unknown error")}')
+                    return False
+            
+            # Refresh designs to get updated state
+            self.listAllDesigns4()
+            return True
+        
+        return False
+
+    def purchaseScorchedPodIfAffordable(self) -> bool:
+        """Purchase Scorched Pod from Shop if user has enough Starbux.
+        
+        Finds the Scorched Pod draw design ID from cached designs and attempts purchase.
+        
+        Returns:
+            True if purchased, False otherwise (not enough Starbux, not found, or error)
+        """
+        # Ensure designs are loaded
+        if not hasattr(self, "drawDesigns") or not self.drawDesigns:
+            if not self.listAllDesigns4():
+                logging.error(f'[{self.info["@Name"]}] Failed to load draw designs')
+                return False
+        
+        # Find Scorched Pod in draw designs
+        scorched_pod_id = None
+        draw_designs = _extract_collection(self.drawDesigns, "DrawDesign")
+        for design in draw_designs:
+            name = design.get("@DrawName", "") or design.get("@Name", "")
+            if "Scorched" in name and "Pod" in name:
+                scorched_pod_id = design.get("@DrawDesignId")
+                break
+        
+        if not scorched_pod_id:
+            logging.warning(f'[{self.info["@Name"]}] Scorched Pod not found in draw designs')
+            return False
+        
+        # Check Starbux balance
+        try:
+            starbux = int(self.info.get("@Starbux", "0"))
+        except (ValueError, TypeError):
+            starbux = 0
+        
+        # Get Scorched Pod cost
+        cost = 0
+        for design in draw_designs:
+            if design.get("@DrawDesignId") == scorched_pod_id:
+                cost = int(design.get("@StarbuxCost", "0"))
+                break
+        
+        if starbux < cost:
+            logging.info(f'[{self.info["@Name"]}] Not enough Starbux for Scorched Pod: have {starbux}, need {cost}')
+            return False
+        
+        logging.info(f'[{self.info["@Name"]}] Purchasing Scorched Pod (ID: {scorched_pod_id}, Cost: {cost} Starbux)')
+        return self.purchaseDrawWithStarbux(scorched_pod_id)
+
     # Determine the boost gauge before attempting to speed up a room
     def speedUpResearchUsingBoostGauge(self, researchId, researchDesignId):
         if not hasattr(self, "allResearchDesigns"):
@@ -2076,8 +2078,8 @@ class Client(object):
                             )
 
     def listAllResearchDesigns2(self):
-        if self.latestVersion and not getattr(self, "allResearchDesigns", {}):
-            url = f"https://api.pixelstarships.com/ResearchService/ListAllResearchDesigns2?languageKey={self.device.languageKey}&designVersion={self._get_design_version('@ResearchDesignVersion')}"
+        if self.latestVersion:
+            url = f"https://api.pixelstarships.com/ResearchService/ListAllResearchDesigns2?languageKey={self.device.languageKey}&designVersion={self.latestVersion['SettingService']['GetLatestSetting']['Setting']['@ResearchDesignVersion']}"
             r = self.request(url, "GET")
             self.allResearchDesigns = xmltodict.parse(r.content, xml_attribs=True)
             if "ResearchService" not in self.allResearchDesigns:
@@ -2281,3 +2283,315 @@ class Client(object):
             return True
 
         return False
+
+    def createStarBattle5(self, clientHp: int, searchNumber: int = 0, value: int = 0) -> bool:
+        """Create a star battle (PvP matchmaking).
+        
+        Uses CreateStarBattle5 endpoint with checksum.
+        Requires checksum_key and savy_checksum configuration settings.
+        """
+        checksum_key = self.settings.get("checksum_key")
+        savy_checksum = self.settings.get("savy_checksum")
+
+        if not checksum_key or not savy_checksum:
+            raise ConfigurationError(
+                "CreateStarBattle5 requires checksum_key and savy_checksum configuration "
+                "values compatible with the installed game version."
+            )
+
+        ts = "{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime())
+        # CreateStarBattle5 checksum: clientHp + clientDateTime + searchNumber + value + checksumKey
+        preimage = (
+            str(clientHp)
+            + ts
+            + str(searchNumber)
+            + str(value)
+            + checksum_key
+        )
+        encrypted = preimage + savy_checksum
+        checksum = hashlib.md5(encrypted.encode("utf-8")).hexdigest()
+        
+        url = f"{self.baseUrl}/BattleService/CreateStarBattle5?clientHp={clientHp}&clientDateTime={ts}&checksum={checksum}&accessToken={self.accessToken}&searchNumber={searchNumber}&value={value}"
+        logging.debug(redact_secrets(f"{url=}"))
+        r = self.request(url, "POST")
+        if r and "errorMessage=" in r.text:
+            logging.warning(f'[{self.info["@Name"]}] CreateStarBattle5 failed: {r.text[:200]}')
+            return False
+        
+        if r:
+            self.createStarBattle5Result = xmltodict.parse(r.content, xml_attribs=True)
+            # Extract battleId from response for subsequent calls
+            try:
+                battle_id = self.createStarBattle5Result["BattleService"]["CreateStarBattle5"]["@battleId"]
+                self.lastBattleId = battle_id
+                logging.info(f'[{self.info["@Name"]}] Created battle: {battle_id}')
+            except (KeyError, TypeError):
+                pass
+            return True
+        return False
+
+    def verifyBattle2(
+        self,
+        battleId: str,
+        clientOutcomeType: int,
+        clientEndFrame: int,
+        clientResultString: str,
+        attackingShipHp: int,
+        syncStatus: int = 0,
+        battleSyncEntity: str = "",
+        syncErrorType: int = 0,
+        description: str = "",
+        score: int = 0,
+    ) -> bool:
+        """Verify battle result with the server.
+        
+        Uses VerifyBattle2 endpoint with checksum.
+        Requires checksum_key and savy_checksum configuration settings.
+        """
+        checksum_key = self.settings.get("checksum_key")
+        savy_checksum = self.settings.get("savy_checksum")
+
+        if not checksum_key or not savy_checksum:
+            raise ConfigurationError(
+                "VerifyBattle2 requires checksum_key and savy_checksum configuration "
+                "values compatible with the installed game version."
+            )
+
+        ts = "{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime())
+        # VerifyBattle2 checksum: battleId + clientOutcomeType + clientEndFrame + clientResultString + attackingShipHp + syncStatus + battleSyncEntity + syncErrorType + description + score + checksumKey
+        preimage = (
+            battleId
+            + str(clientOutcomeType)
+            + str(clientEndFrame)
+            + clientResultString
+            + str(attackingShipHp)
+            + str(syncStatus)
+            + battleSyncEntity
+            + str(syncErrorType)
+            + description
+            + str(score)
+            + checksum_key
+        )
+        encrypted = preimage + savy_checksum
+        checksum = hashlib.md5(encrypted.encode("utf-8")).hexdigest()
+        
+        url = (
+            f"{self.baseUrl}/BattleService/VerifyBattle2?"
+            f"battleId={battleId}&clientOutcomeType={clientOutcomeType}&clientEndFrame={clientEndFrame}"
+            f"&clientResultString={urllib.parse.quote(clientResultString)}&attackingShipHp={attackingShipHp}"
+            f"&checksum={checksum}&syncStatus={syncStatus}&battleSyncEntity={urllib.parse.quote(battleSyncEntity)}"
+            f"&syncErrorType={syncErrorType}&description={urllib.parse.quote(description)}&score={score}"
+            f"&accessToken={self.accessToken}"
+        )
+        logging.debug(redact_secrets(f"{url=}"))
+        r = self.request(url, "POST")
+        if r and "errorMessage=" in r.text:
+            logging.warning(f'[{self.info["@Name"]}] VerifyBattle2 failed: {r.text[:200]}')
+            return False
+        
+        if r:
+            self.verifyBattle2Result = xmltodict.parse(r.content, xml_attribs=True)
+        return True
+
+    def finaliseBattle15(
+        self,
+        battleId: str,
+        clientOutcomeType: int,
+        clientEndFrame: int,
+        clientResultString: str,
+        attackingShipHp: int,
+        clientVersion: str = "0.999.59",
+    ) -> bool:
+        """Finalise battle with the server (FinaliseBattle15 endpoint).
+        
+        Uses the templated FinaliseBattle15 endpoint with checksum.
+        This is the final step to complete a battle.
+        Requires checksum_key and savy_checksum configuration settings.
+        """
+        checksum_key = self.settings.get("checksum_key")
+        savy_checksum = self.settings.get("savy_checksum")
+
+        if not checksum_key or not savy_checksum:
+            raise ConfigurationError(
+                "FinaliseBattle15 requires checksum_key and savy_checksum configuration "
+                "values compatible with the installed game version."
+            )
+
+        ts = "{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime())
+        # FinaliseBattle15 checksum (from static analysis of IL2CPP metadata):
+        # preimage = battleId + clientOutcomeType + clientEndFrame + clientResultString + attackingShipHp + clientVersion + accessToken + checksumKey
+        # encrypted = preimage + savyChecksum
+        # checksum = MD5(encrypted)
+        access_token = self.accessToken or ""
+        preimage = (
+            battleId
+            + str(clientOutcomeType)
+            + str(clientEndFrame)
+            + clientResultString
+            + str(attackingShipHp)
+            + clientVersion
+            + access_token
+            + checksum_key
+        )
+        encrypted = preimage + savy_checksum
+        checksum = hashlib.md5(encrypted.encode("utf-8")).hexdigest()
+        
+        # URL template: /BattleService/{0}?battleId={1}&clientOutcomeType={2}&clientEndFrame={3}&clientResultString={4}&attackingShipHp={5}&checksum={6}&clientVersion={7}&accessToken={8}
+        # Where {0} = "FinaliseBattle15"
+        url = (
+            f"{self.baseUrl}/BattleService/FinaliseBattle15?"
+            f"battleId={battleId}&clientOutcomeType={clientOutcomeType}&clientEndFrame={clientEndFrame}"
+            f"&clientResultString={urllib.parse.quote(clientResultString)}&attackingShipHp={attackingShipHp}"
+            f"&checksum={checksum}&clientVersion={urllib.parse.quote(clientVersion)}&accessToken={self.accessToken}"
+        )
+        logging.debug(redact_secrets(f"{url=}"))
+        r = self.request(url, "POST")
+        if r and "errorMessage=" in r.text:
+            logging.warning(f'[{self.info["@Name"]}] FinaliseBattle15 failed: {r.text[:200]}')
+            return False
+        
+        if r:
+            self.finaliseBattle15Result = xmltodict.parse(r.content, xml_attribs=True)
+            logging.info(f'[{self.info["@Name"]}] Battle finalised successfully: {battleId}')
+        return True
+
+    def getShipHpFraction(self) -> float:
+        """Return the ship's current HP as a fraction of max (0.0-1.0).
+
+        Computes HP from the room layout: each room contributes its current
+        HP (sum of character @Hp values) versus its max capacity. If the ship
+        data is unavailable, returns -1.0 so callers can distinguish "unknown"
+        from "not full".
+        """
+        if not hasattr(self, "shipByUserId") or not self.shipByUserId:
+            if not self.getShipByUserId():
+                return -1.0
+        try:
+            ship = self.shipByUserId["ShipService"]["GetShipByUserId"]["Ship"]
+        except (KeyError, TypeError):
+            return -1.0
+
+        # PSS Ship records the current/max hull capacity as attributes.
+        # Common field names seen in captures: @Hp / @MaxHp, or @HullHp /
+        # @HullMaxHp. Use whichever pair is present.
+        candidates = [
+            ("@Hp", "@MaxHp"),
+            ("@HullHp", "@HullMaxHp"),
+            ("@CurrentHp", "@MaxHp"),
+        ]
+        for cur_attr, max_attr in candidates:
+            cur = ship.get(cur_attr)
+            mx = ship.get(max_attr)
+            if cur is not None and mx is not None:
+                try:
+                    cur_i = int(cur)
+                    mx_i = int(mx)
+                except (ValueError, TypeError):
+                    continue
+                if mx_i > 0:
+                    return cur_i / mx_i
+
+        # Fall back to summing room HP if ship-level attributes are absent.
+        rooms = ship.get("Rooms", {}).get("Room", [])
+        if isinstance(rooms, dict):
+            rooms = [rooms]
+        total_cur = 0
+        total_max = 0
+        for room in rooms:
+            cur = room.get("@Hp")
+            mx = room.get("@MaxHp")
+            if cur is None or mx is None:
+                continue
+            try:
+                total_cur += int(cur)
+                total_max += int(mx)
+            except (ValueError, TypeError):
+                continue
+        if total_max > 0:
+            return total_cur / total_max
+        return -1.0
+
+    def runBattleEndToEnd(self, clientHp: int = 100000) -> bool:
+        """Execute a complete ship battle end-to-end.
+
+        Flow:
+        0. Pre-flight: only start if ship HP is 100%
+        1. Pre-flight: rearm ship (restock ammo)
+        2. CreateStarBattle5 - initiate PvP battle matchmaking
+        3. VerifyBattle2 - submit battle result (simulated win)
+        4. FinaliseBattle15 - finalize battle with server
+
+        This uses the checksum formulas derived from static analysis of the IL2CPP binary
+        and verified against the universal checksum pattern across all PSS endpoints.
+        """
+        logging.info(f'[{self.info.get("@Name", "")}] Starting end-to-end battle flow...')
+
+        # Step 0: Pre-flight - only battle at full ship HP
+        hp_fraction = self.getShipHpFraction()
+        if hp_fraction < 0:
+            logging.warning(
+                f'[{self.info.get("@Name", "")}] Ship HP unavailable; cannot confirm 100%. Aborting battle.'
+            )
+            return False
+        if hp_fraction < 1.0:
+            logging.info(
+                f'[{self.info.get("@Name", "")}] Ship HP at {hp_fraction:.0%}; not 100%. Skipping battle.'
+            )
+            return False
+        logging.info(f'[{self.info.get("@Name", "")}] Ship HP at 100%; proceeding to battle.')
+
+        # Step 1: Pre-flight - rearm ship (restock all ammo categories)
+        logging.info(f'[{self.info.get("@Name", "")}] Rearming ship before battle...')
+        if not self.rebuildAmmo():
+            logging.error(f'[{self.info.get("@Name", "")}] Failed to rearm ship; aborting battle.')
+            return False
+        logging.info(f'[{self.info.get("@Name", "")}] Ship rearmed successfully.')
+
+        # Step 2: Create battle
+        if not self.createStarBattle5(clientHp=clientHp):
+            logging.error(f'[{self.info.get("@Name", "")}] Failed to create battle')
+            return False
+        
+        battleId = getattr(self, "lastBattleId", None)
+        if not battleId:
+            logging.error(f'[{self.info.get("@Name", "")}] No battleId returned from CreateStarBattle5')
+            return False
+        
+        logging.info(f'[{self.info.get("@Name", "")}] Battle created: {battleId}')
+        
+        # Step 2: Verify battle (simulate a win)
+        # clientOutcomeType: 1=Victory, 2=Defeat, 3=Draw
+        # clientEndFrame: final frame number
+        # clientResultString: battle replay data
+        # attackingShipHp: remaining HP of attacking ship
+        if not self.verifyBattle2(
+            battleId=battleId,
+            clientOutcomeType=1,  # Victory
+            clientEndFrame=100,
+            clientResultString="simulated_battle_data",
+            attackingShipHp=clientHp,
+            syncStatus=0,
+            battleSyncEntity="",
+            syncErrorType=0,
+            description="",
+            score=1000,
+        ):
+            logging.error(f'[{self.info.get("@Name", "")}] Failed to verify battle')
+            return False
+        
+        logging.info(f'[{self.info.get("@Name", "")}] Battle verified')
+        
+        # Step 3: Finalise battle
+        if not self.finaliseBattle15(
+            battleId=battleId,
+            clientOutcomeType=1,
+            clientEndFrame=100,
+            clientResultString="simulated_battle_data",
+            attackingShipHp=clientHp,
+            clientVersion="0.999.59",
+        ):
+            logging.error(f'[{self.info.get("@Name", "")}] Failed to finalise battle')
+            return False
+        
+        logging.info(f'[{self.info.get("@Name", "")}] End-to-end battle completed successfully!')
+        return True

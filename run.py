@@ -1,6 +1,8 @@
 import sys
 import getpass
 import os
+from configparser import ConfigParser
+from configparser import NoSectionError
 import smtplib
 from email.message import EmailMessage
 import argparse
@@ -27,14 +29,20 @@ logging.basicConfig(
 
 
 def email_logfile(filename, client, email=None, password=None, recipient=None):
-    """Send log file via email.
-
-    Only sends if all three parameters (email, password, recipient) are provided.
-    Does NOT fall back to config.secrets - SMTP must be explicitly configured via CLI args.
-    """
-    if not (email and password and recipient):
-        logging.debug("SMTP details not provided; skipping email delivery.")
-        return False
+    if email and password and recipient:
+        pass
+    else:
+        try:
+            config = ConfigParser()
+            config.read("./config.secrets")
+            email = config.get("MAIL_CONFIG", "SENDER_EMAIL")
+            password = config.get("MAIL_CONFIG", "SENDER_PASSWD")
+            recipient = config.get("MAIL_CONFIG", "RECIPIENT_EMAIL")
+        except NoSectionError:
+            logging.error(
+                "Unable to email log file because email authentication is not properly setup."
+            )
+            return None
 
     try:
         with open(filename, "rb") as f:
@@ -108,17 +116,10 @@ def main():
         help="path to file containing SMTP password",
     )
     parser.add_argument(
-        "-r",
         "--recipient",
         dest="recipient",
         default=None,
         help="recipient email for log delivery",
-    )
-    parser.add_argument(
-        "--password-file",
-        dest="password_file",
-        default=None,
-        help="path to file containing game password (for CI automation)",
     )
     parser.add_argument(
         "--run-battle",
@@ -152,13 +153,17 @@ def main():
                     smtp_password = pw_content
                     smtp_enabled = True
                 else:
-                    logging.warning("SMTP password file empty; email delivery disabled.")
-            except Exception as e:
-                logging.warning(f"Failed to read SMTP password file: {e}; email delivery disabled.")
+                    logging.error("Incomplete SMTP configuration; email delivery was not attempted.")
+                    sys.exit(2)
+            except Exception:
+                logging.error("Incomplete SMTP configuration; email delivery was not attempted.")
+                sys.exit(2)
         else:
-            logging.warning("SMTP password file not found; email delivery disabled.")
+            logging.error("Incomplete SMTP configuration; email delivery was not attempted.")
+            sys.exit(2)
     else:
-        logging.warning("Incomplete SMTP configuration (need all 3: --smtp-email, --smtp-password-file, --recipient); email delivery disabled.")
+        logging.error("Incomplete SMTP configuration; email delivery was not attempted.")
+        sys.exit(2)
 
     # Load authentication string from file if provided
     auth_string = None
@@ -186,15 +191,7 @@ def main():
     client = Client(device=device, settings=settings)
 
     if args.login_email:
-        if args.password_file:
-            pw_path = Path(args.password_file)
-            if pw_path.is_file():
-                password = pw_path.read_text().strip()
-            else:
-                logging.error("Password file not found")
-                sys.exit(2)
-        else:
-            password = getpass.getpass("Game password: ")
+        password = getpass.getpass("Game password: ")
         if not client.login(email=args.login_email, password=password):
             logging.warning("[authenticate] failed to login")
             sys.exit(1)
@@ -203,9 +200,8 @@ def main():
             logging.warning("[authenticate] failed to login")
             sys.exit(1)
 
-    runtime_failed = False
-
     # Run battle if requested
+    runtime_failed = False
     if args.run_battle:
         try:
             res = client.runBattleEndToEnd()
@@ -315,9 +311,9 @@ def main():
                 logging.error(f"upgradeCharacters failed: {redact_secrets(str(e))}")
                 runtime_failed = True
 
-        char_name = client.info.get("@Name", "") if isinstance(getattr(client, "info", None), dict) else ""
-        logging.info(f'[{char_name}] Finished...')
-        break
+            char_name = client.info.get("@Name", "") if isinstance(getattr(client, "info", None), dict) else ""
+            logging.info(f'[{char_name}] Finished...')
+            break
 
     # Send log file via SMTP only if SMTP is enabled
     if smtp_enabled:
