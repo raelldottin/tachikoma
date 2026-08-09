@@ -2357,8 +2357,11 @@ class Client(object):
             Uses CreateStarBattle5 endpoint with checksum.
             Requires checksum_key and savy_checksum configuration settings.
 
-            Checksum formula (matches FinaliseBattle15 pattern - all params in URL order before checksum):
-            preimage = clientHp + clientDateTime + accessToken + searchNumber + value + deviceKey + email + checksum_key
+            Checksum formula (URL parameter order before checksum):
+            URL: /BattleService/CreateStarBattle5?clientHp={0}&clientDateTime={1}&checksum={2}&accessToken={3}&searchNumber={4}&value={5}
+            Parameters before checksum: clientHp, clientDateTime, accessToken, searchNumber, value
+
+            preimage = clientHp + clientDateTime + accessToken + searchNumber + value + checksum_key
             encrypted = preimage + savy_checksum
             checksum = MD5(encrypted)
             """
@@ -2375,21 +2378,18 @@ class Client(object):
                 raise ConfigurationError("CreateStarBattle5 requires accessToken (must be logged in)")
 
             ts = "{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime())
-            email = self.info.get("@Email", "unknown@unknown.com")
-            # CreateStarBattle5 checksum: URL params + device key + email + checksum_key
+            # CreateStarBattle5 checksum: URL parameters before checksum in URL order
             preimage = (
                 str(clientHp)
                 + ts
                 + self.accessToken
                 + str(searchNumber)
                 + str(value)
-                + self.device.key
-                + email
                 + checksum_key
             )
             encrypted = preimage + savy_checksum
             checksum = hashlib.md5(encrypted.encode("utf-8")).hexdigest()
-        
+
             url = f"{self.baseUrl}/BattleService/CreateStarBattle5?clientHp={clientHp}&clientDateTime={ts}&checksum={checksum}&accessToken={self.accessToken}&searchNumber={searchNumber}&value={value}"
             logging.debug(redact_secrets(f"{url=}"))
             r = self.request(url, "POST")
