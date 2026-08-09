@@ -2463,12 +2463,19 @@ class Client(object):
         data is unavailable, returns -1.0 so callers can distinguish "unknown"
         from "not full".
         """
+        logging.debug(f"[{self.info.get('@Name', '')}] Getting ship HP fraction...")
         if not hasattr(self, "shipByUserId") or not self.shipByUserId:
+            logging.debug(f"[{self.info.get('@Name', '')}] shipByUserId not cached, fetching...")
             if not self.getShipByUserId():
+                logging.warning(f"[{self.info.get('@Name', '')}] getShipByUserId() failed")
                 return -1.0
+            else:
+                logging.debug(f"[{self.info.get('@Name', '')}] getShipByUserId() succeeded")
         try:
             ship = self.shipByUserId["ShipService"]["GetShipByUserId"]["Ship"]
-        except (KeyError, TypeError):
+            logging.debug(f"[{self.info.get('@Name', '')}] Ship data keys: {list(ship.keys()) if isinstance(ship, dict) else 'not dict'}")
+        except (KeyError, TypeError) as e:
+            logging.warning(f"[{self.info.get('@Name', '')}] Ship data structure error: {e}")
             return -1.0
 
         # PSS Ship records the current/max hull capacity as attributes.
@@ -2489,6 +2496,7 @@ class Client(object):
                 except (ValueError, TypeError):
                     continue
                 if mx_i > 0:
+                    logging.debug(f"[{self.info.get('@Name', '')}] Ship HP: {cur_i}/{mx_i} = {cur_i/mx_i:.2%} (from {cur_attr}/{max_attr})")
                     return cur_i / mx_i
 
         # Fall back to summing room HP if ship-level attributes are absent.
@@ -2508,7 +2516,9 @@ class Client(object):
             except (ValueError, TypeError):
                 continue
         if total_max > 0:
+            logging.debug(f"[{self.info.get('@Name', '')}] Ship HP from rooms: {total_cur}/{total_max} = {total_cur/total_max:.2%}")
             return total_cur / total_max
+        logging.warning(f"[{self.info.get('@Name', '')}] No HP data found in ship or rooms")
         return -1.0
 
     def runBattleEndToEnd(self, clientHp: int = 100000) -> bool:
