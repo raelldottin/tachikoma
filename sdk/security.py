@@ -45,7 +45,6 @@ def checksum_device_type_name() -> str:
     Verified endpoint-specific behavior (2026-08-03, 7/7 captures):
         iOS (DeviceType=0): checksum uses "DeviceTypeIPhone"
         macOS (DeviceType=2): checksum uses "DeviceTypeMac"
-
     The app always identifies as iOS (DeviceType=0), so the checksum uses
     "DeviceTypeIPhone".  This is intentional protocol behavior, not an
     inconsistency -- do not "clean up" to DeviceTypeMac.
@@ -200,5 +199,106 @@ def checksum_collect_marker2(
         )
     # Provisional: markerId + clientDateTime + designVersion + ChecksumKey
     preimage = marker_id + client_date_time + design_version + checksum_key
+    encrypted = preimage + savy_checksum
+    return hashlib.md5(encrypted.encode("utf-8")).hexdigest()
+
+
+def checksum_finalise_battle15(
+    battle_id: str,
+    client_outcome_type: int,
+    client_end_frame: int,
+    client_result_string: str,
+    attacking_ship_hp: int,
+    client_version: str,
+    access_token: str,
+    checksum_key: str,
+    savy_checksum: str,
+) -> str:
+    """Compute the FinaliseBattle15 native checksum.
+
+    Derived from static analysis of IL2CPP metadata (v31):
+    - URL template: /BattleService/{0}?battleId={1}&clientOutcomeType={2}&clientEndFrame={3}&clientResultString={4}&attackingShipHp={5}&checksum={6}&clientVersion={7}&accessToken={8}
+    - Where {0} = "FinaliseBattle15"
+    - Parameters ordered as they appear in URL (excluding checksum output param)
+
+    Formula:
+        preimage  = battleId + clientOutcomeType + clientEndFrame + clientResultString + attackingShipHp + clientVersion + accessToken + checksumKey
+        encrypted = preimage + savyChecksum
+        checksum  = MD5(encrypted)
+
+    Args:
+        battle_id: Battle ID from CreateStarBattle5 response
+        client_outcome_type: Outcome type (1=Victory, 2=Defeat, 3=Draw)
+        client_end_frame: Final battle frame number
+        client_result_string: Battle replay/result data string
+        attacking_ship_hp: Remaining HP of attacking ship
+        client_version: Client version string (e.g., "0.999.59")
+        access_token: Current session access token
+        checksum_key: Configuration.ChecksumKey ("5343")
+        savy_checksum: Configuration.SavyChecksum ("Savvy!s0d@")
+
+    Returns:
+        32-char MD5 hex digest.
+
+    Raises:
+        UnsupportedNativeChecksum: If checksum_key or savy_checksum is empty/None.
+    """
+    if not checksum_key or not savy_checksum:
+        raise UnsupportedNativeChecksum(
+            "FinaliseBattle15 requires checksum_key and savy_checksum "
+            "configuration values compatible with the installed game version."
+        )
+
+    preimage = (
+        battle_id
+        + str(client_outcome_type)
+        + str(client_end_frame)
+        + client_result_string
+        + str(attacking_ship_hp)
+        + client_version
+        + access_token
+        + checksum_key
+    )
+    encrypted = preimage + savy_checksum
+    return hashlib.md5(encrypted.encode("utf-8")).hexdigest()
+
+
+def checksum_character_draw(
+    draw_design_id: str,
+    client_date_time: str,
+    checksum_key: str,
+    savy_checksum: str,
+) -> str:
+    """Compute the CharacterService/Draw native checksum for purchasing pods/draws with Starbux.
+
+    Derived from static analysis of IL2CPP metadata (v31):
+    - URL: CharacterService/Draw?drawDesignId={0}&clientDateTime={1}&checksum={2}&accessToken={3}
+    - Parameters in URL order: drawDesignId, clientDateTime, checksum (output), accessToken
+    - The checksum is computed BEFORE the accessToken is added to URL
+
+    Formula:
+        preimage  = drawDesignId + clientDateTime + checksumKey
+        encrypted = preimage + savyChecksum
+        checksum  = MD5(encrypted)
+
+    Args:
+        draw_design_id: The draw design ID (e.g., "123" for Scorched Pod)
+        client_date_time: Current UTC timestamp "yyyy-MM-ddTHH:mm:ss"
+        checksum_key: Configuration.ChecksumKey ("5343")
+        savy_checksum: Configuration.SavyChecksum ("Savvy!s0d@")
+
+    Returns:
+        32-char MD5 hex digest.
+
+    Raises:
+        UnsupportedNativeChecksum: If checksum_key or savy_checksum is empty/None.
+    """
+    if not checksum_key or not savy_checksum:
+        raise UnsupportedNativeChecksum(
+            "CharacterService/Draw requires checksum_key and savy_checksum "
+            "configuration values compatible with the installed game version."
+        )
+
+    preimage = draw_design_id + client_date_time + checksum_key
     encrypted = preimage + savy_checksum
     return hashlib.md5(encrypted.encode("utf-8")).hexdigest()
