@@ -46,7 +46,8 @@ jobs:
             --auth-file "$auth_file" \
             --smtp-email "$SMTP_EMAIL" \
             --smtp-password-file "$smtp_password_file" \
-            --recipient "$RECIPIENT"
+            --recipient "$RECIPIENT" \
+            --run-battle
 
       - name: Process account 2
         continue-on-error: true
@@ -70,7 +71,8 @@ jobs:
             --auth-file "$auth_file" \
             --smtp-email "$SMTP_EMAIL" \
             --smtp-password-file "$smtp_password_file" \
-            --recipient "$RECIPIENT"
+            --recipient "$RECIPIENT" \
+            --run-battle
 
       - name: Process account 3
         continue-on-error: true
@@ -94,7 +96,8 @@ jobs:
             --auth-file "$auth_file" \
             --smtp-email "$SMTP_EMAIL" \
             --smtp-password-file "$smtp_password_file" \
-            --recipient "$RECIPIENT"
+            --recipient "$RECIPIENT" \
+            --run-battle
 
       - name: Process account 4
         continue-on-error: true
@@ -118,7 +121,8 @@ jobs:
             --auth-file "$auth_file" \
             --smtp-email "$SMTP_EMAIL" \
             --smtp-password-file "$smtp_password_file" \
-            --recipient "$RECIPIENT"
+            --recipient "$RECIPIENT" \
+            --run-battle
 
       - name: Process account 5
         continue-on-error: true
@@ -142,4 +146,5 @@ jobs:
             --auth-file "$auth_file" \
             --smtp-email "$SMTP_EMAIL" \
             --smtp-password-file "$smtp_password_file" \
-            --recipient "$RECIPIENT"
+            --recipient "$RECIPIENT" \
+            --run-battle
