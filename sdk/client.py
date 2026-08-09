@@ -2516,9 +2516,10 @@ class Client(object):
 
         Flow:
         0. Pre-flight: only start if ship HP is 100%
-        1. CreateStarBattle5 - initiate PvP battle matchmaking
-        2. VerifyBattle2 - submit battle result (simulated win)
-        3. FinaliseBattle15 - finalize battle with server
+        1. Pre-flight: rearm ship (restock ammo)
+        2. CreateStarBattle5 - initiate PvP battle matchmaking
+        3. VerifyBattle2 - submit battle result (simulated win)
+        4. FinaliseBattle15 - finalize battle with server
 
         This uses the checksum formulas derived from static analysis of the IL2CPP binary
         and verified against the universal checksum pattern across all PSS endpoints.
@@ -2539,7 +2540,14 @@ class Client(object):
             return False
         logging.info(f'[{self.info.get("@Name", "")}] Ship HP at 100%; proceeding to battle.')
 
-        # Step 1: Create battle
+        # Step 1: Pre-flight - rearm ship (restock all ammo categories)
+        logging.info(f'[{self.info.get("@Name", "")}] Rearming ship before battle...')
+        if not self.rebuildAmmo():
+            logging.error(f'[{self.info.get("@Name", "")}] Failed to rearm ship; aborting battle.')
+            return False
+        logging.info(f'[{self.info.get("@Name", "")}] Ship rearmed successfully.')
+
+        # Step 2: Create battle
         if not self.createStarBattle5(clientHp=clientHp):
             logging.error(f'[{self.info.get("@Name", "")}] Failed to create battle')
             return False
