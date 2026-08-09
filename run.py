@@ -1,8 +1,6 @@
 import sys
 import getpass
 import os
-from configparser import ConfigParser
-from configparser import NoSectionError
 import smtplib
 from email.message import EmailMessage
 import argparse
@@ -29,21 +27,15 @@ logging.basicConfig(
 
 
 def email_logfile(filename, client, email=None, password=None, recipient=None):
-    if email and password and recipient:
-        pass
-    else:
-        try:
-            config = ConfigParser()
-            config.read("./config.secrets")
-            email = config.get("MAIL_CONFIG", "SENDER_EMAIL")
-            password = config.get("MAIL_CONFIG", "SENDER_PASSWD")
-            recipient = config.get("MAIL_CONFIG", "RECIPIENT_EMAIL")
-        except NoSectionError:
-            logging.error(
-                "Unable to email log file because email authentication is not properly setup."
-            )
-            return None
-
+    """Send log file via email.
+    
+    Only sends if all three parameters (email, password, recipient) are provided.
+    Does NOT fall back to config.secrets - SMTP must be explicitly configured via CLI args.
+    """
+    if not (email and password and recipient):
+        logging.debug("SMTP details not provided; skipping email delivery.")
+        return False
+    
     try:
         with open(filename, "rb") as f:
             logs = f.read()
