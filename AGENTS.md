@@ -16,8 +16,8 @@ Repository rules:
 - Never edit automation/queue/slices.json from inside a slice.
 - Never use or expose real authentication material.
 - Tests must mock all Pixel Starships network traffic.
-- Do not run the scheduled live-account workflow as validation.
 - Preserve existing gameplay strategy unless the slice explicitly changes it.
 - Update README.template before README.md.
 - Add regression coverage for every corrected defect.
 - Stop when work exceeds allowed paths or max_files_changed.
+- Ensure full end to end run after each implementation.
