@@ -2357,12 +2357,9 @@ class Client(object):
             Uses CreateStarBattle5 endpoint with checksum.
             Requires checksum_key and savy_checksum configuration settings.
 
-            Checksum formula (URL parameter order before checksum):
-            URL: /BattleService/CreateStarBattle5?clientHp={0}&clientDateTime={1}&checksum={2}&accessToken={3}&searchNumber={4}&value={5}
-            Parameters before checksum: clientHp, clientDateTime, accessToken, searchNumber, value
-
-            preimage = clientHp + clientDateTime + accessToken + searchNumber + value + checksum_key
-            encrypted = preimage + savy_checksum
+            Checksum formula (matches FinaliseBattle15 pattern):
+            preimage = clientHp + clientDateTime + accessToken + searchNumber + value + checksumKey
+            encrypted = preimage + savyChecksum
             checksum = MD5(encrypted)
             """
             checksum_key = self.settings.get("checksum_key")
@@ -2378,17 +2375,18 @@ class Client(object):
                 raise ConfigurationError("CreateStarBattle5 requires accessToken (must be logged in)")
 
             ts = "{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime())
-            # CreateStarBattle5 checksum: URL parameters before checksum in URL order
-            preimage = (
-                str(clientHp)
-                + ts
-                + self.accessToken
-                + str(searchNumber)
-                + str(value)
-                + checksum_key
+        
+            from sdk.security import checksum_create_star_battle5
+        
+            checksum = checksum_create_star_battle5(
+                client_hp=str(clientHp),
+                client_date_time=ts,
+                access_token=self.accessToken,
+                search_number=str(searchNumber),
+                value=str(value),
+                checksum_key=checksum_key,
+                savy_checksum=savy_checksum,
             )
-            encrypted = preimage + savy_checksum
-            checksum = hashlib.md5(encrypted.encode("utf-8")).hexdigest()
 
             url = f"{self.baseUrl}/BattleService/CreateStarBattle5?clientHp={clientHp}&clientDateTime={ts}&checksum={checksum}&accessToken={self.accessToken}&searchNumber={searchNumber}&value={value}"
             logging.debug(redact_secrets(f"{url=}"))

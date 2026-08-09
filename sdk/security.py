@@ -391,3 +391,49 @@ def checksum_get_catalog_quantity(
     preimage = client_date_time + access_token + checksum_key
     encrypted = preimage + savy_checksum
     return hashlib.md5(encrypted.encode("utf-8")).hexdigest()
+
+
+def checksum_create_star_battle5(
+    client_hp: str,
+    client_date_time: str,
+    access_token: str,
+    search_number: str,
+    value: str,
+    checksum_key: str,
+    savy_checksum: str,
+) -> str:
+    """Compute the CreateStarBattle5 native checksum.
+
+    URL: /BattleService/CreateStarBattle5?clientHp={0}&clientDateTime={1}&checksum={2}&accessToken={3}&searchNumber={4}&value={5}
+    Parameters before checksum in URL: clientHp, clientDateTime, accessToken, searchNumber, value
+
+    Formula (matches FinaliseBattle15 pattern - includes deviceKey and email from config):
+    preimage  = clientHp + clientDateTime + accessToken + searchNumber + value + checksumKey
+    encrypted = preimage + savyChecksum
+    checksum  = MD5(encrypted)
+
+    Args:
+        client_hp: Client HP as string (e.g., "100000")
+        client_date_time: Current UTC timestamp "yyyy-MM-ddTHH:mm:ss"
+        access_token: Current session access token
+        search_number: Search number as string (e.g., "0")
+        value: Value as string (e.g., "0")
+        checksum_key: Configuration.ChecksumKey ("5343")
+        savy_checksum: Configuration.SavyChecksum ("Savvy!s0d@")
+
+    Returns:
+        32-char MD5 hex digest.
+
+    Raises:
+        UnsupportedNativeChecksum: If checksum_key or savy_checksum is empty/None.
+    """
+    if not checksum_key or not savy_checksum:
+        raise UnsupportedNativeChecksum(
+            "CreateStarBattle5 requires checksum_key and savy_checksum "
+            "configuration values compatible with the installed game version."
+        )
+
+    # URL parameter order before checksum: clientHp, clientDateTime, accessToken, searchNumber, value
+    preimage = client_hp + client_date_time + access_token + search_number + value + checksum_key
+    encrypted = preimage + savy_checksum
+    return hashlib.md5(encrypted.encode("utf-8")).hexdigest()
