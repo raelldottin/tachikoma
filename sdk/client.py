@@ -1833,8 +1833,10 @@ class Client(object):
         draw_designs = _extract_collection(self.drawDesigns, "DrawDesign")
         for design in draw_designs:
             name = design.get("@DrawName", "") or design.get("@Name", "")
-            if "Scorched" in name and "Pod" in name:
+            # Match "Scorched Pod" - could be "Scorched Pod", "Scorched Pod 1000", etc.
+            if "scorched" in name.lower() and "pod" in name.lower():
                 scorched_pod_id = design.get("@DrawDesignId")
+                logging.info(f'[{self.info["@Name"]}] Found Scorched Pod: {name} (ID: {scorched_pod_id})')
                 break
         
         if not scorched_pod_id:
