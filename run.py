@@ -152,24 +152,16 @@ def main():
         smtp_enabled = False
     elif smtp_count == 3:
         pw_path = Path(smtp_password_file)
-        if pw_path.is_file():
-            try:
-                pw_content = pw_path.read_text().strip()
-                if pw_content:
-                    smtp_password = pw_content
-                    smtp_enabled = True
-                else:
-                    logging.error("Incomplete SMTP configuration; email delivery was not attempted.")
-                    sys.exit(2)
-            except Exception:
-                logging.error("Incomplete SMTP configuration; email delivery was not attempted.")
-                sys.exit(2)
-        else:
-            logging.error("Incomplete SMTP configuration; email delivery was not attempted.")
-            sys.exit(2)
-    else:
-        logging.error("Incomplete SMTP configuration; email delivery was not attempted.")
-        sys.exit(2)
+        # Handle both regular files and file descriptors (process substitution)
+        try:
+            pw_content = pw_path.read_text().strip()
+            if pw_content:
+                smtp_password = pw_content
+                smtp_enabled = True
+            else:
+                logging.warning("SMTP password file empty; email delivery disabled.")
+        except Exception as e:
+            logging.warning(f"Failed to read SMTP password file: {e}; email delivery disabled.")
 
     # Load authentication string from file if provided
     auth_string = None
