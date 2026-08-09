@@ -2473,7 +2473,7 @@ class Client(object):
                 logging.debug(f"[{self.info.get('@Name', '')}] getShipByUserId() succeeded")
         try:
             ship = self.shipByUserId["ShipService"]["GetShipByUserId"]["Ship"]
-            logging.debug(f"[{self.info.get('@Name', '')}] Ship data keys: {list(ship.keys()) if isinstance(ship, dict) else 'not dict'}")
+            logging.warning(f"[{self.info.get('@Name', '')}] Ship data keys: {list(ship.keys()) if isinstance(ship, dict) else 'not dict'}")
         except (KeyError, TypeError) as e:
             logging.warning(f"[{self.info.get('@Name', '')}] Ship data structure error: {e}")
             return -1.0
