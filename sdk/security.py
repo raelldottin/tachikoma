@@ -159,20 +159,23 @@ def checksum_rebuild_ammo3(
     device_key: str,
     client_date_time: str,
     ammo_category: str,
+    email: str,
+    access_token: str,
     checksum_key: str,
     savy_checksum: str,
 ) -> str:
     """Compute the RebuildAmmo3 native checksum.
 
-    WARNING: Formula NOT verified against live captures. Based on static analysis
-    only. Gate behind feature flag until verified.
+    Formula matches FinaliseBattle15 pattern (parameters in URL order before checksum):
+    preimage  = deviceKey + email + ammoCategory + clientDateTime + accessToken + checksumKey
+    encrypted = preimage + savyChecksum
+    checksum  = MD5(encrypted)
     """
     if not checksum_key or not savy_checksum:
         raise UnsupportedNativeChecksum(
             "RebuildAmmo3 requires checksum_key and savy_checksum configuration."
         )
-    # Provisional: deviceKey + ammoCategory + clientDateTime + ChecksumKey
-    preimage = device_key + ammo_category + client_date_time + checksum_key
+    preimage = device_key + email + ammo_category + client_date_time + access_token + checksum_key
     encrypted = preimage + savy_checksum
     return hashlib.md5(encrypted.encode("utf-8")).hexdigest()
 
