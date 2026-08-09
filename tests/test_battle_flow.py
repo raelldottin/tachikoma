@@ -623,27 +623,16 @@ class TestBattleFlow(unittest.TestCase):
 
         self.assertFalse(result)
 
-    @patch.object(Client, "purchaseDrawWithStarbux")
+    @patch.object(Client, "purchaseCatalogItem")
     def test_purchase_scorched_pod_if_affordable_success(self, mock_purchase):
-        """purchaseScorchedPodIfAffordable calls purchaseDrawWithStarbux when affordable."""
-        self.client.drawDesigns = {
-            "DesignService": {
-                "ListAllDesigns": {
-                    "DrawDesigns": {
-                        "DrawDesign": [
-                            {"@DrawDesignId": "99", "@DrawName": "Scorched Pod", "@StarbuxCost": "500"},
-                        ]
-                    }
-                }
-            }
-        }
+        """purchaseScorchedPodIfAffordable calls purchaseCatalogItem when affordable."""
         self.client.info["@Starbux"] = "1000"
         mock_purchase.return_value = True
 
         result = self.client.purchaseScorchedPodIfAffordable()
 
         self.assertTrue(result)
-        mock_purchase.assert_called_once_with("99")
+        mock_purchase.assert_called_once_with("1291")
 
 
 if __name__ == "__main__":
