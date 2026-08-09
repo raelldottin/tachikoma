@@ -116,7 +116,7 @@ def main():
         help="path to file containing SMTP password",
     )
     parser.add_argument(
-        "--recipient",
+        "--recipient", "-r",
         dest="recipient",
         default=None,
         help="recipient email for log delivery",
@@ -159,9 +159,14 @@ def main():
                 smtp_password = pw_content
                 smtp_enabled = True
             else:
-                logging.warning("SMTP password file empty; email delivery disabled.")
+                logging.error("SMTP password file empty; email delivery was not attempted.")
+                sys.exit(2)
         except Exception as e:
-            logging.warning(f"Failed to read SMTP password file: {e}; email delivery disabled.")
+            logging.error(f"Failed to read SMTP password file: {e}; email delivery was not attempted.")
+            sys.exit(2)
+    else:
+        logging.error("Incomplete SMTP configuration; email delivery was not attempted.")
+        sys.exit(2)
 
     # Load authentication string from file if provided
     auth_string = None
@@ -171,20 +176,26 @@ def main():
     if auth_string:
         device = Device(language="en", authentication_string=auth_string)
     else:
+        # Clear any persisted .device file to start fresh BEFORE creating Device
+        # This ensures each account gets a unique device key
+        if args.login_email or args.device_key:
+            try:
+                os.unlink(Device.DB)
+            except FileNotFoundError:
+                pass
+
         device = Device(language="en")
         if args.device_key:
             device.set_device_key(args.device_key.upper())
-        elif args.login_email:
-            # Clear any persisted .device file to start fresh
-            try:
-                os.unlink(device.DB)
-            except FileNotFoundError:
-                pass
 
     # Enable email/password login if email provided
     settings = {}
     if args.login_email:
         settings["allow_email_password_login"] = True
+    
+    # Add checksum settings for RebuildAmmo3 and other native checksums
+    settings["checksum_key"] = "5343"
+    settings["savy_checksum"] = "Savvy!s0d@"
 
     client = Client(device=device, settings=settings)
 

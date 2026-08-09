@@ -170,7 +170,10 @@ class Client(object):
         r = self.session.request(method, url, headers=self.headers, data=data)
 
         if "errorMessage" in r.text:
-            if "Please upgrade your lab room." not in r.text:
+            # "storage is full" is a benign condition, log as warning not error
+            if "storage is full" in r.text.lower():
+                logging.warning("[%s] {%s} - storage is full", self.info["@Name"], redact_secrets(url))
+            elif "Please upgrade your lab room." not in r.text:
                 d = xmltodict.parse(r.content, xml_attribs=True)
                 logging.error("[%s] {%s} - {%s}", self.info["@Name"], redact_secrets(url), redact_secrets(str(d)))
 

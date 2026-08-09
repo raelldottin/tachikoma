@@ -439,55 +439,42 @@ class TestBattleFlow(unittest.TestCase):
             mock_create.assert_not_called()
 
     def test_get_ship_hp_fraction_from_ship_attrs(self):
-        """getShipHpFraction reads @Hp/@MaxHp from ship-level attributes."""
+        """getShipHpFraction reads @Hp from ship, @MaxHp from ship design."""
         self.client.shipByUserId = {
             "ShipService": {
                 "GetShipByUserId": {
                     "Ship": {
                         "@Hp": "1000",
-                        "@MaxHp": "1000",
+                        "@ShipDesignId": "233",
                         "Rooms": {"Room": []},
                         "Researches": {"Research": []},
                     }
                 }
             }
         }
+        self.client.shipDesigns = {
+            "ShipDesign": [{"@ShipDesignId": "233", "@MaxHp": "1000"}]
+        }
         self.assertEqual(self.client.getShipHpFraction(), 1.0)
 
     def test_get_ship_hp_fraction_partial(self):
-        """getShipHpFraction returns 0.5 when HP is half of max."""
+        """getShipHpFraction returns 0.5 when HP is half of design max."""
         self.client.shipByUserId = {
             "ShipService": {
                 "GetShipByUserId": {
                     "Ship": {
                         "@Hp": "500",
-                        "@MaxHp": "1000",
+                        "@ShipDesignId": "233",
                         "Rooms": {"Room": []},
                         "Researches": {"Research": []},
                     }
                 }
             }
         }
-        self.assertEqual(self.client.getShipHpFraction(), 0.5)
-
-    def test_get_ship_hp_fraction_fallback_to_rooms(self):
-        """getShipHpFraction falls back to summing room HP when ship attrs absent."""
-        self.client.shipByUserId = {
-            "ShipService": {
-                "GetShipByUserId": {
-                    "Ship": {
-                        "Rooms": {
-                            "Room": [
-                                {"@Hp": "300", "@MaxHp": "300"},
-                                {"@Hp": "700", "@MaxHp": "700"},
-                            ]
-                        },
-                        "Researches": {"Research": []},
-                    }
-                }
-            }
+        self.client.shipDesigns = {
+            "ShipDesign": [{"@ShipDesignId": "233", "@MaxHp": "1000"}]
         }
-        self.assertEqual(self.client.getShipHpFraction(), 1.0)
+        self.assertEqual(self.client.getShipHpFraction(), 0.5)
 
     def test_get_ship_hp_fraction_unknown_returns_negative(self):
         """getShipHpFraction returns -1.0 when ship data is unavailable."""
