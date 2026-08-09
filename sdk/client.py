@@ -2529,13 +2529,19 @@ class Client(object):
         
         # Fall back to ship design data for max HP
         ship_design_id = ship.get("@ShipDesignId")
+        logging.warning(f"[{self.info.get('@Name', '')}] ShipDesignId from ship data: {ship_design_id}")
+        logging.warning(f"[{self.info.get('@Name', '')}] hasattr shipDesigns: {hasattr(self, 'shipDesigns')}")
+        if hasattr(self, "shipDesigns"):
+            logging.warning(f"[{self.info.get('@Name', '')}] shipDesigns keys: {list(self.shipDesigns.keys()) if isinstance(self.shipDesigns, dict) else 'not dict'}")
         if ship_design_id and hasattr(self, "shipDesigns"):
             logging.warning(f"[{self.info.get('@Name', '')}] Checking ship design {ship_design_id} for max HP...")
             designs = self.shipDesigns.get("ShipDesign", [])
+            logging.warning(f"[{self.info.get('@Name', '')}] Ship designs count: {len(designs) if isinstance(designs, list) else 'not list'}")
             if isinstance(designs, dict):
                 designs = [designs]
             for design in designs:
                 if design.get("@ShipDesignId") == ship_design_id:
+                    logging.warning(f"[{self.info.get('@Name', '')}] Found matching design: {design}")
                     # Look for max HP fields in ship design
                     for hp_field in ["@MaxHp", "@Hp", "@HullHp", "@HullMaxHp", "@HpMax"]:
                         mx = design.get(hp_field)
