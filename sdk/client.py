@@ -1814,6 +1814,56 @@ class Client(object):
         
         return False
 
+
+    def purchaseCatalogItem(self, argument: str) -> bool:
+        """Purchase an item from the shop using PurchaseCatalog2 endpoint.
+
+        Endpoint: /ShopService/PurchaseCatalog2?argument={argument}&clientDateTime={}&checksum={}&accessToken={}
+        Checksum: MD5(argument + clientDateTime + accessToken + ChecksumKey + SavyChecksum)
+
+        Args:
+            argument: The catalog item argument (e.g., "1291" for Scorched Pod)
+
+        Returns:
+            True if purchase successful, False otherwise
+        """
+        from sdk.security import checksum_purchase_catalog2
+
+        ts = "{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime())
+        settings = self.settings or {}
+        checksum_key = settings.get("checksum_key", "5343")
+        savy_checksum = settings.get("savy_checksum", "Savvy!s0d@")
+
+        if not self.accessToken:
+            raise ConfigurationError("purchaseCatalogItem requires accessToken (must be logged in)")
+
+        checksum = checksum_purchase_catalog2(
+            argument=argument,
+            client_date_time=ts,
+            access_token=self.accessToken,
+            checksum_key=checksum_key,
+            savy_checksum=savy_checksum,
+        )
+
+        url = f"https://api.pixelstarships.com/ShopService/PurchaseCatalog2?argument={argument}&clientDateTime={ts}&checksum={checksum}&accessToken={self.accessToken}"
+        r = self.request(url, "POST")
+
+        if r:
+            result = xmltodict.parse(r.content, xml_attribs=True)
+            logging.info(f'[{self.info["@Name"]}] PurchaseCatalog2 result: {result}')
+
+            # Check for error
+            if "ShopService" in result:
+                purchase_result = result["ShopService"].get("PurchaseCatalog2", {})
+                if "@errorCode" in purchase_result and purchase_result["@errorCode"] != "0":
+                    logging.error(f'[{self.info["@Name"]}] PurchaseCatalog2 failed: {purchase_result.get("@errorMessage", "Unknown error")}')
+                    return False
+
+            return True
+
+        return False
+
+
     def purchaseScorchedPodIfAffordable(self) -> bool:
         """Purchase Scorched Pod from Shop if user has enough Starbux.
 

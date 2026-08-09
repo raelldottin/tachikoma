@@ -31,6 +31,7 @@ echo "   - Enter galaxy (GetLatestVersion4)"
 echo "   - Collect markers (CollectMarker2)"
 echo "   - Rebuild ammo (RebuildAmmo3)"
 echo "   - Email/password login if testing (UserEmailPasswordAuthorize4)"
+echo "   - Purchase Scorched Pod (PurchaseCatalog2)"
 echo ""
 echo "4. Press Ctrl+C here to stop capture and save"
 echo ""
@@ -48,6 +49,7 @@ TARGET_PATHS = [
     "/GalaxyService/CollectMarker2",
     "/RoomService/RebuildAmmo3",
     "/UserService/UserEmailPasswordAuthorize4",
+    "/ShopService/PurchaseCatalog2",
 ]
 
 class CaptureChecksumInputs:
