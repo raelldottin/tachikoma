@@ -1816,50 +1816,61 @@ class Client(object):
 
     def purchaseScorchedPodIfAffordable(self) -> bool:
         """Purchase Scorched Pod from Shop if user has enough Starbux.
-        
+
         Finds the Scorched Pod draw design ID from cached designs and attempts purchase.
-        
+
         Returns:
             True if purchased, False otherwise (not enough Starbux, not found, or error)
         """
+        logging.error(f'[{self.info["@Name"]}] DEBUG: purchaseScorchedPodIfAffordable START')
+        logging.error(f'[{self.info["@Name"]}] DEBUG: hasattr drawDesigns={hasattr(self, "drawDesigns")}')
+        if hasattr(self, "drawDesigns"):
+            logging.error(f'[{self.info["@Name"]}] DEBUG: drawDesigns type={type(self.drawDesigns)}, keys={list(self.drawDesigns.keys()) if isinstance(self.drawDesigns, dict) else "not dict"}')
+
         # Ensure designs are loaded
         if not hasattr(self, "drawDesigns") or not self.drawDesigns:
+            logging.error(f'[{self.info["@Name"]}] DEBUG: drawDesigns not loaded, calling listAllDesigns4()')
             if not self.listAllDesigns4():
                 logging.error(f'[{self.info["@Name"]}] Failed to load draw designs')
                 return False
-        
+            else:
+                logging.error(f'[{self.info["@Name"]}] DEBUG: listAllDesigns4() succeeded, drawDesigns keys: {list(self.drawDesigns.keys()) if isinstance(self.drawDesigns, dict) else "not dict"}')
+        else:
+            logging.error(f'[{self.info["@Name"]}] DEBUG: drawDesigns already loaded, keys: {list(self.drawDesigns.keys()) if isinstance(self.drawDesigns, dict) else "not dict"}')
+
         # Find Scorched Pod in draw designs
         scorched_pod_id = None
         draw_designs = _extract_collection(self.drawDesigns, "DrawDesign")
+        logging.error(f'[{self.info["@Name"]}] DEBUG: Available draw designs: {[design.get("@DrawName", "") or design.get("@Name", "") for design in draw_designs]}')
         for design in draw_designs:
             name = design.get("@DrawName", "") or design.get("@Name", "")
             # Match "Scorched Pod" - could be "Scorched Pod", "Scorched Pod 1000", etc.
             if "scorched" in name.lower() and "pod" in name.lower():
                 scorched_pod_id = design.get("@DrawDesignId")
-                logging.info(f'[{self.info["@Name"]}] Found Scorched Pod: {name} (ID: {scorched_pod_id})')
+                logging.error(f'[{self.info["@Name"]}] DEBUG: Found Scorched Pod: {name} (ID: {scorched_pod_id})')
                 break
-        
+
         if not scorched_pod_id:
             logging.warning(f'[{self.info["@Name"]}] Scorched Pod not found in draw designs')
             return False
-        
+
         # Check Starbux balance
         try:
             starbux = int(self.info.get("@Starbux", "0"))
         except (ValueError, TypeError):
             starbux = 0
-        
+
         # Get Scorched Pod cost
         cost = 0
         for design in draw_designs:
             if design.get("@DrawDesignId") == scorched_pod_id:
                 cost = int(design.get("@StarbuxCost", "0"))
                 break
-        
+
         if starbux < cost:
             logging.info(f'[{self.info["@Name"]}] Not enough Starbux for Scorched Pod: have {starbux}, need {cost}')
             return False
-        
+
         logging.info(f'[{self.info["@Name"]}] Purchasing Scorched Pod (ID: {scorched_pod_id}, Cost: {cost} Starbux)')
         return self.purchaseDrawWithStarbux(scorched_pod_id)
 
