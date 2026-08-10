@@ -54,13 +54,14 @@ def email_logfile(filename, client, email=None, password=None, recipient=None):
     if not logs:
         return False
 
-    logs = log_capture_string.getvalue()
+    # Use a copy of the log capture to avoid closing the global buffer
+    log_content = log_capture_string.getvalue()
     subject = f"Pixel Starships Automation Log: {client.user.name if hasattr(client, 'user') else ''}"
     message = EmailMessage()
     message["from"] = email
     message["to"] = recipient
     message["subject"] = subject
-    message.set_content(logs)
+    message.set_content(log_content)
 
     try:
         session = smtplib.SMTP("smtp.gmail.com", 587)
@@ -71,7 +72,6 @@ def email_logfile(filename, client, email=None, password=None, recipient=None):
         session.quit()
     except:
         logging.exception("Exception occurred", exc_info=True)
-    log_capture_string.close()
     return True
 
 
