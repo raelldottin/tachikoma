@@ -64,14 +64,26 @@ def email_logfile(filename, client, email=None, password=None, recipient=None):
     message.set_content(log_content)
 
     try:
-        session = smtplib.SMTP("smtp.gmail.com", 587)
+        # Add timeout to prevent hanging
+        session = smtplib.SMTP("smtp.gmail.com", 587, timeout=30)
         session.ehlo()
         session.starttls()
         session.login(email, password)
         session.send_message(message)
         session.quit()
-    except:
-        logging.exception("Exception occurred", exc_info=True)
+        logging.info("Log file emailed successfully")
+    except smtplib.SMTPAuthenticationError as e:
+        logging.error(f"SMTP authentication failed: {e}")
+        return False
+    except smtplib.SMTPException as e:
+        logging.error(f"SMTP error: {e}")
+        return False
+    except TimeoutError:
+        logging.error("SMTP connection timed out")
+        return False
+    except Exception as e:
+        logging.exception(f"Unexpected error sending email: {e}")
+        return False
     return True
 
 
