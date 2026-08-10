@@ -1041,6 +1041,12 @@ class Client(object):
                 percent = math.ceil(
                     count / int(characterDesign["@TrainingCapacity"]) * 100
                 )
+                # Check research prerequisites for each tier
+                has_101_research = self.hasResearch("Fitness", 101) or self.hasResearch("Education", 101)
+                has_201_research = self.hasResearch("Fitness", 201) or self.hasResearch("Education", 201)
+                has_202_research = self.hasResearch("Fitness", 202) or self.hasResearch("Education", 202)
+                has_203_research = self.hasResearch("Fitness", 203) or self.hasResearch("Education", 203)
+                
                 if (
                     roleData
                     and any(
@@ -1048,6 +1054,7 @@ class Client(object):
                         for primaryRoom in roleData["primaryRoom"]
                     )
                     and (percent < 51)
+                    and has_101_research
                     and (
                         not trainingEndDate
                         or (
@@ -1060,7 +1067,6 @@ class Client(object):
                     logging.debug(
                         f"[{self.info['@Name']}] Use Green (T1) {trainingName} primary training for {character['@CharacterName']} in {self.roomName} with {percent:.2f}% training complete, ability {characterDesign['@SpecialAbilityType']}, and {character['@Fatigue']} fatigue."
                     )
-
                 elif (
                     roleData
                     and any(
@@ -1068,6 +1074,7 @@ class Client(object):
                         for primaryRoom in roleData["primaryRoom"]
                     )
                     and (50 < percent < 65)
+                    and has_201_research
                     and (
                         not trainingEndDate
                         or (
@@ -1083,7 +1090,6 @@ class Client(object):
                     logging.debug(
                         f"[{self.info['@Name']}] Use Blue (T2) {trainingName} primary training for {character['@CharacterName']} in {self.roomName} with {percent:.2f}% training complete, ability {characterDesign['@SpecialAbilityType']}, and {character['@Fatigue']} fatigue."
                     )
-
                 elif (
                     roleData
                     and any(
@@ -1091,6 +1097,7 @@ class Client(object):
                         for primaryRoom in roleData["primaryRoom"]
                     )
                     and (64 < percent < 72)
+                    and has_203_research
                     and (
                         not trainingEndDate
                         or (
@@ -1144,6 +1151,7 @@ class Client(object):
                         for secondaryRoom in roleData["secondaryRoom"]
                     )
                     and (73 < percent < 85)
+                    and has_201_research
                     and (
                         not trainingEndDate
                         or (
@@ -1166,6 +1174,7 @@ class Client(object):
                         for secondaryRoom in roleData["secondaryRoom"]
                     )
                     and (84 < percent < 90)
+                    and has_203_research
                     and (
                         not trainingEndDate
                         or (
@@ -1240,6 +1249,62 @@ class Client(object):
                         logging.info(
                             f"[{self.info['@Name']}] Considering training {trainingName} for {character['@CharacterName']} in {self.roomName} with {percent:.2f}% training complete, ability {characterDesign['@SpecialAbilityType']}, {character['@Fatigue']} fatigue."
                         )
+
+                # Step 1 & 2: Use grey consumables for early TP (before 30%)
+                # Step 5: Use hero consumables at 100 fatigue for guaranteed TP
+                fatigue = int(character.get("@Fatigue", "0"))
+                character_id = character.get("@CharacterId")
+                if character_id and percent < 30 and fatigue == 0:
+                    # Step 2: Spam grey cons in primary stat until 30% TP
+                    # Map training stat to consumable stat type
+                    stat_to_cons = {
+                        "WeaponImprovement": "WPN",
+                        "ScienceImprovement": "SCI",
+                        "EngineImprovement": "ENG",
+                        "PilotImprovement": "PLT",
+                        "HpImprovement": "HP",
+                        "AttackImprovement": "ATK",
+                        "AbilityImprovement": "ABL",
+                        "StaminaImprovement": "STA",
+                        "RepairImprovement": "STA",
+                    }
+                    primary_stat = None
+                    for stat in stats:
+                        if int(character[stat]) > 0:
+                            primary_stat = stat_to_cons.get(stat)
+                            break
+                    
+                    if primary_stat:
+                        grey_cons_id = self.findConsumableDesignId(primary_stat, "Common")
+                        if grey_cons_id:
+                            logging.info(f"[{self.info['@Name']}] Using grey {primary_stat} consumable for {character['@CharacterName']} ({percent:.1f}% TP)")
+                            self.useConsumable(grey_cons_id, int(character_id))
+
+                # Step 5: Hero consumables at 100 fatigue for guaranteed TP
+                elif character_id and percent > 89 and fatigue >= 100:
+                    # Need to find which stats are not yet maxed
+                    for stat in stats:
+                        current_val = int(character[stat])
+                        max_val = int(characterDesign.get(stat, "0"))
+                        if current_val < max_val:
+                            stat_to_cons = {
+                                "WeaponImprovement": "WPN",
+                                "ScienceImprovement": "SCI",
+                                "EngineImprovement": "ENG",
+                                "PilotImprovement": "PLT",
+                                "HpImprovement": "HP",
+                                "AttackImprovement": "ATK",
+                                "AbilityImprovement": "ABL",
+                                "StaminaImprovement": "STA",
+                                "RepairImprovement": "STA",
+                            }
+                            cons_type = stat_to_cons.get(stat)
+                            if cons_type:
+                                hero_cons_id = self.findConsumableDesignId(cons_type, "Hero")
+                                if hero_cons_id:
+                                    logging.info(f"[{self.info['@Name']}] Using hero {cons_type} consumable for {character['@CharacterName']} at 100 fatigue ({percent:.1f}% TP)")
+                                    self.useConsumable(hero_cons_id, int(character_id))
+                                    break
 
         return True
 
@@ -1523,6 +1588,76 @@ class Client(object):
         r = self.request(url, "POST")
         if r:
             self.item = xmltodict.parse(r.content, xml_attribs=True)
+
+    def useConsumable(self, consumableItemDesignId: int, characterId: int) -> bool:
+        """Use a consumable item on a character.
+
+        Args:
+            consumableItemDesignId: The ItemDesignId of the consumable (e.g., grey HP cons, hero ATK cons)
+            characterId: The character to use the consumable on
+
+        Returns:
+            True if successful, False otherwise
+        """
+        if not hasattr(self, "itemsOfAShip") or not self.itemsOfAShip:
+            self.listItemsOfAShip()
+
+        items = _extract_collection(getattr(self, "itemsOfAShip", {}), "Item")
+        if not items:
+            logging.info("No items found on ship")
+            return False
+
+        # Find the first available consumable with matching design ID
+        item_id = None
+        for item in items:
+            if item.get("@ItemDesignId") == str(consumableItemDesignId):
+                item_id = item.get("@ItemId")
+                break
+
+        if not item_id:
+            logging.info(f"Consumable itemDesignId {consumableItemDesignId} not found in inventory")
+            return False
+
+        logging.info(f"Using consumable {consumableItemDesignId} (itemId={item_id}) on character {characterId}")
+        self.activateItem3(itemId=item_id, targetId=characterId)
+
+        # Check for error
+        if hasattr(self, "item") and self.item:
+            error = self.item.get("ItemService", {}).get("ActivateItem3", {}).get("@errorMessage", "")
+            if error:
+                logging.error(f"useConsumable failed: {error}")
+                return False
+
+        return True
+
+    def findConsumableDesignId(self, statType: str, tier: str = "Common") -> int:
+        """Find a consumable item design ID by stat type and tier.
+        
+        Args:
+            statType: One of "HP", "ATK", "ABL", "STA", "WPN", "PLT", "SCI", "ENG"
+            tier: One of "Common" (grey), "Uncommon", "Rare", "Epic", "Legendary", "Hero"
+            
+        Returns:
+            ItemDesignId or 0 if not found
+        """
+        if not hasattr(self, "itemDesigns") or not self.itemDesigns:
+            self.listAllDesigns4()
+            
+        items = _extract_collection(getattr(self, "itemDesigns", {}), "ItemDesign")
+        if not items:
+            return 0
+            
+        for item in items:
+            item_name = item.get("@ItemName", "")
+            item_subtype = item.get("@ItemSubType", "")
+            # Look for consumables matching the stat type and tier
+            if item_subtype == "Consumable" or "Consumable" in item_name:
+                if statType.upper() in item_name.upper() and tier.capitalize() in item_name.capitalize():
+                    try:
+                        return int(item.get("@ItemDesignId", "0"))
+                    except (ValueError, TypeError):
+                        pass
+        return 0
 
     def print_market_data(self, v):
         if not isinstance(v, dict):
@@ -2055,6 +2190,43 @@ class Client(object):
         except Exception:
             logging.exception("Unable to upgrade research.", exc_info=True)
             return False
+
+    def getResearchLevel(self, researchName: str) -> int:
+        """Get the current level of a specific research by name.
+        
+        Args:
+            researchName: Name of the research (e.g., "Fitness 101", "Education 201")
+            
+        Returns:
+            Research level (0 if not found)
+        """
+        if not hasattr(self, "allResearches") or not self.allResearches:
+            self.listAllResearches()
+        
+        all_researches = _extract_collection(getattr(self, "allResearches", None), "Research")
+        if not all_researches:
+            return 0
+            
+        for research in all_researches:
+            if research.get("@ResearchName", "").startswith(researchName.split()[0]):
+                try:
+                    level = int(research.get("@ResearchLevel", "0"))
+                    return level
+                except (ValueError, TypeError):
+                    pass
+        return 0
+
+    def hasResearch(self, researchName: str, minLevel: int = 1) -> bool:
+        """Check if a research has reached at least the minimum level.
+        
+        Args:
+            researchName: Name of the research (e.g., "Fitness", "Education")
+            minLevel: Minimum required level (e.g., 101, 201, 202, 203)
+            
+        Returns:
+            True if research level >= minLevel
+        """
+        return self.getResearchLevel(researchName) >= minLevel
 
     def upgradeRooms(self):
         try:
