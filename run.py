@@ -334,7 +334,13 @@ def main():
 
     # Send log file via SMTP only if SMTP is enabled
     if smtp_enabled:
-        email_logfile(logfilepath, client, smtp_email, smtp_password, recipient)
+        try:
+            email_result = email_logfile(logfilepath, client, smtp_email, smtp_password, recipient)
+            if email_result is False:
+                logging.warning("email_logfile returned False")
+        except Exception as e:
+            logging.exception(f"email_logfile raised exception: {e}")
+            runtime_failed = True
 
     if runtime_failed:
         sys.exit(1)
