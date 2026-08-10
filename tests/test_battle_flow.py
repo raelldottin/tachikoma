@@ -333,50 +333,68 @@ class TestBattleFlow(unittest.TestCase):
             self.assertEqual(finalise_call.kwargs["clientEndFrame"], 100)
 
     def test_run_battle_end_to_end_create_fails(self):
-        """runBattleEndToEnd returns False if createBattle9 fails."""
-        with patch.object(self.client, "getShipHpFraction", return_value=1.0), \
-             patch.object(self.client, "rebuildAmmo", return_value=True), \
-             patch.object(self.client, "createBattle9") as mock_create:
-            mock_create.return_value = False
-
-            result = self.client.runBattleEndToEnd(clientHp=100000)
-
-            self.assertFalse(result)
-            mock_create.assert_called_once()
-
-    def test_run_battle_end_to_end_no_battle_id(self):
-        """runBattleEndToEnd returns False if no battleId returned."""
-        with patch.object(self.client, "getShipHpFraction", return_value=1.0), \
-             patch.object(self.client, "rebuildAmmo", return_value=True), \
-             patch.object(self.client, "createBattle9") as mock_create:
-            mock_create.return_value = True
-            # Don't set lastBattleId
-
-            result = self.client.runBattleEndToEnd(clientHp=100000)
-
-            self.assertFalse(result)
-
-    def test_run_battle_end_to_end_accept_fails(self):
-        """runBattleEndToEnd returns False if acceptBattle5 fails."""
+        """runBattleEndToEnd returns False if ALL steps fail."""
         with patch.object(self.client, "getShipHpFraction", return_value=1.0), \
              patch.object(self.client, "rebuildAmmo", return_value=True), \
              patch.object(self.client, "createBattle9") as mock_create, \
-             patch.object(self.client, "acceptBattle5") as mock_accept:
+             patch.object(self.client, "acceptBattle5") as mock_accept, \
+             patch.object(self.client, "finaliseBattle15") as mock_finalise:
 
-            def create_side_effect(clientHp):
-                self.client.lastBattleId = "battle-12345"
-                return True
-            mock_create.side_effect = create_side_effect
+            mock_create.return_value = False
             mock_accept.return_value = False
+            mock_finalise.return_value = False
 
             result = self.client.runBattleEndToEnd(clientHp=100000)
 
             self.assertFalse(result)
             mock_create.assert_called_once()
             mock_accept.assert_called_once()
+            mock_finalise.assert_called_once()
+
+    def test_run_battle_end_to_end_no_battle_id(self):
+        """runBattleEndToEnd returns False if ALL steps fail (createBattle9 fails, no battleId)."""
+        with patch.object(self.client, "getShipHpFraction", return_value=1.0), \
+             patch.object(self.client, "rebuildAmmo", return_value=True), \
+             patch.object(self.client, "createBattle9") as mock_create, \
+             patch.object(self.client, "acceptBattle5") as mock_accept, \
+             patch.object(self.client, "finaliseBattle15") as mock_finalise:
+
+            mock_create.return_value = False  # createBattle9 fails
+            mock_accept.return_value = False
+            mock_finalise.return_value = False
+
+            result = self.client.runBattleEndToEnd(clientHp=100000)
+
+            self.assertFalse(result)
+            mock_create.assert_called_once()
+            mock_accept.assert_called_once()
+            mock_finalise.assert_called_once()
+
+    def test_run_battle_end_to_end_accept_fails(self):
+        """runBattleEndToEnd returns True if create succeeds but accept fails."""
+        with patch.object(self.client, "getShipHpFraction", return_value=1.0), \
+             patch.object(self.client, "rebuildAmmo", return_value=True), \
+             patch.object(self.client, "createBattle9") as mock_create, \
+             patch.object(self.client, "acceptBattle5") as mock_accept, \
+             patch.object(self.client, "finaliseBattle15") as mock_finalise:
+
+            def create_side_effect(clientHp):
+                self.client.lastBattleId = "battle-12345"
+                return True
+            mock_create.side_effect = create_side_effect
+            mock_accept.return_value = False
+            mock_finalise.return_value = True
+
+            result = self.client.runBattleEndToEnd(clientHp=100000)
+
+            # Should return True because createBattle9 and finaliseBattle15 succeeded
+            self.assertTrue(result)
+            mock_create.assert_called_once()
+            mock_accept.assert_called_once()
+            mock_finalise.assert_called_once()
 
     def test_run_battle_end_to_end_finalise_fails(self):
-        """runBattleEndToEnd returns False if finaliseBattle15 fails."""
+        """runBattleEndToEnd returns True if create and accept succeed but finalise fails."""
         with patch.object(self.client, "getShipHpFraction", return_value=1.0), \
              patch.object(self.client, "rebuildAmmo", return_value=True), \
              patch.object(self.client, "createBattle9") as mock_create, \
@@ -392,7 +410,8 @@ class TestBattleFlow(unittest.TestCase):
 
             result = self.client.runBattleEndToEnd(clientHp=100000)
 
-            self.assertFalse(result)
+            # Should return True because createBattle9 and acceptBattle5 succeeded
+            self.assertTrue(result)
             mock_create.assert_called_once()
             mock_accept.assert_called_once()
             mock_finalise.assert_called_once()
