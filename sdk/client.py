@@ -2351,6 +2351,106 @@ class Client(object):
 
         return False
 
+    def createBattle9(self, clientHp: int = 4000) -> bool:
+        """Create a battle using the older CreateBattle9 endpoint.
+
+        Uses CreateBattle9 endpoint with checksum (the actual endpoint used by the game client).
+
+        Checksum formula (matches capture):
+        preimage = clientHp + clientDateTime + accessToken + checksum_key
+        encrypted = preimage + savy_checksum
+        checksum = MD5(encrypted)
+
+        Args:
+            clientHp: Client HP to use for battle matchmaking (default 4000)
+
+        Returns:
+            True if battle created successfully, False otherwise
+        """
+        checksum_key = self.settings.get("checksum_key")
+        savy_checksum = self.settings.get("savy_checksum")
+
+        if not checksum_key or not savy_checksum:
+            raise ConfigurationError(
+                "CreateBattle9 requires checksum_key and savy_checksum configuration "
+                "values compatible with the installed game version."
+            )
+
+        if not self.accessToken:
+            raise ConfigurationError("CreateBattle9 requires accessToken (must be logged in)")
+
+        ts = "{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime())
+        # CreateBattle9 checksum: clientHp + clientDateTime + accessToken + checksum_key
+        preimage = str(clientHp) + ts + self.accessToken + checksum_key
+        encrypted = preimage + savy_checksum
+        checksum = hashlib.md5(encrypted.encode("utf-8")).hexdigest()
+
+        url = f"{self.baseUrl}/BattleService/CreateBattle9?clientHp={clientHp}&clientDateTime={ts}&checksum={checksum}&accessToken={self.accessToken}"
+        logging.debug(redact_secrets(f"{url=}"))
+        r = self.request(url, "POST")
+        if r and "errorMessage=" in r.text:
+            logging.warning(f'[{self.info["@Name"]}] CreateBattle9 failed: {r.text[:200]}')
+            return False
+
+        if r:
+            self.createBattle9Result = xmltodict.parse(r.content, xml_attribs=True)
+            # Extract battleId from response for subsequent calls
+            try:
+                battle_id = self.createBattle9Result["BattleService"]["CreateBattle9"]["Battle"]["@BattleId"]
+                self.lastBattleId = battle_id
+                logging.info(f'[{self.info["@Name"]}] Created battle: {battle_id}')
+            except (KeyError, TypeError):
+                pass
+            return True
+        return False
+
+    def acceptBattle5(self, battleId: str, itemDesignId: int = 0) -> bool:
+        """Accept a battle using the AcceptBattle5 endpoint.
+
+        Uses AcceptBattle5 endpoint with checksum.
+
+        Checksum formula (URL parameter order before checksum):
+        preimage = battleId + itemDesignId + clientDateTime + accessToken + checksum_key
+        encrypted = preimage + savy_checksum
+        checksum = MD5(encrypted)
+
+        Args:
+            battleId: Battle ID from CreateBattle9 response
+            itemDesignId: Item design ID (default 0)
+
+        Returns:
+            True if battle accepted successfully, False otherwise
+        """
+        checksum_key = self.settings.get("checksum_key")
+        savy_checksum = self.settings.get("savy_checksum")
+
+        if not checksum_key or not savy_checksum:
+            raise ConfigurationError(
+                "AcceptBattle5 requires checksum_key and savy_checksum configuration "
+                "values compatible with the installed game version."
+            )
+
+        if not self.accessToken:
+            raise ConfigurationError("AcceptBattle5 requires accessToken (must be logged in)")
+
+        ts = "{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime())
+        # AcceptBattle5 checksum: battleId + itemDesignId + clientDateTime + accessToken + checksum_key
+        preimage = battleId + str(itemDesignId) + ts + self.accessToken + checksum_key
+        encrypted = preimage + savy_checksum
+        checksum = hashlib.md5(encrypted.encode("utf-8")).hexdigest()
+
+        url = f"{self.baseUrl}/BattleService/AcceptBattle5?battleId={battleId}&itemDesignId={itemDesignId}&clientDateTime={ts}&checksum={checksum}&accessToken={self.accessToken}"
+        logging.debug(redact_secrets(f"{url=}"))
+        r = self.request(url, "POST")
+        if r and "errorMessage=" in r.text:
+            logging.warning(f'[{self.info["@Name"]}] AcceptBattle5 failed: {r.text[:200]}')
+            return False
+
+        if r:
+            self.acceptBattle5Result = xmltodict.parse(r.content, xml_attribs=True)
+            return True
+        return False
+
     def createStarBattle5(self, clientHp: int, searchNumber: int = 0, value: int = 0) -> bool:
             """Create a star battle (PvP matchmaking).
 
@@ -2603,86 +2703,71 @@ class Client(object):
             return -1.0
 
     def runBattleEndToEnd(self, clientHp: int = 100000) -> bool:
-        """Execute a complete ship battle end-to-end.
+            """Execute a complete ship battle end-to-end.
 
-        Flow:
-        0. Pre-flight: only start if ship HP is 100%
-        1. Pre-flight: rearm ship (restock ammo)
-        2. CreateStarBattle5 - initiate PvP battle matchmaking
-        3. VerifyBattle2 - submit battle result (simulated win)
-        4. FinaliseBattle15 - finalize battle with server
+            Flow:
+            0. Pre-flight: only start if ship HP is 100%
+            1. Pre-flight: rearm ship (restock ammo)
+            2. CreateBattle9 - initiate battle matchmaking (older API used by game client)
+            3. AcceptBattle5 - accept the battle
+            4. FinaliseBattle15 - finalize battle with server
 
-        This uses the checksum formulas derived from static analysis of the IL2CPP binary
-        and verified against the universal checksum pattern across all PSS endpoints.
-        """
-        logging.info(f'[{self.info.get("@Name", "")}] Starting end-to-end battle flow...')
+            This uses the checksum formulas derived from static analysis of the IL2CPP binary
+            and verified against the universal checksum pattern across all PSS endpoints.
+            """
+            logging.info(f'[{self.info.get("@Name", "")}] Starting end-to-end battle flow...')
 
-        # Step 0: Pre-flight - only battle at full ship HP
-        hp_fraction = self.getShipHpFraction()
-        if hp_fraction < 0:
-            logging.warning(
-                f'[{self.info.get("@Name", "")}] Ship HP unavailable; cannot confirm 100%. Aborting battle.'
-            )
-            return False
-        if hp_fraction < 1.0:
-            logging.info(
-                f'[{self.info.get("@Name", "")}] Ship HP at {hp_fraction:.0%}; not 100%. Skipping battle.'
-            )
-            return False
-        logging.info(f'[{self.info.get("@Name", "")}] Ship HP at 100%; proceeding to battle.')
+            # Step 0: Pre-flight - only battle at full ship HP
+            hp_fraction = self.getShipHpFraction()
+            if hp_fraction < 0:
+                logging.warning(
+                    f'[{self.info.get("@Name", "")}] Ship HP unavailable; cannot confirm 100%. Aborting battle.'
+                )
+                return False
+            if hp_fraction < 1.0:
+                logging.info(
+                    f'[{self.info.get("@Name", "")}] Ship HP at {hp_fraction:.0%}; not 100%. Skipping battle.'
+                )
+                return False
+            logging.info(f'[{self.info.get("@Name", "")}] Ship HP at 100%; proceeding to battle.')
 
-        # Step 1: Pre-flight - rearm ship (restock all ammo categories)
-        logging.info(f'[{self.info.get("@Name", "")}] Rearming ship before battle...')
-        if not self.rebuildAmmo():
-            logging.error(f'[{self.info.get("@Name", "")}] Failed to rearm ship; aborting battle.')
-            return False
-        logging.info(f'[{self.info.get("@Name", "")}] Ship rearmed successfully.')
+            # Step 1: Pre-flight - rearm ship (restock all ammo categories)
+            logging.info(f'[{self.info.get("@Name", "")}] Rearming ship before battle...')
+            if not self.rebuildAmmo():
+                logging.error(f'[{self.info.get("@Name", "")}] Failed to rearm ship; aborting battle.')
+                return False
+            logging.info(f'[{self.info.get("@Name", "")}] Ship rearmed successfully.')
 
-        # Step 2: Create battle
-        if not self.createStarBattle5(clientHp=clientHp):
-            logging.error(f'[{self.info.get("@Name", "")}] Failed to create battle')
-            return False
-        
-        battleId = getattr(self, "lastBattleId", None)
-        if not battleId:
-            logging.error(f'[{self.info.get("@Name", "")}] No battleId returned from CreateStarBattle5')
-            return False
-        
-        logging.info(f'[{self.info.get("@Name", "")}] Battle created: {battleId}')
-        
-        # Step 2: Verify battle (simulate a win)
-        # clientOutcomeType: 1=Victory, 2=Defeat, 3=Draw
-        # clientEndFrame: final frame number
-        # clientResultString: battle replay data
-        # attackingShipHp: remaining HP of attacking ship
-        if not self.verifyBattle2(
-            battleId=battleId,
-            clientOutcomeType=1,  # Victory
-            clientEndFrame=100,
-            clientResultString="simulated_battle_data",
-            attackingShipHp=clientHp,
-            syncStatus=0,
-            battleSyncEntity="",
-            syncErrorType=0,
-            description="",
-            score=1000,
-        ):
-            logging.error(f'[{self.info.get("@Name", "")}] Failed to verify battle')
-            return False
-        
-        logging.info(f'[{self.info.get("@Name", "")}] Battle verified')
-        
-        # Step 3: Finalise battle
-        if not self.finaliseBattle15(
-            battleId=battleId,
-            clientOutcomeType=1,
-            clientEndFrame=100,
-            clientResultString="simulated_battle_data",
-            attackingShipHp=clientHp,
-            clientVersion="0.999.59",
-        ):
-            logging.error(f'[{self.info.get("@Name", "")}] Failed to finalise battle')
-            return False
-        
-        logging.info(f'[{self.info.get("@Name", "")}] End-to-end battle completed successfully!')
-        return True
+            # Step 2: Create battle using CreateBattle9 (older API used by game client)
+            if not self.createBattle9(clientHp=clientHp):
+                logging.error(f'[{self.info.get("@Name", "")}] Failed to create battle')
+                return False
+
+            battleId = getattr(self, "lastBattleId", None)
+            if not battleId:
+                logging.error(f'[{self.info.get("@Name", "")}] No battleId returned from CreateBattle9')
+                return False
+
+            logging.info(f'[{self.info.get("@Name", "")}] Battle created: {battleId}')
+
+            # Step 3: Accept battle
+            if not self.acceptBattle5(battleId=battleId, itemDesignId=0):
+                logging.error(f'[{self.info.get("@Name", "")}] Failed to accept battle')
+                return False
+
+            logging.info(f'[{self.info.get("@Name", "")}] Battle accepted')
+
+            # Step 4: Finalise battle
+            if not self.finaliseBattle15(
+                battleId=battleId,
+                clientOutcomeType=1,
+                clientEndFrame=100,
+                clientResultString="simulated_battle_data",
+                attackingShipHp=clientHp,
+                clientVersion="0.999.59",
+            ):
+                logging.error(f'[{self.info.get("@Name", "")}] Failed to finalise battle')
+                return False
+
+            logging.info(f'[{self.info.get("@Name", "")}] End-to-end battle completed successfully!')
+            return True

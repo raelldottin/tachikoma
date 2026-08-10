@@ -304,18 +304,18 @@ class TestBattleFlow(unittest.TestCase):
         # Mock the battle steps in sequence
         with patch.object(self.client, "getShipHpFraction", return_value=1.0), \
              patch.object(self.client, "rebuildAmmo", return_value=True), \
-             patch.object(self.client, "createStarBattle5") as mock_create, \
-             patch.object(self.client, "verifyBattle2") as mock_verify, \
+             patch.object(self.client, "createBattle9") as mock_create, \
+             patch.object(self.client, "acceptBattle5") as mock_accept, \
              patch.object(self.client, "finaliseBattle15") as mock_finalise:
 
-            # Step 1: createStarBattle5 returns True and sets lastBattleId
+            # Step 1: createBattle9 returns True and sets lastBattleId
             def create_side_effect(clientHp):
                 self.client.lastBattleId = "battle-12345"
                 return True
             mock_create.side_effect = create_side_effect
 
-            # Step 2: verifyBattle2 returns True
-            mock_verify.return_value = True
+            # Step 2: acceptBattle5 returns True
+            mock_accept.return_value = True
 
             # Step 3: finaliseBattle15 returns True
             mock_finalise.return_value = True
@@ -324,13 +324,8 @@ class TestBattleFlow(unittest.TestCase):
 
             self.assertTrue(result)
             mock_create.assert_called_once_with(clientHp=100000)
-            mock_verify.assert_called_once()
+            mock_accept.assert_called_once_with(battleId="battle-12345", itemDesignId=0)
             mock_finalise.assert_called_once()
-
-            # Verify verifyBattle2 called with victory parameters
-            verify_call = mock_verify.call_args
-            self.assertEqual(verify_call.kwargs["clientOutcomeType"], 1)
-            self.assertEqual(verify_call.kwargs["clientEndFrame"], 100)
 
             # Verify finaliseBattle15 called with victory parameters
             finalise_call = mock_finalise.call_args
@@ -338,10 +333,10 @@ class TestBattleFlow(unittest.TestCase):
             self.assertEqual(finalise_call.kwargs["clientEndFrame"], 100)
 
     def test_run_battle_end_to_end_create_fails(self):
-        """runBattleEndToEnd returns False if createStarBattle5 fails."""
+        """runBattleEndToEnd returns False if createBattle9 fails."""
         with patch.object(self.client, "getShipHpFraction", return_value=1.0), \
              patch.object(self.client, "rebuildAmmo", return_value=True), \
-             patch.object(self.client, "createStarBattle5") as mock_create:
+             patch.object(self.client, "createBattle9") as mock_create:
             mock_create.return_value = False
 
             result = self.client.runBattleEndToEnd(clientHp=100000)
@@ -353,7 +348,7 @@ class TestBattleFlow(unittest.TestCase):
         """runBattleEndToEnd returns False if no battleId returned."""
         with patch.object(self.client, "getShipHpFraction", return_value=1.0), \
              patch.object(self.client, "rebuildAmmo", return_value=True), \
-             patch.object(self.client, "createStarBattle5") as mock_create:
+             patch.object(self.client, "createBattle9") as mock_create:
             mock_create.return_value = True
             # Don't set lastBattleId
 
@@ -361,45 +356,45 @@ class TestBattleFlow(unittest.TestCase):
 
             self.assertFalse(result)
 
-    def test_run_battle_end_to_end_verify_fails(self):
-        """runBattleEndToEnd returns False if verifyBattle2 fails."""
+    def test_run_battle_end_to_end_accept_fails(self):
+        """runBattleEndToEnd returns False if acceptBattle5 fails."""
         with patch.object(self.client, "getShipHpFraction", return_value=1.0), \
              patch.object(self.client, "rebuildAmmo", return_value=True), \
-             patch.object(self.client, "createStarBattle5") as mock_create, \
-             patch.object(self.client, "verifyBattle2") as mock_verify:
+             patch.object(self.client, "createBattle9") as mock_create, \
+             patch.object(self.client, "acceptBattle5") as mock_accept:
 
             def create_side_effect(clientHp):
                 self.client.lastBattleId = "battle-12345"
                 return True
             mock_create.side_effect = create_side_effect
-            mock_verify.return_value = False
+            mock_accept.return_value = False
 
             result = self.client.runBattleEndToEnd(clientHp=100000)
 
             self.assertFalse(result)
             mock_create.assert_called_once()
-            mock_verify.assert_called_once()
+            mock_accept.assert_called_once()
 
     def test_run_battle_end_to_end_finalise_fails(self):
         """runBattleEndToEnd returns False if finaliseBattle15 fails."""
         with patch.object(self.client, "getShipHpFraction", return_value=1.0), \
              patch.object(self.client, "rebuildAmmo", return_value=True), \
-             patch.object(self.client, "createStarBattle5") as mock_create, \
-             patch.object(self.client, "verifyBattle2") as mock_verify, \
+             patch.object(self.client, "createBattle9") as mock_create, \
+             patch.object(self.client, "acceptBattle5") as mock_accept, \
              patch.object(self.client, "finaliseBattle15") as mock_finalise:
 
             def create_side_effect(clientHp):
                 self.client.lastBattleId = "battle-12345"
                 return True
             mock_create.side_effect = create_side_effect
-            mock_verify.return_value = True
+            mock_accept.return_value = True
             mock_finalise.return_value = False
 
             result = self.client.runBattleEndToEnd(clientHp=100000)
 
             self.assertFalse(result)
             mock_create.assert_called_once()
-            mock_verify.assert_called_once()
+            mock_accept.assert_called_once()
             mock_finalise.assert_called_once()
 
     # 6. Ship HP Pre-flight Gate Tests
@@ -407,7 +402,7 @@ class TestBattleFlow(unittest.TestCase):
     def test_run_battle_aborts_when_hp_unknown(self):
         """runBattleEndToEnd returns False when ship HP is unavailable (-1)."""
         with patch.object(self.client, "getShipHpFraction", return_value=-1.0), \
-             patch.object(self.client, "createStarBattle5") as mock_create:
+             patch.object(self.client, "createBattle9") as mock_create:
             result = self.client.runBattleEndToEnd(clientHp=100000)
             self.assertFalse(result)
             mock_create.assert_not_called()
@@ -415,16 +410,16 @@ class TestBattleFlow(unittest.TestCase):
     def test_run_battle_aborts_when_hp_below_full(self):
         """runBattleEndToEnd returns False when ship HP < 100%."""
         with patch.object(self.client, "getShipHpFraction", return_value=0.5), \
-             patch.object(self.client, "createStarBattle5") as mock_create:
+             patch.object(self.client, "createBattle9") as mock_create:
             result = self.client.runBattleEndToEnd(clientHp=100000)
             self.assertFalse(result)
             mock_create.assert_not_called()
 
     def test_run_battle_proceeds_when_hp_full(self):
-        """runBattleEndToEnd proceeds to createStarBattle5 when HP is 100%."""
+        """runBattleEndToEnd proceeds to createBattle9 when HP is 100%."""
         with patch.object(self.client, "getShipHpFraction", return_value=1.0), \
              patch.object(self.client, "rebuildAmmo", return_value=True), \
-             patch.object(self.client, "createStarBattle5") as mock_create:
+             patch.object(self.client, "createBattle9") as mock_create:
             mock_create.return_value = False  # fail fast
             result = self.client.runBattleEndToEnd(clientHp=100000)
             mock_create.assert_called_once()
@@ -433,7 +428,7 @@ class TestBattleFlow(unittest.TestCase):
         """runBattleEndToEnd returns False if rebuildAmmo fails."""
         with patch.object(self.client, "getShipHpFraction", return_value=1.0), \
              patch.object(self.client, "rebuildAmmo", return_value=False), \
-             patch.object(self.client, "createStarBattle5") as mock_create:
+             patch.object(self.client, "createBattle9") as mock_create:
             result = self.client.runBattleEndToEnd(clientHp=100000)
             self.assertFalse(result)
             mock_create.assert_not_called()
