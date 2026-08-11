@@ -268,13 +268,16 @@ def main():
                 logging.error(f"collectTaskReward failed: {redact_secrets(str(e))}")
                 runtime_failed = True
 
-        try:
-            res = client.getCrewInfo()
-            if res is False:
+        # These operations should only run once per account, not in a loop
+        # Run them once and then break out of the loop for CI
+        if not getattr(client, "_automation_done", False):
+            try:
+                res = client.getCrewInfo()
+                if res is False:
+                    runtime_failed = True
+            except Exception as e:
+                logging.error(f"getCrewInfo failed: {redact_secrets(str(e))}")
                 runtime_failed = True
-        except Exception as e:
-            logging.error(f"getCrewInfo failed: {redact_secrets(str(e))}")
-            runtime_failed = True
 
             try:
                 res = client.upgradeResearches()
@@ -329,22 +332,26 @@ def main():
                 logging.error(f"manageTraining failed: {redact_secrets(str(e))}")
                 runtime_failed = True
 
-            try:
-                client.getResourceTotals()
-            except Exception as e:
-                logging.error(f"getResourceTotals failed: {redact_secrets(str(e))}")
+            client._automation_done = True
 
-            try:
-                res = client.upgradeCharacters()
-                if res is False:
-                    runtime_failed = True
-            except Exception as e:
-                logging.error(f"upgradeCharacters failed: {redact_secrets(str(e))}")
-                runtime_failed = True
+        # In CI, we only run once per account
+        break
 
-            char_name = client.info.get("@Name", "") if isinstance(getattr(client, "info", None), dict) else ""
-            logging.info(f'[{char_name}] Finished...')
-            break
+    try:
+        client.getResourceTotals()
+    except Exception as e:
+        logging.error(f"getResourceTotals failed: {redact_secrets(str(e))}")
+
+    try:
+        res = client.upgradeCharacters()
+        if res is False:
+            runtime_failed = True
+    except Exception as e:
+        logging.error(f"upgradeCharacters failed: {redact_secrets(str(e))}")
+        runtime_failed = True
+
+    char_name = client.info.get("@Name", "") if isinstance(getattr(client, "info", None), dict) else ""
+    logging.info(f'[{char_name}] Finished...')
 
     # Send log file via SMTP only if SMTP is enabled
     if smtp_enabled:
