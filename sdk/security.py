@@ -270,6 +270,89 @@ def checksum_finalise_battle15(
     return hashlib.md5(encrypted.encode("utf-8")).hexdigest()
 
 
+# =============================================================================
+# CHECKSUM CONSTANTS (extracted from IL2CPP binary / capture verification)
+# =============================================================================
+CHECKSUM_KEY = "5343"
+SAVY_CHECKSUM = "Savvy!s0d@"
+
+
+def checksum_create_battle9(
+    client_hp: int,
+    client_date_time: str,
+    access_token: str,
+    checksum_key: str = CHECKSUM_KEY,
+    savy_checksum: str = SAVY_CHECKSUM,
+) -> str:
+    """Compute the CreateBattle9 native checksum.
+
+    URL: /BattleService/CreateBattle9?clientHp={0}&clientDateTime={1}&checksum={2}&accessToken={3}&itemDesignId={4}
+    Parameters before checksum in URL: clientHp, clientDateTime, accessToken
+
+    Formula (VERIFIED against capture: 8118b3ffc06d9e8b520c1b6956e7ca9a):
+    preimage  = clientDateTime + checksumKey
+    encrypted = preimage + savyChecksum
+    checksum  = MD5(encrypted)
+
+    Args:
+        client_hp: Ship HP × 100 (e.g., 4000 for HP=40)
+        client_date_time: Current UTC timestamp "yyyy-MM-ddTHH:mm:ss"
+        access_token: Current session access token (NOT used in checksum)
+        checksum_key: Configuration.ChecksumKey ("5343")
+        savy_checksum: Configuration.SavyChecksum ("Savvy!s0d@")
+
+    Returns:
+        32-char MD5 hex digest.
+    """
+    if not checksum_key or not savy_checksum:
+        raise UnsupportedNativeChecksum(
+            "CreateBattle9 requires checksum_key and savy_checksum"
+        )
+
+    preimage = client_date_time + checksum_key
+    encrypted = preimage + savy_checksum
+    return hashlib.md5(encrypted.encode("utf-8")).hexdigest()
+
+
+def checksum_accept_battle5(
+    battle_id: str,
+    item_design_id: int,
+    client_date_time: str,
+    access_token: str,
+    checksum_key: str = CHECKSUM_KEY,
+    savy_checksum: str = SAVY_CHECKSUM,
+) -> str:
+    """Compute the AcceptBattle5 native checksum.
+
+    URL: /BattleService/AcceptBattle5?battleId={0}&itemDesignId={1}&clientDateTime={2}&checksum={3}&accessToken={4}
+    Parameters before checksum in URL: battleId, itemDesignId, clientDateTime, accessToken
+
+    Formula:
+    preimage  = battleId + itemDesignId + clientDateTime + accessToken + checksumKey
+    encrypted = preimage + savyChecksum
+    checksum  = MD5(encrypted)
+
+    Args:
+        battle_id: Battle ID from CreateBattle9 response
+        item_design_id: Item design ID (usually 0 for standard battles)
+        client_date_time: Current UTC timestamp "yyyy-MM-ddTHH:mm:ss"
+        access_token: Current session access token
+        checksum_key: Configuration.ChecksumKey ("5343")
+        savy_checksum: Configuration.SavyChecksum ("Savvy!s0d@")
+
+    Returns:
+        32-char MD5 hex digest.
+    """
+    if not checksum_key or not savy_checksum:
+        raise UnsupportedNativeChecksum(
+            "AcceptBattle5 requires checksum_key and savy_checksum"
+        )
+
+    preimage = str(battle_id) + str(item_design_id) + client_date_time + access_token + checksum_key
+    encrypted = preimage + savy_checksum
+    return hashlib.md5(encrypted.encode("utf-8")).hexdigest()
+
+
 def checksum_character_draw(
     draw_design_id: str,
     client_date_time: str,

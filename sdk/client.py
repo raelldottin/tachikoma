@@ -2543,8 +2543,8 @@ class Client(object):
 
         Uses CreateBattle9 endpoint with checksum (the actual endpoint used by the game client).
 
-        Checksum formula (matches capture):
-        preimage = clientHp + clientDateTime + accessToken + checksum_key
+        Checksum formula (verified against capture: 8118b3ffc06d9e8b520c1b6956e7ca9a):
+        preimage = clientDateTime + checksum_key
         encrypted = preimage + savy_checksum
         checksum = MD5(encrypted)
 
@@ -2567,8 +2567,8 @@ class Client(object):
             raise ConfigurationError("CreateBattle9 requires accessToken (must be logged in)")
 
         ts = "{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime())
-        # CreateBattle9 checksum: clientHp + clientDateTime + accessToken + checksum_key
-        preimage = str(clientHp) + ts + self.accessToken + checksum_key
+        # CreateBattle9 checksum (VERIFIED against capture): clientDateTime + checksum_key
+        preimage = ts + checksum_key
         encrypted = preimage + savy_checksum
         checksum = hashlib.md5(encrypted.encode("utf-8")).hexdigest()
 
