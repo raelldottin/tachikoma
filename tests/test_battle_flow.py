@@ -631,7 +631,7 @@ class TestBattleFlow(unittest.TestCase):
                 }
             }
         }
-        self.client.info["@Starbux"] = "100"
+        self.client.info["@Credits"] = "100"
 
         result = self.client.purchaseScorchedPodIfAffordable()
 
@@ -640,7 +640,7 @@ class TestBattleFlow(unittest.TestCase):
     @patch.object(Client, "purchaseCatalogItem")
     def test_purchase_scorched_pod_if_affordable_success(self, mock_purchase):
         """purchaseScorchedPodIfAffordable calls purchaseCatalogItem when affordable."""
-        self.client.info["@Starbux"] = "1000"
+        self.client.info["@Credits"] = "1000"
         mock_purchase.return_value = True
 
         result = self.client.purchaseScorchedPodIfAffordable()
