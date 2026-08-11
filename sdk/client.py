@@ -1994,6 +1994,21 @@ class Client(object):
                     logging.error(f'[{self.info["@Name"]}] PurchaseCatalog2 failed: {purchase_result.get("@errorMessage", "Unknown error")}')
                     return False
 
+                # Update credits balance from response if available
+                user_node = purchase_result.get("User", {})
+                if isinstance(user_node, dict) and "@Credits" in user_node:
+                    try:
+                        self.credits = int(user_node["@Credits"])
+                    except (ValueError, TypeError):
+                        pass
+                elif isinstance(purchase_result.get("User"), list) and purchase_result["User"]:
+                    user_node = purchase_result["User"][0]
+                    if isinstance(user_node, dict) and "@Credits" in user_node:
+                        try:
+                            self.credits = int(user_node["@Credits"])
+                        except (ValueError, TypeError):
+                            pass
+
             return True
 
         return False
@@ -2007,11 +2022,11 @@ class Client(object):
         Returns:
             True if purchased, False otherwise (not enough Starbux, not found, or error)
         """
-        # Check Starbux balance
+        # Check Starbux balance (Credits == Starbux on the User element)
         try:
-            starbux = int(self.info.get("@Starbux", "0"))
+            starbux = int(self.info.get("@Credits", self.credits))
         except (ValueError, TypeError):
-            starbux = 0
+            starbux = int(self.credits) if self.credits else 0
 
         # Scorched Pod costs 1000 Starbux (argument 1291)
         cost = 1000
