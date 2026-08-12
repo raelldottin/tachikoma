@@ -2510,15 +2510,26 @@ class Client(object):
             logging.error(f"collectTaskReward failed: {redact_secrets(str(e))}")
             return False
 
-    def heartbeat(self):
-        if (
-            divmod(
-                (datetime.datetime.utcnow() - self.user.lastHeartBeat).seconds,
-                60,
-            )[0]
-            == 0
-        ):
-            return False
+    def heartbeat(self, force: bool = False):
+        """Send HeartBeat4 to keep the game session alive.
+
+        The official client sends this every ~60 seconds continuously.
+        The server uses this to validate that the game session is active;
+        without it, CreateBattle9 (and other actions) may return errors.
+
+        Args:
+            force: If True, send heartbeat even if <60s since last heartbeat.
+                   Use this before critical operations like CreateBattle9.
+        """
+        if not force:
+            if (
+                divmod(
+                    (datetime.datetime.utcnow() - self.user.lastHeartBeat).seconds,
+                    60,
+                )[0]
+                == 0
+            ):
+                return False
 
         if not self.accessToken:
             self.quickReload()
@@ -2903,6 +2914,7 @@ class Client(object):
 
             This uses the checksum formulas derived from static analysis of the IL2CPP binary
             and verified against the universal checksum pattern across all PSS endpoints.
+            HeartBeat4 is sent periodically (every ~60s) during the flow, matching official client.
             """
             logging.info(f'[{self.info.get("@Name", "")}] Starting end-to-end battle flow...')
 
@@ -2928,6 +2940,9 @@ class Client(object):
             logging.info(f'[{self.info.get("@Name", "")}] Ship rearmed successfully.')
 
             # Step 2: Create battle using CreateBattle9 (older API used by game client)
+            # Send heartbeat before CreateBattle9 to ensure session is active
+            # Force=True because we just authenticated and lastHeartBeat may be stale
+            self.heartbeat(force=True)
             battle_created = self.createBattle9(clientHp=clientHp)
             if not battle_created:
                 logging.warning(f'[{self.info.get("@Name", "")}] CreateBattle9 failed, but continuing with battle flow...')
@@ -2941,6 +2956,8 @@ class Client(object):
                 logging.info(f'[{self.info.get("@Name", "")}] Battle created: {battleId}')
 
             # Step 3: Accept battle
+            # Send heartbeat to keep session alive during battle
+            self.heartbeat()
             battle_accepted = self.acceptBattle5(battleId=battleId, itemDesignId=0)
             if not battle_accepted:
                 logging.warning(f'[{self.info.get("@Name", "")}] AcceptBattle5 failed, but continuing...')
@@ -2948,6 +2965,8 @@ class Client(object):
             logging.info(f'[{self.info.get("@Name", "")}] Battle accept attempted')
 
             # Step 4: Finalise battle
+            # Send heartbeat before finalising
+            self.heartbeat()
             battle_finalised = self.finaliseBattle15(
                 battleId=battleId,
                 clientOutcomeType=1,
