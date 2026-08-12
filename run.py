@@ -240,6 +240,12 @@ def main():
             logging.error(f"runBattleEndToEnd failed: {redact_secrets(str(e))}")
             runtime_failed = True
 
+    # Send heartbeat to keep session alive (official client sends every 60s)
+    try:
+        client.heartbeat()
+    except Exception as e:
+        logging.debug(f"heartbeat failed: {redact_secrets(str(e))}")
+
     # Purchase Scorched Pod if affordable
     try:
         res = client.purchaseScorchedPodIfAffordable()
