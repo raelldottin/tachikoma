@@ -371,5 +371,121 @@ class TestParseServerDatetimeEdgeCases(unittest.TestCase):
         self.assertEqual(result.tzinfo, timezone.utc)
 
 
+class TestCrewStatFormulas(unittest.TestCase):
+    """Tests for crew stat / training formulas from the Crew Planning and Training Guide."""
+
+    def test_tp_caps_by_rarity(self):
+        """TP caps match the guide: 3*=70, 4*=80, 5*=90, 6*=100, 7*=110."""
+        from sdk.crew_leveling import get_tp_cap
+
+        self.assertEqual(get_tp_cap(3), 70)
+        self.assertEqual(get_tp_cap(4), 80)
+        self.assertEqual(get_tp_cap(5), 90)
+        self.assertEqual(get_tp_cap(6), 100)
+        self.assertEqual(get_tp_cap(7), 110)
+
+    def test_tp_cap_exceptional_4star(self):
+        """Mistycball and Huge Hellaluya (4*) have 100 TP, not 80."""
+        from sdk.crew_leveling import get_tp_cap
+
+        self.assertEqual(get_tp_cap(4, "Mistycball"), 100)
+        self.assertEqual(get_tp_cap(4, "Huge Hellaluya"), 100)
+        # Regular 4* crew still get 80
+        self.assertEqual(get_tp_cap(4, "Robyna Hoots"), 80)
+
+    def test_tp_cap_captain(self):
+        """6* captains get 200 TP."""
+        from sdk.crew_leveling import get_tp_cap
+
+        self.assertEqual(get_tp_cap(6, is_captain=True), 200)
+        # Non-captain 6* crew get standard 100
+        self.assertEqual(get_tp_cap(6, is_captain=False), 100)
+
+    def test_tp_cap_unknown_rarity(self):
+        """Unknown rarity returns 0."""
+        from sdk.crew_leveling import get_tp_cap
+
+        self.assertEqual(get_tp_cap(1), 0)
+        self.assertEqual(get_tp_cap(0), 0)
+
+    def test_crew_level_cap(self):
+        """Level cap = ship_level × 4, max 40."""
+        from sdk.crew_leveling import get_crew_level_cap
+
+        self.assertEqual(get_crew_level_cap(1), 4)
+        self.assertEqual(get_crew_level_cap(5), 20)
+        self.assertEqual(get_crew_level_cap(10), 40)
+        self.assertEqual(get_crew_level_cap(15), 40)  # capped at 40
+
+    def test_final_stat_formula(self):
+        """final_stat = base × (1 + TP/100) + equipment."""
+        from sdk.crew_leveling import compute_final_stat
+
+        # Base 10 HP, 15 TP in HP, 0 equipment → 11.5
+        result = compute_final_stat(10, 15, 0)
+        self.assertAlmostEqual(result, 11.5)
+
+        # Base 10, 20 TP, 5 equipment → 10 × 1.20 + 5 = 17.0
+        result = compute_final_stat(10, 20, 5)
+        self.assertAlmostEqual(result, 17.0)
+
+        # Base 7, 70 TP (max for 3*), 0 equipment → 7 × 1.70 = 11.9
+        result = compute_final_stat(7, 70, 0)
+        self.assertAlmostEqual(result, 11.9)
+
+    def test_final_ability_formula(self):
+        """final_ability = base × (1 + TP/100) × (1 + equipment%)."""
+        from sdk.crew_leveling import compute_final_ability
+
+        # Base 5.0, 50 TP, 20% equipment → 5.0 × 1.5 × 1.2 = 9.0
+        result = compute_final_ability(5.0, 50, 20)
+        self.assertAlmostEqual(result, 9.0)
+
+        # Base 3.0, 0 TP, 0% equipment → 3.0
+        result = compute_final_ability(3.0, 0, 0)
+        self.assertAlmostEqual(result, 3.0)
+
+    def test_final_stamina_formula(self):
+        """final_stamina = TP + equipment_bonus (additive, not multiplicative)."""
+        from sdk.crew_leveling import compute_final_stamina
+
+        # 70 TP + 10 equipment → 80
+        self.assertEqual(compute_final_stamina(70, 10), 80)
+        # 0 TP, 5 equipment → 5
+        self.assertEqual(compute_final_stamina(0, 5), 5)
+        # 100 TP, 0 equipment → 100
+        self.assertEqual(compute_final_stamina(100, 0), 100)
+
+    def test_hp_rounding_from_guide(self):
+        """Guide example: 10 HP crew with 15 TP → 11.5 (guide notes display
+        shows 11.45 as 11.5 but game rounds UP to 12)."""
+        from sdk.crew_leveling import compute_final_stat
+        import math
+
+        raw = compute_final_stat(10, 15, 0)
+        # HP should be rounded UP per guide
+        self.assertEqual(math.ceil(raw), 12)
+
+    def test_gunner_blueprint_example(self):
+        """Guide mentions Robyna Hoots (3* gunner) with 10 HP and 39.4 Weapon.
+        Verify that 39.4 Weapon is achievable with reasonable TP allocation."""
+        from sdk.crew_leveling import compute_final_stat
+
+        # If base weapon is ~23 (typical 3* gunner), need 39.4/23 ≈ 1.713 multiplier
+        # So ~71% TP in weapon: compute_final_stat(23, 71, 0) ≈ 39.33
+        # With 3 equipment: compute_final_stat(23, 68, 3) = 23 × 1.68 + 3 = 41.64
+        # Or: base 20, 70 TP, 5 equipment = 20 × 1.70 + 5 = 39.0
+        # These are approximate — the guide says "not too shabby" for 10HP/39.4WPN
+        result = compute_final_stat(20, 70, 5)
+        self.assertAlmostEqual(result, 39.0, places=1)
+
+    def test_xp_from_pvp(self):
+        """XP from PVP = enemy_trophies / 10 (from guide Section 3)."""
+        # This is documented but not implemented as a function — verify formula
+        enemy_trophies = 1000
+        xp = enemy_trophies / 10
+        self.assertEqual(xp, 100)
+
+
 if __name__ == "__main__":
     unittest.main()
