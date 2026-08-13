@@ -64,6 +64,22 @@ Read-only layout evaluation — no HTTP mutations, no room-moving endpoints (PSS
 
 Logs actionable recommendations: exposed critical rooms, missing repair/weapon/reactor rooms, weapon imbalance, bedroom capacity, pending upgrades. Runs automatically in the daily loop.
 
+### Wiki Game Formulas
+
+All 9 formulas from the [Pixel Starships Wiki](https://pixelstarships.fandom.com/wiki/Formulas) integrated as pure functions:
+
+| # | Formula | Module | Key Functions |
+|---|---------|--------|---------------|
+| 1 | Room Reload | `sdk/game_formulas.py` | `room_reload_boosted`, `room_reload_powered`, `room_reload` |
+| 2 | Crew Stat Buff | `sdk/crew_leveling.py` | `compute_final_stat`, `compute_final_ability`, `compute_final_stamina` |
+| 3 | Escape | `sdk/game_formulas.py` | `escape_chance`, `escape_rate` |
+| 4 | Dodge | `sdk/game_formulas.py` | `dodge_evasion` (post-July 2023 formula, capped at 80%) |
+| 5 | Damage Reduction | `sdk/game_formulas.py` | `damage_reduction`, `effective_damage` |
+| 6 | Fire Damage | `sdk/game_formulas.py` | `fire_damage_reduced`, `fire_crew_damage`, `fire_ap_damage` |
+| 7 | Crew Stat by Level | `sdk/game_formulas.py` | `crew_stat_at_level` (ease_out / linear / ease_in) |
+| 8 | Gas Draw Price | `sdk/game_formulas.py` | `gas_draw_price` (capped at 2M) |
+| 9 | Trophy Gain/Loss | `sdk/game_formulas.py` | `trophy_gain` (capped 1-40) |
+
 ## Setup & Usage
 
 1. Clone the repository to your local machine.
