@@ -150,6 +150,32 @@ class TestBattleFlow(unittest.TestCase):
 
         self.assertIn("checksum_key and savy_checksum", str(cm.exception))
 
+    # 2b. createBattle9 XML parsing regression test
+
+    @patch.object(Client, "request")
+    def test_create_battle9_parses_createbattle_wrapper(self, mock_request):
+        """createBattle9 extracts battleId from <CreateBattle> wrapper (not <CreateBattle9>).
+
+        Regression: server returns <BattleService><CreateBattle><Battle BattleId=...>
+        but old code looked for key 'CreateBattle9', causing KeyError and battleId=0.
+        Verified against live CI run 31656147771 response.
+        """
+        xml_response = (
+            b'<BattleService><CreateBattle ChanceToFindStarBattles="0">'
+            b'<Battle BattleId="236203" AttackingShipId="6965170" '
+            b'DefendingShipId="4144566" RandomSeed="814" />'
+            b'</CreateBattle></BattleService>'
+        )
+        mock_response = MagicMock()
+        mock_response.content = xml_response
+        mock_response.text = xml_response.decode("utf-8")
+        mock_request.return_value = mock_response
+
+        result = self.client.createBattle9(clientHp=40)
+
+        self.assertTrue(result)
+        self.assertEqual(self.client.lastBattleId, "236203")
+
     # 3. verifyBattle2 Tests
 
     @patch.object(Client, "request")
