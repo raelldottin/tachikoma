@@ -2594,13 +2594,15 @@ class Client(object):
 
         if r:
             self.createBattle9Result = xmltodict.parse(r.content, xml_attribs=True)
+            # Log the raw response for debugging when battleId extraction fails
+            logging.info(f'[{self.info["@Name"]}] CreateBattle9 response: {redact_secrets(r.text[:300])}')
             # Extract battleId from response for subsequent calls
             try:
                 battle_id = self.createBattle9Result["BattleService"]["CreateBattle9"]["Battle"]["@BattleId"]
                 self.lastBattleId = battle_id
                 logging.info(f'[{self.info["@Name"]}] Created battle: {battle_id}')
-            except (KeyError, TypeError):
-                pass
+            except (KeyError, TypeError) as e:
+                logging.warning(f'[{self.info["@Name"]}] Could not extract BattleId: {e}. Response structure: {redact_secrets(str(self.createBattle9Result)[:200])}')
             return True
         return False
 
@@ -2902,7 +2904,18 @@ class Client(object):
             logging.warning(f"[{self.info.get('@Name', '')}] No max HP found in ship design")
             return -1.0
 
-    def runBattleEndToEnd(self, clientHp: int = 100000) -> bool:
+    def getShipHp(self) -> int:
+        """Return the ship's current HP as an integer, or -1 if unavailable."""
+        if not hasattr(self, "shipByUserId") or not self.shipByUserId:
+            if not self.getShipByUserId():
+                return -1
+        try:
+            ship = self.shipByUserId["ShipService"]["GetShipByUserId"]["Ship"]
+            return int(ship.get("@Hp", -1))
+        except (KeyError, TypeError, ValueError):
+            return -1
+
+    def runBattleEndToEnd(self, clientHp: int = 0) -> bool:
             """Execute a complete ship battle end-to-end.
 
             Flow:
@@ -2932,6 +2945,15 @@ class Client(object):
                 return False
             logging.info(f'[{self.info.get("@Name", "")}] Ship HP at 100%; proceeding to battle.')
 
+            # Determine actual ship HP for CreateBattle9 clientHp parameter.
+            # The official client sends the ship's current HP (e.g. 4000), not a max value.
+            # If clientHp was explicitly passed (non-zero), use it; otherwise use ship's actual HP.
+            actual_client_hp = clientHp if clientHp > 0 else self.getShipHp()
+            if actual_client_hp <= 0:
+                logging.warning(f'[{self.info.get("@Name", "")}] Could not determine ship HP; defaulting to 4000')
+                actual_client_hp = 4000
+            logging.info(f'[{self.info.get("@Name", "")}] Using clientHp={actual_client_hp} for battle')
+
             # Step 1: Pre-flight - rearm ship (restock all ammo categories)
             logging.info(f'[{self.info.get("@Name", "")}] Rearming ship before battle...')
             if not self.rebuildAmmo():
@@ -2943,7 +2965,7 @@ class Client(object):
             # Send heartbeat before CreateBattle9 to ensure session is active
             # Force=True because we just authenticated and lastHeartBeat may be stale
             self.heartbeat(force=True)
-            battle_created = self.createBattle9(clientHp=clientHp)
+            battle_created = self.createBattle9(clientHp=actual_client_hp)
             if not battle_created:
                 logging.warning(f'[{self.info.get("@Name", "")}] CreateBattle9 failed, but continuing with battle flow...')
 
@@ -2967,12 +2989,16 @@ class Client(object):
             # Step 4: Finalise battle
             # Send heartbeat before finalising
             self.heartbeat()
+            # Parameters verified against mitmproxy capture:
+            # - clientEndFrame: real client sends 2400-2600 (battle frame count); use 2428
+            # - clientResultString: real client sends empty string ""
+            # - attackingShipHp: real client sends actual ship HP (e.g. 4000); use our actual_client_hp
             battle_finalised = self.finaliseBattle15(
                 battleId=battleId,
                 clientOutcomeType=1,
-                clientEndFrame=100,
-                clientResultString="simulated_battle_data",
-                attackingShipHp=clientHp,
+                clientEndFrame=2428,
+                clientResultString="",
+                attackingShipHp=actual_client_hp,
                 clientVersion="0.999.59",
             )
             if not battle_finalised:
