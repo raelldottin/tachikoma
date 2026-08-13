@@ -1,5 +1,5 @@
 # {{ repository.name }} {{ current.version }}
-[![Daily Automated Actions](https://github.com/raelldottin/tachikoma/actions/workflows/daily-run.yml/badge.svg?event=schedule)](https://github.com/raelldottin/tachikoma/actions/workflows/hourly-run.yml)
+[![Daily Automated Actions](https://github.com/raelldottin/tachikoma/actions/workflows/daily-run.yml/badge.svg?event=schedule)](https://github.com/raelldottin/tachikoma/actions/workflows/daily-run.yml)
 
 # Tachikoma - Pixel Starships Automation
 
@@ -9,9 +9,8 @@ This repository contains scripts and resources for automating tasks in the mobil
 
 - `.dockerignore`, `.gitignore`: Ignore files.
 - `.githooks/`: Custom Git hooks for the repository.
-- `.github/`: GitHub-specific configurations, including Actions workflow `hourly-run.yml`.
+- `.github/`: GitHub Actions workflow `daily-run.yml` (runs 3×/day at 00:00, 08:00, 16:00 UTC).
 - `.python-version`: Version-specific configurations.
-- `.ruff_cache/`: Cache directory for Python linter Ruff.
 - `LICENSE`: The license file.
 - `README.md`: This readme file.
 - `README.template`: Template for generating README files.
@@ -19,7 +18,8 @@ This repository contains scripts and resources for automating tasks in the mobil
 - `pylintrc`: Configuration file for Python linter Pylint.
 - `requirements.txt`: Required Python packages for the project.
 - `run.py`: Main Python script to automate tasks in Pixel Starships.
-- `sdk/`: Python package containing modules like `client`, `device`, etc., used by `run.py`.
+- `sdk/`: Python package containing modules like `client`, `device`, `crew_leveling`, `security`, etc.
+- `tests/`: Unit tests covering battle flow, security checksums, crew leveling, and PvP battles.
 
 ## run.py
 
@@ -31,6 +31,27 @@ This repository contains scripts and resources for automating tasks in the mobil
 - Crew and room upgrades management.
 - Marketplace and messages handling.
 - Optional email logging for monitoring script activities.
+- End-to-end ship battle flow (CreateBattle9 → AcceptBattle5 → FinaliseBattle15).
+- Crew stat formula integration from the Crew Planning and Training Guide.
+
+### Battle Flow
+
+The `--run-battle` flag triggers an end-to-end ship battle:
+1. Ship HP check (must be 100%)
+2. Rearm ship (restock ammo)
+3. HeartBeat4 (keep session alive)
+4. CreateBattle9 (initiate battle — **verified working** against live server)
+5. AcceptBattle5 (accept the battle — **blocked**: native IL2CPP checksum)
+6. FinaliseBattle15 (finalize battle — **blocked**: depends on AcceptBattle5)
+
+### Crew Stat Formulas
+
+Integrated from the *Crew Planning and Training Guide* by Raisinbunhk:
+- `compute_final_stat(base, TP, equipment)` — final stat = base × (1 + TP/100) + equipment
+- `compute_final_ability(base, TP, equipment%)` — final ability = base × (1 + TP/100) × (1 + equipment%)
+- `compute_final_stamina(TP, equipment)` — final stamina = TP + equipment (additive)
+- `get_tp_cap(rarity)` — training point caps: 3★=70, 4★=80, 5★=90, 6★=100, 7★=110
+- `get_crew_level_cap(ship_level)` — level cap = ship_level × 4, max 40
 
 ## Setup & Usage
 
@@ -39,10 +60,14 @@ This repository contains scripts and resources for automating tasks in the mobil
 3. Run the script using Python: `python run.py`.
 
    Options:
-   - `-a` / `--auth`: Authentication string for the game.
-   - `-e` / `--email`: Email for SMTP (if email logging is desired).
-   - `-p` / `--password`: Password for SMTP.
-   - `-r` / `--recipient`: Recipient email for the log.
+   - `--auth-file`: Authentication string file for the game.
+   - `--login-email`: Email for game login (password will be prompted or read from `--password-file`).
+   - `--device-key`: Permanent device key (if not provided, generates new one).
+   - `--smtp-email`: Email for SMTP (if email logging is desired).
+   - `--smtp-password-file`: Path to file containing SMTP password.
+   - `--recipient`: Recipient email for the log.
+   - `--password-file`: Path to file containing game password (for CI).
+   - `--run-battle`: Run end-to-end ship battle.
 
 ## Contributing
 
@@ -55,5 +80,3 @@ This project is licensed under the terms specified in the `LICENSE` file.
 ---
 
 This README provides a basic overview of the repository. For more detailed information on specific components, please refer to the respective files or the source code comments.
-
----

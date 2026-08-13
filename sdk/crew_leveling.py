@@ -2,6 +2,7 @@ from __future__ import annotations
 
 """Crew leveling logic — pure evaluation, no HTTP."""
 
+import math
 from dataclasses import dataclass
 from enum import Enum
 from datetime import datetime, timezone
@@ -177,6 +178,90 @@ LEGENDARY_GAS_REQUIRED = {
 
 
 MAX_CHARACTER_LEVEL = 40
+
+
+# =============================================================================
+# Crew stat and training formulas (from Crew Planning and Training Guide by
+# Raisinbunhk / Cinnamoroll). These are pure helper functions — no HTTP.
+# =============================================================================
+
+# Training Point (TP) caps by crew rarity (stars).
+# Source: Crew Planning and Training Guide, Section 5.
+TP_CAPS_BY_RARITY = {
+    3: 70,   # 3* crew
+    4: 80,   # 4* crew (exceptions below)
+    5: 90,   # 5* crew
+    6: 100,  # 6* crew (captains: 200)
+    7: 110,  # 7* crew
+}
+
+# 4* crew with exceptional 100 TP (instead of standard 80).
+EXCEPTIONAL_4STAR_TP = 100
+EXCEPTIONAL_4STAR_NAMES = frozenset({"Mistycball", "Huge Hellaluya"})
+
+# 6* captains have 200 TP (instead of standard 100).
+CAPTAIN_TP = 200
+
+
+def get_tp_cap(rarity: int, character_name: str = "", is_captain: bool = False) -> int:
+    """Return the training-point cap for a crew member.
+
+    Args:
+        rarity: Crew star rating (3-7).
+        character_name: Crew name — used to detect exceptional 4* crew.
+        is_captain: Whether this crew is a captain (6* captains get 200 TP).
+
+    Returns:
+        Maximum training points for this crew.
+    """
+    if is_captain and rarity == 6:
+        return CAPTAIN_TP
+    if rarity == 4 and character_name in EXCEPTIONAL_4STAR_NAMES:
+        return EXCEPTIONAL_4STAR_TP
+    return TP_CAPS_BY_RARITY.get(rarity, 0)
+
+
+def get_crew_level_cap(ship_level: int) -> int:
+    """Return the crew level cap for a given ship level.
+
+    Formula: level_cap = ship_level × 4, max 40.
+    (Source: Crew Planning and Training Guide, Section 3.)
+    """
+    return min(ship_level * 4, MAX_CHARACTER_LEVEL)
+
+
+def compute_final_stat(base_stat: float, training_points: int, equipment_bonus: float) -> float:
+    """Compute a crew member's final stat value.
+
+    Formula: final_stat = base_stat × (1 + TP/100) + equipment_bonus
+    (Source: Crew Planning and Training Guide, Section 5.)
+
+    HP is rounded UP to the nearest whole number (use math.ceil).
+    Attack/Repairs are rounded UP to one decimal place.
+    """
+    return base_stat * (1 + training_points / 100) + equipment_bonus
+
+
+def compute_final_ability(base_ability: float, training_points: int, equipment_bonus_pct: float) -> float:
+    """Compute a crew member's final ability value.
+
+    Formula: final_ability = base_ability × (1 + TP/100) × (1 + equipment_bonus%)
+    (Source: Crew Planning and Training Guide, Section 5.)
+
+    Both training points and equipment provide percentage boosts to ability.
+    """
+    return base_ability * (1 + training_points / 100) * (1 + equipment_bonus_pct / 100)
+
+
+def compute_final_stamina(training_points: int, equipment_bonus: float) -> float:
+    """Compute a crew member's final stamina value.
+
+    Formula: final_stamina = TP + equipment_bonus
+    (Source: Crew Planning and Training Guide, Section 5.)
+
+    Stamina is unique — both TP and equipment add directly (not multiplicative).
+    """
+    return training_points + equipment_bonus
 
 
 def parse_server_datetime(value: str) -> Optional[datetime]:
