@@ -2670,33 +2670,35 @@ class Client(object):
 
         Uses AcceptBattle5 endpoint with checksum.
 
-        Checksum formula (URL parameter order before checksum):
-        preimage = battleId + itemDesignId + clientDateTime + accessToken + checksum_key
+        Checksum formula (VERIFIED against 3 mitmproxy captures):
+        preimage = accessToken + battleId + clientDateTime
         encrypted = preimage + savy_checksum
         checksum = MD5(encrypted)
 
+        Note: itemDesignId is NOT included in preimage, ChecksumKey is NOT used.
+
         Args:
             battleId: Battle ID from CreateBattle9 response
-            itemDesignId: Item design ID (default 0)
+            itemDesignId: Item design ID (default 0) — NOT used in checksum
 
         Returns:
             True if battle accepted successfully, False otherwise
         """
-        checksum_key = self.settings.get("checksum_key")
         savy_checksum = self.settings.get("savy_checksum")
 
-        if not checksum_key or not savy_checksum:
+        if not savy_checksum:
             raise ConfigurationError(
-                "AcceptBattle5 requires checksum_key and savy_checksum configuration "
-                "values compatible with the installed game version."
+                "AcceptBattle5 requires savy_checksum configuration "
+                "value compatible with the installed game version."
             )
 
         if not self.accessToken:
             raise ConfigurationError("AcceptBattle5 requires accessToken (must be logged in)")
 
         ts = "{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime())
-        # AcceptBattle5 checksum: battleId + itemDesignId + clientDateTime + accessToken + checksum_key
-        preimage = battleId + str(itemDesignId) + ts + self.accessToken + checksum_key
+        # AcceptBattle5 checksum: accessToken + battleId + clientDateTime + savy_checksum
+        # No itemDesignId, no checksum_key
+        preimage = self.accessToken + battleId + ts
         encrypted = preimage + savy_checksum
         checksum = hashlib.md5(encrypted.encode("utf-8")).hexdigest()
 
