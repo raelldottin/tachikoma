@@ -53,6 +53,17 @@ Integrated from the *Crew Planning and Training Guide* by Raisinbunhk:
 - `get_tp_cap(rarity)` — training point caps: 3★=70, 4★=80, 5★=90, 6★=100, 7★=110
 - `get_crew_level_cap(ship_level)` — level cap = ship_level × 4, max 40
 
+### Ship Layout Analysis
+
+Read-only layout evaluation — no HTTP mutations, no room-moving endpoints (PSS API doesn't expose them). The `analyzeShipLayout()` method fetches ship data and room designs, then evaluates:
+- **Armor coverage**: percentage of critical rooms (reactors, weapons, shields) with adjacent armor
+- **Repair proximity**: average distance from repair rooms to critical rooms
+- **Weapon distribution**: left/right balance of weapons across the ship
+- **Power balance**: reactor power generated vs estimated consumption
+- **Overall defense score**: weighted average of the above (0-100)
+
+Logs actionable recommendations: exposed critical rooms, missing repair/weapon/reactor rooms, weapon imbalance, bedroom capacity, pending upgrades. Runs automatically in the daily loop.
+
 ## Setup & Usage
 
 1. Clone the repository to your local machine.

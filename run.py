@@ -338,6 +338,11 @@ def main():
                 logging.error(f"manageTraining failed: {redact_secrets(str(e))}")
                 runtime_failed = True
 
+            try:
+                client.analyzeShipLayout()
+            except Exception as e:
+                logging.error(f"analyzeShipLayout failed: {redact_secrets(str(e))}")
+
             client._automation_done = True
 
         # In CI, we only run once per account
