@@ -44,8 +44,10 @@ The `--run-battle` flag triggers an end-to-end ship battle:
 2. Rearm ship (restock ammo)
 3. HeartBeat4 (keep session alive)
 4. CreateBattle9 (initiate battle — **verified working** against live server)
-5. AcceptBattle5 (accept the battle — **blocked**: native IL2CPP checksum)
-6. FinaliseBattle15 (finalize battle — **blocked**: depends on AcceptBattle5)
+5. AcceptBattle5 (accept the battle — **verified working**: `MD5(accessToken + battleId + clientDateTime + SavyChecksum)`)
+6. FinaliseBattle15 (finalize battle — **verified working**, battle accepted)
+
+All 3 battle endpoints verified against live server with 5 accounts across CI run 31752041641.
 
 ### Crew Stat Formulas
 
