@@ -2594,11 +2594,19 @@ class Client(object):
 
         if r:
             self.createBattle9Result = xmltodict.parse(r.content, xml_attribs=True)
-            # Log the raw response for debugging when battleId extraction fails
-            logging.info(f'[{self.info["@Name"]}] CreateBattle9 response: {redact_secrets(r.text[:300])}')
-            # Extract battleId from response for subsequent calls
+            # Log the raw response for debugging
+            logging.debug(f'[{self.info["@Name"]}] CreateBattle9 response: {redact_secrets(r.text[:300])}')
+            # Extract battleId from response for subsequent calls.
+            # The server returns <CreateBattle> not <CreateBattle9> as the wrapper element,
+            # so we try both keys. (Verified against live CI run 31656147771.)
+            battle_service = self.createBattle9Result.get("BattleService", {})
+            battle_wrapper = (
+                battle_service.get("CreateBattle9")
+                or battle_service.get("CreateBattle")
+                or {}
+            )
             try:
-                battle_id = self.createBattle9Result["BattleService"]["CreateBattle9"]["Battle"]["@BattleId"]
+                battle_id = battle_wrapper["Battle"]["@BattleId"]
                 self.lastBattleId = battle_id
                 logging.info(f'[{self.info["@Name"]}] Created battle: {battle_id}')
             except (KeyError, TypeError) as e:
