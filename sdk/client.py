@@ -2423,6 +2423,57 @@ class Client(object):
             logging.error(f"getCrewInfo failed: {redact_secrets(str(e))}")
             return False
 
+    def analyzeShipLayout(self):
+        """Analyze the current ship layout and log recommendations.
+
+        Reads ship data (getShipByUserId) and room designs (listAllDesigns4)
+        to evaluate armor coverage, repair proximity, weapon distribution,
+        and power balance.  Logs a formatted report with recommendations.
+
+        This is a read-only analysis — it does not modify the ship.
+        """
+        try:
+            from sdk.ship_layout import (
+                parse_rooms, analyze_layout, format_analysis_report,
+            )
+
+            # Ensure ship data is loaded
+            if not hasattr(self, "shipByUserId") or not self.shipByUserId:
+                if not self.getShipByUserId():
+                    logging.warning(f"[{self.info.get('@Name', '')}] Cannot analyze layout: ship data unavailable")
+                    return False
+
+            # Ensure room designs are loaded
+            if not hasattr(self, "roomDesigns") or not self.roomDesigns:
+                if not self.listRoomDesigns2():
+                    logging.warning(f"[{self.info.get('@Name', '')}] Cannot analyze layout: room designs unavailable")
+                    return False
+
+            # Extract ship data
+            ship = self.shipByUserId["ShipService"]["GetShipByUserId"]["Ship"]
+            ship_name = ship.get("@ShipName", "")
+            ship_level = int(ship.get("@ShipLevel", 0))
+            ship_design_id = ship.get("@ShipDesignId", "")
+
+            # Extract room designs
+            room_design_list = _extract_collection(self.roomDesigns, "RoomDesign")
+
+            # Parse and analyze
+            rooms = parse_rooms(ship, room_design_list)
+            analysis = analyze_layout(
+                rooms, ship_name=ship_name, ship_level=ship_level,
+                ship_design_id=ship_design_id,
+            )
+
+            report = format_analysis_report(analysis)
+            for line in report.split("\n"):
+                logging.info(f"[{ship_name}] {line}")
+
+            return True
+        except Exception as e:
+            logging.error(f"analyzeShipLayout failed: {redact_secrets(str(e))}")
+            return False
+
     def getMessages(self):
         try:
             if not self.listSystemMessagesForUser3():
