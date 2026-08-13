@@ -2650,8 +2650,10 @@ class Client(object):
         checksum = hashlib.md5(encrypted.encode("utf-8")).hexdigest()
 
         url = f"{self.baseUrl}/BattleService/AcceptBattle5?battleId={battleId}&itemDesignId={itemDesignId}&clientDateTime={ts}&checksum={checksum}&accessToken={self.accessToken}"
+        # Game client also sends the same params as form-encoded POST body (verified against capture)
+        post_data = f"battleId={battleId}&itemDesignId={itemDesignId}&clientDateTime={ts}&checksum={checksum}&accessToken={self.accessToken}"
         logging.debug(redact_secrets(f"{url=}"))
-        r = self.request(url, "POST")
+        r = self.request(url, "POST", data=post_data)
         if r and "errorMessage=" in r.text:
             logging.warning(f'[{self.info["@Name"]}] AcceptBattle5 failed: {r.text[:200]}')
             return False
