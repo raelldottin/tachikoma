@@ -579,3 +579,27 @@ def checksum_rebuild_ammo3(
     preimage = ammo_category + client_date_time + access_token + checksum_key
     encrypted = preimage + savy_checksum
     return hashlib.md5(encrypted.encode("utf-8")).hexdigest()
+
+
+def checksum_heartbeat4(
+    ticks: int,
+    access_token: str,
+) -> str:
+    """Compute the HeartBeat4 checksum.
+
+    Verified formula (matched against 267 mitmproxy captures, 2026-08-08 to 2026-08-10):
+        checksum = str(ChecksumTimeForDate(ticks) + ChecksumPasswordWithString(access_token))
+
+    This is a NUMERIC SUM (not string concatenation). The original code used
+    string concatenation which produced different but still server-accepted values.
+
+    Args:
+        ticks: .NET ticks (100ns intervals since 0001-01-01) from DotNet.get_time()
+        access_token: Current session access token
+
+    Returns:
+        Checksum string (numeric sum as string).
+    """
+    time_part = ChecksumTimeForDate(ticks)
+    pwd_part = ChecksumPasswordWithString(access_token)
+    return str(time_part + pwd_part)

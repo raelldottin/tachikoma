@@ -2731,7 +2731,13 @@ class Client(object):
         if not self.accessToken:
             self.quickReload()
 
-        url = f"{self.baseUrl}/UserService/HeartBeat4?clientDateTime={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}&checksum={ChecksumTimeForDate(DotNet.get_time()) + ChecksumPasswordWithString(self.accessToken)}&accessToken={self.accessToken}"
+        from sdk.security import checksum_heartbeat4
+        ts_str = "{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime())
+        checksum = checksum_heartbeat4(
+            ticks=DotNet.get_time(),
+            access_token=self.accessToken,
+        )
+        url = f"{self.baseUrl}/UserService/HeartBeat4?clientDateTime={ts_str}&checksum={checksum}&accessToken={self.accessToken}"
         r = self.session.request("POST", url, headers=self.headers)
         d = xmltodict.parse(r.content, xml_attribs=True)
 

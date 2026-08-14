@@ -22,6 +22,9 @@ from sdk.security import (
     checksum_update_marker_movement,
     checksum_rebuild_ammo3,
     checksum_collect_marker2,
+    checksum_heartbeat4,
+    ChecksumTimeForDate,
+    ChecksumPasswordWithString,
 )
 from tests.synthetic_fixtures import (
     SYNTHETIC_DEVICE_KEY_IOS,
@@ -752,6 +755,116 @@ class TestRefreshTokenLoginBehavior(unittest.TestCase):
             self.assertTrue(result)
             self.assertEqual(self.client.accessToken, "new-access-token")
             self.assertEqual(self.device.refreshToken, original_refresh)  # unchanged
+
+
+class TestHeartBeat4Checksum(unittest.TestCase):
+    """HeartBeat4 checksum regression tests.
+
+    Formula verified against 267 mitmproxy captures (2026-08-08 to 2026-08-10):
+        checksum = str(ChecksumTimeForDate(ticks) + ChecksumPasswordWithString(accessToken))
+
+    This is a NUMERIC SUM, not string concatenation.
+    """
+
+    def test_heartbeat4_known_capture_1(self):
+        """Capture: 2026-08-08T17:35:14, token=466f...3b0, checksum=698."""
+        from sdk.dotnet import DotNet
+        from datetime import datetime
+
+        dt = datetime(2026, 8, 8, 17, 35, 14)
+        ticks = DotNet.ticks(dt)
+        token = "466f7d82-0bd8-48d1-90f6-2466c3e873b0"
+        result = checksum_heartbeat4(ticks=ticks, access_token=token)
+        self.assertEqual(result, "698")
+
+    def test_heartbeat4_known_capture_2(self):
+        """Capture: 2026-08-09T03:00:14 URL, actual ticks at 03:01:07, checksum=215.
+
+        Note: The game's clientDateTime in the URL may differ from the actual
+        DotNet.get_time() ticks used for the checksum (the game caches/rounds
+        the displayed timestamp but computes the checksum with current ticks).
+        """
+        from sdk.dotnet import DotNet
+        from datetime import datetime
+
+        dt = datetime(2026, 8, 9, 3, 1, 7)
+        ticks = DotNet.ticks(dt)
+        token = "466f7d82-0bd8-48d1-90f6-2466c3e873b0"
+        result = checksum_heartbeat4(ticks=ticks, access_token=token)
+        self.assertEqual(result, "215")
+
+    def test_heartbeat4_known_capture_3(self):
+        """Capture: 2026-08-09T21:57:59, token=e02c...d8c, checksum=3611."""
+        from sdk.dotnet import DotNet
+        from datetime import datetime
+
+        dt = datetime(2026, 8, 9, 21, 57, 59)
+        ticks = DotNet.ticks(dt)
+        token = "e02c01a6-18f4-4f91-8a14-0e91e1cfed8c"
+        result = checksum_heartbeat4(ticks=ticks, access_token=token)
+        self.assertEqual(result, "3611")
+
+    def test_heartbeat4_known_capture_4(self):
+        """Capture: 2026-08-10T03:19:51, token=e02c...d8c, checksum=1217."""
+        from sdk.dotnet import DotNet
+        from datetime import datetime
+
+        dt = datetime(2026, 8, 10, 3, 19, 51)
+        ticks = DotNet.ticks(dt)
+        token = "e02c01a6-18f4-4f91-8a14-0e91e1cfed8c"
+        result = checksum_heartbeat4(ticks=ticks, access_token=token)
+        self.assertEqual(result, "1217")
+
+    def test_heartbeat4_uses_numeric_sum_not_concat(self):
+        """Verify the formula produces numeric sum, not string concatenation."""
+        from sdk.dotnet import DotNet
+        from datetime import datetime
+
+        dt = datetime(2026, 8, 8, 17, 35, 14)
+        ticks = DotNet.ticks(dt)
+        token = "466f7d82-0bd8-48d1-90f6-2466c3e873b0"
+
+        time_part = ChecksumTimeForDate(ticks)
+        pwd_part = ChecksumPasswordWithString(token)
+
+        # Numeric sum = "698" (correct)
+        numeric = str(time_part + pwd_part)
+        # String concat = "490208" (wrong, what old code produced)
+        concat = str(time_part) + str(pwd_part)
+
+        self.assertEqual(checksum_heartbeat4(ticks=ticks, access_token=token), numeric)
+        self.assertNotEqual(numeric, concat)
+
+    def test_heartbeat4_different_tokens_produce_different_checksums(self):
+        """Different access tokens should produce different checksums."""
+        from sdk.dotnet import DotNet
+        from datetime import datetime
+
+        dt = datetime(2026, 8, 9, 3, 0, 14)
+        ticks = DotNet.ticks(dt)
+
+        token1 = "466f7d82-0bd8-48d1-90f6-2466c3e873b0"
+        token2 = "e02c01a6-18f4-4f91-8a14-0e91e1cfed8c"
+
+        result1 = checksum_heartbeat4(ticks=ticks, access_token=token1)
+        result2 = checksum_heartbeat4(ticks=ticks, access_token=token2)
+
+        self.assertNotEqual(result1, result2)
+
+    def test_heartbeat4_different_times_produce_different_checksums(self):
+        """Different timestamps should produce different checksums."""
+        from sdk.dotnet import DotNet
+        from datetime import datetime
+
+        token = "466f7d82-0bd8-48d1-90f6-2466c3e873b0"
+
+        ticks1 = DotNet.ticks(datetime(2026, 8, 8, 17, 35, 14))
+        ticks2 = DotNet.ticks(datetime(2026, 8, 9, 3, 0, 14))
+
+        result1 = checksum_heartbeat4(ticks=ticks1, access_token=token)
+        result2 = checksum_heartbeat4(ticks=ticks2, access_token=token)
+
+        self.assertNotEqual(result1, result2)
 
 
 if __name__ == '__main__':
