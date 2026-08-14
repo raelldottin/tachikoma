@@ -2361,6 +2361,7 @@ class Client(object):
         encrypted = preimage + savy_checksum
         checksum = MD5(encrypted)
         """
+        from sdk.security import checksum_rebuild_ammo3
         # These must be provided via configuration - no fallback to hardcoded values
         checksum_key = self.settings.get("checksum_key")
         savy_checksum = self.settings.get("savy_checksum")
@@ -2390,14 +2391,57 @@ class Client(object):
                     f'[{self.info["@Name"]}] Restocking {ammoCategory.lower()} items.'
                 )
             ts = "{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime())
-            preimage = ammoCategory + ts + self.accessToken + checksum_key
-            encrypted = preimage + savy_checksum
-            checksum = hashlib.md5(encrypted.encode("utf-8")).hexdigest()
+            checksum = checksum_rebuild_ammo3(
+                ammo_category=ammoCategory,
+                client_date_time=ts,
+                access_token=self.accessToken,
+                checksum_key=checksum_key,
+                savy_checksum=savy_checksum,
+            )
             url = f"{self.baseUrl}/RoomService/RebuildAmmo3?ammoCategory={ammoCategory}&clientDateTime={ts}&checksum={checksum}&accessToken={self.accessToken}"
             logging.debug(redact_secrets(f"{url=}"))
             r = self.request(url, "POST")
             if "errorMessage=" in r.text:
                 logging.warning(f'[{self.info["@Name"]}] RebuildAmmo3 {ammoCategory} failed: {r.text[:200]}')
+        return True
+
+    def updateMarkerMovement(self, marker_id: str) -> bool:
+        """Update marker movement for collecting resources from galaxy markers.
+
+        Uses UpdateMarkerMovement with verified checksum formula.
+
+        Checksum formula:
+        preimage = markerId + clientDateTime + accessToken + checksumKey
+        encrypted = preimage + savyChecksum
+        checksum = MD5(encrypted)
+        """
+        from sdk.security import checksum_update_marker_movement
+        checksum_key = self.settings.get("checksum_key")
+        savy_checksum = self.settings.get("savy_checksum")
+
+        if not checksum_key or not savy_checksum:
+            raise ConfigurationError(
+                "UpdateMarkerMovement requires checksum_key and savy_checksum configuration "
+                "values compatible with the installed game version."
+            )
+
+        if not self.accessToken:
+            raise ConfigurationError("UpdateMarkerMovement requires accessToken (must be logged in)")
+
+        ts = "{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime())
+        checksum = checksum_update_marker_movement(
+            marker_id=marker_id,
+            client_date_time=ts,
+            access_token=self.accessToken,
+            checksum_key=checksum_key,
+            savy_checksum=savy_checksum,
+        )
+        url = f"{self.baseUrl}/GalaxyService/UpdateMarkerMovement?starSystemMarkerId={marker_id}&clientDateTime={ts}&checksum={checksum}&accessToken={self.accessToken}"
+        logging.debug(redact_secrets(f"{url=}"))
+        r = self.request(url, "POST")
+        if "errorMessage=" in r.text:
+            logging.warning(f'[{self.info["@Name"]}] UpdateMarkerMovement failed: {r.text[:200]}')
+            return False
         return True
 
     def getCrewInfo(self):

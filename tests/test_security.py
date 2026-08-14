@@ -15,7 +15,13 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from sdk.redaction import redact_secrets, redact_dict, safe_log_message, redact_log
 from sdk.client import Client, ConfigurationError
 from sdk.device import Device
-from sdk.security import checksum_device_login17, checksum_user_email_password_authorize4, checksum_finalise_battle15
+from sdk.security import (
+    checksum_device_login17,
+    checksum_user_email_password_authorize4,
+    checksum_finalise_battle15,
+    checksum_update_marker_movement,
+    checksum_rebuild_ammo3,
+)
 from tests.synthetic_fixtures import (
     SYNTHETIC_DEVICE_KEY_IOS,
     SYNTHETIC_DEVICE_KEY_MAC,
@@ -497,6 +503,113 @@ class TestVerifiedChecksums(unittest.TestCase):
             savy_checksum,
         )
         self.assertEqual(result, expected_md5)
+
+
+class TestVerifiedChecksumsNew(unittest.TestCase):
+    """Test newly verified checksum formulas against live captures."""
+
+    def test_update_marker_movement_verified_captures(self):
+        """UpdateMarkerMovement formula verified against 6 mitmproxy captures (2026-08-08 to 2026-08-10).
+        
+        Formula: MD5(markerId + clientDateTime + accessToken + ChecksumKey + SavyChecksum)
+        """
+        checksum_key = "5343"
+        savy_checksum = "Savvy!s0d@"
+        
+        # Capture 1: 2026-08-08
+        result = checksum_update_marker_movement(
+            marker_id="95363156",
+            client_date_time="2026-08-08T17:37:07",
+            access_token="466f7d82-0bd8-48d1-90f6-2466c3e873b0",
+            checksum_key=checksum_key,
+            savy_checksum=savy_checksum,
+        )
+        self.assertEqual(result, "0449bbb16da6e2deb67113831801b0c3")
+        
+        # Capture 2: 2026-08-09
+        result = checksum_update_marker_movement(
+            marker_id="95384543",
+            client_date_time="2026-08-09T03:14:28",
+            access_token="9f98e1bf-38d3-449e-a5e8-3bd782b56c6e",
+            checksum_key=checksum_key,
+            savy_checksum=savy_checksum,
+        )
+        self.assertEqual(result, "5d7425e65dc8c4c88f478821d1d2e0d9")
+        
+        # Capture 3: 2026-08-09 (different markerId)
+        result = checksum_update_marker_movement(
+            marker_id="95384544",
+            client_date_time="2026-08-09T03:14:28",
+            access_token="9f98e1bf-38d3-449e-a5e8-3bd782b56c6e",
+            checksum_key=checksum_key,
+            savy_checksum=savy_checksum,
+        )
+        self.assertEqual(result, "068d7d6605a8598a0b047992f668b881")
+        
+        # Capture 4: 2026-08-09
+        result = checksum_update_marker_movement(
+            marker_id="95384545",
+            client_date_time="2026-08-09T03:14:28",
+            access_token="9f98e1bf-38d3-449e-a5e8-3bd782b56c6e",
+            checksum_key=checksum_key,
+            savy_checksum=savy_checksum,
+        )
+        self.assertEqual(result, "517f98cfd68adc047ed0fe82f64eeb0b")
+        
+        # Capture 5: 2026-08-09
+        result = checksum_update_marker_movement(
+            marker_id="95379943",
+            client_date_time="2026-08-09T03:14:28",
+            access_token="9f98e1bf-38d3-449e-a5e8-3bd782b56c6e",
+            checksum_key=checksum_key,
+            savy_checksum=savy_checksum,
+        )
+        self.assertEqual(result, "4ecf4bd91ff7440e2a76d82632326629")
+        
+        # Capture 6: 2026-08-10
+        result = checksum_update_marker_movement(
+            marker_id="95415247",
+            client_date_time="2026-08-10T01:53:10",
+            access_token="e02c01a6-18f4-4f91-8a14-0e91e1cfed8c",
+            checksum_key=checksum_key,
+            savy_checksum=savy_checksum,
+        )
+        self.assertEqual(result, "a5bb2a16a6dec0e9c8e4455b5d7bd739")
+
+    def test_rebuild_ammo3_verified_capture(self):
+        """RebuildAmmo3 formula verified against mitmproxy capture (2026-08-10).
+        
+        Formula: MD5(ammoCategory + clientDateTime + accessToken + ChecksumKey + SavyChecksum)
+        """
+        checksum_key = "5343"
+        savy_checksum = "Savvy!s0d@"
+        
+        result = checksum_rebuild_ammo3(
+            ammo_category="None",
+            client_date_time="2026-08-10T01:53:06",
+            access_token="e02c01a6-18f4-4f91-8a14-0e91e1cfed8c",
+            checksum_key=checksum_key,
+            savy_checksum=savy_checksum,
+        )
+        self.assertEqual(result, "0c062964d743eccb15b1bc00338997f3")
+
+    def test_update_marker_movement_requires_config(self):
+        """UpdateMarkerMovement raises UnsupportedNativeChecksum when config missing."""
+        from sdk.security import UnsupportedNativeChecksum
+        
+        with self.assertRaises(UnsupportedNativeChecksum):
+            checksum_update_marker_movement("id", "time", "token", "", "savy")
+        with self.assertRaises(UnsupportedNativeChecksum):
+            checksum_update_marker_movement("id", "time", "token", "ck", "")
+
+    def test_rebuild_ammo3_requires_config(self):
+        """RebuildAmmo3 raises UnsupportedNativeChecksum when config missing."""
+        from sdk.security import UnsupportedNativeChecksum
+        
+        with self.assertRaises(UnsupportedNativeChecksum):
+            checksum_rebuild_ammo3("ammo", "time", "token", "", "savy")
+        with self.assertRaises(UnsupportedNativeChecksum):
+            checksum_rebuild_ammo3("ammo", "time", "token", "ck", "")
 
 
 class TestRefreshTokenLoginBehavior(unittest.TestCase):
