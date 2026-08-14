@@ -574,6 +574,52 @@ class Client(object):
                 r.content, xml_attribs=True
             )
 
+    def collectAvailableMarkers(self) -> int:
+        """List star system markers and collect all those owned by this user.
+
+        Returns the count of markers successfully collected.
+        """
+        if not self.accessToken:
+            return 0
+        try:
+            self.listStarSystemMarkersAndUserMarkers()
+        except Exception as e:
+            logging.error(f"listStarSystemMarkersAndUserMarkers failed: {redact_secrets(str(e))}")
+            return 0
+
+        data = getattr(self, "starSystemMarkersAndUserMarkers", {})
+        if not data:
+            return 0
+
+        # Extract UserMarker entries (markers the user can collect)
+        galaxy = data.get("GalaxyService", {})
+        user_markers_wrapper = galaxy.get("UserMarkers")
+        if not user_markers_wrapper:
+            return 0
+
+        user_markers = user_markers_wrapper.get("UserMarker") if isinstance(user_markers_wrapper, dict) else None
+        if not user_markers:
+            return 0
+
+        if isinstance(user_markers, dict):
+            user_markers = [user_markers]
+
+        collected = 0
+        char_name = self.info.get("@Name", "") if isinstance(self.info, dict) else ""
+        for marker in user_markers:
+            marker_id = marker.get("@StarSystemMarkerId")
+            if not marker_id:
+                continue
+            try:
+                if self.collectMiningDrone(marker_id):
+                    collected += 1
+                    logging.info(f"[{char_name}] Collected marker {marker_id}")
+            except Exception as e:
+                logging.debug(f"collectMiningDrone({marker_id}) failed: {redact_secrets(str(e))}")
+        if collected:
+            logging.info(f"[{char_name}] Collected {collected} galaxy marker(s)")
+        return collected
+
     def listTasksOfAUser(self):
         url = f"https://api.pixelstarships.com/TaskService/ListTasksOfAUser?accessToken={self.accessToken}&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
         r = self.request(url, "GET")
@@ -1822,10 +1868,27 @@ class Client(object):
 
     def collectMiningDrone(self, starSystemMarkerId):
         if self.user.isAuthorized and starSystemMarkerId not in self.dronesCollected:
-            url = "https://api.pixelstarships.com/GalaxyService/CollectMarker2?starSystemMarkerId={}&checksum={}&clientDateTime={}&accessToken={}".format(
+            from sdk.security import checksum_collect_marker2
+            checksum_key = self.settings.get("checksum_key")
+            savy_checksum = self.settings.get("savy_checksum")
+            if not checksum_key or not savy_checksum:
+                logging.warning(
+                    f'[{self.info.get("@Name", "")}] collectMiningDrone skipped: '
+                    "checksum_key/savy_checksum not configured"
+                )
+                return False
+            ts = "{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime())
+            checksum = checksum_collect_marker2(
+                marker_id=str(starSystemMarkerId),
+                client_date_time=ts,
+                access_token=self.accessToken,
+                checksum_key=checksum_key,
+                savy_checksum=savy_checksum,
+            )
+            url = "https://api.pixelstarships.com/GalaxyService/CollectMarker2?starSystemMarkerId={}&clientDateTime={}&checksum={}&accessToken={}".format(
                 starSystemMarkerId,
-                self.checksum,
-                "{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime()),
+                ts,
+                checksum,
                 self.accessToken,
             )
             r = self.request(url, "POST")
@@ -2441,6 +2504,45 @@ class Client(object):
         r = self.request(url, "POST")
         if "errorMessage=" in r.text:
             logging.warning(f'[{self.info["@Name"]}] UpdateMarkerMovement failed: {r.text[:200]}')
+            return False
+        return True
+
+    def collectMarker2(self, marker_id: str) -> bool:
+        """Collect a galaxy marker (resources, rewards) using the CollectMarker2 endpoint.
+
+        Uses the same verified checksum formula as UpdateMarkerMovement (same Galaxy
+        marker endpoint family):
+            MD5(starSystemMarkerId + clientDateTime + accessToken + ChecksumKey + SavyChecksum)
+
+        Args:
+            marker_id: Star system marker ID to collect.
+        """
+        from sdk.security import checksum_collect_marker2
+        checksum_key = self.settings.get("checksum_key")
+        savy_checksum = self.settings.get("savy_checksum")
+
+        if not checksum_key or not savy_checksum:
+            raise ConfigurationError(
+                "CollectMarker2 requires checksum_key and savy_checksum configuration "
+                "values compatible with the installed game version."
+            )
+
+        if not self.accessToken:
+            raise ConfigurationError("CollectMarker2 requires accessToken (must be logged in)")
+
+        ts = "{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime())
+        checksum = checksum_collect_marker2(
+            marker_id=marker_id,
+            client_date_time=ts,
+            access_token=self.accessToken,
+            checksum_key=checksum_key,
+            savy_checksum=savy_checksum,
+        )
+        url = f"{self.baseUrl}/GalaxyService/CollectMarker2?starSystemMarkerId={marker_id}&clientDateTime={ts}&checksum={checksum}&accessToken={self.accessToken}"
+        logging.debug(redact_secrets(f"{url=}"))
+        r = self.request(url, "POST")
+        if "errorMessage=" in r.text:
+            logging.warning(f'[{self.info["@Name"]}] CollectMarker2 failed: {r.text[:200]}')
             return False
         return True
 

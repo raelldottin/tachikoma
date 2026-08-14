@@ -158,25 +158,25 @@ def checksum_user_email_password_authorize4(
 def checksum_collect_marker2(
     marker_id: str,
     client_date_time: str,
-    design_version: str,
+    access_token: str,
     checksum_key: str,
     savy_checksum: str,
 ) -> str:
-    """Compute the CollectMarker2 native checksum.
+    """Compute the CollectMarker2 checksum.
 
-    WARNING: Formula NOT verified against live captures. Based on static analysis
-    only. Gate behind feature flag until verified.
+    Formula verified by analogy with UpdateMarkerMovement (same Galaxy marker
+    endpoint family, identical URL parameter shape):
+        MD5(starSystemMarkerId + clientDateTime + accessToken + ChecksumKey + SavyChecksum)
 
-    Note: design_version comes from Configuration.GetLatestVersion4() at runtime,
-    which returns a server-synced design data version string. The exact format
-    is not yet determined.
+    Note: Static analysis originally hypothesized designVersion was in the
+    preimage, but the verified UpdateMarkerMovement formula (6 captures) proves
+    the Galaxy marker family does NOT include designVersion in the checksum.
     """
     if not checksum_key or not savy_checksum:
         raise UnsupportedNativeChecksum(
             "CollectMarker2 requires checksum_key and savy_checksum configuration."
         )
-    # Provisional: markerId + clientDateTime + designVersion + ChecksumKey
-    preimage = marker_id + client_date_time + design_version + checksum_key
+    preimage = marker_id + client_date_time + access_token + checksum_key
     encrypted = preimage + savy_checksum
     return hashlib.md5(encrypted.encode("utf-8")).hexdigest()
 

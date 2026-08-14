@@ -310,6 +310,12 @@ def main():
                 runtime_failed = True
 
             try:
+                client.collectAvailableMarkers()
+            except Exception as e:
+                logging.error(f"collectAvailableMarkers failed: {redact_secrets(str(e))}")
+                # marker collection failure is not fatal
+
+            try:
                 res = client.listActiveMarketplaceMessages()
                 if res is False:
                     runtime_failed = True

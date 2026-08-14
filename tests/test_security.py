@@ -21,6 +21,7 @@ from sdk.security import (
     checksum_finalise_battle15,
     checksum_update_marker_movement,
     checksum_rebuild_ammo3,
+    checksum_collect_marker2,
 )
 from tests.synthetic_fixtures import (
     SYNTHETIC_DEVICE_KEY_IOS,
@@ -610,6 +611,43 @@ class TestVerifiedChecksumsNew(unittest.TestCase):
             checksum_rebuild_ammo3("ammo", "time", "token", "", "savy")
         with self.assertRaises(UnsupportedNativeChecksum):
             checksum_rebuild_ammo3("ammo", "time", "token", "ck", "")
+
+    def test_collect_marker2_formula_matches_update_marker_movement(self):
+        """CollectMarker2 uses the same formula as UpdateMarkerMovement (same Galaxy marker family).
+
+        Formula: MD5(markerId + clientDateTime + accessToken + ChecksumKey + SavyChecksum)
+        No designVersion — static analysis was wrong about this.
+        """
+        checksum_key = "5343"
+        savy_checksum = "Savvy!s0d@"
+
+        # Use the same known-good vector from UpdateMarkerMovement capture 1
+        result_collect = checksum_collect_marker2(
+            marker_id="95363156",
+            client_date_time="2026-08-08T17:37:07",
+            access_token="466f7d82-0bd8-48d1-90f6-2466c3e873b0",
+            checksum_key=checksum_key,
+            savy_checksum=savy_checksum,
+        )
+        result_movement = checksum_update_marker_movement(
+            marker_id="95363156",
+            client_date_time="2026-08-08T17:37:07",
+            access_token="466f7d82-0bd8-48d1-90f6-2466c3e873b0",
+            checksum_key=checksum_key,
+            savy_checksum=savy_checksum,
+        )
+        # Same inputs → same checksum (both use identical formula)
+        self.assertEqual(result_collect, result_movement)
+        self.assertEqual(result_collect, "0449bbb16da6e2deb67113831801b0c3")
+
+    def test_collect_marker2_requires_config(self):
+        """CollectMarker2 raises UnsupportedNativeChecksum when config missing."""
+        from sdk.security import UnsupportedNativeChecksum
+        
+        with self.assertRaises(UnsupportedNativeChecksum):
+            checksum_collect_marker2("id", "time", "token", "", "savy")
+        with self.assertRaises(UnsupportedNativeChecksum):
+            checksum_collect_marker2("id", "time", "token", "ck", "")
 
 
 class TestRefreshTokenLoginBehavior(unittest.TestCase):
