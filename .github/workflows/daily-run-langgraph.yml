@@ -1,0 +1,98 @@
+name: Daily Automated Actions with LangGraph
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 0 * * *'   # 00:00 UTC
+    - cron: '0 8 * * *'   # 08:00 UTC
+    - cron: '0 16 * * *'  # 16:00 UTC
+
+env:
+  # NVIDIA NIM Configuration
+  NIM_BASE_URL: https://integrate.api.nvidia.com/v1
+  NIM_MODEL: nvidia/nemotron-3-ultra
+  # NIM_API_KEY is set via GitHub secrets
+  
+  # PostgreSQL for checkpointing (optional)
+  # POSTGRES_CHECKPOINT_URL: postgresql://user:pass@host:5432/langgraph
+
+jobs:
+  langgraph-pss-automation:
+    name: 'LangGraph PSS Automation'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install langgraph langchain-nvidia-ai-endpoints langchain-openai psycopg2-binary
+      
+      - name: Verify SDK imports
+        run: |
+          python -c "
+          from sdk.client import Client
+          from sdk.device import Device
+          from sdk.security import CHECKSUM_KEY, SAVY_CHECKSUM
+          from sdk.ship_layout import analyze_layout
+          from sdk.crew_leveling import compute_final_stat
+          from sdk.game_formulas import room_reload, trophy_gain
+          from pss_langgraph_automation import AccountWorker, run_github_action
+          print('All imports successful')
+          "
+      
+      - name: Run LangGraph PSS Automation
+        env:
+          # NVIDIA NIM API Key (store in GitHub secrets)
+          NIM_API_KEY: ${{ secrets.NIM_API_KEY }}
+          
+          # PSS Account Credentials (store in GitHub secrets)
+          PSS_ACCOUNT_1_EMAIL: ${{ secrets.PSS_ACCOUNT_1_EMAIL }}
+          PSS_ACCOUNT_1_PASSWORD: ${{ secrets.PSS_ACCOUNT_1_PASSWORD }}
+          PSS_ACCOUNT_2_EMAIL: ${{ secrets.PSS_ACCOUNT_2_EMAIL }}
+          PSS_ACCOUNT_2_PASSWORD: ${{ secrets.PSS_ACCOUNT_2_PASSWORD }}
+          PSS_ACCOUNT_3_EMAIL: ${{ secrets.PSS_ACCOUNT_3_EMAIL }}
+          PSS_ACCOUNT_3_PASSWORD: ${{ secrets.PSS_ACCOUNT_3_PASSWORD }}
+          PSS_ACCOUNT_4_EMAIL: ${{ secrets.PSS_ACCOUNT_4_EMAIL }}
+          PSS_ACCOUNT_4_PASSWORD: ${{ secrets.PSS_ACCOUNT_4_PASSWORD }}
+          PSS_ACCOUNT_5_EMAIL: ${{ secrets.PSS_ACCOUNT_5_EMAIL }}
+          PSS_ACCOUNT_5_PASSWORD: ${{ secrets.PSS_ACCOUNT_5_PASSWORD }}
+          
+          # Optional: Per-account device keys
+          PSS_ACCOUNT_1_DEVICE_KEY: ${{ secrets.PSS_ACCOUNT_1_DEVICE_KEY }}
+          PSS_ACCOUNT_2_DEVICE_KEY: ${{ secrets.PSS_ACCOUNT_2_DEVICE_KEY }}
+          PSS_ACCOUNT_3_DEVICE_KEY: ${{ secrets.PSS_ACCOUNT_3_DEVICE_KEY }}
+          PSS_ACCOUNT_4_DEVICE_KEY: ${{ secrets.PSS_ACCOUNT_4_DEVICE_KEY }}
+          PSS_ACCOUNT_5_DEVICE_KEY: ${{ secrets.PSS_ACCOUNT_5_DEVICE_KEY }}
+          
+          # SMTP Configuration (store in GitHub secrets)
+          SMTP_EMAIL: ${{ secrets.SMTP_EMAIL }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          EMAIL_RECIPIENT: ${{ secrets.EMAIL_RECIPIENT }}
+          
+          # Optional: PostgreSQL for checkpointing
+          # POSTGRES_CHECKPOINT_URL: ${{ secrets.POSTGRES_CHECKPOINT_URL }}
+        run: |
+          python -m pss_langgraph_automation
+      
+      - name: Upload workflow summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: langgraph-workflow-summary
+          path: |
+            *.log
+            *.json
+          retention-days: 7
