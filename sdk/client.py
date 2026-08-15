@@ -17,8 +17,6 @@ from urllib3.util import Retry
 from ratelimit import limits, sleep_and_retry
 from sdk.device import Device
 from .security import (
-    ChecksumTimeForDate,
-    ChecksumPasswordWithString,
     ChecksumEmailAuthorize,
     checksum_user_email_password_authorize4,
     checksum_device_login17,
@@ -1915,11 +1913,15 @@ class Client(object):
         return False
 
     def collectReward2(self, messageId):
-        url = f"https://api.pixelstarships.com/MessageService/CollectReward2?messageId={messageId}&clientDateTime={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}&checksum={ChecksumTimeForDate(DotNet.get_time()) + ChecksumPasswordWithString(self.accessToken)}&accessToken={self.accessToken}"
+        from sdk.security import ChecksumTimeForDate, ChecksumPasswordWithString
+        url = f"https://api.pixelstarships.com/MessageService/CollectReward2?messageId={messageId}&clientDateTime={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}&checksum={str(ChecksumTimeForDate(DotNet.get_time()) + ChecksumPasswordWithString(self.accessToken))}&accessToken={self.accessToken}"
         self.request(url, "POST")
 
     def AddStarbux2(self, quantity=1):
-        url = f"https://api.pixelstarships.com/UserService/AddStarbux2?quantity={quantity}&clientDateTime={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}&checksum={ChecksumTimeForDate(DotNet.get_time()) + ChecksumPasswordWithString(self.accessToken)}&accessToken={self.accessToken}"
+        from sdk.security import checksum_add_starbux2
+        ts = "{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime())
+        checksum = checksum_add_starbux2(str(quantity), ts, self.accessToken)
+        url = f"https://api.pixelstarships.com/UserService/AddStarbux2?quantity={quantity}&clientDateTime={ts}&checksum={checksum}&accessToken={self.accessToken}"
         r = self.request(url, "POST")
         if r:
             self.starbux = xmltodict.parse(r.content, xml_attribs=True)
