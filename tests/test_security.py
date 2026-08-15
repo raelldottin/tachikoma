@@ -25,6 +25,7 @@ from sdk.security import (
     checksum_heartbeat4,
     checksum_purchase_catalog2,
     checksum_buy_reward2,
+    checksum_add_starbux2,
     ChecksumTimeForDate,
     ChecksumPasswordWithString,
 )
@@ -992,6 +993,35 @@ class TestBuyReward2Checksum(unittest.TestCase):
     def test_buy_reward2_returns_32_char_md5(self):
         """Output should be a 32-char lowercase hex string."""
         result = checksum_buy_reward2("2026-08-10T00:00:00", "5343", "Savvy!s0d@")
+        self.assertEqual(len(result), 32)
+        self.assertTrue(all(c in "0123456789abcdef" for c in result))
+
+
+class TestAddStarbux2Checksum(unittest.TestCase):
+    """Tests for UserService/AddStarbux2 MD5 checksum.
+
+    Formula: MD5(quantity + clientDateTime + accessToken + ChecksumKey + SavyChecksum)
+    Inferred from IL2CPP template (not yet capture-verified).
+    """
+
+    def test_add_starbux2_known_formula(self):
+        """Verify the MD5 formula produces expected output."""
+        result = checksum_add_starbux2("1", "2026-08-10T00:00:00", "tok", "5343", "Savvy!s0d@")
+        import hashlib
+        expected = hashlib.md5(b"12026-08-10T00:00:00tok5343Savvy!s0d@").hexdigest()
+        self.assertEqual(result, expected)
+
+    def test_add_starbux2_raises_on_empty_keys(self):
+        """Should raise UnsupportedNativeChecksum if keys are empty."""
+        from sdk.security import UnsupportedNativeChecksum
+        with self.assertRaises(UnsupportedNativeChecksum):
+            checksum_add_starbux2("1", "2026-08-10T00:00:00", "tok", "", "Savvy!s0d@")
+        with self.assertRaises(UnsupportedNativeChecksum):
+            checksum_add_starbux2("1", "2026-08-10T00:00:00", "tok", "5343", "")
+
+    def test_add_starbux2_returns_32_char_md5(self):
+        """Output should be a 32-char lowercase hex string."""
+        result = checksum_add_starbux2("1", "2026-08-10T00:00:00", "tok", "5343", "Savvy!s0d@")
         self.assertEqual(len(result), 32)
         self.assertTrue(all(c in "0123456789abcdef" for c in result))
 
