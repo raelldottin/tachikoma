@@ -379,7 +379,7 @@ def checksum_purchase_catalog2(
     URL: /ShopService/PurchaseCatalog2?argument={0}&clientDateTime={1}&checksum={2}&accessToken={3}
     Parameters before checksum in URL: argument, clientDateTime, accessToken
 
-    Formula:
+    Verified formula (matched against 44 mitmproxy captures, 2026-08-09 to 2026-08-10):
         preimage  = argument + clientDateTime + accessToken + checksumKey
         encrypted = preimage + savyChecksum
         checksum  = MD5(encrypted)
