@@ -197,6 +197,7 @@ verified formulas.
 | ShopService/PurchaseCatalog2 | `MD5(argument + clientDateTime + accessToken + ChecksumKey + SavyChecksum)` | 44 | ✓ Verified |
 | UserService/PurchaseCatalog2 | `ChecksumTimeForDate(ticks) + ChecksumPasswordWithString(token) + 1` (numeric) | 10 (8 match) | ✓ Verified (old-style) |
 | DeviceLogin17 | `MD5(deviceKey + clientDateTime + ChecksumKey + SavyChecksum)` | 1 | ✓ Verified |
+| RewardService/BuyReward2 | `MD5(clientDateTime + ChecksumKey + SavyChecksum)` — no rewardDesignId, no accessToken! | 4 | ✓ Verified |
 | UserEmailPasswordAuthorize4 | Native IL2CPP pipeline — blocked | 24 | ✗ Blocked |
 
 ### Unverified Endpoints (No Captures)
@@ -256,6 +257,6 @@ captures exist. Their formulas can be inferred from the two known patterns:
 
 3. **AcceptBattle5/FinaliseBattle15 omit `ChecksumKey`** — they use only `SavyChecksum` as the salt, with `accessToken` prepended (not appended) to the preimage.
 
-4. **BuyReward2 remains uncracked**: 4 captures exist but no permutation of `rewardDesignId + clientDateTime + accessToken + ChecksumKey + SavyChecksum` matches. The IL2CPP template `/RewardService/BuyReward2?rewardDesignId=` is truncated — additional params may exist that weren't in the template string.
+4. **BuyReward2 cracked**: 4 captures verified. Formula: `MD5(clientDateTime + ChecksumKey + SavyChecksum)` — the SIMPLEST checksum in the game, excluding BOTH `rewardDesignId` AND `accessToken` from the preimage.
 
 5. **Total IL2CPP URL templates extracted**: 316 (44 with checksum, 272 without)

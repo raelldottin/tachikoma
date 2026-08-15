@@ -409,6 +409,47 @@ def checksum_purchase_catalog2(
     return hashlib.md5(encrypted.encode("utf-8")).hexdigest()
 
 
+def checksum_buy_reward2(
+    client_date_time: str,
+    checksum_key: str = CHECKSUM_KEY,
+    savy_checksum: str = SAVY_CHECKSUM,
+) -> str:
+    """Compute the RewardService/BuyReward2 native checksum.
+
+    URL: /RewardService/BuyReward2?rewardDesignId={0}&clientDateTime={1}&checksum={2}&accessToken={3}
+
+    Verified formula (matched against 4 mitmproxy captures, 2026-08-10):
+        preimage  = clientDateTime + checksumKey
+        encrypted = preimage + savyChecksum
+        checksum  = MD5(encrypted)
+
+    Unique: This is the SIMPLEST checksum in the game — it excludes BOTH
+    rewardDesignId and accessToken from the preimage. Only clientDateTime
+    is used as the dynamic input. The rewardDesignId and accessToken are
+    present in the URL but not part of the checksum computation.
+
+    Args:
+        client_date_time: Current UTC timestamp "yyyy-MM-ddTHH:mm:ss"
+        checksum_key: Configuration.ChecksumKey ("5343")
+        savy_checksum: Configuration.SavyChecksum ("Savvy!s0d@")
+
+    Returns:
+        32-char MD5 hex digest.
+
+    Raises:
+        UnsupportedNativeChecksum: If checksum_key or savy_checksum is empty/None.
+    """
+    if not checksum_key or not savy_checksum:
+        raise UnsupportedNativeChecksum(
+            "BuyReward2 requires checksum_key and savy_checksum "
+            "configuration values compatible with the installed game version."
+        )
+
+    preimage = client_date_time + checksum_key
+    encrypted = preimage + savy_checksum
+    return hashlib.md5(encrypted.encode("utf-8")).hexdigest()
+
+
 def checksum_get_catalog_quantity(
     client_date_time: str,
     access_token: str,
