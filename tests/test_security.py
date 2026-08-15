@@ -24,6 +24,7 @@ from sdk.security import (
     checksum_collect_marker2,
     checksum_heartbeat4,
     checksum_purchase_catalog2,
+    checksum_buy_reward2,
     ChecksumTimeForDate,
     ChecksumPasswordWithString,
 )
@@ -925,6 +926,72 @@ class TestPurchaseCatalog2Checksum(unittest.TestCase):
     def test_purchase_catalog2_returns_32_char_md5(self):
         """Output should be a 32-char lowercase hex string."""
         result = checksum_purchase_catalog2("1", "2026-08-10T00:00:00", "tok", "5343", "Savvy!s0d@")
+        self.assertEqual(len(result), 32)
+        self.assertTrue(all(c in "0123456789abcdef" for c in result))
+
+
+class TestBuyReward2Checksum(unittest.TestCase):
+    """Regression tests for RewardService/BuyReward2 MD5 checksum.
+
+    Formula: MD5(clientDateTime + ChecksumKey + SavyChecksum)
+    — NO rewardDesignId, NO accessToken in the preimage!
+    Verified against 4 mitmproxy captures (2026-08-10).
+    """
+
+    def test_buy_reward2_known_capture_1(self):
+        """Capture: rewardDesignId=2016, dt=2026-08-10T01:55:14"""
+        result = checksum_buy_reward2(
+            client_date_time="2026-08-10T01:55:14",
+            checksum_key="5343",
+            savy_checksum="Savvy!s0d@",
+        )
+        self.assertEqual(result, "cc49c2934aa472565e9d6cc4b8cb061f")
+
+    def test_buy_reward2_known_capture_2(self):
+        """Capture: rewardDesignId=2061, dt=2026-08-10T01:55:18"""
+        result = checksum_buy_reward2(
+            client_date_time="2026-08-10T01:55:18",
+            checksum_key="5343",
+            savy_checksum="Savvy!s0d@",
+        )
+        self.assertEqual(result, "42209572b458b145f97b6703d049321f")
+
+    def test_buy_reward2_known_capture_3(self):
+        """Capture: rewardDesignId=2063, dt=2026-08-10T01:55:25"""
+        result = checksum_buy_reward2(
+            client_date_time="2026-08-10T01:55:25",
+            checksum_key="5343",
+            savy_checksum="Savvy!s0d@",
+        )
+        self.assertEqual(result, "de3a847295cf2ceedd4e6f7593b777ea")
+
+    def test_buy_reward2_known_capture_4(self):
+        """Capture: rewardDesignId=2064, dt=2026-08-10T01:55:31"""
+        result = checksum_buy_reward2(
+            client_date_time="2026-08-10T01:55:31",
+            checksum_key="5343",
+            savy_checksum="Savvy!s0d@",
+        )
+        self.assertEqual(result, "a733c16cd00272b9aef516a4cba9b112")
+
+    def test_buy_reward2_checksum_independent_of_reward_design_id(self):
+        """The checksum must NOT depend on rewardDesignId — only clientDateTime."""
+        # Same timestamp, different "rewardDesignId" — must produce same checksum
+        c1 = checksum_buy_reward2("2026-08-10T01:55:14", "5343", "Savvy!s0d@")
+        # The function doesn't even take rewardDesignId, proving it's excluded
+        self.assertEqual(c1, "cc49c2934aa472565e9d6cc4b8cb061f")
+
+    def test_buy_reward2_raises_on_empty_keys(self):
+        """Should raise UnsupportedNativeChecksum if keys are empty."""
+        from sdk.security import UnsupportedNativeChecksum
+        with self.assertRaises(UnsupportedNativeChecksum):
+            checksum_buy_reward2("2026-08-10T00:00:00", "", "Savvy!s0d@")
+        with self.assertRaises(UnsupportedNativeChecksum):
+            checksum_buy_reward2("2026-08-10T00:00:00", "5343", "")
+
+    def test_buy_reward2_returns_32_char_md5(self):
+        """Output should be a 32-char lowercase hex string."""
+        result = checksum_buy_reward2("2026-08-10T00:00:00", "5343", "Savvy!s0d@")
         self.assertEqual(len(result), 32)
         self.assertTrue(all(c in "0123456789abcdef" for c in result))
 
