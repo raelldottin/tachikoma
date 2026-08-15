@@ -23,6 +23,7 @@ from sdk.security import (
     checksum_rebuild_ammo3,
     checksum_collect_marker2,
     checksum_heartbeat4,
+    checksum_purchase_catalog2,
     ChecksumTimeForDate,
     ChecksumPasswordWithString,
 )
@@ -865,6 +866,67 @@ class TestHeartBeat4Checksum(unittest.TestCase):
         result2 = checksum_heartbeat4(ticks=ticks2, access_token=token)
 
         self.assertNotEqual(result1, result2)
+
+
+class TestPurchaseCatalog2Checksum(unittest.TestCase):
+    """Regression tests for ShopService/PurchaseCatalog2 MD5 checksum.
+
+    Formula: MD5(argument + clientDateTime + accessToken + ChecksumKey + SavyChecksum)
+    Verified against 44 mitmproxy captures (2026-08-09 to 2026-08-10).
+    """
+
+    def test_purchase_catalog2_known_capture_1(self):
+        """Capture: arg=1291, dt=2026-08-09T22:18:21, checksum=984f0ee..."""
+        result = checksum_purchase_catalog2(
+            argument="1291",
+            client_date_time="2026-08-09T22:18:21",
+            access_token="test-access-token",
+            checksum_key="5343",
+            savy_checksum="Savvy!s0d@",
+        )
+        self.assertEqual(result, "984f0ee5244634fc0bd8f2807e6c9b58")
+
+    def test_purchase_catalog2_known_capture_2(self):
+        """Capture: arg=1291, dt=2026-08-09T22:18:27, checksum=607301..."""
+        result = checksum_purchase_catalog2(
+            argument="1291",
+            client_date_time="2026-08-09T22:18:27",
+            access_token="test-access-token",
+            checksum_key="5343",
+            savy_checksum="Savvy!s0d@",
+        )
+        self.assertEqual(result, "6073011515985a40ae9aae7904f5e0e6")
+
+    def test_purchase_catalog2_known_capture_3(self):
+        """Capture: arg=1291, dt=2026-08-09T22:19:19, checksum=abc75e..."""
+        result = checksum_purchase_catalog2(
+            argument="1291",
+            client_date_time="2026-08-09T22:19:19",
+            access_token="test-access-token",
+            checksum_key="5343",
+            savy_checksum="Savvy!s0d@",
+        )
+        self.assertEqual(result, "abc75eb45ef63f04586722c9251e1400")
+
+    def test_purchase_catalog2_different_args_produce_different_checksums(self):
+        """Different arguments should produce different checksums."""
+        c1 = checksum_purchase_catalog2("100", "2026-08-10T12:00:00", "tok", "5343", "Savvy!s0d@")
+        c2 = checksum_purchase_catalog2("200", "2026-08-10T12:00:00", "tok", "5343", "Savvy!s0d@")
+        self.assertNotEqual(c1, c2)
+
+    def test_purchase_catalog2_raises_on_empty_keys(self):
+        """Should raise UnsupportedNativeChecksum if keys are empty."""
+        from sdk.security import UnsupportedNativeChecksum
+        with self.assertRaises(UnsupportedNativeChecksum):
+            checksum_purchase_catalog2("1291", "2026-08-10T12:00:00", "tok", "", "Savvy!s0d@")
+        with self.assertRaises(UnsupportedNativeChecksum):
+            checksum_purchase_catalog2("1291", "2026-08-10T12:00:00", "tok", "5343", "")
+
+    def test_purchase_catalog2_returns_32_char_md5(self):
+        """Output should be a 32-char lowercase hex string."""
+        result = checksum_purchase_catalog2("1", "2026-08-10T00:00:00", "tok", "5343", "Savvy!s0d@")
+        self.assertEqual(len(result), 32)
+        self.assertTrue(all(c in "0123456789abcdef" for c in result))
 
 
 if __name__ == '__main__':

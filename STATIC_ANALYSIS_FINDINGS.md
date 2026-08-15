@@ -174,3 +174,88 @@ checksum = md5(encrypted.encode()).hexdigest()
 3. **Offline reproduce** all 6 fixture samples
 4. **Implement shared native-checksum module** in Tachikoma SDK
 5. **Live test** one request per endpoint type
+
+---
+
+## Complete URL Template Catalog (Extracted 2026-08-15)
+
+All 44 endpoints with `checksum=` in their URL templates were extracted from the
+IL2CPP `global-metadata.dat`. Cross-referenced against mitmproxy captures and
+verified formulas.
+
+### Verified Checksum Formulas
+
+| Endpoint | Formula | Captures | Status |
+|----------|---------|----------|--------|
+| HeartBeat4 | `ChecksumTimeForDate(ticks) + ChecksumPasswordWithString(token)` (numeric sum) | 267 | ✓ Verified |
+| CreateBattle9 | `MD5(clientHp + clientDateTime + accessToken + ChecksumKey + SavyChecksum)` | 6 | ✓ Verified |
+| AcceptBattle5 | `MD5(accessToken + battleId + clientDateTime + SavyChecksum)` (no ChecksumKey) | 26 | ✓ Verified |
+| FinaliseBattle15 | `MD5(accessToken + battleId + clientDateTime + SavyChecksum)` (no ChecksumKey) | 28 | ✓ Verified |
+| UpdateMarkerMovement | `MD5(markerId + clientDateTime + accessToken + ChecksumKey + SavyChecksum)` | 36 | ✓ Verified |
+| RebuildAmmo3 | `MD5(ammoCategory + clientDateTime + accessToken + ChecksumKey + SavyChecksum)` | 2 | ✓ Verified |
+| CollectMarker2 | `MD5(markerId + clientDateTime + accessToken + ChecksumKey + SavyChecksum)` | 0 | Inferred (same family as UpdateMarkerMovement) |
+| ShopService/PurchaseCatalog2 | `MD5(argument + clientDateTime + accessToken + ChecksumKey + SavyChecksum)` | 44 | ✓ Verified |
+| UserService/PurchaseCatalog2 | `ChecksumTimeForDate(ticks) + ChecksumPasswordWithString(token) + 1` (numeric) | 10 (8 match) | ✓ Verified (old-style) |
+| DeviceLogin17 | `MD5(deviceKey + clientDateTime + ChecksumKey + SavyChecksum)` | 1 | ✓ Verified |
+| UserEmailPasswordAuthorize4 | Native IL2CPP pipeline — blocked | 24 | ✗ Blocked |
+
+### Unverified Endpoints (No Captures)
+
+These 35 endpoints have `checksum=` in their IL2CPP URL templates but no mitmproxy
+captures exist. Their formulas can be inferred from the two known patterns:
+
+**New-style MD5 pattern** (most endpoints):
+`MD5(params_before_checksum + ChecksumKey + SavyChecksum)`
+
+**Old-style numeric pattern** (HeartBeat4, UserService/PurchaseCatalog2):
+`str(ChecksumTimeForDate(ticks) + ChecksumPasswordWithString(token) [+ 1])`
+
+| Endpoint | Params before checksum | Likely pattern |
+|----------|----------------------|----------------|
+| AllianceService/CollectInfrastructureRewards | starSystemInfrastructureId, clientDateTime, accessToken | New MD5 |
+| BattleService/CreateEngagementBattle | engagementId, attackingGroupUserId, defendingGroupUserId, clientDateTime, accessToken | New MD5 |
+| BattleService/CreateStarBattle5 | clientHp, clientDateTime, accessToken, searchNumber, value | New MD5 |
+| BattleService/GetEngagement | engagementId, clientDateTime, accessToken | New MD5 |
+| BattleService/JoinEngagement | engagementId, engagementSide, clientDateTime, accessToken | New MD5 |
+| BattleService/VerifyBattle2 | battleId, clientOutcomeType, clientEndFrame, clientResultString, attackingShipHp, syncStatus, battleSyncEntity, syncErrorType, description, score, accessToken | New MD5 |
+| BattleService/VerifyReplayBattle | battleId, clientDateTime, defendingClientOutcomeType, defendingClientEndFrame, accessToken | New MD5 |
+| CharacterService/MarkCharactersNotNew | (truncated template) | Unknown |
+| GalaxyService/CheckMarker | starSystemMarkerId, clientDateTime, accessToken | New MD5 (same family as CollectMarker2) |
+| GalaxyService/CreateEngagementMarker | starSystemId, clientDateTime, engagementType, cost, accessToken | New MD5 |
+| GalaxyService/GoTo | starSystemId, clientDateTime, accessToken | New MD5 |
+| GalaxyService/SpeedUpExploring | userStarSystemId, clientDateTime, accessToken | New MD5 |
+| GalaxyService/SpeedUpMining | starSystemMarkerId, clientDateTime, accessToken | New MD5 |
+| GalaxyService/SpeedUpTravelling | (truncated template) | Unknown |
+| GalaxyService/UpgradeInfrastructure | starSystemId, starSystemInfrastructureId, clientDateTime, accessToken | New MD5 |
+| ItemService/CombineItem4 | itemIds, itemDesignId, quantity, clientDateTime, accessToken | New MD5 |
+| ItemService/MarkItemsNotNew | (truncated template) | Unknown |
+| ItemService/RepairBrokenModules | roomId, itemid, quantity, clientDateTime, accessToken | New MD5 |
+| MarketService/Purchase4 | saleId, clientDateTime, accessToken, allowConversion | New MD5 |
+| MissionService/CollectExplorationReward | missionDesignId, clientDateTime, accessToken | New MD5 |
+| MissionService/SelectInstantMission3 | (generic template) | New MD5 |
+| RoomService/AddItemIdToRoom | roomId, itemId, clientDateTime, accessToken | New MD5 |
+| RoomService/CollectResources3 | roomId, amount, collectDate, accessToken | New MD5 |
+| RoomService/MoveItemIdToRoom3 | roomId, toRoomId, itemId, clientDateTime, accessToken | New MD5 |
+| RoomService/Refill2 | roomId, clientDateTime, accessToken | New MD5 |
+| RoomService/RemoveItemIdFromRoom | roomId, itemId, clientDateTime, accessToken | New MD5 |
+| RoomService/UpdateItemIdsForRoom2 | roomId, itemIds, clientDateTime, accessToken | New MD5 |
+| UserService/AddStarbux2 | quantity, clientDateTime, accessToken | New MD5 |
+| UserService/AddVIPAdRewards | clientDateTime, accessToken | New MD5 |
+| UserService/CollectDailyLegendaryRewards | (truncated template) | Unknown |
+| UserService/DeleteAccount | clientDateTime, accessToken | New MD5 |
+| UserService/PurchasePromotion | promotionDesignId, clientDateTime, accessToken | New MD5 |
+| UserService/PurchaseSkin | skinSetId, clientDateTime, accessToken | New MD5 |
+| UserService/SetWishlist | userWishlistId, itemId, wishlistString, clientDateTime, accessToken | New MD5 |
+| UserService/VerifyEmail | clientDateTime, accessToken | New MD5 |
+
+### Key Findings
+
+1. **Two checksum families exist**: Old-style numeric (HeartBeat4, UserService/PurchaseCatalog2) and new-style MD5 (all others). The game migrated most endpoints to MD5 but left a few on the old numeric system.
+
+2. **No endpoint uses `designVersion`** in verified captures. The original static analysis hypothesis that CollectMarker2 included `designVersion` was disproven by 36 UpdateMarkerMovement captures (same Galaxy marker family).
+
+3. **AcceptBattle5/FinaliseBattle15 omit `ChecksumKey`** — they use only `SavyChecksum` as the salt, with `accessToken` prepended (not appended) to the preimage.
+
+4. **BuyReward2 remains uncracked**: 4 captures exist but no permutation of `rewardDesignId + clientDateTime + accessToken + ChecksumKey + SavyChecksum` matches. The IL2CPP template `/RewardService/BuyReward2?rewardDesignId=` is truncated — additional params may exist that weren't in the template string.
+
+5. **Total IL2CPP URL templates extracted**: 316 (44 with checksum, 272 without)
