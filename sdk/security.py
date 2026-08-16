@@ -494,6 +494,88 @@ def checksum_add_starbux2(
     return hashlib.md5(encrypted.encode("utf-8")).hexdigest()
 
 
+def checksum_go_to(
+    star_system_id: str,
+    client_date_time: str,
+    access_token: str,
+    checksum_key: str = CHECKSUM_KEY,
+    savy_checksum: str = SAVY_CHECKSUM,
+) -> str:
+    """Compute the GalaxyService/GoTo native checksum for travelling to a star system.
+
+    URL: /GalaxyService/GoTo?starSystemId={0}&clientDateTime={1}&checksum={2}&accessToken={3}
+
+    Formula (verified against 2 captures):
+        preimage  = clientDateTime + starSystemId + accessToken + checksumKey
+        encrypted = preimage + savyChecksum
+        checksum  = MD5(encrypted)
+
+    Note: clientDateTime comes FIRST in the preimage (unusual ordering, verified
+    against captures 2026-08-16T07:33:41 and 2026-08-16T07:40:57).
+
+    Args:
+        star_system_id: Target star system ID.
+        client_date_time: DotNet-format timestamp (YYYY-MM-DDTHH:MM:SS).
+        access_token: Session access token.
+        checksum_key: ChecksumKey config value (default "5343").
+        savy_checksum: SavyChecksum config value (default "Savvy!s0d@").
+
+    Returns:
+        32-char MD5 hex digest.
+
+    Raises:
+        UnsupportedNativeChecksum: If checksum_key or savy_checksum is empty/None.
+    """
+    if not checksum_key or not savy_checksum:
+        raise UnsupportedNativeChecksum(
+            "GoTo requires checksum_key and savy_checksum "
+            "configuration values compatible with the installed game version."
+        )
+
+    preimage = client_date_time + star_system_id + access_token + checksum_key
+    encrypted = preimage + savy_checksum
+    return hashlib.md5(encrypted.encode("utf-8")).hexdigest()
+
+
+def checksum_speedup_travelling(
+    client_date_time: str,
+    access_token: str,
+    checksum_key: str = CHECKSUM_KEY,
+    savy_checksum: str = SAVY_CHECKSUM,
+) -> str:
+    """Compute the GalaxyService/SpeedUpTravelling native checksum.
+
+    URL: /GalaxyService/SpeedUpTravelling?checksum={0}&clientDateTime={1}&accessToken={2}
+
+    No params before checksum in the template — only clientDateTime and accessToken
+    follow. Formula (verified against 1 capture):
+        preimage  = clientDateTime + accessToken + checksumKey
+        encrypted = preimage + savyChecksum
+        checksum  = MD5(encrypted)
+
+    Args:
+        client_date_time: DotNet-format timestamp (YYYY-MM-DDTHH:MM:SS).
+        access_token: Session access token.
+        checksum_key: ChecksumKey config value (default "5343").
+        savy_checksum: SavyChecksum config value (default "Savvy!s0d@").
+
+    Returns:
+        32-char MD5 hex digest.
+
+    Raises:
+        UnsupportedNativeChecksum: If checksum_key or savy_checksum is empty/None.
+    """
+    if not checksum_key or not savy_checksum:
+        raise UnsupportedNativeChecksum(
+            "SpeedUpTravelling requires checksum_key and savy_checksum "
+            "configuration values compatible with the installed game version."
+        )
+
+    preimage = client_date_time + access_token + checksum_key
+    encrypted = preimage + savy_checksum
+    return hashlib.md5(encrypted.encode("utf-8")).hexdigest()
+
+
 def checksum_get_catalog_quantity(
     client_date_time: str,
     access_token: str,

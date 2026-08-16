@@ -2548,6 +2548,364 @@ class Client(object):
             return False
         return True
 
+    def findMiningDrones(self) -> list:
+        """Find all mining drone markers on the star map.
+
+        Calls ListStarSystemMarkersAndUserMarkers and filters for markers with
+        MarkerType="Mining" and IsCollected="false".
+
+        Returns:
+            A list of dicts, each with keys: markerId, starSystemId,
+            missionDesignId, missionEventId, rewardString, isRepeatable.
+        """
+        if not self.accessToken:
+            return []
+
+        try:
+            self.listStarSystemMarkersAndUserMarkers()
+        except Exception as e:
+            logging.error(
+                f"[{self.info.get('@Name', '')}] "
+                f"findMiningDrones: ListStarSystemMarkersAndUserMarkers failed: "
+                f"{redact_secrets(str(e))}"
+            )
+            return []
+
+        data = getattr(self, "starSystemMarkersAndUserMarkers", {})
+        if not data:
+            return []
+
+        galaxy = data.get("GalaxyService", {})
+        markers_wrapper = galaxy.get("ListStarSystemMarkersAndUserMarkers", {})
+        if not markers_wrapper:
+            return []
+
+        star_markers_wrapper = markers_wrapper.get("StarSystemMarkers")
+        if not star_markers_wrapper:
+            return []
+
+        star_markers = star_markers_wrapper.get("StarSystemMarker")
+        if not star_markers:
+            return []
+
+        if isinstance(star_markers, dict):
+            star_markers = [star_markers]
+
+        drones = []
+        for m in star_markers:
+            if m.get("@MarkerType") != "Mining":
+                continue
+            if m.get("@IsCollected", "false").lower() == "true":
+                continue
+            drone = {
+                "markerId": m.get("@StarSystemMarkerId", ""),
+                "starSystemId": m.get("@StarSystemId", ""),
+                "missionDesignId": m.get("@MissionDesignId", "0"),
+                "missionEventId": m.get("@MissionEventId", "0"),
+                "rewardString": m.get("@RewardString", ""),
+                "isRepeatable": m.get("@IsRepeatable", "false").lower() == "true",
+            }
+            drones.append(drone)
+
+        return drones
+
+    def goToStarSystem(self, star_system_id: str) -> str | None:
+        """Travel to a star system.
+
+        Sends a GoTo request to the galaxy service. Returns the
+        StarSystemArrivalDate from the response, or None on failure.
+
+        Args:
+            star_system_id: Target star system ID.
+
+        Returns:
+            ISO-format arrival timestamp string, or None on error.
+        """
+        from sdk.security import checksum_go_to
+
+        checksum_key = self.settings.get("checksum_key")
+        savy_checksum = self.settings.get("savy_checksum")
+        if not checksum_key or not savy_checksum:
+            logging.warning(
+                f"[{self.info.get('@Name', '')}] goToStarSystem skipped: "
+                "checksum_key/savy_checksum not configured"
+            )
+            return None
+
+        if not self.accessToken:
+            return None
+
+        ts = "{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime())
+        checksum = checksum_go_to(
+            star_system_id=star_system_id,
+            client_date_time=ts,
+            access_token=self.accessToken,
+            checksum_key=checksum_key,
+            savy_checksum=savy_checksum,
+        )
+        url = (
+            f"{self.baseUrl}/GalaxyService/GoTo?starSystemId={star_system_id}"
+            f"&clientDateTime={ts}&checksum={checksum}&accessToken={self.accessToken}"
+        )
+        logging.debug(redact_secrets(f"{url=}"))
+        r = self.request(url, "POST")
+        if not r or "errorMessage=" in r.text:
+            logging.warning(
+                f"[{self.info.get('@Name', '')}] GoTo({star_system_id}) failed: "
+                f"{r.text[:200] if r else 'no response'}"
+            )
+            return None
+
+        try:
+            parsed = xmltodict.parse(r.content, xml_attribs=True)
+            ship = parsed.get("GalaxyService", {}).get("GoTo", {}).get("Ship", {})
+            arrival = ship.get("@StarSystemArrivalDate", "")
+            current_ss = ship.get("@StarSystemId", "")
+            logging.info(
+                f"[{self.info.get('@Name', '')}] GoTo({star_system_id}): "
+                f"now at StarSystem {current_ss}, arrives {arrival}"
+            )
+            return arrival
+        except Exception as e:
+            logging.error(f"GoTo parse error: {redact_secrets(str(e))}")
+            return None
+
+    def speedUpTravelling(self) -> bool:
+        """Speed up ship travel, eliminating remaining travel time.
+
+        Sends a SpeedUpTravelling request that instantly completes the
+        current journey.
+
+        Returns:
+            True if the server responded with Success, False otherwise.
+        """
+        from sdk.security import checksum_speedup_travelling
+
+        checksum_key = self.settings.get("checksum_key")
+        savy_checksum = self.settings.get("savy_checksum")
+        if not checksum_key or not savy_checksum:
+            logging.warning(
+                f"[{self.info.get('@Name', '')}] speedUpTravelling skipped: "
+                "checksum_key/savy_checksum not configured"
+            )
+            return False
+
+        if not self.accessToken:
+            return False
+
+        ts = "{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime())
+        checksum = checksum_speedup_travelling(
+            client_date_time=ts,
+            access_token=self.accessToken,
+            checksum_key=checksum_key,
+            savy_checksum=savy_checksum,
+        )
+        url = (
+            f"{self.baseUrl}/GalaxyService/SpeedUpTravelling"
+            f"?checksum={checksum}&clientDateTime={ts}&accessToken={self.accessToken}"
+        )
+        logging.debug(redact_secrets(f"{url=}"))
+        r = self.request(url, "POST")
+        if not r or "errorMessage=" in r.text:
+            logging.warning(
+                f"[{self.info.get('@Name', '')}] SpeedUpTravelling failed: "
+                f"{r.text[:200] if r else 'no response'}"
+            )
+            return False
+
+        if "Success" in r.text:
+            logging.info(
+                f"[{self.info.get('@Name', '')}] SpeedUpTravelling: Success"
+            )
+            return True
+        return False
+
+    def waitForArrival(
+        self, arrival_date: str, max_wait: int = 300, poll_interval: int = 15
+    ) -> bool:
+        """Wait for the ship to arrive at its destination.
+
+        If the remaining travel time is less than max_wait seconds, polls the
+        server with UpdateMarkerMovement until the ship arrives. If the remaining
+        travel time is less than 5 minutes (300s), automatically calls
+        speedUpTravelling to eliminate it.
+
+        Args:
+            arrival_date: ISO-format timestamp from GoTo response
+                (StarSystemArrivalDate).
+            max_wait: Maximum seconds to wait before giving up (default 300).
+            poll_interval: Seconds between UpdateMarkerMovement polls
+                (default 15).
+
+        Returns:
+            True if the ship has arrived (or travel was sped up), False on
+            timeout or error.
+        """
+        if not arrival_date:
+            return False
+
+        # Parse arrival time
+        try:
+            # Handle the PSS date format: YYYY-MM-DDTHH:MM:SS
+            arrival_dt = datetime.datetime.fromisoformat(arrival_date)
+        except (ValueError, TypeError):
+            logging.error(
+                f"[{self.info.get('@Name', '')}] "
+                f"waitForArrival: cannot parse arrival_date='{arrival_date}'"
+            )
+            return False
+
+        now = datetime.datetime.now()
+        remaining = (arrival_dt - now).total_seconds()
+
+        if remaining <= 0:
+            logging.info(
+                f"[{self.info.get('@Name', '')}] "
+                f"Ship already arrived (arrival {arrival_date})"
+            )
+            return True
+
+        # If travel time < 5 minutes, use SpeedUpTravelling to eliminate it
+        if remaining < 300:
+            logging.info(
+                f"[{self.info.get('@Name', '')}] "
+                f"Travel time {int(remaining)}s < 5min — calling SpeedUpTravelling"
+            )
+            if self.speedUpTravelling():
+                return True
+            # If SpeedUp fails (e.g. not enough starbux), fall through to polling
+
+        # Wait for arrival by polling
+        logging.info(
+            f"[{self.info.get('@Name', '')}] "
+            f"Waiting for arrival at {arrival_date} ({int(remaining)}s remaining)"
+        )
+
+        waited = 0
+        while waited < max_wait:
+            sleep_time = min(poll_interval, max_wait - waited)
+            time.sleep(sleep_time)
+            waited += sleep_time
+
+            now = datetime.datetime.now()
+            if now >= arrival_dt:
+                logging.info(
+                    f"[{self.info.get('@Name', '')}] Ship arrived at {arrival_date}"
+                )
+                return True
+
+            # Optionally poll the server to confirm
+            remaining = (arrival_dt - now).total_seconds()
+            # If travel time dropped below 5 minutes while waiting, speed up
+            if remaining < 300 and remaining > 0:
+                logging.info(
+                    f"[{self.info.get('@Name', '')}] "
+                    f"Remaining {int(remaining)}s < 5min — calling SpeedUpTravelling"
+                )
+                if self.speedUpTravelling():
+                    return True
+
+        logging.warning(
+            f"[{self.info.get('@Name', '')}] "
+            f"waitForArrival timed out after {max_wait}s (arrival {arrival_date})"
+        )
+        return False
+
+    def collectMiningDronesWithTravel(self) -> int:
+        """Find all mining drones, travel to them, and collect them.
+
+        The full flow is:
+        1. Find all uncollected mining drone markers.
+        2. For each drone at a star system different from the ship's current
+           position:
+           a. Call GoTo to travel there.
+           b. If travel time < 5 minutes, call SpeedUpTravelling to eliminate it.
+           c. Wait for arrival.
+        3. Call CollectMarker2 to collect the mining drone.
+
+        Skips drones that are already collected (tracks via dronesCollected).
+
+        Returns:
+            The number of mining drones successfully collected.
+        """
+        if not self.accessToken:
+            return 0
+
+        char_name = self.info.get("@Name", "") if isinstance(self.info, dict) else ""
+        drones = self.findMiningDrones()
+        if not drones:
+            logging.info(f"[{char_name}] No uncollected mining drones found")
+            return 0
+
+        logging.info(
+            f"[{char_name}] Found {len(drones)} uncollected mining drone(s)"
+        )
+
+        # Get current star system from ship data
+        current_star_system = ""
+        try:
+            self.getShipByUserId()
+        except Exception:
+            pass
+        ship_data = getattr(self, "shipByUserId", None)
+        if ship_data and isinstance(ship_data, dict):
+            ship = ship_data.get("ShipService", {}).get("GetShipByUserId", {}).get("Ship", {})
+            current_star_system = ship.get("@StarSystemId", "")
+
+        collected = 0
+        for drone in drones:
+            marker_id = drone["markerId"]
+            if not marker_id:
+                continue
+            if marker_id in self.dronesCollected:
+                continue
+
+            target_ss = drone["starSystemId"]
+            logging.info(
+                f"[{char_name}] Processing mining drone {marker_id} "
+                f"at StarSystem {target_ss}"
+            )
+
+            # Travel if needed
+            if target_ss and target_ss != current_star_system:
+                arrival = self.goToStarSystem(target_ss)
+                if not arrival:
+                    logging.warning(
+                        f"[{char_name}] GoTo failed for drone {marker_id}, skipping"
+                    )
+                    continue
+
+                if not self.waitForArrival(arrival):
+                    logging.warning(
+                        f"[{char_name}] Wait for arrival failed for drone {marker_id}, "
+                        f"attempting collection anyway"
+                    )
+
+                current_star_system = target_ss
+
+            # Collect the drone
+            try:
+                if self.collectMiningDrone(marker_id):
+                    collected += 1
+                    logging.info(
+                        f"[{char_name}] Collected mining drone {marker_id}"
+                    )
+                else:
+                    logging.warning(
+                        f"[{char_name}] CollectMiningDrone({marker_id}) returned False"
+                    )
+            except Exception as e:
+                logging.error(
+                    f"[{char_name}] CollectMiningDrone({marker_id}) failed: "
+                    f"{redact_secrets(str(e))}"
+                )
+
+        if collected:
+            logging.info(
+                f"[{char_name}] Collected {collected} mining drone(s)"
+            )
+        return collected
+
     def getCrewInfo(self):
         try:
             character_list = []

@@ -26,6 +26,8 @@ from sdk.security import (
     checksum_purchase_catalog2,
     checksum_buy_reward2,
     checksum_add_starbux2,
+    checksum_go_to,
+    checksum_speedup_travelling,
     ChecksumTimeForDate,
     ChecksumPasswordWithString,
 )
@@ -1022,6 +1024,64 @@ class TestAddStarbux2Checksum(unittest.TestCase):
     def test_add_starbux2_returns_32_char_md5(self):
         """Output should be a 32-char lowercase hex string."""
         result = checksum_add_starbux2("1", "2026-08-10T00:00:00", "tok", "5343", "Savvy!s0d@")
+        self.assertEqual(len(result), 32)
+        self.assertTrue(all(c in "0123456789abcdef" for c in result))
+
+
+class TestGoToChecksum(unittest.TestCase):
+    """Tests for GalaxyService/GoTo MD5 checksum.
+
+    Formula (verified against 2 captures): MD5(clientDateTime + starSystemId
+    + accessToken + ChecksumKey + SavyChecksum).
+    Note the unusual ordering: clientDateTime comes FIRST.
+    """
+
+    def test_go_to_capture_match_1(self):
+        """Verify against capture: GoTo(24) at 2026-08-16T07:33:41."""
+        result = checksum_go_to("24", "2026-08-16T07:33:41", "8688182e-02b6-46e4-893f-3ec2ada85a9f")
+        self.assertEqual(result, "736e00a8ae3b1959a9e6906285a59860")
+
+    def test_go_to_capture_match_2(self):
+        """Verify against capture: GoTo(34) at 2026-08-16T07:40:57."""
+        result = checksum_go_to("34", "2026-08-16T07:40:57", "8688182e-02b6-46e4-893f-3ec2ada85a9f")
+        self.assertEqual(result, "ffe07c5f50f1502d6c3c9164470c2c49")
+
+    def test_go_to_raises_on_empty_keys(self):
+        from sdk.security import UnsupportedNativeChecksum
+        with self.assertRaises(UnsupportedNativeChecksum):
+            checksum_go_to("24", "2026-08-16T00:00:00", "tok", "", "Savvy!s0d@")
+        with self.assertRaises(UnsupportedNativeChecksum):
+            checksum_go_to("24", "2026-08-16T00:00:00", "tok", "5343", "")
+
+    def test_go_to_returns_32_char_md5(self):
+        result = checksum_go_to("1", "2026-08-10T00:00:00", "tok", "5343", "Savvy!s0d@")
+        self.assertEqual(len(result), 32)
+        self.assertTrue(all(c in "0123456789abcdef" for c in result))
+
+
+class TestSpeedUpTravellingChecksum(unittest.TestCase):
+    """Tests for GalaxyService/SpeedUpTravelling MD5 checksum.
+
+    Formula (verified against 1 capture): MD5(clientDateTime + accessToken
+    + ChecksumKey + SavyChecksum).
+    """
+
+    def test_speedup_capture_match(self):
+        """Verify against capture: SpeedUpTravelling at 2026-08-16T07:33:45."""
+        result = checksum_speedup_travelling(
+            "2026-08-16T07:33:45", "8688182e-02b6-46e4-893f-3ec2ada85a9f"
+        )
+        self.assertEqual(result, "fdbfe31afb34169d576220a9a26c8564")
+
+    def test_speedup_raises_on_empty_keys(self):
+        from sdk.security import UnsupportedNativeChecksum
+        with self.assertRaises(UnsupportedNativeChecksum):
+            checksum_speedup_travelling("2026-08-16T00:00:00", "tok", "", "Savvy!s0d@")
+        with self.assertRaises(UnsupportedNativeChecksum):
+            checksum_speedup_travelling("2026-08-16T00:00:00", "tok", "5343", "")
+
+    def test_speedup_returns_32_char_md5(self):
+        result = checksum_speedup_travelling("2026-08-10T00:00:00", "tok", "5343", "Savvy!s0d@")
         self.assertEqual(len(result), 32)
         self.assertTrue(all(c in "0123456789abcdef" for c in result))
 
