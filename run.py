@@ -316,6 +316,12 @@ def main():
                 # marker collection failure is not fatal
 
             try:
+                client.collectMiningDronesWithTravel()
+            except Exception as e:
+                logging.error(f"collectMiningDronesWithTravel failed: {redact_secrets(str(e))}")
+                # mining drone collection failure is not fatal
+
+            try:
                 res = client.listActiveMarketplaceMessages()
                 if res is False:
                     runtime_failed = True
