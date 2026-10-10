@@ -1,0 +1,25 @@
+--- litellm/litellm_core_utils/streaming_handler.py	2026-10-08 08:07:02
++++ /Users/raelldottin/.hermes/cache/scratch/litellm-gw-test2-venv/lib/python3.12/site-packages/litellm/litellm_core_utils/streaming_handler.py	2026-10-10 08:50:25
+@@ -2074,6 +2074,22 @@
+                         self.chunks.append(processed_chunk)
+                         return processed_chunk
+         except (StopAsyncIteration, StopIteration):
++            # LOCAL PATCH (Tachikoma, 2026-10-09): a stream that ends
++            # without the upstream ever sending a completion marker is a
++            # truncated response, not a success. Without this guard the
++            # gateway synthesizes finish_reason="stop" + [DONE] downstream
++            # (repro: mock clean chunked-encoding EOF with no finish chunk;
++            # upstream issues #33404/#36768; PR #33222 fixed only the
++            # transport-error path). Mirrors the received_finish_reason
++            # check already applied to httpx.ReadError/RemoteProtocolError.
++            if self.received_finish_reason is None:
++                self._log_stream_failure_and_raise(
++                    RuntimeError(
++                        "LiteLLM stream ended without a completion marker "
++                        "(no finish_reason received before upstream EOF); "
++                        "refusing to synthesize a successful completion"
++                    )
++                )
+             return await self._finalize_completed_stream(cache_hit=cache_hit)
+         except httpx.TimeoutException as e:  # if httpx read timeout error occues
+             traceback_exception = traceback.format_exc()
