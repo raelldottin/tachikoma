@@ -20,12 +20,28 @@ mock in `mock_nvidia.py`, never the real NVIDIA API.
   quota exhaustion, bounded 503 retries, model disappearance, concurrency,
   restart survival (caller-driven), streaming-integrity canary, log
   redaction.
-- `test_streaming_integrity.py` — 4-case differential streaming suite
-  (A tcp_reset, B truncated_body, C clean_close, D control). **Case C is
-  the canary for the synthetic-success bug** — see `SRE-REPORT.md`.
+- `test_streaming_integrity.py` — 5-case differential streaming suite
+  (A tcp_reset, B truncated_body, C clean_close, D control, E valid
+  tool-call stream). **Case C is the canary for the synthetic-success
+  bug** — see `SRE-REPORT.md`. Both sides verified: stock 1.104.2 fails C
+  silently; patched passes 5/5.
 - `streaming_handler_clean-EOF.patch` — local LiteLLM 1.104.2 patch; guards
   the `StopAsyncIteration` branch the same way PR #33222 guards transport
   errors. Re-apply after every LiteLLM upgrade and re-run both suites.
+- `validate_deployment.py` — fail-closed deployment gate: checks version
+  pin, patch presence, health, and both suites. Exit 0 = safe to route
+  traffic; any failure prints DO NOT ROUTE PRODUCTION TRAFFIC.
+- `config-redis.yaml` + `test_redis_multiprocess.py` — cross-process
+  coordination suite: two proxy processes share one Redis; verifies
+  credential cooldown propagates across processes (R3), expires after
+  cooldown_time (R4), and failures stay bounded (R5). Control without
+  Redis: R3 fails (each process learns alone). Note `cache: True` response
+  caching must stay OFF during these tests — identical requests get served
+  from cache and never reach the upstream.
+- `UPSTREAM-DRAFT.md` — pre-approval draft comment/PR for upstream issue
+  #40260 (clean-EOF case; do not duplicate #33404/#42085/#36768).
+- `LIVE-TEST-PLAN.md` — draft plan for the later authorized live NVIDIA
+  run (out-of-band credentials only; ~40-60 minimal requests).
 
 ## Running
 
@@ -35,8 +51,9 @@ python mock_nvidia.py 43210 &
 export NVIDIA_KEY_1=sk-good NVIDIA_KEY_2=sk-429 NVIDIA_KEY_3=sk-revoked
 export GATEWAY_MASTER_KEY=sk-gateway-test-key
 litellm --config config.yaml --port 4000 --host 127.0.0.1 &
-python test_streaming_integrity.py   # expect 4/4 (patched) / 3/4 (stock)
+python test_streaming_integrity.py   # expect 5/5 (patched) / 4/5 (stock: C fails)
 python run_acceptance.py             # expect 10/10 (patched)
+python validate_deployment.py        # full fail-closed gate
 ```
 
 ## Expected results
