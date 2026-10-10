@@ -1,0 +1,33 @@
+# Redis-backed multi-process coordination test config.
+# Same mock upstream as the acceptance suite; two proxy processes will run
+# from this config on different ports sharing one Redis.
+#
+# Requires env: NVIDIA_KEY_1/2/3, GATEWAY_MASTER_KEY, REDIS_PORT (docker
+# redis on 16379 in the local run), plus REDIS_HOST=127.0.0.1.
+
+model_list:
+  - model_name: nvidia-primary
+    litellm_params:
+      model: openai/z-ai/glm-5.3
+      api_base: http://127.0.0.1:43210/v1
+      api_key: os.environ/NVIDIA_KEY_1
+      weight: 1
+  - model_name: nvidia-primary
+    litellm_params:
+      model: openai/z-ai/glm-5.3
+      api_base: http://127.0.0.1:43210/v1
+      api_key: os.environ/NVIDIA_KEY_2
+      weight: 1
+
+router_settings:
+  routing_strategy: simple-shuffle
+  allowed_fails: 3
+  cooldown_time: 60
+  redis_host: os.environ/REDIS_HOST
+  redis_port: os.environ/REDIS_PORT
+
+litellm_settings:
+  num_retries: 2
+
+general_settings:
+  master_key: os.environ/GATEWAY_MASTER_KEY

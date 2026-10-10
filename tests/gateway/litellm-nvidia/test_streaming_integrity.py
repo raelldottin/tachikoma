@@ -49,7 +49,7 @@ def control(payload):
     raise last
 
 
-def stream_request():
+def stream_request(payload_extra=None):
     """Send a streaming chat request; read the SSE body to completion.
 
     Returns dict(status, body, error). error is set if an exception was
@@ -57,6 +57,8 @@ def stream_request():
     """
     payload = {"model": "nvidia-primary", "stream": True,
                "messages": [{"role": "user", "content": "Hello"}]}
+    if payload_extra:
+        payload.update(payload_extra)
     req = urllib.request.Request(
         f"{BASE}/v1/chat/completions", data=json.dumps(payload).encode(),
         headers={"Content-Type": "application/json",
@@ -108,7 +110,7 @@ KEYS_DEFAULT = {
 }
 
 
-def run_case(name, mode, must):
+def run_case(name, mode, must, payload_extra=None):
     # Pin ALL fixture credentials to the failure mode: whichever deployment
     # the router picks, it must hit the case under test (no healthy key can
     # recover and mask the result). For the control case, restore defaults.
@@ -117,7 +119,7 @@ def run_case(name, mode, must):
             control({"key": k, "mode": KEYS_DEFAULT[k]})
         else:
             control({"key": k, "mode": "streamcut", "stream_mode": mode})
-    result = stream_request()
+    result = stream_request(payload_extra)
     verdict, detail = classify(result)
     # For failure cases, truncated_stream also counts as detected (the
     # incompleteness is visible to the client rather than papered over).
@@ -129,15 +131,20 @@ def run_case(name, mode, must):
 
 
 if __name__ == "__main__":
+    TOOL_DEF = {"tools": [{"type": "function", "function": {
+        "name": "get_weather",
+        "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
+    }}]}
     cases = [
-        ("A tcp_reset",      "tcp_reset",      "explicit_failure"),
-        ("B truncated_body", "truncated_body", "explicit_failure"),
-        ("C clean_close",    "clean_close",    "explicit_failure"),
-        ("D control_ok",      "ok",             "silent_success"),  # genuine [DONE] is required here
+        ("A tcp_reset",       "tcp_reset",      "explicit_failure", None),
+        ("B truncated_body",  "truncated_body", "explicit_failure", None),
+        ("C clean_close",     "clean_close",    "explicit_failure", None),
+        ("D control_ok",      "ok",             "silent_success",   None),  # genuine [DONE] required
+        ("E toolcall_ok",     "ok",             "silent_success",   TOOL_DEF),  # valid tool-call stream must still pass
     ]
     passed = 0
-    for name, mode, must in cases:
-        if run_case(name, mode, must):
+    for name, mode, must, extra in cases:
+        if run_case(name, mode, must, extra):
             passed += 1
     print(f"\n=== streaming integrity: {passed}/{len(cases)} ===", flush=True)
 

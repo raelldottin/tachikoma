@@ -34,6 +34,7 @@ from aiohttp import web
 
 KEYS = {
     "sk-good": "ok",
+    "sk-good2": "ok",
     "sk-429": "429",
     "sk-revoked": "401",
     "sk-nomodel": "404",
@@ -96,6 +97,7 @@ async def chat_completions(request):
     key = bearer(request)
     model = "unknown"
     stream = False
+    body: dict = {}
     try:
         body = await request.json()
         model = body.get("model", "unknown")
@@ -161,6 +163,28 @@ async def chat_completions(request):
         return resp  # clean EOF; aiohttp sends a valid chunked terminator
 
     # fully valid stream (control case)
+    if body.get("tools"):
+        # Valid TOOL-CALL stream: chunks carrying tool_calls deltas, then a
+        # genuine finish_reason="tool_calls" + [DONE]. Guards the negative
+        # control: the patch must reject incomplete streams without breaking
+        # legitimate tool-call completions.
+        resp = web.StreamResponse(headers={"Content-Type": "text/event-stream"})
+        await resp.prepare(request)
+        first = sse_chunk(model, {"role": "assistant"})
+        first["choices"][0]["delta"]["tool_calls"] = [{
+            "index": 0, "id": "call_mock_1", "type": "function",
+            "function": {"name": "get_weather", "arguments": ""},
+        }]
+        second = sse_chunk(model, {})
+        second["choices"][0]["delta"]["tool_calls"] = [{
+            "index": 0, "function": {"arguments": '{"city": "Tokyo"}'},
+        }]
+        for payload in (first, second):
+            await resp.write(f"data: {json.dumps(payload)}\n\n".encode())
+        await resp.write(f"data: {json.dumps(sse_chunk(model, {}, finish_reason='tool_calls'))}\n\n".encode())
+        await resp.write(b"data: [DONE]\n\n")
+        return resp
+
     resp = web.StreamResponse(headers={"Content-Type": "text/event-stream"})
     await resp.prepare(request)
     for delta in ({"role": "assistant"}, {"content": "Hello "}, {"content": "from mock"}):
