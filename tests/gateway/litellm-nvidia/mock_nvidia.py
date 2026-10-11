@@ -67,7 +67,11 @@ def sse_chunk(model, delta=None, finish_reason="__unset__"):
     }
 
 
-def chat_body(model):
+def chat_body(model, prompt_text=""):
+    # Usage scales with the prompt so TPM limits see realistic token
+    # counts (the multi-process TPM tests rely on this).
+    prompt_tokens = max(1, len(prompt_text.split()))
+    completion_tokens = 4
     return {
         "id": "chatcmpl-mock",
         "object": "chat.completion",
@@ -76,7 +80,9 @@ def chat_body(model):
         "choices": [
             {"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "Hello from mock"}}
         ],
-        "usage": {"prompt_tokens": 5, "completion_tokens": 4, "total_tokens": 9},
+        "usage": {"prompt_tokens": prompt_tokens,
+                  "completion_tokens": completion_tokens,
+                  "total_tokens": prompt_tokens + completion_tokens},
     }
 
 
@@ -127,7 +133,11 @@ async def chat_completions(request):
         )
 
     if not stream:
-        return web.json_response(chat_body(model))
+        prompt_text = " ".join(
+            m.get("content", "") if isinstance(m.get("content"), str) else ""
+            for m in (body.get("messages") or [])
+        )
+        return web.json_response(chat_body(model, prompt_text))
 
     # ---- streaming paths ----
     smode = STREAM_MODE.get(key, "ok") if mode == "streamcut" else "ok"

@@ -1,0 +1,39 @@
+# Multi-process RPM/TPM enforcement test config.
+# Two proxy processes run from this file on different ports sharing Redis.
+# Deployments carry explicit rpm/tpm limits enforced by
+# ModelRateLimitingCheck via DualCache (in-memory + Redis): with Redis the
+# per-deployment counters are shared across processes.
+#
+# Requires env: NVIDIA_KEY_1/2/3, GATEWAY_MASTER_KEY, REDIS_HOST,
+# REDIS_PORT. Response caching intentionally OFF (cache: True would serve
+# identical requests from cache and never reach the rate limiter).
+
+model_list:
+  - model_name: nvidia-primary
+    litellm_params:
+      model: openai/z-ai/glm-5.3
+      api_base: http://127.0.0.1:43210/v1
+      api_key: os.environ/NVIDIA_KEY_1
+      rpm: 4
+      tpm: 1000000   # high; TPM tested separately via rpm-tpm.yaml swap
+      weight: 1
+  - model_name: nvidia-primary
+    litellm_params:
+      model: openai/z-ai/glm-5.3
+      api_base: http://127.0.0.1:43210/v1
+      api_key: os.environ/NVIDIA_KEY_2
+      rpm: 4
+      tpm: 1000000
+      weight: 1
+
+router_settings:
+  routing_strategy: simple-shuffle   # ModelRateLimitingCheck enforces limits on ALL strategies
+  optional_pre_call_checks: ["enforce_model_rate_limits"]   # opt-in: activates rpm/tpm enforcement
+  redis_host: os.environ/REDIS_HOST
+  redis_port: os.environ/REDIS_PORT
+
+litellm_settings:
+  num_retries: 0   # 429s must surface immediately, not be retried away
+
+general_settings:
+  master_key: os.environ/GATEWAY_MASTER_KEY
