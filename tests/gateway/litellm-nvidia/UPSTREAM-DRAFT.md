@@ -89,6 +89,26 @@ Note the patch deliberately does **not** change behavior for streams that
 DID receive a finish_reason but lack `[DONE]` (some providers omit the
 sentinel) — those continue to finalize normally.
 
+**Downstream behavior with the guard (captured, LiteLLM proxy 1.104.2):**
+once the 200 stream has begun the status cannot retroactively change, so
+the raise is converted by the proxy's stream generator into an explicit
+SSE error event — genuine chunks forward, then:
+
+```text
+data: {"error": {"message": "LiteLLM stream ended without a completion
+marker (no finish_reason received before upstream EOF); refusing to
+synthesize a successful completion", "type": "...", "code": "500"}}
+```
+
+No synthetic `finish_reason:"stop"` chunk, no `[DONE]`. This matches
+LiteLLM's documented mid-stream error mechanism and preserves the partial
+output for diagnostics, per the issue's expected behavior. Legitimate
+completion reasons — `"length"`, `"content_filter"`, `"tool_calls"` — are
+untouched: the guard only fires when NO terminal event ever arrived, and
+the valid tool-call control case (`finish_reason:"tool_calls"`) passes on
+both stock and patched builds. The guard does not retry: a partially
+delivered response is surfaced as a failure, not replayed.
+
 **Why fail rather than an opt-in strict mode (#42085):** a truncated
 completion is indistinguishable from a good one by any downstream check
 requiring finish_reason, because the gateway itself manufactures the
