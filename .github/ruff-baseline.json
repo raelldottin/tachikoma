@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "violations": [
+    {
+      "path": "scripts/verify_battle_against_capture.py",
+      "code": "F401",
+      "message": "`sdk.security.checksum_accept_battle5` imported but unused",
+      "count": 1
+    },
+    {
+      "path": "sdk/crew_leveling.py",
+      "code": "F401",
+      "message": "`math` imported but unused",
+      "count": 1
+    },
+    {
+      "path": "sdk/ship_layout.py",
+      "code": "F401",
+      "message": "`math` imported but unused",
+      "count": 1
+    },
+    {
+      "path": "sdk/ship_layout.py",
+      "code": "F401",
+      "message": "`typing.Optional` imported but unused",
+      "count": 1
+    },
+    {
+      "path": "tests/test_battle_flow.py",
+      "code": "F401",
+      "message": "`xmltodict` imported but unused",
+      "count": 1
+    },
+    {
+      "path": "tests/test_game_formulas.py",
+      "code": "F401",
+      "message": "`math` imported but unused",
+      "count": 1
+    },
+    {
+      "path": "tests/test_game_formulas.py",
+      "code": "F401",
+      "message": "`sdk.game_formulas.DODGE_CAP_COMBINED` imported but unused",
+      "count": 1
+    },
+    {
+      "path": "tests/test_game_formulas.py",
+      "code": "F401",
+      "message": "`sdk.game_formulas.GAS_DRAW_BASE` imported but unused",
+      "count": 1
+    },
+    {
+      "path": "tests/test_game_formulas.py",
+      "code": "F401",
+      "message": "`sdk.game_formulas.TROPHY_BASE` imported but unused",
+      "count": 1
+    },
+    {
+      "path": "tests/test_game_formulas.py",
+      "code": "F401",
+      "message": "`sdk.game_formulas.TROPHY_MAX` imported but unused",
+      "count": 1
+    },
+    {
+      "path": "tests/test_game_formulas.py",
+      "code": "F401",
+      "message": "`sdk.game_formulas.TROPHY_MIN` imported but unused",
+      "count": 1
+    },
+    {
+      "path": "tests/test_ship_layout.py",
+      "code": "F401",
+      "message": "`unittest.mock.MagicMock` imported but unused",
+      "count": 1
+    }
+  ]
+}
