@@ -462,7 +462,7 @@ class TestExitCodeAggregation(unittest.TestCase):
     @patch("run.Client")
     @patch("run.Device")
     def test_exit_0_on_success_and_skips(self, mock_device, mock_client):
-        mock_cli_inst = MagicMock()  # type: ignore
+        mock_cli_inst = MagicMock(_automation_done=False)  # type: ignore
         mock_cli_inst.login.return_value = True
         mock_cli_inst.freeStarbuxToday = 10
         mock_cli_inst.freeStarbuxMax = 10
@@ -480,7 +480,7 @@ class TestExitCodeAggregation(unittest.TestCase):
     @patch("run.Client")
     @patch("run.Device")
     def test_exit_1_on_unexpected_room_failure_and_continues_training(self, mock_device, mock_client):
-        mock_cli_inst = MagicMock()  # type: ignore
+        mock_cli_inst = MagicMock(_automation_done=False)  # type: ignore
         mock_cli_inst.login.return_value = True
         mock_cli_inst.freeStarbuxToday = 10
         mock_cli_inst.freeStarbuxMax = 10
@@ -500,7 +500,7 @@ class TestExitCodeAggregation(unittest.TestCase):
     @patch("run.Client")
     @patch("run.Device")
     def test_exit_1_on_unexpected_training_failure(self, mock_device, mock_client):
-        mock_cli_inst = MagicMock()  # type: ignore
+        mock_cli_inst = MagicMock(_automation_done=False)  # type: ignore
         mock_cli_inst.login.return_value = True
         mock_cli_inst.freeStarbuxToday = 10
         mock_cli_inst.freeStarbuxMax = 10
@@ -518,7 +518,7 @@ class TestExitCodeAggregation(unittest.TestCase):
     @patch("run.Client")
     @patch("run.Device")
     def test_independent_actions_continue_after_research_failure(self, mock_device, mock_client):
-        mock_cli_inst = MagicMock()  # type: ignore
+        mock_cli_inst = MagicMock(_automation_done=False)  # type: ignore
         mock_cli_inst.login.return_value = True
         mock_cli_inst.freeStarbuxToday = 10
         mock_cli_inst.freeStarbuxMax = 10

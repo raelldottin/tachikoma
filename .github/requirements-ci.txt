@@ -1,0 +1,10 @@
+# Core application tests use the runtime's declared versions.
+# Constraints do not install optional LangGraph/database/pytest dependencies.
+-c ../requirements.txt
+requests
+ratelimit
+xmltodict
+
+# Keep CI tooling independent of a developer's environment.
+ruff==0.15.5
+PyYAML==6.0.3
