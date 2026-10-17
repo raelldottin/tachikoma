@@ -198,11 +198,74 @@ class WorkflowPolicyTests(unittest.TestCase):
                 if job.get("permissions", {}).get("contents") == "write":
                     self.assertEqual((filename, name), ("release.yml", "publish"))
         publish = self.documents["release.yml"]["jobs"]["publish"]
-        self.assertEqual(publish["needs"], "build")
+        self.assertEqual(publish["needs"], "verify")
         self.assertFalse(any("checkout@" in step.get("uses", "") for step in publish["steps"]))
         command = publish["steps"][-1]["run"]
         self.assertIn("--draft", command)
         self.assertIn("--verify-tag", command)
+
+    def test_manual_release_cannot_publish_or_bypass_artifact_verification(self):
+        for mutation in (
+            "publish_condition",
+            "publish_dependency",
+            "build_condition",
+            "verify_dependency",
+            "permissions",
+        ):
+            docs = copy.deepcopy(self.documents)
+            jobs = docs["release.yml"]["jobs"]
+            if mutation == "publish_condition":
+                jobs["publish"].pop("if")
+            elif mutation == "publish_dependency":
+                jobs["publish"]["needs"] = "build"
+            elif mutation == "build_condition":
+                jobs["build"].pop("if")
+            elif mutation == "verify_dependency":
+                jobs["verify"]["needs"] = "checks"
+            else:
+                jobs["verify"]["permissions"] = {"contents": "write"}
+            with self.subTest(mutation=mutation), self.assertRaises(ValueError):
+                ci.check_workflows(docs)
+
+    def test_manual_release_uses_only_a_local_synthetic_tag(self):
+        release = self.documents["release.yml"]
+        self.assertIn("workflow_dispatch", release["on"])
+        steps = release["jobs"]["build"]["steps"]
+        tag_step = next(step for step in steps if step.get("name") == "Create local verification tag")
+        self.assertEqual(tag_step["if"], "${{ github.event_name == 'workflow_dispatch' }}")
+        self.assertEqual(tag_step["run"], 'git tag 0.0.0 "$GITHUB_SHA"')
+        build_step = next(
+            step for step in steps if step.get("name") == "Validate tag and build reproducible source archive"
+        )
+        self.assertEqual(
+            build_step["env"]["RELEASE_TAG"],
+            "${{ github.event_name == 'workflow_dispatch' && '0.0.0' || github.ref_name }}",
+        )
+
+    def test_downloaded_manifest_must_match_workflow_identity(self):
+        steps = self.documents["release.yml"]["jobs"]["verify"]["steps"]
+        script = next(step["run"] for step in steps if step.get("name") == "Verify release identity")
+        code = "\n".join(script.splitlines()[1:-1])
+        for tag in ("0.0.0", "v1.2.3"):
+            expected = {"tag": tag, "version": tag.removeprefix("v"), "commit": "abc123"}
+            for field in (None, "tag", "version", "commit", "missing"):
+                with self.subTest(tag=tag, field=field), TemporaryDirectory() as temporary:
+                    root = Path(temporary)
+                    (root / "dist").mkdir()
+                    manifest = expected.copy()
+                    if field == "missing":
+                        manifest.pop("commit")
+                    elif field:
+                        manifest[field] = "wrong"
+                    (root / "dist/release-manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+                    result = subprocess.run(
+                        [sys.executable, "-c", code],
+                        cwd=root,
+                        env={**os.environ, "GITHUB_SHA": "abc123", "RELEASE_TAG": tag},
+                        capture_output=True,
+                        text=True,
+                    )
+                    self.assertEqual(result.returncode, 0 if field is None else 1, result.stderr)
 
     def test_validation_does_not_call_live_game_or_request_secrets(self):
         for filename in ("blocking-ci.yml", "automation-check.yml", "python-tests.yml", "postmerge-ci.yml"):
