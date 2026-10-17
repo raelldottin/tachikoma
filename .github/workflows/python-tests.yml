@@ -1,0 +1,49 @@
+name: Python tests
+
+on:
+  workflow_call:
+    inputs:
+      operating-systems:
+        type: string
+        default: '["ubuntu-latest"]'
+      python-versions:
+        type: string
+        default: '["3.13"]'
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: ${{ matrix.os }} / Python ${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON(inputs.operating-systems) }}
+        python: ${{ fromJSON(inputs.python-versions) }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            .github/requirements-ci.txt
+      - run: python -m pip install -r .github/requirements-ci.txt
+      - name: Full mocked application suite
+        if: runner.os != 'Windows'
+        run: python scripts/ci.py test
+      - name: Portable Windows smoke suite
+        if: runner.os == 'Windows'
+        run: >-
+          python scripts/ci.py test --names
+          tests.test_security
+          tests.test_game_formulas
+          tests.test_crew_leveling
+          tests.test_ship_layout
+          tests.test_ci

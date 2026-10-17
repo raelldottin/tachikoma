@@ -5,6 +5,17 @@
 
 This repository contains scripts and resources for automating tasks in the mobile game Pixel Starships. The project is built around a Python script `run.py` which interacts with various game elements to perform a series of automated tasks. It's designed to help players manage routine activities in the game more efficiently.
 
+## GitHub validation and releases
+
+Pull requests and merge queues run **Blocking CI**, ending in one
+`CI required` result. Pushes to `main` run the broader Python/platform
+matrix. Version tags such as `1.2.3` or `v1.2.3` validate the tagged source
+and prepare a draft GitHub release with a reproducible source archive and
+SHA-256 checksums. These validation workflows use mocked game traffic.
+
+See [.github/workflows/README.md](.github/workflows/README.md) for the
+check coverage, lint baseline, local commands, and branch-protection setup.
+
 ## Repository Contents
 
 - `.dockerignore`, `.gitignore`: Ignore files.
