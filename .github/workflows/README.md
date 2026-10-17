@@ -11,6 +11,7 @@ introduced.
 | Pull request / merge queue | `blocking-ci.yml` | Repository policy, workflow syntax, automation harness, Python lint ratchet, full mocked application suite on Ubuntu / Python 3.13 |
 | Push to `main` / manual run | `postmerge-ci.yml` | Same policies plus Python 3.11 and 3.13 on Ubuntu, macOS, and Windows |
 | Version tag push | `release.yml` | Fresh checks and the platform matrix on the tagged commit, tag/main ancestry validation, reproducible source packaging, draft release |
+| Manual source-release verification on `main` | `release.yml` | Same checks and packaging, artifact download, checksums and manifest identity; publisher skipped |
 
 `automation-check.yml` and `python-tests.yml` are reusable workflows, not
 additional event listeners. This replaces the old standalone Automation
@@ -101,13 +102,29 @@ ownership and gzip header metadata are fixed, making repeated builds with
 the same commit and toolchain byte-identical. Dependency binaries are not
 bundled; this is a source distribution, not an installer.
 
-A separate publisher downloads only the build artifact, checks its digests,
-and creates a **draft** GitHub release with generated notes. Only that job
+A read-only verification job downloads the build artifact, checks its digests,
+and requires its manifest tag, version and commit to match the workflow.
+A separate publisher depends on that verification, downloads only the build
+artifact, checks its digests again, and creates a **draft** GitHub release with
+generated notes. Only that job
 has `contents: write`; it does not check out or execute project code.
 Review and publish the draft in GitHub when ready. No PyPI credentials,
 custom signing keys, or API keys are required. Re-running a tag whose
 release already exists fails instead of overwriting it; reconcile the
 existing draft or release explicitly before retrying.
+
+To verify the hosted build without choosing a release version, run:
+
+```sh
+gh workflow run release.yml --repo raelldottin/tachikoma --ref main
+```
+
+Manual builds require `main` and create a synthetic `0.0.0` tag only inside
+the fresh runner checkout. The normal tag identity and main ancestry checks
+still apply. An existing local tag causes failure instead of being replaced.
+The archive, manifest and checksums are retained as the `source-release`
+Actions artifact for 14 days. No tag is pushed; publication requires an actual
+tag-push event, so manual runs create no GitHub release, including drafts.
 
 ## Local validation
 
@@ -132,9 +149,12 @@ tags, main ancestry, repeatable archives, checksum validation, source
 symlink rejection and exclusion of dirty/private synthetic files. It creates
 only temporary test repositories and initiates no live game requests.
 
-Hosted Linux/Windows jobs and GitHub's release publication still need their
-first actual Actions run after these changes are pushed. Local validation
-does not prove those hosted executions or configure branch protection.
+Hosted post-merge validation passed all nine jobs on the merged pipeline
+commit `6d785b76c43a9128c02b40d4afc5226cd99a3fe2`, including the Linux,
+macOS and Windows matrix. The `main` branch requires `CI required` from
+GitHub Actions with an up-to-date branch, including for administrators.
+Manual source-release verification proves packaging and artifact transport;
+draft-release publication remains untested until a real version-tag push.
 
 Publication is isolated from the original dirty inventory/gateway checkout:
 only the pipeline implementation and necessary test-harness corrections are
