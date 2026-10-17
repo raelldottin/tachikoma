@@ -107,7 +107,12 @@ def check_workflows(documents: dict) -> None:
             raise ValueError(f"workflow needs read-only default permissions: {name}")
         if "pull_request_target" in document.get("on", {}):
             raise ValueError("privileged pull-request execution is forbidden")
-        for job in document["jobs"].values():
+        for job_name, job in document["jobs"].items():
+            allowed_permissions = (
+                {"contents": "write"} if (name, job_name) == ("release.yml", "publish") else {"contents": "read"}
+            )
+            if job.get("permissions", {"contents": "read"}) != allowed_permissions:
+                raise ValueError(f"unexpected job permissions: {name}/{job_name}")
             if "runs-on" in job and "timeout-minutes" not in job:
                 raise ValueError(f"job lacks a timeout: {name}")
             for step in job.get("steps", []):
@@ -128,6 +133,16 @@ def check_workflows(documents: dict) -> None:
         gate = documents[filename]["jobs"]["required"]
         if gate.get("if") != "${{ always() }}" or gate.get("needs") != ["checks", "tests"]:
             raise ValueError("aggregate gate must always evaluate all required workflows")
+    release = documents["release.yml"]
+    jobs = release["jobs"]
+    if "workflow_dispatch" not in release["on"]:
+        raise ValueError("source release must support manual verification")
+    if jobs["build"].get("if") != "${{ github.event_name == 'push' || github.ref == 'refs/heads/main' }}":
+        raise ValueError("manual release verification must build only main")
+    if jobs["verify"].get("needs") != "build" or jobs["publish"].get("needs") != "verify":
+        raise ValueError("release publication must depend on downloaded artifact verification")
+    if jobs["publish"].get("if") != "${{ github.event_name == 'push' && github.ref_type == 'tag' }}":
+        raise ValueError("release publication must require a real tag push")
 
 
 def check_repository(repo: Path) -> None:
