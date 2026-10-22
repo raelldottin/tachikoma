@@ -51,7 +51,7 @@ class TestRedaction(unittest.TestCase):
 
     def test_redact_jwt_token(self):
         """JWT tokens should be redacted."""
-        text = "***REMOVED***"
+        text = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0.SflKxwR0NTY"
         result = redact_secrets(text)
         self.assertEqual(result, '***REDACTED_JWT***')
 
@@ -148,12 +148,12 @@ class TestRedaction(unittest.TestCase):
 
     def test_safe_log_message(self):
         """safe_log_message should format and redact."""
-        result = safe_log_message("Token: %s", "***REMOVED***")
+        result = safe_log_message("Token: %s", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0.SflKxwR0NTY")
         self.assertIn("***REDACTED_JWT***", result)
 
     def test_redact_log_alias(self):
         """redact_log should be an alias for safe_log_message."""
-        result = redact_log("Token: %s", "***REMOVED***")
+        result = redact_log("Token: %s", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0.SflKxwR0NTY")
         self.assertIn("***REDACTED_JWT***", result)
 
 
