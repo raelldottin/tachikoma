@@ -21,3 +21,6 @@ frida_*.log
 cpp2il_output/
 scripts/*.pyc
 .worktrees/
+
+# Local agent swarm bookkeeping (not repo content)
+.swarm/
