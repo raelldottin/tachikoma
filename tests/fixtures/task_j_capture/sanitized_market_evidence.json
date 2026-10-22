@@ -1,0 +1,103 @@
+{
+  "schema_version": 1,
+  "worker_id": "t_1fce40eb",
+  "gate_standard": "MARKET_MEDIATED_EVIDENCE_ONLY",
+  "capture": {
+    "filename": "pss-task-j-capture.jsonl",
+    "sha256": "7edadfcdc55806a79836ebcd6453d7d2d8b5d18d3cc8949829af31ec2b3c9ed4",
+    "bytes": 35050332,
+    "records": 357,
+    "provenance": "operator-supplied official-client capture; supporting UnityPlayer headers and login chronology"
+  },
+  "endpoint_counts": {
+    "MarketService/SellItem3": {"requests": 6, "responses": 6},
+    "MarketService/Purchase4": {"requests": 1, "responses": 1},
+    "MessageService/ListActiveMarketplaceMessages5": {"requests": 7, "responses": 7},
+    "ShipService/GetShipByUserId": {"requests": 4, "responses": 4},
+    "UserService/ListAllUserDataFirst2": {"requests": 4, "responses": 4},
+    "ItemService/GiftItem": {"requests": 0, "responses": 0},
+    "ItemService/ListItemsOfAShip": {"requests": 0, "responses": 0}
+  },
+  "transfer": {
+    "seller": "A",
+    "buyer": "B",
+    "sale_alias": "SALE_1",
+    "item_design_id": 360,
+    "source_item_alias": "A_ITEM_360",
+    "requested_quantity": 1,
+    "currency_type": "Gas",
+    "currency_value": 250000,
+    "sell_request_line": 45,
+    "sell_response_line": 46,
+    "purchase_request_line": 126,
+    "purchase_response_line": 127,
+    "sell_method": "POST",
+    "purchase_method": "POST",
+    "sell_success": true,
+    "purchase_success": true,
+    "allow_conversion": false,
+    "explicit_recipient_parameter": null,
+    "purchase_achievement_account": "A"
+  },
+  "market_browse": [
+    {
+      "request_line": 112,
+      "response_line": 121,
+      "response_time": "2026-10-05T08:00:15.744098",
+      "filters": {"itemSubType": "None", "rarity": "None", "currencyType": "Unknown", "itemDesignId": "0", "userId": "0"},
+      "target_sale_present": true,
+      "target_projection": {"sale_alias": "SALE_1", "seller": "A", "item_argument": "item:360x1", "price_argument": "gas:250000"}
+    },
+    {
+      "request_line": 211,
+      "response_line": 220,
+      "response_time": "2026-10-05T08:07:19.650738",
+      "filters": {"itemSubType": "None", "rarity": "None", "currencyType": "Unknown", "itemDesignId": "0", "userId": "0"},
+      "target_sale_present": false
+    },
+    {
+      "request_line": 223,
+      "response_line": 224,
+      "response_time": "2026-10-05T08:08:01.316288",
+      "filters": {"itemSubType": "None", "rarity": "None", "currencyType": "Unknown", "itemDesignId": "359", "userId": "0"},
+      "target_sale_present": false,
+      "comparable_to_pre_purchase": false
+    }
+  ],
+  "inventory": {
+    "A": {"get_ship_response_line": 18, "user_data_response_line": 20, "item_alias": "A_ITEM_360", "item_design_id": 360, "pre_quantity": 6, "post_quantity": null},
+    "B": {"get_ship_response_line": 74, "user_data_response_line": 76, "item_alias": "B_ITEM_360", "item_design_id": 360, "pre_quantity": 4, "post_quantity": null}
+  },
+  "later_b_listing": {
+    "request_line": 132,
+    "response_line": 133,
+    "item_design_id": 359,
+    "pre_quantity": 34,
+    "requested_quantity": 1,
+    "currency_type": "Mineral",
+    "currency_value": 50000,
+    "purchase_captured": false
+  },
+  "evidence": {
+    "market_wire_shapes": "CAPTURED_NOT_VERIFIED",
+    "market_delivery_semantics": "CAPTURED_AMBIGUOUS",
+    "purchase_checksum": "CAPTURED_AMBIGUOUS",
+    "purchase_checksum_independent_preimage_proven": false,
+    "historical_checksum_matches_reported_by_sibling": {"SellItem3": "6/6", "Purchase4": "1/1"},
+    "live_authentication_values_used_in_this_worker": false,
+    "GiftItem": "STATICALLY_DISCOVERED",
+    "ListItemsOfAShip_promoted": false
+  },
+  "decision": {
+    "reconciliation": "UNRECONCILED",
+    "remaining_market_gaps": ["seller post-purchase inventory", "buyer post-purchase inventory", "stack identity and merge/split behavior", "failure/error behavior", "protected-item and currency constraints"],
+    "reciprocal_swap_proven": false,
+    "transferability": "INSUFFICIENT",
+    "proposal_status": "HOLD_UNVERIFIED_TRANSFERABILITY",
+    "proposed_quantity": 0,
+    "actionable": false,
+    "agent_live_mutations": 0,
+    "gift_capture_required_for_this_worker": false,
+    "inventory_apply": "UNCONDITIONAL_REFUSAL"
+  }
+}

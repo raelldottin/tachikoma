@@ -895,6 +895,34 @@ class Client(object):
             ]["StarSystemMarkerGenerators"]
         return True
 
+    def listAllDynamicDesigns(self):
+        """Fetch DesignService/ListAllDynamicDesigns.
+
+        This is the ItemDesign source: the captured dynamic feed decodes to
+        2,557 ItemDesign rows (2026-08-08 capture) while the static
+        ListAllDesigns4 branch contains zero. ``sdk/client.py`` owns transport
+        and XML extraction only; all normalization lives in
+        ``sdk/inventory/designs.py`` (this module never imports sdk.inventory).
+        """
+        if not self.latestVersion:
+            self.getLatestVersion3()
+        if "SettingService" not in self.latestVersion:
+            return False
+        settings = self.latestVersion["SettingService"]["GetLatestSetting"]["Setting"]
+        url = (
+            f"{self.baseUrl}/DesignService/ListAllDynamicDesigns"
+            f"?languageKey={self.device.languageKey}"
+            f"&designVersion={settings.get('@ItemDesignVersion', '0')}"
+        )
+        r = self.request(url, "GET")
+        if not r:
+            return False
+        self.dynamicDesigns = xmltodict.parse(r.content, xml_attribs=True)
+        if "DesignService" not in self.dynamicDesigns:
+            logging.error("Failed to fetch dynamic design data.")
+            return False
+        return True
+
     def listAllCharacterDesigns2(self):
         if self.latestVersion:
             url = f"{self.baseUrl}/CharacterService/ListAllCharacterDesigns2?languageKey={self.device.languageKey}&designVersion={self.latestVersion['SettingService']['GetLatestSetting']['Setting']['@CharacterDesignVersion']}"
@@ -1755,64 +1783,6 @@ class Client(object):
         logging.info(
             f"[{self.info['@Name']}] You have a total of {self.credits} starbux."
         )
-
-    def collectAllResources(self):
-        url = "https://api.pixelstarships.com/RoomService/CollectAllResources?itemType=None&collectDate={}&accessToken={}".format(
-            "{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime()),
-            self.accessToken,
-        )
-        try:
-            r = self.request(url, "POST")
-            if not r or not r.content:
-                return False
-            d = xmltodict.parse(r.content, xml_attribs=True)
-            if not isinstance(d, dict):
-                return False
-        except Exception as e:
-            logging.error(f"collectAllResources failed: {redact_secrets(str(e))}")
-            return False
-
-        items = _extract_collection(d, "Item")
-        mineral = None
-        gas = None
-        for item in items:
-            t = (item.get("@Type") or item.get("@ItemType") or "").lower()
-            qty = str(item.get("@Quantity", "0"))
-            if "mineral" in t:
-                mineral = qty
-            elif "gas" in t:
-                gas = qty
-
-        if items:
-            if mineral is None and gas is None:
-                mineral = str(items[0].get("@Quantity", "0"))
-                if len(items) > 1:
-                    gas = str(items[1].get("@Quantity", "0"))
-            elif mineral is None:
-                for item in items:
-                    t = (item.get("@Type") or item.get("@ItemType") or "").lower()
-                    if "gas" not in t:
-                        mineral = str(item.get("@Quantity", "0"))
-                        break
-            elif gas is None:
-                for item in items:
-                    t = (item.get("@Type") or item.get("@ItemType") or "").lower()
-                    if "mineral" not in t:
-                        gas = str(item.get("@Quantity", "0"))
-                        break
-
-        self.mineralTotal = mineral if mineral is not None else "0"
-        self.gasTotal = gas if gas is not None else "0"
-
-        try:
-            user_node = d.get("RoomService", {}).get("CollectResources", {}).get("User", {})
-            if isinstance(user_node, dict) and "@Credits" in user_node:
-                self.credits = user_node["@Credits"]
-        except Exception:
-            pass
-
-        self.rssCollectedTimestamp = time.time()
-        return True
 
     def getResourceTotals(self):
         logging.info(
@@ -2905,6 +2875,240 @@ class Client(object):
                 f"[{char_name}] Collected {collected} mining drone(s)"
             )
         return collected
+
+    # ── Gas / Mineral Collection from Rooms ───────────────────────────
+
+    def _findResourceRooms(self) -> list:
+        """Find ship rooms that have accumulated resources (Manufactured > 0).
+
+        Parses the GetShipByUserId response stored in self.shipByUserId.
+        Returns a list of dicts: {roomId, manufactured, roomDesignId}.
+        """
+        data = getattr(self, "shipByUserId", None)
+        if not data or not isinstance(data, dict):
+            return []
+
+        ship = (
+            data.get("ShipService", {})
+            .get("GetShipByUserId", {})
+            .get("Ship", {})
+        )
+        rooms_wrapper = ship.get("Rooms", {})
+        rooms = rooms_wrapper.get("Room", [])
+        if not rooms:
+            return []
+        if isinstance(rooms, dict):
+            rooms = [rooms]
+
+        producing = []
+        for r in rooms:
+            room_id = r.get("@RoomId", "")
+            manufactured = r.get("@Manufactured", "0")
+            room_design_id = r.get("@RoomDesignId", "")
+            try:
+                mfg_int = int(manufactured)
+            except (ValueError, TypeError):
+                mfg_int = 0
+            if mfg_int > 0 and room_id:
+                producing.append(
+                    {
+                        "roomId": room_id,
+                        "manufactured": manufactured,
+                        "roomDesignId": room_design_id,
+                    }
+                )
+        return producing
+
+    def collectResources3(self, room_id: str, amount: str) -> bool:
+        """Collect resources from a single room via CollectResources3.
+
+        Checksum formula (verified 14/14 captures):
+            MD5(collectDate + roomId + amount + accessToken + ChecksumKey + SavyChecksum)
+
+        Args:
+            room_id: Room ID to collect from.
+            amount: Amount of resources to collect (Manufactured value).
+
+        Returns:
+            True on success, False on error.
+        """
+        from sdk.security import checksum_collect_resources3
+
+        checksum_key = self.settings.get("checksum_key")
+        savy_checksum = self.settings.get("savy_checksum")
+        if not checksum_key or not savy_checksum:
+            logging.warning(
+                f"[{self.info.get('@Name', '')}] collectResources3 skipped: "
+                "checksum_key/savy_checksum not configured"
+            )
+            return False
+
+        if not self.accessToken:
+            return False
+
+        ts = "{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime())
+        checksum = checksum_collect_resources3(
+            room_id=room_id,
+            amount=amount,
+            collect_date=ts,
+            access_token=self.accessToken,
+            checksum_key=checksum_key,
+            savy_checksum=savy_checksum,
+        )
+        url = (
+            f"{self.baseUrl}/RoomService/CollectResources3"
+            f"?roomId={room_id}&amount={amount}&collectDate={ts}"
+            f"&checksum={checksum}&accessToken={self.accessToken}"
+        )
+        logging.debug(redact_secrets(f"{url=}"))
+        r = self.request(url, "POST")
+        if not r or "errorMessage=" in r.text:
+            logging.warning(
+                f"[{self.info.get('@Name', '')}] CollectResources3({room_id}) failed: "
+                f"{r.text[:200] if r else 'no response'}"
+            )
+            return False
+        return True
+
+    def collectAllResources(self) -> bool:
+        """Collect all resources from all rooms at once via CollectAllResources.
+
+        This endpoint does NOT require a checksum — only itemType, collectDate,
+        and accessToken.  It collects from every resource-producing room on the
+        ship in a single call.
+
+        Returns:
+            True on success, False on error.
+        """
+        if not self.accessToken:
+            return False
+
+        ts = "{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime())
+        url = (
+            f"{self.baseUrl}/RoomService/CollectAllResources"
+            f"?itemType=None&collectDate={ts}&accessToken={self.accessToken}"
+        )
+        try:
+            r = self.request(url, "POST")
+            if not r or not r.content:
+                return False
+            d = xmltodict.parse(r.content, xml_attribs=True)
+            if not isinstance(d, dict):
+                return False
+            if "errorMessage=" in r.text:
+                logging.warning(
+                    f"[{self.info.get('@Name', '')}] CollectAllResources failed: "
+                    f"{r.text[:200]}"
+                )
+                return False
+        except Exception as e:
+            logging.error(f"collectAllResources failed: {redact_secrets(str(e))}")
+            return False
+
+        items = _extract_collection(d, "Item")
+        mineral = None
+        gas = None
+        for item in items:
+            t = (item.get("@Type") or item.get("@ItemType") or "").lower()
+            qty = str(item.get("@Quantity", "0"))
+            if "mineral" in t:
+                mineral = qty
+            elif "gas" in t:
+                gas = qty
+
+        if items:
+            if mineral is None and gas is None:
+                mineral = str(items[0].get("@Quantity", "0"))
+                if len(items) > 1:
+                    gas = str(items[1].get("@Quantity", "0"))
+            elif mineral is None:
+                for item in items:
+                    t = (item.get("@Type") or item.get("@ItemType") or "").lower()
+                    if "gas" not in t:
+                        mineral = str(item.get("@Quantity", "0"))
+                        break
+            elif gas is None:
+                for item in items:
+                    t = (item.get("@Type") or item.get("@ItemType") or "").lower()
+                    if "mineral" not in t:
+                        gas = str(item.get("@Quantity", "0"))
+                        break
+
+        self.mineralTotal = mineral if mineral is not None else "0"
+        self.gasTotal = gas if gas is not None else "0"
+
+        try:
+            user_node = d.get("RoomService", {}).get("CollectResources", {}).get("User", {})
+            if isinstance(user_node, dict) and "@Credits" in user_node:
+                self.credits = user_node["@Credits"]
+        except Exception:
+            pass
+
+        self.rssCollectedTimestamp = time.time()
+        return True
+
+    def collectRoomResources(self) -> int:
+        """Collect gas and minerals from all resource-producing rooms.
+
+        Strategy:
+        1. Refresh ship data via getShipByUserId.
+        2. Find all rooms with Manufactured > 0.
+        3. If there are producing rooms, call CollectAllResources (bulk, no
+           checksum) to collect everything at once.
+
+        Returns:
+            Number of rooms that had resources to collect (0 if none).
+        """
+        if not self.accessToken:
+            return 0
+
+        char_name = self.info.get("@Name", "") if isinstance(self.info, dict) else ""
+
+        # Refresh ship data to get current Manufactured values
+        try:
+            self.getShipByUserId()
+        except Exception as e:
+            logging.error(
+                f"[{char_name}] collectRoomResources: getShipByUserId failed: "
+                f"{redact_secrets(str(e))}"
+            )
+            return 0
+
+        producing = self._findResourceRooms()
+        if not producing:
+            logging.info(f"[{char_name}] No rooms with resources to collect")
+            return 0
+
+        total_amount = sum(int(r["manufactured"]) for r in producing)
+        logging.info(
+            f"[{char_name}] Found {len(producing)} room(s) with resources "
+            f"(total {total_amount})"
+        )
+
+        # Use CollectAllResources for bulk collection (no checksum needed)
+        if self.collectAllResources():
+            logging.info(
+                f"[{char_name}] Collected resources from {len(producing)} room(s)"
+            )
+            return len(producing)
+        else:
+            # Fall back to per-room CollectResources3
+            logging.info(
+                f"[{char_name}] CollectAllResources failed, falling back to per-room"
+            )
+            collected = 0
+            for room in producing:
+                if self.collectResources3(room["roomId"], room["manufactured"]):
+                    collected += 1
+                else:
+                    logging.warning(
+                        f"[{char_name}] CollectResources3({room['roomId']}) failed"
+                    )
+            if collected:
+                logging.info(
+                    f"[{char_name}] Collected from {collected}/{len(producing)} room(s)"
+                )
+            return collected
 
     def getCrewInfo(self):
         try:

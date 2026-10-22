@@ -102,7 +102,21 @@ class TUI:
                 cmd_name = parts[0].lower()
                 args = parts[1:]
 
-                cmd = self.registry.get(cmd_name)
+                # Longest registered prefix wins: try the two-word verb
+                # ("inventory apply") BEFORE the single-word verb, so a
+                # registered refusal stub is reachable instead of being
+                # shadowed by its own first word. Unregistered second
+                # words ("inventory plan") fall back to the single-word
+                # verb with the full argument list preserved. _cmd_help
+                # resolves multi-word verbs the same way.
+                cmd = None
+                for width in range(min(len(args), 1), -1, -1):
+                    cmd = self.registry.get(
+                        " ".join([cmd_name] + args[:width])
+                    )
+                    if cmd:
+                        args = args[width:]
+                        break
                 if not cmd:
                     print(f"Unknown command: {cmd_name}")
                     print('Type "help" for available commands.')

@@ -6,7 +6,12 @@ import os
 from datetime import datetime
 from mitmproxy import http
 
-LOG_FILE = os.path.expanduser("~/pss-mitm-capture.jsonl")
+# Task J evidence capture: default to a dedicated file so a fresh capture
+# session never appends into the historical 692MB corpus. Override by
+# unsetting PSS_CAPTURE_FILE (or pointing it back at the historical file).
+LOG_FILE = os.path.expanduser(
+    os.environ.get("PSS_CAPTURE_FILE", "~/pss-task-j-capture.jsonl")
+)
 
 INTERESTING_HOSTS = [
     "player-auth.services.api.unity.com",

@@ -26,7 +26,10 @@ class TestCommandRegistry(unittest.TestCase):
     def test_register_default_commands(self):
         """Test that default commands are registered."""
         commands = self.registry.list_commands()
-        expected = ["device", "exit", "help", "logout", "quit", "refresh", "ship", "status"]
+        expected = [
+            "device", "exit", "help", "inventory", "inventory apply",
+            "logout", "quit", "refresh", "ship", "status",
+        ]
         self.assertEqual(sorted(commands), expected)
 
     def test_is_verified(self):
@@ -38,6 +41,8 @@ class TestCommandRegistry(unittest.TestCase):
         self.assertTrue(self.registry.is_verified("logout"))
         self.assertTrue(self.registry.is_verified("exit"))
         self.assertTrue(self.registry.is_verified("quit"))
+        self.assertTrue(self.registry.is_verified("inventory"))
+        self.assertFalse(self.registry.is_verified("inventory apply"))
 
     def test_unknown_command(self):
         """Test unknown command returns None."""

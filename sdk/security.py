@@ -576,6 +576,51 @@ def checksum_speedup_travelling(
     return hashlib.md5(encrypted.encode("utf-8")).hexdigest()
 
 
+def checksum_collect_resources3(
+    room_id: str,
+    amount: str,
+    collect_date: str,
+    access_token: str,
+    checksum_key: str = CHECKSUM_KEY,
+    savy_checksum: str = SAVY_CHECKSUM,
+) -> str:
+    """Compute the RoomService/CollectResources3 native checksum.
+
+    URL: /RoomService/CollectResources3?roomId={0}&amount={1}&collectDate={2}&checksum={3}&accessToken={4}
+
+    Formula (verified against 14 captures):
+        preimage  = collectDate + roomId + amount + accessToken + checksumKey
+        encrypted = preimage + savyChecksum
+        checksum  = MD5(encrypted)
+
+    Note: collectDate comes FIRST in the preimage (before roomId and amount).
+    accessToken IS included (unlike BuyReward2 which excludes it).
+
+    Args:
+        room_id: Room ID to collect from.
+        amount: Amount of resources to collect (the room's Manufactured value).
+        collect_date: DotNet-format timestamp (YYYY-MM-DDTHH:MM:SS).
+        access_token: Session access token.
+        checksum_key: ChecksumKey config value (default "5343").
+        savy_checksum: SavyChecksum config value (default "Savvy!s0d@").
+
+    Returns:
+        32-char MD5 hex digest.
+
+    Raises:
+        UnsupportedNativeChecksum: If checksum_key or savy_checksum is empty/None.
+    """
+    if not checksum_key or not savy_checksum:
+        raise UnsupportedNativeChecksum(
+            "CollectResources3 requires checksum_key and savy_checksum "
+            "configuration values compatible with the installed game version."
+        )
+
+    preimage = collect_date + room_id + amount + access_token + checksum_key
+    encrypted = preimage + savy_checksum
+    return hashlib.md5(encrypted.encode("utf-8")).hexdigest()
+
+
 def checksum_get_catalog_quantity(
     client_date_time: str,
     access_token: str,

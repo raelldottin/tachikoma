@@ -1,0 +1,252 @@
+{
+ "a_sellitem3_req": {
+  "schema_version": 1,
+  "ts": "2026-10-05T07:56:11.259791",
+  "type": "request",
+  "endpoint": "http://api.pixelstarships.com/MarketService/SellItem3",
+  "url": "http://api.pixelstarships.com/MarketService/SellItem3?itemId=187296241&quantity=1&currencyType=Gas&currencyValue=250000&clientDateTime=2026-10-05T07:56:10&checksum=a14eb53a0ac3eacc42b563053286df71&accessToken=[REDACTED]",
+  "param_names": [
+   "itemId",
+   "quantity",
+   "currencyType",
+   "currencyValue",
+   "clientDateTime",
+   "checksum",
+   "accessToken"
+  ],
+  "secret_param_names": [
+   "accessToken"
+  ],
+  "headers": {
+   "Host": "api.pixelstarships.com",
+   "User-Agent": "UnityPlayer/6000.0.77f1 (UnityWebRequest/1.0, libcurl/8.10.1-DEV)",
+   "Accept": "*/*",
+   "Accept-Encoding": "deflate, gzip",
+   "Proxy-Connection": "Keep-Alive",
+   "Content-Type": "application/x-www-form-urlencoded",
+   "X-Unity-Version": "6000.0.77f1",
+   "Content-Length": "195"
+  },
+  "body": "itemId=187296241&quantity=1&currencyType=Gas&currencyValue=250000&clientDateTime=2026-10-05T07%3a56%3a10&checksum=a14eb53a0ac3eacc42b563053286df71&accessToken=[REDACTED]",
+  "method": "POST"
+ },
+ "a_sellitem3_resp": {
+  "schema_version": 1,
+  "ts": "2026-10-05T07:56:11.595978",
+  "type": "response",
+  "endpoint": "http://api.pixelstarships.com/MarketService/SellItem3",
+  "url": "http://api.pixelstarships.com/MarketService/SellItem3?itemId=187296241&quantity=1&currencyType=Gas&currencyValue=250000&clientDateTime=2026-10-05T07:56:10&checksum=a14eb53a0ac3eacc42b563053286df71&accessToken=[REDACTED]",
+  "param_names": [
+   "itemId",
+   "quantity",
+   "currencyType",
+   "currencyValue",
+   "clientDateTime",
+   "checksum",
+   "accessToken"
+  ],
+  "secret_param_names": [
+   "accessToken"
+  ],
+  "headers": {
+   "Content-Type": "application/xml",
+   "Content-Length": "58",
+   "Connection": "keep-alive",
+   "Date": "Mon, 05 Oct 2026 07:56:11 GMT",
+   "Cache-Control": "no-store, no-cache",
+   "Server": "Kestrel",
+   "X-Cache": "Miss from cloudfront",
+   "Via": "1.1 e3d2c542026df7b9357e3b591c889f64.cloudfront.net (CloudFront)",
+   "X-Amz-Cf-Pop": "JFK52-P3",
+   "X-Amz-Cf-Id": "eilcPC7Jxjyej-H__HeB1xoPJeJ098fzZIvAqk3iAOwEbANWYJLKLQ=="
+  },
+  "body": "<MarketService><SellItem success=\"True\" /></MarketService>",
+  "status_code": 200
+ },
+ "b_purchase4_req": {
+  "schema_version": 1,
+  "ts": "2026-10-05T08:00:31.477381",
+  "type": "request",
+  "endpoint": "http://api.pixelstarships.com/MarketService/Purchase4",
+  "url": "http://api.pixelstarships.com/MarketService/Purchase4?saleId=44414085&clientDateTime=2026-10-05T08:00:31&checksum=468dd0665d59100ebda162a7f1e1cf31&accessToken=[REDACTED]&allowConversion=False",
+  "param_names": [
+   "saleId",
+   "clientDateTime",
+   "checksum",
+   "accessToken",
+   "allowConversion"
+  ],
+  "secret_param_names": [
+   "accessToken"
+  ],
+  "headers": {
+   "Host": "api.pixelstarships.com",
+   "User-Agent": "UnityPlayer/6000.0.77f1 (UnityWebRequest/1.0, libcurl/8.10.1-DEV)",
+   "Accept": "*/*",
+   "Accept-Encoding": "deflate, gzip",
+   "Proxy-Connection": "Keep-Alive",
+   "Content-Type": "application/x-www-form-urlencoded",
+   "X-Unity-Version": "6000.0.77f1",
+   "Content-Length": "167"
+  },
+  "body": "saleId=44414085&clientDateTime=2026-10-05T08%3a00%3a31&checksum=468dd0665d59100ebda162a7f1e1cf31&accessToken=[REDACTED]&allowConversion=False",
+  "method": "POST"
+ },
+ "b_purchase4_resp": {
+  "schema_version": 1,
+  "ts": "2026-10-05T08:00:31.681990",
+  "type": "response",
+  "endpoint": "http://api.pixelstarships.com/MarketService/Purchase4",
+  "url": "http://api.pixelstarships.com/MarketService/Purchase4?saleId=44414085&clientDateTime=2026-10-05T08:00:31&checksum=468dd0665d59100ebda162a7f1e1cf31&accessToken=[REDACTED]&allowConversion=False",
+  "param_names": [
+   "saleId",
+   "clientDateTime",
+   "checksum",
+   "accessToken",
+   "allowConversion"
+  ],
+  "secret_param_names": [
+   "accessToken"
+  ],
+  "headers": {
+   "Content-Type": "application/xml",
+   "Content-Length": "208",
+   "Connection": "keep-alive",
+   "Date": "Mon, 05 Oct 2026 08:00:31 GMT",
+   "Cache-Control": "no-store, no-cache",
+   "Server": "Kestrel",
+   "X-Cache": "Miss from cloudfront",
+   "Via": "1.1 20292965cdbba1b959488426be2ef49e.cloudfront.net (CloudFront)",
+   "X-Amz-Cf-Pop": "JFK52-P3",
+   "X-Amz-Cf-Id": "EicXmlI7n_eciqVMV9pBnx0sTrz2HocWe9fvf83RidyGyJG4acVqJw=="
+  },
+  "body": "<MarketService><Purchase success=\"True\" /><Achievements><Achievement AchievementId=\"156429022\" AchievementDesignId=\"98\" UserId=\"9228834\" ProgressValue=\"162\" Collected=\"false\" /></Achievements></MarketService>",
+  "status_code": 200
+ },
+ "b_sellitem3_other_req": {
+  "schema_version": 1,
+  "ts": "2026-10-05T08:00:56.970713",
+  "type": "request",
+  "endpoint": "http://api.pixelstarships.com/MarketService/SellItem3",
+  "url": "http://api.pixelstarships.com/MarketService/SellItem3?itemId=187865520&quantity=1&currencyType=Mineral&currencyValue=50000&clientDateTime=2026-10-05T08:00:56&checksum=59d66b98a1090455f9d52d5ab47087c0&accessToken=[REDACTED]",
+  "param_names": [
+   "itemId",
+   "quantity",
+   "currencyType",
+   "currencyValue",
+   "clientDateTime",
+   "checksum",
+   "accessToken"
+  ],
+  "secret_param_names": [
+   "accessToken"
+  ],
+  "headers": {
+   "Host": "api.pixelstarships.com",
+   "User-Agent": "UnityPlayer/6000.0.77f1 (UnityWebRequest/1.0, libcurl/8.10.1-DEV)",
+   "Accept": "*/*",
+   "Accept-Encoding": "deflate, gzip",
+   "Proxy-Connection": "Keep-Alive",
+   "Content-Type": "application/x-www-form-urlencoded",
+   "X-Unity-Version": "6000.0.77f1",
+   "Content-Length": "198"
+  },
+  "body": "itemId=187865520&quantity=1&currencyType=Mineral&currencyValue=50000&clientDateTime=2026-10-05T08%3a00%3a56&checksum=59d66b98a1090455f9d52d5ab47087c0&accessToken=[REDACTED]",
+  "method": "POST"
+ },
+ "b_sellitem3_other_resp": {
+  "schema_version": 1,
+  "ts": "2026-10-05T08:00:57.071600",
+  "type": "response",
+  "endpoint": "http://api.pixelstarships.com/MarketService/SellItem3",
+  "url": "http://api.pixelstarships.com/MarketService/SellItem3?itemId=187865520&quantity=1&currencyType=Mineral&currencyValue=50000&clientDateTime=2026-10-05T08:00:56&checksum=59d66b98a1090455f9d52d5ab47087c0&accessToken=[REDACTED]",
+  "param_names": [
+   "itemId",
+   "quantity",
+   "currencyType",
+   "currencyValue",
+   "clientDateTime",
+   "checksum",
+   "accessToken"
+  ],
+  "secret_param_names": [
+   "accessToken"
+  ],
+  "headers": {
+   "Content-Type": "application/xml",
+   "Content-Length": "58",
+   "Connection": "keep-alive",
+   "Date": "Mon, 05 Oct 2026 08:00:57 GMT",
+   "Cache-Control": "no-store, no-cache",
+   "Server": "Kestrel",
+   "X-Cache": "Miss from cloudfront",
+   "Via": "1.1 1f85764c0bc1f70d16858df07753dfa8.cloudfront.net (CloudFront)",
+   "X-Amz-Cf-Pop": "JFK52-P3",
+   "X-Amz-Cf-Id": "T4xEjZr-sqhUcP0xzMjrkx54_ISzaF4zUJ-nhQaOcnEUnLYpNQPeGw=="
+  },
+  "body": "<MarketService><SellItem success=\"True\" /></MarketService>",
+  "status_code": 200
+ },
+ "b_marketlist_pre": {
+  "schema_version": 1,
+  "ts": "2026-10-05T08:00:15.455427",
+  "type": "request",
+  "endpoint": "http://api.pixelstarships.com/MessageService/ListActiveMarketplaceMessages5",
+  "url": "http://api.pixelstarships.com/MessageService/ListActiveMarketplaceMessages5?itemSubType=None&rarity=None&currencyType=Unknown&itemDesignId=0&userId=0&accessToken=[REDACTED]",
+  "param_names": [
+   "itemSubType",
+   "rarity",
+   "currencyType",
+   "itemDesignId",
+   "userId",
+   "accessToken"
+  ],
+  "secret_param_names": [
+   "accessToken"
+  ],
+  "headers": {
+   "Host": "api.pixelstarships.com",
+   "User-Agent": "UnityPlayer/6000.0.77f1 (UnityWebRequest/1.0, libcurl/8.10.1-DEV)",
+   "Accept": "*/*",
+   "Accept-Encoding": "deflate, gzip",
+   "Proxy-Connection": "Keep-Alive",
+   "X-Unity-Version": "6000.0.77f1"
+  },
+  "body": "",
+  "method": "GET"
+ },
+ "b_marketlist_pre_resp": {
+  "schema_version": 1,
+  "ts": "2026-10-05T08:00:15.744098",
+  "type": "response",
+  "endpoint": "http://api.pixelstarships.com/MessageService/ListActiveMarketplaceMessages5",
+  "url": "http://api.pixelstarships.com/MessageService/ListActiveMarketplaceMessages5?itemSubType=None&rarity=None&currencyType=Unknown&itemDesignId=0&userId=0&accessToken=[REDACTED]",
+  "param_names": [
+   "itemSubType",
+   "rarity",
+   "currencyType",
+   "itemDesignId",
+   "userId",
+   "accessToken"
+  ],
+  "secret_param_names": [
+   "accessToken"
+  ],
+  "headers": {
+   "Content-Type": "application/xml",
+   "Transfer-Encoding": "chunked",
+   "Connection": "keep-alive",
+   "Date": "Mon, 05 Oct 2026 08:00:15 GMT",
+   "Content-Encoding": "gzip",
+   "Server": "Kestrel",
+   "Cache-Control": "no-store, no-cache",
+   "Vary": "Accept-Encoding",
+   "X-Cache": "Miss from cloudfront",
+   "Via": "1.1 83f903d51f378add519d351aa3b07052.cloudfront.net (CloudFront)",
+   "X-Amz-Cf-Pop": "JFK52-P3",
+   "X-Amz-Cf-Id": "HTWCCpV8tL_O902-j5eV41AAyGK3Wf5KwbVZP4JuR8kypw8kJ2kDzw=="
+  },
+  "body": "<MessageService><ListActiveMarketplaceMessages><Messages><Message MessageId=\"594319378\" UserId=\"3537010\" Message=\"Selling 2 Recall Beacon\" UserName=\"Domin01\" UserSpriteId=\"22452\" MessageType=\"Market\" ChannelId=\"3\" ActivityType=\"MarketListed\" ActivityArgument=\"starbux:100\" Argument=\"item:1978x2\" AllianceName=\"2ooted\" AllianceSpriteId=\"19371\" AllianceId=\"44969\" MessageDate=\"2026-10-05T07:49:36\" Trophy=\"4842\" ShipDesignId=\"0\" SaleId=\"44414040\" /><Message MessageId=\"594319407\" UserId=\"10378261\" Message=\"Selling 1 Void Particle\" UserName=\"Arizono4ka\" UserSpriteId=\"12751\" MessageType=\"Market\" ChannelId=\"3\" ActivityType=\"MarketListed\" ActivityArgument=\"gas:1000000\" Argument=\"item:778x1\" AllianceName=\"\u0411\u0410\u0428\u041e\u0419 \u041f\u0410\u0421\u0422\u0423\u041a\" AllianceSpriteId=\"2317\" AllianceId=\"44215\" MessageDate=\"2026-10-05T07:50:09\" Trophy=\"2910\" ShipDesignId=\"0\" SaleId=\"44414043\" /><Message MessageId=\"594319434\" UserId=\"9073665\" Message=\"Selling 1 Cryo Mine\" UserName=\"wo3k0\" UserSpriteId=\"13167\" MessageType=\"Market\" ChannelId=\"3\" ActivityType=\"MarketListed\" ActivityArgument=\"starbux:25\" Argument=\"item:820x1\" AllianceName=\"THE V\u03a9ID\" AllianceSpriteId=\"2321\" AllianceId=\"41093\" MessageDate=\"2026-10-05T07:50:36\" Trophy=\"4905\" ShipDesignId=\"0\" SaleId=\"44414045\" RibbonSpriteId=\"26729\" /><Message MessageId=\"594319475\" UserId=\"11357868\" Message=\"Selling 1 Immensity Gauntlet (+6.4 Engine)\" UserName=\"Gh4di\" UserSpriteId=\"11219\" MessageType=\"Market\" ChannelId=\"3\" ActivityType=\"MarketListed\" ActivityArgument=\"starbux:2500\" Argument=\"item:1493x1\" AllianceName=\"Dynasty\" AllianceSpriteId=\"654\" AllianceId=\"14349\" MessageDate=\"2026-10-05T07:51:25\" Trophy=\"4886\" ShipDesignId=\"0\" SaleId=\"44414050\" RibbonSpriteId=\"26737\" /><Message MessageId=\"594319505\" UserId=\"9791249\" Message=\"Selling 1 Ginkgo\" UserName=\"Lapis03\" UserSpriteId=\"8986\" MessageType=\"Market\" ChannelId=\"3\" ActivityType=\"MarketListed\" ActivityArgument=\"starbux:100\" Argument=\"item:334x1\" AllianceName=\"Ashen Strangers\" AllianceSpriteId=\"2317\" AllianceId=\"35055\" MessageDate=\"2026-10-05T07:52:10\" Trophy=\"4289\" ShipDesignId=\"0\" SaleId=\"44414055\" /><Message MessageId=\"594319507\" UserId=\"9791249\" Message=\"Selling 1 Ginkgo\" UserName=\"Lapis03\" UserSpriteId=\"8986\" MessageType=\"Market\" ChannelId=\"3\" ActivityType=\"MarketListed\" ActivityArgument=\"starbux:100\" Argument=\"item:334x1\" AllianceName=\"Ashen Strangers\" AllianceSpriteId=\"2317\" AllianceId=\"35055\" MessageDate=\"2026-10-05T07:52:12\" Trophy=\"4289\" ShipDesignId=\"0\" SaleId=\"44414056\" /><Message MessageId=\"594319596\" UserId=\"11646405\" Message=\"Selling 1 Gauntlet\" UserName=\"Julie8944\" UserSpriteId=\"10499\" MessageType=\"Market\" ChannelId=\"3\" ActivityType=\"MarketListed\" ActivityArgument=\"starbux:62\" Argument=\"item:427x1\" AllianceName=\"\" AllianceSpriteId=\"0\" AllianceId=\"0\" MessageDate=\"2026-10-05T07:53:29\" Trophy=\"1352\" ShipDesignId=\"0\" SaleId=\"44414066\" /><Message MessageId=\"594319665\" UserId=\"5965246\" Message=\"Selling 1 Void Particle\" UserName=\"Mr Fool\" UserSpriteId=\"12751\" MessageType=\"Market\" ChannelId=\"3\" ActivityType=\"MarketListed\" ActivityArgument=\"gas:350000\" Argument=\"item:778x1\" AllianceName=\"Soltan Empire\" AllianceSpriteId=\"19373\" AllianceId=\"44572\" MessageDate=\"2026-10-05T07:54:19\" Trophy=\"4983\" ShipDesignId=\"0\" SaleId=\"44414078\" /><Message MessageId=\"594319691\" UserId=\"12301991\" Message=\"Selling 1 Small Mineral Crate\" UserName=\"cause 345\" UserSpriteId=\"3486\" MessageType=\"Market\" ChannelId=\"3\" ActivityType=\"MarketListed\" ActivityArgument=\"starbux:1\" Argument=\"item:81x1\" AllianceName=\"Weedsnorters lul\" AllianceSpriteId=\"19365\" AllianceId=\"45113\" MessageDate=\"2026-10-05T07:54:51\" Trophy=\"2006\" ShipDesignId=\"0\" SaleId=\"44414084\" /><Message MessageId=\"594319758\" UserId=\"9228834\" Message=\"Selling 1 New Repair Guide\" UserName=\".syn\" UserSpriteId=\"8955\" MessageType=\"Market\" ChannelId=\"3\" ActivityType=\"MarketListed\" ActivityArgument=\"gas:250000\" Argument=\"item:360x1\" AllianceName=\"Band of Pirates\" AllianceSpriteId=\"2321\" AllianceId=\"43958\" MessageDate=\"2026-10-05T07:56:11\" Trophy=\"527\" ShipDesignId=\"0\" SaleId=\"44414085\" /><Message MessageId=\"594319790\" UserId=\"11407856\" Message=\"Selling 1 2026 Class A Greaves MKIII\" UserName=\"ChocoMilk_\" UserSpriteId=\"29505\" MessageType=\"Market\" ChannelId=\"3\" ActivityType=\"MarketListed\" ActivityArgument=\"starbux:4000\" Argument=\"item:2424x1\" AllianceName=\"Red Barons\" AllianceSpriteId=\"2316\" AllianceId=\"23429\" MessageDate=\"2026-10-05T07:56:54\" Trophy=\"5678\" ShipDesignId=\"0\" SaleId=\"44414087\" RibbonSpriteId=\"26689\" /><Message MessageId=\"594319826\" UserId=\"9987196\" Message=\"Selling 20 Void Particle\" UserName=\"\u5de6\u8f85\u661f\u541b\" UserSpriteId=\"12751\" MessageType=\"Market\" ChannelId=\"3\" ActivityType=\"MarketListed\" ActivityArgument=\"gas:2000000\" Argument=\"item:778x20\" AllianceName=\"\u4e1c \u80dc \u795e \u5dde\" AllianceSpriteId=\"19378\" AllianceId=\"45749\" MessageDate=\"2026-10-05T07:57:24\" Trophy=\"4376\" ShipDesignId=\"0\" SaleId=\"44414092\" /><Message MessageId=\"594319836\" UserId=\"12370175\" Message=\"Selling 1 Federation Slacks\" UserName=\"\u7af9\u7075\" UserSpriteId=\"11038\" MessageType=\"Market\" ChannelId=\"3\" ActivityType=\"MarketListed\" ActivityArgument=\"starbux:5\" Argument=\"item:522x1\" AllianceName=\"Summit RISING\" AllianceSpriteId=\"19374\" AllianceId=\"44231\" MessageDate=\"2026-10-05T07:57:34\" Trophy=\"4889\" ShipDesignId=\"0\" SaleId=\"44414093\" /><Message MessageId=\"594319882\" UserId=\"12413974\" Message=\"Selling 1 Combat Pants\" UserName=\"Kiteinthewin\" UserSpriteId=\"3329\" MessageType=\"Market\" ChannelId=\"3\" ActivityType=\"MarketListed\" ActivityArgument=\"starbux:4\" Argument=\"item:80x1\" AllianceName=\"The Conjoint Vikings\" AllianceSpriteId=\"15066\" AllianceId=\"13019\" MessageDate=\"2026-10-05T07:58:15\" Trophy=\"1531\" ShipDesignId=\"0\" SaleId=\"44414098\" /><Message MessageId=\"594319888\" UserId=\"10487530\" Message=\"Selling 100 Void Particle\" UserName=\"DIMONYYYYY\" UserSpriteId=\"12751\" MessageType=\"Market\" ChannelId=\"3\" ActivityType=\"MarketListed\" ActivityArgument=\"starbux:90\" Argument=\"item:778x100\" AllianceName=\"\u0411\u0410\u0428\u041e\u0419 \u041f\u0410\u0421\u0422\u0423\u041a\" AllianceSpriteId=\"2317\" AllianceId=\"44215\" MessageDate=\"2026-10-05T07:58:20\" Trophy=\"3299\" ShipDesignId=\"0\" SaleId=\"44414099\" /><Message MessageId=\"594319889\" UserId=\"11426589\" Message=\"Selling 4 Void Particle\" UserName=\"A Cruise Ship\" UserSpriteId=\"12751\" MessageType=\"Market\" ChannelId=\"3\" ActivityType=\"MarketListed\" ActivityArgument=\"gas:999999\" Argument=\"item:778x4\" AllianceName=\"NomNomNom\" AllianceSpriteId=\"19380\" AllianceId=\"34331\" MessageDate=\"2026-10-05T07:58:20\" Trophy=\"4915\" ShipDesignId=\"0\" SaleId=\"44414100\" /><Message MessageId=\"594319892\" UserId=\"10487530\" Message=\"Selling 100 Void Particle\" UserName=\"DIMONYYYYY\" UserSpriteId=\"12751\" MessageType=\"Market\" ChannelId=\"3\" ActivityType=\"MarketListed\" ActivityArgument=\"starbux:90\" Argument=\"item:778x100\" AllianceName=\"\u0411\u0410\u0428\u041e\u0419 \u041f\u0410\u0421\u0422\u0423\u041a\" AllianceSpriteId=\"2317\" AllianceId=\"44215\" MessageDate=\"2026-10-05T07:58:22\" Trophy=\"3299\" ShipDesignId=\"0\" SaleId=\"44414101\" /><Message MessageId=\"594319894\" UserId=\"10487530\" Message=\"Selling 100 Void Particle\" UserName=\"DIMONYYYYY\" UserSpriteId=\"12751\" MessageType=\"Market\" ChannelId=\"3\" ActivityType=\"MarketListed\" ActivityArgument=\"starbux:90\" Argument=\"item:778x100\" AllianceName=\"\u0411\u0410\u0428\u041e\u0419 \u041f\u0410\u0421\u0422\u0423\u041a\" AllianceSpriteId=\"2317\" AllianceId=\"44215\" MessageDate=\"2026-10-05T07:58:25\" Trophy=\"3299\" ShipDesignId=\"0\" SaleId=\"44414102\" /><Message MessageId=\"594319909\" UserId=\"7009407\" Message=\"Selling 5 Water Sprinkler\" UserName=\"nssonef\" UserSpriteId=\"5046\" MessageType=\"Market\" ChannelId=\"3\" ActivityType=\"MarketListed\" ActivityArgument=\"starbux:150\" Argument=\"item:168x5\" AllianceName=\"Zeon Fleet\" AllianceSpriteId=\"2281\" AllianceId=\"45580\" MessageDate=\"2026-10-05T07:58:37\" Trophy=\"3452\" ShipDesignId=\"0\" SaleId=\"44414103\" /><Message MessageId=\"594319911\" UserId=\"7009407\" Message=\"Selling 5 Water Sprinkler\" UserName=\"nssonef\" UserSpriteId=\"5046\" MessageType=\"Market\" ChannelId=\"3\" ActivityType=\"MarketListed\" ActivityArgument=\"starbux:150\" Argument=\"item:168x5\" AllianceName=\"Zeon Fleet\" AllianceSpriteId=\"2281\" AllianceId=\"45580\" MessageDate=\"2026-10-05T07:58:40\" Trophy=\"3452\" ShipDesignId=\"0\" SaleId=\"44414104\" /><Message MessageId=\"594319925\" UserId=\"10303923\" Message=\"Selling 2 Small Cola\" UserName=\"Darkanee\" UserSpriteId=\"8786\" MessageType=\"Market\" ChannelId=\"3\" ActivityType=\"MarketListed\" ActivityArgument=\"starbux:1\" Argument=\"item:323x2\" AllianceName=\"Dynasty Mutiny\" AllianceSpriteId=\"654\" AllianceId=\"44353\" MessageDate=\"2026-10-05T07:58:47\" Trophy=\"4823\" ShipDesignId=\"0\" SaleId=\"44414105\" RibbonSpriteId=\"26734\" /><Message MessageId=\"594319926\" UserId=\"11263476\" Message=\"Selling 1 Small Mineral Crate\" UserName=\"sas2835\" UserSpriteId=\"3486\" MessageType=\"Market\" ChannelId=\"3\" ActivityType=\"MarketListed\" ActivityArgument=\"starbux:1\" Argument=\"item:81x1\" AllianceName=\"Weedsnorters lul\" AllianceSpriteId=\"19365\" AllianceId=\"45113\" MessageDate=\"2026-10-05T07:58:48\" Trophy=\"2045\" ShipDesignId=\"0\" SaleId=\"44414106\" /><Message MessageId=\"594319939\" UserId=\"11648894\" Message=\"Selling 3 Silicon (Si)\" UserName=\"kikmie\" UserSpriteId=\"3603\" MessageType=\"Market\" ChannelId=\"3\" ActivityType=\"MarketListed\" ActivityArgument=\"gas:5000000\" Argument=\"item:105x3\" AllianceName=\"TheHighClass THC\" AllianceSpriteId=\"19387\" AllianceId=\"44552\" MessageDate=\"2026-10-05T07:59:08\" Trophy=\"4970\" ShipDesignId=\"0\" SaleId=\"44414107\" /><Message MessageId=\"594319941\" UserId=\"10303923\" Message=\"Selling 3 Small Protein Shake\" UserName=\"Darkanee\" UserSpriteId=\"8242\" MessageType=\"Market\" ChannelId=\"3\" ActivityType=\"MarketListed\" ActivityArgument=\"starbux:2\" Argument=\"item:296x3\" AllianceName=\"Dynasty Mutiny\" AllianceSpriteId=\"654\" AllianceId=\"44353\" MessageDate=\"2026-10-05T07:59:11\" Trophy=\"4823\" ShipDesignId=\"0\" SaleId=\"44414108\" RibbonSpriteId=\"26734\" /><Message MessageId=\"594319945\" UserId=\"3435559\" Message=\"Selling 1 Half Day Immunity\" UserName=\"Mrs. Platapix\" UserSpriteId=\"3492\" MessageType=\"Market\" ChannelId=\"3\" ActivityType=\"MarketListed\" ActivityArgument=\"mineral:500000\" Argument=\"item:90x1\" AllianceName=\"THE ONE PIECE \u2620\ufe0f\" AllianceSpriteId=\"653\" AllianceId=\"45786\" MessageDate=\"2026-10-05T07:59:16\" Trophy=\"3461\" ShipDesignId=\"0\" SaleId=\"44414109\" /><Message MessageId=\"594319967\" UserId=\"7009407\" Message=\"Selling 1 Foaming Sprinkler\" UserName=\"nssonef\" UserSpriteId=\"5593\" MessageType=\"Market\" ChannelId=\"3\" ActivityType=\"MarketListed\" ActivityArgument=\"starbux:100\" Argument=\"item:226x1\" AllianceName=\"Zeon Fleet\" AllianceSpriteId=\"2281\" AllianceId=\"45580\" MessageDate=\"2026-10-05T07:59:44\" Trophy=\"3452\" ShipDesignId=\"0\" SaleId=\"44414112\" /><Message MessageId=\"594319991\" UserId=\"10303923\" Message=\"Selling 1 Recall Beacon\" UserName=\"Darkanee\" UserSpriteId=\"22452\" MessageType=\"Market\" ChannelId=\"3\" ActivityType=\"MarketListed\" ActivityArgument=\"starbux:40\" Argument=\"item:1978x1\" AllianceName=\"Dynasty Mutiny\" AllianceSpriteId=\"654\" AllianceId=\"44353\" MessageDate=\"2026-10-05T07:59:56\" Trophy=\"4823\" ShipDesignId=\"0\" SaleId=\"44414113\" RibbonSpriteId=\"26734\" /><Message MessageId=\"594319995\" UserId=\"11357868\" Message=\"Selling 1 Super Mineral Crate\" UserName=\"Gh4di\" UserSpriteId=\"4614\" MessageType=\"Market\" ChannelId=\"3\" ActivityType=\"MarketListed\" ActivityArgument=\"starbux:45\" Argument=\"item:241x1\" AllianceName=\"Dynasty\" AllianceSpriteId=\"654\" AllianceId=\"14349\" MessageDate=\"2026-10-05T08:00:06\" Trophy=\"4886\" ShipDesignId=\"0\" SaleId=\"44414114\" RibbonSpriteId=\"26737\" /><Message MessageId=\"594319997\" UserId=\"10173107\" Message=\"Selling 2 Mega Screw\" UserName=\"plalt1\" UserSpriteId=\"10008\" MessageType=\"Market\" ChannelId=\"3\" ActivityType=\"MarketListed\" ActivityArgument=\"starbux:60\" Argument=\"item:422x2\" AllianceName=\"Trek Federation\" AllianceSpriteId=\"2317\" AllianceId=\"9343\" MessageDate=\"2026-10-05T08:00:11\" Trophy=\"4953\" ShipDesignId=\"0\" SaleId=\"44414115\" RibbonSpriteId=\"26730\" /><Message MessageId=\"594319998\" UserId=\"12340841\" Message=\"Selling 1 Small Gas Crate\" UserName=\"Incursor\" UserSpriteId=\"3489\" MessageType=\"Market\" ChannelId=\"3\" ActivityType=\"MarketListed\" ActivityArgument=\"gas:2500000\" Argument=\"item:84x1\" AllianceName=\"Scarlet Barons\" AllianceSpriteId=\"2316\" AllianceId=\"33241\" MessageDate=\"2026-10-05T08:00:13\" Trophy=\"3496\" ShipDesignId=\"0\" SaleId=\"44414116\" /></Messages></ListActiveMarketplaceMessages></MessageService>",
+  "status_code": 200
+ }
+}

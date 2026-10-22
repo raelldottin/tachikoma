@@ -466,6 +466,7 @@ class TestExitCodeAggregation(unittest.TestCase):
         mock_cli_inst.login.return_value = True
         mock_cli_inst.freeStarbuxToday = 10
         mock_cli_inst.freeStarbuxMax = 10
+        mock_cli_inst._automation_done = False
         mock_cli_inst.upgradeResearches.return_value = True
         mock_cli_inst.upgradeRooms.return_value = True
         mock_cli_inst.manageTraining.return_value = True
@@ -484,6 +485,7 @@ class TestExitCodeAggregation(unittest.TestCase):
         mock_cli_inst.login.return_value = True
         mock_cli_inst.freeStarbuxToday = 10
         mock_cli_inst.freeStarbuxMax = 10
+        mock_cli_inst._automation_done = False
         mock_cli_inst.upgradeResearches.return_value = True
         mock_cli_inst.upgradeRooms.return_value = False  # Unexpected failure
         mock_cli_inst.manageTraining.return_value = True
@@ -504,6 +506,7 @@ class TestExitCodeAggregation(unittest.TestCase):
         mock_cli_inst.login.return_value = True
         mock_cli_inst.freeStarbuxToday = 10
         mock_cli_inst.freeStarbuxMax = 10
+        mock_cli_inst._automation_done = False
         mock_cli_inst.upgradeResearches.return_value = True
         mock_cli_inst.upgradeRooms.return_value = True
         mock_cli_inst.manageTraining.return_value = False  # Unexpected failure
@@ -522,6 +525,7 @@ class TestExitCodeAggregation(unittest.TestCase):
         mock_cli_inst.login.return_value = True
         mock_cli_inst.freeStarbuxToday = 10
         mock_cli_inst.freeStarbuxMax = 10
+        mock_cli_inst._automation_done = False
         mock_cli_inst.upgradeResearches.return_value = False  # Unexpected failure
         mock_cli_inst.upgradeRooms.return_value = True
         mock_cli_inst.manageTraining.return_value = True

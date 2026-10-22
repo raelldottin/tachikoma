@@ -6,7 +6,6 @@ No real credentials or live Pixel Starships network calls are performed.
 """
 import unittest
 from unittest.mock import MagicMock, patch
-import xmltodict
 
 from sdk.client import Client
 from sdk.device import Device
@@ -481,15 +480,22 @@ class TestBattleFlow(unittest.TestCase):
 
     def test_run_battle_proceeds_when_hp_full(self):
         """runBattleEndToEnd proceeds to createBattle9 when HP is 100%."""
+        # Regression: acceptBattle5 MUST be mocked. runBattleEndToEnd
+        # continues on createBattle9 failure with dummy battleId=0, and an
+        # unmocked acceptBattle5 made a LIVE call to api.pixelstarships.com
+        # from inside the unit-test suite (repo rule: tests mock all PSS
+        # traffic). Verified live by socket-block probe before the fix.
         with patch.object(self.client, "getShipHpFraction", return_value=1.0), \
              patch.object(self.client, "getShipHp", return_value=4000), \
              patch.object(self.client, "rebuildAmmo", return_value=True), \
              patch.object(self.client, "heartbeat"), \
              patch.object(self.client, "finaliseBattle15", return_value=False), \
+             patch.object(self.client, "acceptBattle5", return_value=False) as mock_accept, \
              patch.object(self.client, "createBattle9") as mock_create:
             mock_create.return_value = False  # fail fast
             result = self.client.runBattleEndToEnd(clientHp=0)
             mock_create.assert_called_once()
+            mock_accept.assert_called_once()
 
     def test_run_battle_aborts_when_rearm_fails(self):
         """runBattleEndToEnd returns False if rebuildAmmo fails."""
