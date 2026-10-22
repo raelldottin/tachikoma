@@ -9,6 +9,7 @@ sys.path.insert(0, ".")
 from sdk.device import Device
 from sdk.client import Client
 from sdk.security import checksum_user_email_password_authorize4
+from scripts.script_credentials import load_email_password
 import requests
 
 # Load capture
@@ -29,10 +30,11 @@ client = Client(device=device, settings={"checksum_key": "5343", "savy_checksum"
 client.accessToken = captured_access_token
 
 # Compute checksum with captured timestamp
+test_email, test_password = load_email_password()
 ts = "2026-08-02T06:04:20"  # Use captured timestamp
 checksum = checksum_user_email_password_authorize4(
     device.key,
-    "***REMOVED***",
+    test_email,
     ts,
     client.accessToken,
     "5343",
@@ -47,8 +49,8 @@ post_data = urllib.parse.urlencode({
     "clientDateTime": ts,
     "checksum": checksum,
     "deviceKey": device.key,
-    "email": "***REMOVED***",
-    "password": "***REMOVED***",
+    "email": test_email,
+    "password": test_password,
     "languageKey": "en",
     "isWeb": "False",
     "accessToken": client.accessToken,
@@ -65,7 +67,7 @@ from datetime import datetime
 ts2 = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
 checksum2 = checksum_user_email_password_authorize4(
     device.key,
-    "***REMOVED***",
+    test_email,
     ts2,
     client.accessToken,
     "5343",
@@ -78,8 +80,8 @@ post_data2 = urllib.parse.urlencode({
     "clientDateTime": ts2,
     "checksum": checksum2,
     "deviceKey": device.key,
-    "email": "***REMOVED***",
-    "password": "***REMOVED***",
+    "email": test_email,
+    "password": test_password,
     "languageKey": "en",
     "isWeb": "False",
     "accessToken": client.accessToken,

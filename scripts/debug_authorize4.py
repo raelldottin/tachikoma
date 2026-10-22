@@ -10,6 +10,7 @@ sys.path.insert(0, ".")
 from sdk.device import Device
 from sdk.client import Client
 from sdk.security import checksum_user_email_password_authorize4
+from scripts.script_credentials import load_email_password
 import requests
 
 # Load capture
@@ -57,10 +58,11 @@ print(f"Access token: {client.accessToken}")
 print(f"Device key: {device.key}")
 
 # Now compute checksum with OUR access token and current time
+test_email, test_password = load_email_password()
 ts = client._client_datetime_utc()
 our_cs = checksum_user_email_password_authorize4(
     device.key,
-    "***REMOVED***",
+    test_email,
     ts,
     client.accessToken,
     "5343",
@@ -70,11 +72,11 @@ print("\n=== OUR COMPUTED CHECKSUM ===")
 print(f"  clientDateTime: {ts}")
 print(f"  checksum: {our_cs}")
 print(f"  deviceKey: {device.key}")
-print("  email: ***REMOVED***")
+print(f"  email: {test_email}")
 print(f"  accessToken: {client.accessToken}")
 
 # Verify our checksum independently
-preimage = device.key + "***REMOVED***" + ts + client.accessToken + "5343"
+preimage = device.key + test_email + ts + client.accessToken + "5343"
 verify = hashlib.md5((preimage + "Savvy!s0d@").encode()).hexdigest()
 print("\n=== INDEPENDENT VERIFICATION ===")
 print(f"  preimage: {preimage[:80]}...")
@@ -86,8 +88,8 @@ post_data = urllib.parse.urlencode({
     "clientDateTime": ts,
     "checksum": our_cs,
     "deviceKey": device.key,
-    "email": "***REMOVED***",
-    "password": "***REMOVED***",
+    "email": test_email,
+    "password": test_password,
     "languageKey": "en",
     "isWeb": "False",
     "accessToken": client.accessToken,

@@ -7,6 +7,7 @@ sys.path.insert(0, ".")
 
 from sdk.device import Device
 from sdk.client import Client
+from scripts.script_credentials import load_email_password
 
 # Load captures
 with open("/tmp/pss_capture.json") as f:
@@ -30,7 +31,8 @@ client = Client(device=device, settings={"checksum_key": "5343", "savy_checksum"
 client.accessToken = captured_access_token
 
 print("\n=== Stage 2: UserEmailPasswordAuthorize4 (with captured access token) ===")
-ok = client.authorize_email_password("***REMOVED***", "***REMOVED***")
+test_email, test_password = load_email_password()
+ok = client.authorize_email_password(test_email, test_password)
 print(f"Result: {ok}")
 if client.device.refreshToken:
     print(f"Refresh token: {client.device.refreshToken[:20]}...")

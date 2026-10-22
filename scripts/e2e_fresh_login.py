@@ -5,6 +5,7 @@ sys.path.insert(0, ".")
 
 from sdk.device import Device
 from sdk.client import Client
+from scripts.script_credentials import load_email_password
 
 # Use a fresh device (no refresh token)
 device = Device(language="en")
@@ -22,8 +23,9 @@ if not client.accessToken:
 
 # ── Stage 2: UserEmailPasswordAuthorize4 ──
 print("\n=== Stage 2: UserEmailPasswordAuthorize4 ===")
-# The password from the capture - using it for the test
-ok = client.authorize_email_password("***REMOVED***", "***REMOVED***")
+# Credentials come from PSS_TEST_EMAIL / PSS_TEST_PASSWORD(_FILE)
+test_email, test_password = load_email_password()
+ok = client.authorize_email_password(test_email, test_password)
 print(f"Result: {ok}")
 if client.device.refreshToken:
     print(f"Refresh token: {client.device.refreshToken[:20]}...")

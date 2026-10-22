@@ -13,6 +13,7 @@ sys.path.insert(0, ".")
 from sdk.device import Device
 from sdk.client import Client
 from sdk.redaction import redact_secrets
+from scripts.script_credentials import load_email_password
 
 # Load captured refresh token from private fixture (in-memory only, never print)
 with open("/tmp/pss_capture.json") as f:
@@ -39,9 +40,8 @@ if not client.accessToken:
     sys.exit(1)
 
 # ── Stage 2: UserEmailPasswordAuthorize4 ═══════════════════════════
-# Use the captured email (account credential, already in /tmp/pss_capture.json)
-captured_email = "***REMOVED***"
-captured_password = "***REMOVED***"
+# Test account credentials come from PSS_TEST_EMAIL / PSS_TEST_PASSWORD(_FILE)
+captured_email, captured_password = load_email_password()
 
 print()
 print("=== Stage 2: UserEmailPasswordAuthorize4 ===")
