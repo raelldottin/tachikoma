@@ -1,0 +1,46 @@
+{
+  "artifact": "pss-pvp-research-digest.md",
+  "task": "t_e104fc3d",
+  "swarm_root": "t_a812900d",
+  "author": "tachikoma-researcher",
+  "official_patch_latest_reviewed": "V0.999.60",
+  "official_patch_latest_date": "2026-08-17",
+  "hull14_patch": "V0.999.55",
+  "hull14_date": "2026-06-17",
+  "max_hull": 14,
+  "repo_tests_baseline": "1140 OK, skipped=1",
+  "repo_ruff_errors": 25,
+  "repo_ty_diagnostics": 139,
+  "crew_level_cap_formula": "ship_level * 4, max 40",
+  "tp_caps": {"3": 70, "4": 80, "4_exceptions": ["Mistycball", "Huge Hellaluya (100)"], "5": 90, "6": 100, "6_captains": 200, "7": 110},
+  "trophy_gain_cap": [1, 40],
+  "battle_duration_s": 180,
+  "immunity_failed_defense_h": 8,
+  "immunity_successful_defense_min": 20,
+  "non_powered_room_armor_pct": 300,
+  "fair_play": "offline decision-support only; no auto gameplay or mutations",
+  "unknowns": [
+    "no account snapshots provided; all account state UNKNOWN",
+    "hull 1-14 room unlock levels by hull not captured (community tables COMMUNITY tier)",
+    "crew_leveling gas tables have duplicate keys (levels 9, 17)",
+    "native AI condition/action availability by python level not fully enumerated",
+    "battle-results dataset not yet created (downstream lane)",
+    "item transferability between accounts unverified (separate inventory goal)"
+  ],
+  "baseline_modules_reused": [
+    "sdk/crew_leveling.py",
+    "sdk/game_formulas.py",
+    "sdk/ship_layout.py",
+    "sdk/inventory/*",
+    "sdk/client.py (read-only snapshot/battle flow)",
+    "tests/test_pvp_battles.py",
+    "tests/test_ship_layout.py"
+  ],
+  "battle_results_schema_fields": [
+    "battle_id", "account_pseudonym", "role", "opponent_pseudonym_or_anon",
+    "opponent_hull_level", "outcome", "trophy_delta", "battle_duration_s",
+    "major_rooms_lost", "battle_strategy", "suspected_loss_cause",
+    "ship_config_version", "account_hull_level", "trophy_before", "trophy_after",
+    "notes", "created_at"
+  ]
+}
