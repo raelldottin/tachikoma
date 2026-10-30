@@ -1,0 +1,21 @@
+{
+  "ship_name": "SanitizedTestShip",
+  "ship_level": 10,
+  "ship_design_id": "HULL-10",
+  "ship_data": {
+    "Rooms": {
+      "Room": [
+        {"@RoomId": "r1", "@RoomDesignId": "256", "@Row": "10", "@Column": "20", "@RoomStatus": "normal", "@UpgradeRoomDesignId": "0"},
+        {"@RoomId": "r2", "@RoomDesignId": "100", "@Row": "11", "@Column": "20", "@RoomStatus": "normal", "@UpgradeRoomDesignId": "0"},
+        {"@RoomId": "r3", "@RoomDesignId": "300", "@Row": "12", "@Column": "22", "@RoomStatus": "normal", "@UpgradeRoomDesignId": "0"},
+        {"@RoomId": "r4", "@RoomDesignId": "400", "@Row": "13", "@Column": "22", "@RoomStatus": "normal", "@UpgradeRoomDesignId": "0"}
+      ]
+    }
+  },
+  "room_designs": [
+    {"@RoomDesignId": "256", "@RoomName": "Heavy Armor", "@ColumnWidth": "1", "@RowHeight": "1", "@RoomHp": "200", "@PowerGenerated": "0", "@MaxPopulation": "0"},
+    {"@RoomDesignId": "100", "@RoomName": "Laser Cannon", "@ColumnWidth": "2", "@RowHeight": "1", "@RoomHp": "50", "@PowerGenerated": "0", "@MaxPopulation": "0"},
+    {"@RoomDesignId": "300", "@RoomName": "Fusion Reactor", "@ColumnWidth": "2", "@RowHeight": "2", "@RoomHp": "100", "@PowerGenerated": "20", "@MaxPopulation": "0"},
+    {"@RoomDesignId": "400", "@RoomName": "Medbay", "@ColumnWidth": "2", "@RowHeight": "2", "@RoomHp": "60", "@PowerGenerated": "0", "@MaxPopulation": "0"}
+  ]
+}
