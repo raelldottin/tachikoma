@@ -1,298 +1,282 @@
-# Tachikoma Product Roadmap
+# Tachikoma Product Roadmap — Full Gameplay Automation Research
 
-**Version:** 1.0 (planning baseline)
+**Roadmap version:** 2.0
 **Updated:** 2026-11-03
-**Planning horizon:** November 2026–June 2027; later work is directional
-**Status:** Proposed roadmap, not a statement that future capabilities have shipped
-**Primary product:** Offline, evidence-based Pixel Starships progression and PvP decision support
+**Horizon:** November 2026–June 2027, then continuous experimentation
+**Status:** Proposed work and research plan; release completion must be established from GitHub and verified evidence
 **Repository:** [raelldottin/tachikoma](https://github.com/raelldottin/tachikoma)
 
-> **North star:** Help each ship make the next best legal, measurable investment in its crew, layout, research, equipment, and in-game combat AI—then demonstrate whether the change improved performance against comparable opponents.
+> **North star:** Determine how effective full Pixel Starships gameplay automation can become at progressing new accounts and winning PvP battles, and quantify the benefits, costs, risks, and failure modes versus manual gameplay.
 
-## 1. Executive decision
+## 1. Product mission and research premise
 
-Pivot Tachikoma's *new product development* away from expanding authenticated gameplay automation, credential reverse engineering, and market-transfer execution. Build a **local-first competitive ship advisor** that imports sanitized or manually entered game data, explains strategic weaknesses, recommends changes a player can make in the official client, and measures the results of human-played battles.
+The project owner reports **SavySoda authorization for testing the impact of full-gameplay automation**. Tachikoma's research program therefore includes the full game loop: account state acquisition, resource operations, crew development, research, upgrades, crafting, combat preparation, PvP, market/economy interactions, and orchestration across owned accounts.
 
-The existing automation code is legacy surface area to inventory, isolate, and make an explicit maintenance/retirement decision about—not automatically a roadmap commitment. Do not expand or re-enable it through this roadmap.
+**No gameplay activity is categorically excluded from the product roadmap.** PvP execution, unattended progression, farming, marketplace transactions, multi-account scheduling and direct game integration are candidate capabilities to develop and evaluate. The product must measure how effective they actually are rather than assuming automation is inherently beneficial.
 
-**Why now:** A working network endpoint is not itself a product outcome. Competitive improvement needs account-level baselines, a reasoned progression plan, and battle evidence. The game also evolves: the June 2026 Hull 14 update changed combat options; the October 2026 1.0 preview announced further equipment and training changes. Hard-coded recommendations are likely to become stale without versioned rule sets ([official Hull 14 notes](https://blog.pixelstarships.com/2026/06/17/hull-14-major-update-patch-notes-v0-999-55/); [official 1.0 preview](https://blog.pixelstarships.com/2026/10/16/sneak-peek-pixel-starships-1-0/)).
+The owner-provided scope description is the basis for this roadmap. The actual SavySoda correspondence was not independently available during drafting, so its precise wording, contacts, dates, limits and any special terms are not asserted as fact. Keep the source approval in private project records. This is a research-planning distinction, not an artificial ban on automation categories.
 
-### Non-negotiable product boundary
+The product should answer:
 
-Pixel Starships' [EULA](https://www.pixelstarships.com/EULA) and [fair-play statement](https://blog.pixelstarships.com/2022/09/12/fair-play-and-automation/) prohibit scripts or automation that confer an unfair advantage, explicitly calling out automated market interactions, item transfers, and tools controlling multiple accounts. Tachikoma's *new* features must be **offline/read-only decision support**. The user makes each gameplay change using the official game UI and its built-in crew/room AI.
+- How much faster do new ships progress under automation than with a manual routine?
+- What fraction of useful gameplay actions can be completed reliably without intervention?
+- Which crew, room, research, equipment and AI investments generate the highest measurable PvP improvement?
+- Can automated battle strategy adapt to hull, opponent characteristics, balance patches, and losses?
+- How do market/economy strategies affect resources, inventory availability and account growth?
+- Does operating several ships concurrently or sequentially increase throughput, and at what cost?
+- What is the operational cost (compute, models, resources, failures) per unit of progression and per net PvP gain?
 
-No autonomous PvP battles, bot farming, scripted market trades, simultaneous account control, token extraction, premium purchases, or live gameplay mutations. A user-controlled dashboard that *recommends* an in-game AI rule is in scope; a bot that *applies* it is not.
+**Strategic outcome:** An instrumented system that develops, plays, analyzes, and continually optimizes owned Pixel Starships accounts, with reproducible evidence of results.
 
-## 2. Who the product serves and what it does
+## 2. Current repository baseline (verified versus proposed)
 
-| User / job | Problem | Promised outcome |
+The public default branch was reviewed while drafting this roadmap. Code exists, but test presence or historical successful execution does not establish current gameplay compatibility or shipping readiness.
+
+| Capability or artifact | Present repo evidence | Plan |
 | --- | --- | --- |
-| Owner of a developing ship | Too many possible upgrades, limited minerals/gas/time | Ranked, cost-aware seven-day and 30-day growth plan |
-| Competitive PvP player | Repeated losses without diagnosis | Evidence-based attack/defense weaknesses and native-AI suggestions |
-| Player managing several ships | Different hulls and progression stages are easy to conflate | **Independent** private profiles and apples-to-apples comparisons; no coordinated account control |
-| Maintainer / tester | Old protocol research and fragile runtime behavior obscure product progress | Pure strategy engine, synthetic fixtures, reproducible tests, transparent evidence status |
+| Legacy game automation entrypoint | `run.py` | Assess current functionality and integrate with a reliable account scheduler |
+| Protocol and client transport | `sdk/client.py`, `sdk/device.py`, `sdk/commands.py` | Version endpoint capabilities and verify state outcomes |
+| Crew development formulas | `sdk/crew_leveling.py`, tests | Reuse and update for current balance and progression decisions |
+| Game calculation library | `sdk/game_formulas.py` | Expand verified strategy calculations |
+| Ship-layout evaluation | `sdk/ship_layout.py` | Improve room, armor, power and repair optimization |
+| PvP/battle flow models and tests | `tests/test_pvp_battles.py`, `tests/test_battle_flow.py` | Integrate combat evaluation, match strategy and empirical outcomes |
+| CI and autonomous development | `.github/workflows/`, `automation/`, `AGENTS.md` | Preserve reproducibility, add full-gameplay integration test coverage |
+| Historical research and captures | Repo documentation and prior Hermes discussions | Reconcile against tracked branches before treating as implemented |
 
-**Jobs to be done:** “What should I upgrade next?”, “Why did that defense fail?”, “Should I level the hull?”, “Which crew fits this weapon/repair role?”, “What native AI condition should I try?”, and “Did last week's changes help?”
+Prior Hermes Task D–J/J-M and GOAL-PVP-001 results have been discussed, but **their completion and integration into main were not verified**. GOAL-PVP-001's verifier was previously blocked by a Hermes managed-worker issue. Inspect its handoffs and commits before recreating or claiming those capabilities.
 
-**Positioning:** A competitive ship planning workbench, not an unattended Pixel Starships client.
+An earlier operator assessment reported exposed game credentials in public history. Credential rotation, token invalidation and history cleanup status are still to be confirmed by the maintainer. New test sessions should use secure current authentication, not known-exposed material.
 
-## 3. Current-state inventory and evidence boundaries
+## 3. Product pillars
 
-The following exists on GitHub **main at roadmap drafting time**; it is not a claim that all features are correct or game-version-current.
+### A. Account intelligence
 
-| Area | Existing repo evidence | Roadmap disposition |
-| --- | --- | --- |
-| Legacy app and command flow | `run.py`, `sdk/client.py`, `sdk/commands.py`, TUI | Audit; separate offline strategy from authenticated execution |
-| Crew analysis | `sdk/crew_leveling.py`, `tests/test_crew_leveling.py` | Reuse verified pure formulas; validate against current game balance |
-| Game formulas | `sdk/game_formulas.py`, `tests/test_game_formulas.py` | Make versions/assumptions explicit; test boundary cases |
-| Ship-layout evaluation | `sdk/ship_layout.py`, `tests/test_ship_layout.py` | Evolve heuristic scoring into explainable, confidence-labeled recommendations |
-| PvP/battle tests | `tests/test_pvp_battles.py`, `tests/test_battle_flow.py` | Use only offline/mocked fixtures for new analytics; tests are not proof of live competitive wins |
-| CI and agent harness | `.github/workflows/`, `automation/`, `AGENTS.md` | Retain safety gates and reproducibility; no mandatory live gameplay tests |
-| Existing product documentation | `README.template`, `README.md`, `docs/auth-operations.md` | Roadmap becomes strategic source of truth; historical auth docs are not future-feature mandates |
+Maintain current, account-scoped snapshots of hull level, trophies, crew, rooms, layout, ammunition, research, inventory, equipment, resources, game version and native AI configuration. Track observation time and source, distinguish complete from partial states, and prevent cross-account identity mix-ups.
 
-**Not verified as merged into main:** the prior Hermes Kanban inventory Tasks D–J / Task J-M, and GOAL-PVP-001. Their results may exist in local workspaces, branches, or reports. The last operator-provided status for the PvP goal (October 28) showed its verifier blocked by Hermes managed-worker infrastructure, **not a passed release gate**. Reconcile commit hashes, tests, provenance, and review gates before treating that work as shipped. Likewise, do not assume the repo's old crew training caps remain correct after future 1.0 changes.
+### B. Autonomous progression
 
-**Security debt:** A previous operator report identified publicly exposed account credentials/tokens. Rotation, invalidation, and public-ref cleanup were requested but their completed status has **not been independently verified here**. Keep incident remediation urgent and isolated; never use those credentials for roadmap development. Offline planning should not be blocked by the security incident, while any network-connected legacy execution stays disabled until separate authorization/compliance/security review.
+Develop decision policies and action orchestration for collection, resource management, crew training, healing, room upgrades, research, crafting, equipment, inventory management, maintenance and hull advancement. Coordinate prerequisites, cooldowns, scheduling, opportunity cost and the effect of actions on combat readiness.
 
-## 4. Product principles
+### C. Competitive PvP
 
-1. **Evidence before optimization.** State the input source, capture date, game version, and what is unknown. Never invent item inventory, levels, battle results, or opponent details.
-2. **Improve an account, don't merely accumulate trophies.** Compare against similar opponent hulls, ship configurations, and battle types. Track attack and defense separately.
-3. **One recommendation, one measurable hypothesis.** Every suggested action has a reason, estimated resource/time cost where known, expected mechanism, risk, and validation method.
-4. **Hull upgrades are gates, not a race.** Readiness is a transparent checklist; do not give false precision or guarantee winning.
-5. **Pure computation, human execution.** Imports and analytics are local/offline; gameplay decisions are performed in the game client.
-6. **Separate each ship.** Pseudonymous account identity with strict data isolation; no account coordination or market manipulation.
-7. **Version every game assumption.** Rules are tagged by patch, with explicit unknown/announced/published/observed status.
-8. **Secure by default.** No credentials in fixtures, reports, logs, repository files, or telemetry.
+Optimize ship layouts, target selection, defensive resilience, crew specialization, weapon operation, boarding, shields, repairs and native combat AI. Evaluate automated preparation, battle initiation, outcomes and subsequent policy changes. Separate offensive from defensive outcomes.
 
-## 5. Roadmap at a glance
+### D. Game economy
 
-Time boxes below are **prioritization targets**, not commitments. Move a phase only when its exit criteria are met.
+Study minerals, gas, items, crafting requirements, market prices, transaction fees and inventories across accounts. Evaluate market listings, purchases and inventory movement with exact listing/transaction identity and economic reconciliation. Compare the economic return of different strategies.
 
-| Release / target window | User-facing outcome | Priority | Exit gate |
+### E. Multi-account orchestration
+
+Develop separate account goals and a scheduling layer able to compare independent, sequential and concurrent operation. Measure how a portfolio of ships progresses without confusing credentials, state, resources, experiments or combat records. Assess orchestration strategies empirically.
+
+### F. Adaptive learning
+
+Feed observed game state and battle/economic outcomes back into recommendations and decision policies. Compare strategies, discover failure modes, update rules after patches and retain rollback-capable versions of policies. Optimize for long-term outcomes, not just the number of requests sent.
+
+## 4. Releases and target windows
+
+Windows are planning targets; exit criteria depend on working demonstrations and evidence rather than calendar dates.
+
+| Release | Target | Primary deliverable | Exit evidence |
 | --- | --- | --- | --- |
-| **R0 Foundation & trust** · Nov 2026 | Honest baseline, security separation, source-of-truth requirements | P0 | Product contract, evidence ledger, non-mutation tests and status audit |
-| **R1 Ship Profile MVP** · Nov–Dec 2026 | Import/enter ship and crew state, view weaknesses without live login | P0 | Two sanitized sample profiles + deterministic analysis + unknown handling |
-| **R2 Progression Planner** · Dec 2026–Jan 2027 | Ranked crew/room/research upgrades and hull readiness for each ship | P0 | Explainable 7/30-day plan, budget constraints, no invented costs |
-| **R3 Native AI & Build Lab** · Jan–Feb 2027 | Compare candidate layouts/crew roles and prepare human-applied native AI rules | P1 | At least two build strategies compared with clear assumptions |
-| **R4 PvP Results & Experiments** · Feb–Mar 2027 | Log human-played outcomes and identify recurring attack/defense failure patterns | P0 | Comparable-battle cohorts, uncertainty, before/after experiments |
-| **R5 Portfolio Workbench** · Mar–Apr 2027 | One offline view across independent ships and their next actions | P1 | Per-ship isolation, private local data, prioritized work queue |
-| **R6 Polished Reports & Release** · Apr–Jun 2027 | Usable CLI/local HTML reporting, exports, docs, and reproducible releases | P1 | End-to-end acceptance, docs, privacy/security review |
-| **Later / conditional** | Deeper replay analysis, optimization experiments, community-contributed strategy packs | P2 | Proven demand, legally permissible data, enough validation samples |
+| **R0 — Baseline and experimental design** | Nov 2026 | Existing-system audit, research scope ledger, reproducible test accounts and initial metrics | Correct baseline for each ship and experiment plan |
+| **R1 — Reliable game state and execution** | Nov–Dec 2026 | Account snapshots, lifecycle, typed commands, state reconciliation and observability | Repeatable verified operations with attributed outcomes |
+| **R2 — Automated growth engine** | Dec 2026–Jan 2027 | Resource collection, crew, research, crafting, upgrades and scheduling | Measured account progression with reliability and resource accounting |
+| **R3 — PvP automation engine** | Jan–Feb 2027 | Combat preparation, native AI policies, PvP runs, defense assessment | Win/loss/trophy evidence broken down by opponent cohort |
+| **R4 — Marketplace and economy optimization** | Feb–Mar 2027 | Item/market execution models, resource allocation and economic experiments | Reconciled items, currency and efficiency across operations |
+| **R5 — Multi-account orchestration** | Mar–Apr 2027 | Coordinated scheduling, differentiated account strategies and comparative experiments | Measured fleet throughput, isolation and operator time savings |
+| **R6 — Adaptive optimization and release** | Apr–Jun 2027 | Data-driven strategy tuning, dashboards, alerts, durable test harness and releases | Reproducible improvements with known costs and failure cases |
+| **Post-R6** | Continuous | New game-version support, strategy comparison, richer telemetry and optimization | Evidence-backed gains under new patches and account conditions |
 
-### R0 — Foundation & trust (P0)
+### R0 — Baseline and experimental design
 
-**Deliver:** a `roadmap-status` inventory of code and unfinished Hermes artifacts; repo release baseline and test commands; patch/version ledger; documented offline boundary; signed-off security-isolation policy; sanitized example dataset.
+Produce a factual map of what current `main`, historical branches and Hermes workspaces actually contain. Record a profile for every participating new ship: hull, crew, layout, research, resource balances, current PvP standing and baseline gameplay schedule. Capture game build and test provenance. Preserve the reported SavySoda approval as private source evidence and document its actual terms without guessing.
 
-**Work:** review legacy live workflows and credential storage without reading or republishing secrets; establish an explicit owner decision on disabling/retiring network automation; confirm which former GOAL-PVP-001 components have merged; label each capability `shipped`, `prototype`, `unverified`, `deferred` or `prohibited`.
+Define manual and automated comparison groups or repeated before/after trials. Track the workload of daily maintenance and manual game time. Specify outcome metrics and how to compare ships of different hull levels fairly.
 
-**Accept when:** new advisor code has zero authenticated HTTP paths; all tests use mocked/synthetic data; the repository is scanned for sensitive material without outputting values; game rules have source/version metadata; no claim is based merely on a passing old CI badge.
+**Exit:** a reproducible baseline, test-account dataset, observed game version, validated data schema, current-test-capability inventory and defined initial experiments.
 
-**Dependencies:** source audit; incident owner retains separate responsibility for credential rotation and historical purge. Do not make game-account login a prerequisite.
+### R1 — Reliable game state and execution
 
-### R1 — Ship Profile MVP (P0)
+Build an account-aware state provider and typed gameplay action catalog. Determine which current game endpoints correspond to desired operations, which fields represent specific items and ships, and how to reconcile success against observed game state. Replace ad hoc assumptions with explicit request/response and postcondition contracts.
 
-**Deliver:** versioned local schema for `ShipSnapshot`, `CrewSnapshot`, `RoomSnapshot`, `ResearchSnapshot`, and `DataProvenance`; local JSON/CSV/manual form import; validation with clear missing-field diagnostics; per-ship report.
+Create a scheduler, event log, state-delta capture, command status model and operational dashboard. Reuse existing verified authentication and client code where suitable; keep secret material outside tracked artifacts.
 
-**Must capture:** pseudonymous ship ID, hull/trophies (optional), game patch, source and timestamp, rooms/levels/placement/power, crew level/role/ability/equipment/training, research, available resources, native AI rules if supplied. Credentials and authentication artifacts are forbidden.
+**Exit:** multiple representative operations can be scheduled, attributed to the correct ship, observed, and checked for their actual effects. Errors, timeouts and uncertain outcomes are represented explicitly.
 
-**MVP views:** current strengths/weaknesses, exposed critical rooms, power and repair coverage, crew readiness, missing evidence, five most promising manual improvements.
+### R2 — Automated growth engine
 
-**Accept when:** fixtures for at least two materially different hull configurations produce stable, reproducible output; invalid/missing inputs do not silently become zero; two ships' records cannot mix; every recommendation links to relevant input fields.
+Develop progression policies that rank available actions against resources, dependencies, cooldowns and PvP readiness. Include daily collection, crew leveling/training, healing, research, room upgrades, crafting, modules/equipment and resource reserves. Model hull-upgrade timing as a testable strategy rather than a universal rule.
 
-### R2 — Progression Planner (P0)
+Compare manual daily routines with automated policies over comparable periods. Analyze minerals/gas gained, account development, unproductive spending and unattended execution reliability.
 
-**Deliver:** opportunity scoring, upgrade dependency graph, per-ship upgrade readiness and seven-/30-day investment plans.
+**Exit:** measurable gains in progression tasks completed, operator time saved, and/or resource utilization, with transparent costs and a failure ledger.
 
-**Prioritization dimensions:** expected PvP impact (hypothesis, not fact), minerals/gas/time required, crew/room dependencies, prerequisite research, irreversibility, risk and confidence. Unknown costs remain unknown rather than estimated from fabricated numbers.
+### R3 — PvP automation engine
 
-**Decision support:** crew leveling/training/equipment recommendations; weapon, shield, engine, reactor, repair, security, hangar upgrades where relevant; research ordering; protected inventory/reserve awareness if an independently verified offline inventory module is available; hull readiness checklist.
+Build a combat policy layer that evaluates ship configurations, native room/crew AI, power allocation, targeting, repair support, boarding and match preparation. Evaluate PvP run management and outcome recording against matched opponent brackets.
 
-**Accept when:** hard resource ceilings and protected-reserve constraints are respected; incompatible upgrades are never suggested simultaneously; priority changes are explainable; the same inputs and rules yield identical results; a hull-upgrade decision shows explicit unmet gates and requires human judgment.
+Compare at least two candidate strategies with preserved configuration versions and clearly defined experimental windows. Track wins, losses, defensive results, trophies, duration and resource costs. Distinguish an HTTP response from a genuine game outcome.
 
-### R3 — Native AI & Build Lab (P1)
+**Exit:** reproducible battle trials, offense/defense scorecards, opponent-normalized comparisons and an evidence-based recommendation for the next strategy.
 
-**Deliver:** offline reference cards for native crew/room AI conditions and actions; role-to-room match suggestions; layout comparison and hypothetical loadout scenarios.
+### R4 — Marketplace and economy optimization
 
-**Hypotheses to test:** coordinated target focus versus broader targeting, repair travel time, shield and reactor resilience, defensive crew allocation, boarding/anti-boarding readiness, missile/craft interactions at supported hulls. Availability and legal conditions must be checked against the versioned game data.
+Develop an economic model for item demand, crafting ingredients, minerals/gas, marketplace listings and purchases. Reuse prior Task J-M's insight that the visible client used market-mediated transfers, but confirm it against current repository code and captures before treating it as a production contract.
 
-**Output:** human-readable in-client setup steps, before/after expected mechanism, assumptions, and manual rollback instructions—not executable instructions for direct server API mutation.
+Correlate listing creation, discovered sale/listing identity, purchase, account inventory delta, price, fees and seller proceeds. Compare economic strategies and their effects on account growth.
 
-**Accept when:** invalid game-version combinations are rejected; suggestions are clearly labeled `candidate` until corroborated by battle evidence; the system cannot send or apply AI changes to the game.
+**Exit:** successful reconciliation for representative market/economy experiments, meaningful efficiency comparisons, and no claims of completed transfers based only on listing creation.
 
-### R4 — PvP Results & Experiments (P0)
+### R5 — Multi-account orchestration
 
-**Deliver:** manual battle journal, optional sanitized replay metadata import (only when obtained lawfully), attack/defense scorecards, loss-cause taxonomy, and controlled before/after comparison.
+Add account-scoped objectives, scheduler isolation, resource budgets, state ownership, action histories and fleet-wide reporting. Compare independently optimized ships with shared planning policies, and evaluate sequential versus concurrent operation by throughput, failure rate, resource results and competition outcomes.
 
-**Data grain:** one row per human-played battle: profile, timestamp, game version, configuration version, mode, attack/defense, own/opponent hull if known, result, trophy change if known, duration if known, notable damaged/lost rooms and suspected cause. Unknown outcomes are not counted as defeats.
+**Exit:** consistent multi-ship metrics, no unintended cross-account execution or data mix-ups, reproducible workload comparisons, and measurable operator time savings.
 
-**Analytics:** win rate and sample size; confidence interval or simple uncertainty notice; net trophies; breakdown by opponent bracket and mode; repeated loss causes; performance before/after a single ship change. Do not pool mismatched account cohorts or treat correlational improvements as causal proof.
+### R6 — Adaptive optimization and release
 
-**Suggested initial targets (to validate after baseline):** 30 comparable attacks **and** 30 comparable defenses per tested configuration where practical; 7-day reporting freshness; improving comparable-opponent performance by 10 percentage points versus baseline is a hypothesis, not an SLA or guarantee.
+Implement a policy evaluation loop: baseline, new hypothesis, instrumented action, observed outcome, comparison, decision and versioned rollout. Generate reports for ship growth and PvP outcomes. Provide CLI and local dashboard usability, test fixtures, operational diagnostics and release instructions.
 
-**Accept when:** tests cover win/loss/tie/unknown, data leakage across profiles, uneven sample sizes, confounded comparisons, and reproducible reports. Recommendations must not claim measured improvement without adequately comparable observations.
+**Exit:** repeatable full-gameplay scenarios, clean releases, regression tests, documented known limitations, and a study report quantifying when automation helped, failed or was more expensive than manual play.
 
-### R5 — Portfolio Workbench (P1)
+## 5. Prioritized epic backlog
 
-**Deliver:** offline account overview and separate account improvement queues; a budget-aware planning calendar; progress against last recommendation; model-change audit trail.
+These IDs are planning references, not claims that existing GitHub issues have been created.
 
-**Design:** independent ship profiles with no simultaneous logins or multi-account gameplay actions. Comparisons normalize for hull, patch, opponents, and missing data rather than presenting an unsupported global ranking.
+| Epic | Priority | Focus | Owner lane / dependency |
+| --- | --- | --- | --- |
+| **AUTO-001** | P0 | Verified code and Hermes baseline, game/version provenance | Maintainer, verifier |
+| **AUTO-002** | P0 | Multi-account identity, state and inventory snapshots | Protocol, architect / AUTO-001 |
+| **AUTO-003** | P0 | Gameplay action catalog, postconditions and reconciliation | Protocol, safety / AUTO-002 |
+| **AUTO-004** | P0 | Autonomous daily progression scheduler | Architect, analyst / AUTO-003 |
+| **AUTO-005** | P0 | Crew/ship/research upgrade policy engine | Analyst, researcher / AUTO-002 |
+| **AUTO-006** | P0 | Native combat AI and PvP strategy library | Researcher, analyst / AUTO-005 |
+| **AUTO-007** | P0 | PvP execution and battle-result evidence | Protocol, architect / AUTO-003, AUTO-006 |
+| **AUTO-008** | P1 | Market/item/economy experimentation | Analyst, protocol / AUTO-003 |
+| **AUTO-009** | P1 | Multi-account orchestration and throughput study | Architect, safety / AUTO-004, AUTO-007 |
+| **AUTO-010** | P0 | Controlled manual-vs-automation study design | Analyst, verifier / AUTO-001 |
+| **AUTO-011** | P1 | Adaptive policy iteration and optimization | Analyst, architect / AUTO-007, AUTO-010 |
+| **AUTO-012** | P1 | Dashboard, audit and reporting UX | Architect / AUTO-002, AUTO-010 |
+| **AUTO-013** | P0 | Security and account-secret remediation | Safety, maintainer / parallel |
+| **AUTO-014** | P0 | Comprehensive test and reliability harness | Verifier, architect / across releases |
+| **AUTO-015** | P1 | Patch-aware rules and compatibility verification | Researcher, protocol / across releases |
 
-**Accept when:** profile separation is enforced in import/storage/reporting; switching profiles cannot leak another ship's data; a combined dashboard is only an offline summary.
+**First three implementation slices:** (1) validate the current system and account baselines; (2) prove reliable account-specific state and action reconciliation; (3) connect a daily progression policy to the execution and measurement loop. Do not rebuild existing functionality without auditing it.
 
-### R6 — Polished Reports & Release (P1)
+## 6. Experimental design
 
-**Deliver:** documented local-first CLI and/or static HTML report generator; screenshot/manual data workflow; accessible summaries; reproducible sample reports; migration documentation; user guide; source citations and changelog.
+The study should compare at least the following modes, using matched hulls/ability levels or statistical adjustment where matching is imperfect:
 
-**Accept when:** a new user can install the tool, import synthetic example data, view a ship assessment, plan one change, record an outcome, and compare results without entering credentials, connecting to a game API, or making any gameplay action. The release contains no secrets, raw captures, or private profile data.
+- **Manual control:** a documented human routine with observed time and outcomes.
+- **Rule-based automation:** stable deterministic schedules and progression policies.
+- **Adaptive automation:** policies revised from feedback, optionally using AI agents for planning and review.
+- **Multi-account operational variants:** independent execution versus coordinated scheduling, sequential versus concurrent, differentiated versus common strategies.
 
-### Later options — Do not pre-commit
+Use baseline windows, explicit configuration revisions, patch versions and comparable opponent cohorts. Track interventions such as new legendary crew, premium spending or unexpected game updates. Include failed tasks and losses, not only successful runs. State sample size and uncertainty.
 
-- Structured replay annotation and per-room survival visualization if non-sensitive, authorized sources are available.
-- Scenario scoring across strategies and hull levels; distinguish heuristic from validated simulation.
-- Community-contributed versioned, reviewed strategy packs with attribution and provenance.
-- Optional local desktop app after CLI/report usage demonstrates demand.
-- More sophisticated ranking/forecasting only after battle data is sufficient and well-calibrated.
+**Example experiment:** For two ships at comparable hull levels, establish initial crew and trophy baselines; run a documented manual routine for one comparison period and an automated progression policy for another; compare progression and PvP after normalizing for time, resources and opponent strength. Treat the outcome as preliminary if the accounts or schedules are not genuinely comparable.
 
-## 6. Prioritized epic backlog
+## 7. Product scorecard
 
-Each epic produces independently verifiable artifacts; IDs are stable planning identifiers, **not assertions that GitHub issues/Kanban cards already exist**.
-
-| Epic | Priority | Owner lane | Depends on | First demonstrable acceptance |
-| --- | --- | --- | --- | --- |
-| **PV-001 Baseline & policy gate** | P0 | Safety + verifier | None | Non-mutation contract, repo audit and known/unknown status ledger |
-| **PV-002 Snapshot schema/import** | P0 | Architect + analyst | PV-001 | Two isolated sanitized profiles parse and validate |
-| **PV-003 Ship/crew readiness** | P0 | Analyst | PV-002 | Repeatable, explainable room/crew gap assessment |
-| **PV-004 Upgrade dependency & budget planner** | P0 | Analyst + architect | PV-003 | 7/30-day plan respects dependencies and unknown costs |
-| **PV-005 Patch-aware game data** | P0 | Researcher + verifier | PV-001 | Rule set names patch, source, effective/uncertain status |
-| **PV-006 Battle journal & cohorts** | P0 | Analyst | PV-002 | Attack/defense and opponent bracket statistics correct |
-| **PV-007 Native AI recommendations** | P1 | Researcher + architect | PV-003, PV-005 | Manual rule cards with conditions, rationale, rollback |
-| **PV-008 Layout/loadout comparison** | P1 | Architect + analyst | PV-003, PV-005 | Candidate A/B scored without pretending to simulate battles |
-| **PV-009 Experiment review** | P1 | Analyst + verifier | PV-006, PV-007 | Change-to-result comparison flags small/confounded samples |
-| **PV-010 Portfolio/local reporting** | P1 | Architect | PV-004, PV-006 | Private per-account dashboards and reproducible exports |
-| **PV-011 Distribution & product QA** | P1 | Verifier + maintainer | PV-010 | Install → analyze → plan → journal → compare offline demo |
-| **PV-012 Live/legacy deprecation decision** | P0 risk | Maintainer + safety | PV-001 | Documented decision on obsolete authenticated workflows; no silent activation |
-
-**Suggested first three vertical slices:** (1) inventory current repository / security and game-version assumptions, (2) import two synthetic ship profiles and run existing layout/crew evaluation, (3) generate the first human-readable readiness report. Avoid a large parallel swarm until a single slice works end to end.
-
-## 7. Measurement framework
-
-**North-star outcome:** Change in **human-played PvP win rate against comparable opponents**, measured separately for attack and defense at a comparable hull/game-version/strategy level. This is a long-run outcome, not an engineering gate for shipping an offline MVP.
-
-| Measure | Definition | Use / guardrail |
+| Metric | Definition | Why it matters |
 | --- | --- | --- |
-| Comparable attack win rate | Wins / known-result attacks in the chosen opponent bracket and version | Always show denominator and period |
-| Comparable defense win rate | Wins / known-result defenses in the same bracket and version | Do not mix attack/defense |
-| Net trophy change | Trophy gains minus losses over a stated window | Supporting signal; susceptible to matchmaking |
-| Recommendation completion | Human-confirmed changes / planned changes | Leading indicator, not proof of improvement |
-| Time-to-first-insight | Minutes from valid import to first explainable report | MVP usability |
-| Snapshot freshness | Age of latest manually supplied data | Suppress high-confidence advice on stale inputs |
-| Explanation coverage | Recommendations with provenance, reason, confidence and unknowns / total | Quality gate; target 100% |
-| Safety regressions | New unauthorized network/gameplay mutation or secret leak paths | Release tolerance: zero |
+| Account growth velocity | Verified upgrades, crew levels and research progress per elapsed day | Core progression outcome |
+| Attack win rate | Wins / known-result attacks in a comparable cohort | Offensive PvP effectiveness |
+| Defense win rate | Wins / known-result defenses in comparable conditions | Defensive ship resilience |
+| Net trophies | Trophy gains minus losses in a stated interval | Competitive movement |
+| Resources per hour | Useful minerals/gas gained per elapsed hour | Economic efficiency |
+| Market return | Net realized item/resource gain minus purchase and transaction costs | Trading/economy performance |
+| Automation coverage | Completed game actions without manual intervention / intended actions | Breadth of autonomous capability |
+| Verified action success | Operations with confirmed postconditions / attempted operations | Execution reliability |
+| Time saved | Human active minutes avoided per ship per week | Operational value |
+| Cost per progression unit | Resources, compute and model cost / verified achievement | Net usefulness of automation |
+| Incident/failure frequency | Failed, duplicated, misattributed or unreconciled actions per test period | Research quality and reliability |
 
-No win-rate or trophy target should drive behavior that violates platform policy. Targets are revised after valid baseline data arrives.
+Report sample size, game version and data provenance alongside every headline metric. Set numerical improvement targets after collecting baselines; do not invent current win rates or claim unverified gains.
 
-## 8. Game-version and evidence policy
-
-Maintain a versioned `GameRuleset` manifest with `version`, `release_status`, `source_url`, `observed_on`, `effective_from`, `supersedes`, and confidence per rule. Official patch notes outrank older community observations, but game-client behavior may require re-validation. Keep **announced** distinct from **released**.
-
-Specific watchpoints:
-
-- **Released in June 2026:** Hull 14, new hangars/rooms, new craft and tactical AI features, several power and balance changes ([V0.999.55](https://blog.pixelstarships.com/2026/06/17/hull-14-major-update-patch-notes-v0-999-55/)).
-- **Released in August 2026:** V0.999.60 patch; review full notes before attributing current values ([official game blog](https://blog.pixelstarships.com/)).
-- **Announced October 16, 2026, not independently confirmed shipped in this roadmap:** Version 1.0 changes to Legendary Equipment and Legendary Crew training points, plus UI/mining-drone behavior ([1.0 preview](https://blog.pixelstarships.com/2026/10/16/sneak-peek-pixel-starships-1-0/)). Do not overwrite published crew formulas with announced caps until release is confirmed and tested.
-
-Every scored recommendation must expose its ruleset version. Unknown patch compatibility degrades confidence or blocks the specific recommendation rather than making up an answer.
-
-## 9. Data and architecture contract
-
-**Architecture direction:**
+## 8. Architecture direction
 
 ```text
-manual entry / sanitized export / screenshot-derived observations
-                    |
-             schema validation
-                    |
-        local pseudonymous ship snapshots
-                    |
-       pure game-rule and planning functions
-                    |
-    readiness + budget + native-AI recommendation
-                    |
-         human-readable report / local CLI
-                    |
-       human plays using official PSS client
-                    |
-          manual battle-results journal
-                    |
-      comparison / evidence confidence / next plan
+account-specific game state + versioned rules + experiment configuration
+                                |
+                        validated snapshots
+                                |
+                 strategy / progression policies
+                                |
+                    multi-account scheduler
+                                |
+                gameplay action adapter / client
+                                |
+                 observed response + game state
+                                |
+               reconciliation and event journal
+                                |
+             PvP, progression and economy metrics
+                                |
+             evaluator / policy revision / reports
 ```
 
-- Pure strategy/domain modules take typed, validated data and return deterministic results. **No import of authenticated game client transport.**
-- Keep any old `sdk/client.py` functionality in the separately audited legacy boundary. Never transitively reach it from the offline advisor.
-- Use local portable structured files with an explicit schema version; define privacy/retention/export/delete behavior before building a database or telemetry.
-- Ingestion defaults to manual/sanitized import. Do not make reverse-engineered live API calls, credentials, game-client interception, or automated screen control a dependency.
-- Keep a per-rule explanation and per-input provenance trace; do not silently normalize missing resource values to zero.
-- Compatibility: Python 3.11 baseline according to `pyproject.toml`; respect repository test conventions and `AGENTS.md` restrictions. Use `README.template` as the maintained README source.
-- No remote user telemetry, hosted account dashboard, or multi-device sync in initial scope.
+- **Domain layer:** typed ship, room, crew, inventory, research and battle models; pure deterministic recommendation functions.
+- **Execution layer:** game-client compatibility, typed actions, per-account state machines, scheduling, cooldown and retry logic based on observed operation semantics.
+- **Evidence layer:** structured event records with account alias, game version, action ID, expected effect, observed effect, costs and confidence.
+- **Experiment layer:** policy versions, manual and automated cohorts, configuration revisions, opponent comparisons and reports.
+- **Operator layer:** CLI/local dashboard, configuration, intervention, review and observability.
 
-## 10. Quality, security, and release gates
+Keep the domain and live transport separate to support repeatable offline simulation and real-environment validation. Model ambiguity explicitly: a successful request is not necessarily a completed gameplay action. Design retries based on proven idempotency and reconciliation rather than guessing.
 
-**Definition of ready:** explicit user problem; one independent vertical slice; known sources and patch version; synthetic examples; permitted paths; no live gameplay requirement; measurable acceptance; failure behavior specified.
+## 9. Gameplay compatibility and evidence
 
-**Definition of done:** deterministic tests and adversarial fixtures; full existing test suite and configured lint/type checks; `git diff --check`; reviewed docs; no new authenticated network path; no secrets in code/test/report data; provenance and limitations visible; code review or verifier gate pass; one realistic synthetic end-to-end walkthrough.
+Maintain a versioned game-rule source ledger, distinguishing official released mechanics, official announcements, community observations, static protocol discoveries and dynamically demonstrated behavior. Relevant recent anchors include [Hull 14 notes (2026-06-17)](https://blog.pixelstarships.com/2026/06/17/hull-14-major-update-patch-notes-v0-999-55/) and [Pixel Starships 1.0 preview (2026-10-16)](https://blog.pixelstarships.com/2026/10/16/sneak-peek-pixel-starships-1-0/).
 
-**Security incident track (parallel but not optional):** identify owner and independently verify the earlier credential-rotation, refresh-token invalidation, GitHub history cleanup, and scheduled workflow disablement decisions. Do not publish values or re-use leaked material. Do not equate history deletion with token invalidation. Block network-enabled changes until this incident and platform-policy review are resolved, while leaving offline development unblocked.
+For the observed marketplace path, prior operator-provided capture analysis identified `SellItem3`, `ListActiveMarketplaceMessages5`, and `Purchase4` with an exact `SaleId`. It did **not** establish a live `GiftItem` route or fully reconciled reciprocal trade. Treat this as historical test evidence to independently reconcile, not proof that every endpoint remains current.
 
-**Legacy risk control:** new advisor releases must not include an automatic PvP, marketplace, farming, or cross-account action even behind a flag. Audit whether the old scheduled workflows should be retired, quarantined, or moved to a separately approved historical branch. This roadmap itself does not disable, delete, or rewrite those workflows.
+For battles, classify evidence separately for request shape, battle acceptance, finalization, server outcome and actual competitive performance. Do not promote one successful protocol call into a claim of automation effectiveness.
 
-## 11. Key risks and explicit decisions
+## 10. Quality, reliability and security engineering
 
-| Risk / decision | Impact | Mitigation / owner |
-| --- | --- | --- |
-| Public credentials/tokens reported exposed; current remediation status unknown | Account compromise and workflow misuse | **P0 security owner** validates revocation/rotation, public refs, and automation status separately |
-| Existing repo advertises authenticated automated battles/collections | Account enforcement risk under official EULA | **Product owner** decides quarantine/deprecation; no expansion or automatic use |
-| GOAL-PVP-001 local swarm not proven merged or verified | Duplicate implementation; phantom progress | **Maintainer** checks commit IDs, tests, verifier metadata, and branch merge state |
-| 1.0 announced balance changes may invalidate crew scores | Misleading recommendations | **Researcher** uses announced/released version states; verifier validates rules |
-| Sparse or biased PvP samples | Overfitted strategy recommendations | **Analyst** shows sample sizes, confidence and opponent brackets |
-| Data entry cost | Low adoption | **Product** starts with minimal typed fields and gradual detail |
-| Cross-account identity/mix-up | Incorrect or private recommendations | **Architect** enforces pseudonymous profile isolation |
-| Market or item-transfer automation pressure | Fair-play and asset-loss risk | **Safety owner** keeps trading execution explicitly out of scope |
+Engineering safeguards support reproducibility and protect the test accounts; they are **not categorical bans on gameplay-automation research areas**.
 
-**Open product decisions:** (A) whether to deprecate legacy online `run.py` workflows immediately; (B) CLI-first versus generated static HTML as first user surface (recommend CLI + static report); (C) minimum fields users will actually enter manually; (D) whether a future community guide feature is useful after offline MVP adoption. None is a prerequisite to publishing this document.
+- Protect authentication material using secret storage and redaction. Never commit passwords or bearer/refresh tokens; replace credentials previously reported exposed.
+- Keep versioned code and validated fixtures in CI; preserve synthetically mocked unit tests alongside separately analyzed real test results.
+- Reconcile each gameplay action with observed state; record timeouts, duplicate operations, incomplete responses and negative results.
+- Preserve account ownership and identity throughout execution so no ship receives another account's actions, resources or metrics.
+- Record requested and realized resource expenditure, including premium spending where actually studied.
+- Document specific SavySoda approval correspondence privately rather than inventing its provisions in a public file.
+- Maintain runtime observability and the ability for the test operator to halt experiments or recover from faults.
+- Give verifier evidence, tests, and failures the same priority as new feature implementation.
+
+**Definition of done:** acceptance tests against representative fixtures; full repo test/lint requirements; live evidence where relevant; exact post-state reconciliation; performance metrics with limitations; no committed secrets; independent review; and an updated roadmap status.
+
+## 11. Principal dependencies, risks and decisions
+
+| Decision / risk | Required action |
+| --- | --- |
+| Reported SavySoda full-automation approval | Preserve actual grant privately and use its terms as factual research context; do not invent limits |
+| Publicly exposed credentials reported previously | Verify rotation/revocation and clean test credentials; don't reuse compromised values |
+| GOAL-PVP-001 verifier/merge status uncertain | Reconcile the local task evidence against main before duplicating implementation |
+| Patch-dependent mechanics and old formulas | Maintain version/patch evidence and regression tests |
+| PvP matching and sample-selection bias | Normalize by opponent cohort and report uncertainty |
+| Long-running activity and failure loops | Build event journal, reconciliation, fault recovery and an operator stop |
+| Cross-account state or execution confusion | Typed profile isolation, per-account audit and verification |
+| Resource/premium cost of experiments | Measure costs and economic value rather than equating automation activity with success |
 
 ## 12. Operating cadence and ownership
 
-- **Weekly:** inspect one ship's latest data, choose its top three feasible manual actions, log completed actions and battle outcomes, and update risks and patch-watch notes.
-- **Every two weeks:** ship at most one or two vertical slices with tests and concrete demo evidence; avoid unbounded multi-agent parallelism and retry loops.
-- **Monthly:** compare normalized PvP results and adjust the plan; retain counter-evidence and assumptions rather than claiming victory from anecdotes.
-- **When official patch notes release:** revalidate affected formulas, room compatibility, equipment and AI rules before applying them to recommendations.
+**Weekly:** inspect per-ship growth, resource budgets, PvP results, failed actions and top policy changes. **Biweekly:** ship one or two vertical features and test their impact. **Monthly:** publish a comparative automation-effectiveness report with account growth, battle results, operator effort and operating cost.
 
-Kanban roles: `tachikoma-researcher` owns game-rules sourcing; `tachikoma-analyst` owns evaluation and measurement; `tachikoma-architect` owns typed pure modules and report integration; `tachikoma-protocol` assists **offline data/schema interpretation only**; `tachikoma-safety` owns policy, privacy and mutation audit; `tachikoma-verifier` independently tests claims; `tachikoma` synthesizes accepted work. Workers do not declare their own verifier gates passed.
+Hermes owner lanes: `tachikoma-researcher` researches balance and strategic hypotheses; `tachikoma-protocol` reconciles observed client operations; `tachikoma-analyst` models progression and experiments; `tachikoma-architect` integrates execution and decision layers; `tachikoma-safety` audits account state, credential handling and experiment reliability; `tachikoma-verifier` challenges results; `tachikoma` synthesizes.
 
-## 13. Immediate next action (first accepted milestone)
+## 13. Next milestone
 
-**PV-001/PV-002 thin vertical slice:** produce a complete offline recommendation for **one synthetic ship** and a contrasting second ship:
+**AUTO-001 + AUTO-002 + AUTO-003:** establish validated multi-account state, current code capability map and one verified gameplay action flow. From that foundation, implement the first reproducible autonomous daily progression sequence with actual progress metrics, then proceed to PvP strategy tests and the economic experiments.
 
-1. Audit the current branch and last GOAL-PVP-001 handoffs; record what truly exists.
-2. Define a versioned, credential-free `ShipSnapshot` schema and two synthetic fixtures.
-3. Feed both into existing pure ship-layout and crew-readiness analysis.
-4. Produce a report naming the top three recommendations **with evidence, unknowns and explicit manual next actions**.
-5. Verify no network traffic and no gameplay mutation can occur from the report path.
-6. Independently test and present the output; only then begin resource budgeting and historical battle journals.
-
-**Acceptance:** a new user can run the example completely offline, compare the two ships, understand the reasons and limitations, and see that no game state was changed.
+**Acceptance:** a participating test ship has a documented starting state; Tachikoma performs and reconciles a sequence of representative gameplay actions; progression, operator time and failures are measured; and the evidence is sufficient to compare automation with manual operation.
 
 ## 14. Sources and maintenance
 
-Repository evidence reviewed on 2026-11-03: [README.template](../README.template), [AGENTS.md](../AGENTS.md), [crew leveling](../sdk/crew_leveling.py), [ship layout](../sdk/ship_layout.py), [game formulas](../sdk/game_formulas.py), [PvP tests](../tests/test_pvp_battles.py), [automation harness](../automation/README.md), and [workflow directory](../.github/workflows/).
+Repository source files reviewed at initial planning: [README.template](../README.template), [AGENTS.md](../AGENTS.md), [client](../sdk/client.py), [crew](../sdk/crew_leveling.py), [layout](../sdk/ship_layout.py), [formulas](../sdk/game_formulas.py), [PvP tests](../tests/test_pvp_battles.py), [automation harness](../automation/README.md).
 
-External sources:
+External references: [Pixel Starships official blog](https://blog.pixelstarships.com/), [Hull 14 notes](https://blog.pixelstarships.com/2026/06/17/hull-14-major-update-patch-notes-v0-999-55/), and [1.0 preview](https://blog.pixelstarships.com/2026/10/16/sneak-peek-pixel-starships-1-0/). The owner reports a separate SavySoda test authorization; its document was not supplied or verified here.
 
-1. [Pixel Starships EULA](https://www.pixelstarships.com/EULA).
-2. [SavySoda: Fair Play and Automation (2022-09-12)](https://blog.pixelstarships.com/2022/09/12/fair-play-and-automation/).
-3. [SavySoda: Hull 14 Major Update (2026-06-17)](https://blog.pixelstarships.com/2026/06/17/hull-14-major-update-patch-notes-v0-999-55/).
-4. [SavySoda: Pixel Starships 1.0 Preview (2026-10-16)](https://blog.pixelstarships.com/2026/10/16/sneak-peek-pixel-starships-1-0/).
-5. [SavySoda game updates index](https://blog.pixelstarships.com/).
-
-**Maintenance rule:** update this roadmap when a release gate passes, the repo's verified implementation changes, or the game's official rules change. Separate delivered facts from proposals. Do not retroactively mark earlier Kanban goals done solely because their task titles appear in a planning document.
+Keep this roadmap current with code that has actually merged, game releases, experiment results, and changes in the research mandate. **Full gameplay automation is the product objective; offline-only operation is no longer the governing restriction.**
