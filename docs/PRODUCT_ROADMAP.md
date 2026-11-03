@@ -1,10 +1,10 @@
 # Tachikoma Product Roadmap
 
-**Version:** 1.0 (planning baseline)  
-**Updated:** 2026-11-03  
-**Planning horizon:** November 2026–June 2027; later work is directional  
-**Status:** Proposed roadmap, not a statement that future capabilities have shipped  
-**Primary product:** Offline, evidence-based Pixel Starships progression and PvP decision support  
+**Version:** 1.0 (planning baseline)
+**Updated:** 2026-11-03
+**Planning horizon:** November 2026–June 2027; later work is directional
+**Status:** Proposed roadmap, not a statement that future capabilities have shipped
+**Primary product:** Offline, evidence-based Pixel Starships progression and PvP decision support
 **Repository:** [raelldottin/tachikoma](https://github.com/raelldottin/tachikoma)
 
 > **North star:** Help each ship make the next best legal, measurable investment in its crew, layout, research, equipment, and in-game combat AI—then demonstrate whether the change improved performance against comparable opponents.
