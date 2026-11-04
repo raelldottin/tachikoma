@@ -1,7 +1,7 @@
 <!---
 This file is auto-generate by a github hook please modify README.template if you don't want to loose your work
 -->
-# //github.com/raelldottin/tachikoma 1.1.7-123
+# //github.com/raelldottin/tachikoma 1.1.7-278
 [![Daily Automated Actions](https://github.com/raelldottin/tachikoma/actions/workflows/daily-run.yml/badge.svg?event=schedule)](https://github.com/raelldottin/tachikoma/actions/workflows/daily-run.yml)
 
 # Tachikoma - Pixel Starships Automation
@@ -122,7 +122,7 @@ Contributions to enhance the script's functionality or efficiency are welcome. F
 
 ## License
 
-This project is licensed under the terms specified in the `LICENSE` file.
+This project is licensed under the BSD 2-Clause License. See [LICENSE](LICENSE).
 
 ---
 
