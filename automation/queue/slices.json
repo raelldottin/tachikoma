@@ -300,7 +300,7 @@
       ],
       "max_files_changed": 6,
       "notes": "AUTO-005. Add sdk/policy/ with a pure, versioned policy interface: plan(snapshot, design_data, config) returns ordered ActionRequests (catalog action id, params, reason, expected cost) plus the candidates it rejected and why. Ship one policy, baseline-v1, that reproduces run.py's current daily order and resource checks as closely as the catalog allows, so automated runs can be compared against today's behaviour. Respect configurable mineral/gas reserves, skip actions whose preconditions fail, and never emit an action for an unobserved section. Design data (room upgrade costs, research costs) is passed in, not fetched. Synthetic tests only.",
-      "status": "queued",
+      "status": "done",
       "required_validations": [
         "make syntax-check",
         "make test",
