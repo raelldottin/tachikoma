@@ -215,6 +215,189 @@
       ],
       "max_files_changed": 8,
       "notes": "R1 exit. Add sdk/execution/ with a runner that takes an injected client and snapshot provider, checks preconditions, captures before and after snapshots, invokes one catalog action, reconciles it and journals the result. Timeouts, exceptions and ambiguous responses are journaled explicitly as uncertain; no automatic retry of non-idempotent actions; a dry-run mode performs no mutating call. Refuse to run when the snapshot alias differs from the requested account. Tests use a fake client; no real network traffic. Do not wire it into run.py yet."
+    },
+    {
+      "slice_id": "r2-client-snapshot-provider",
+      "title": "Build account snapshots from Client reads (R2 input)",
+      "priority": 90,
+      "domain": "account-state",
+      "allowed_paths": [
+        "sdk/state/",
+        "tests/",
+        "docs/baseline/"
+      ],
+      "depends_on": [
+        "r1-reconciled-action-runner"
+      ],
+      "max_files_changed": 6,
+      "notes": "R2 prerequisite. Add sdk/state/client_provider.py: a snapshot provider that calls only read-only Client methods (getShipByUserId, listAllCharactersOfUser, listItemsOfAShip and the resource totals the client already tracks) and feeds build_snapshot for a given alias. A read that fails or returns no data leaves its section missing; it never raises past the provider unless the alias is invalid. It must never call a mutating method, enforced by a test whose fake client fails on any method the capability inventory marks mutating. Fake-client tests only; no network traffic.",
+      "status": "queued",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
+    },
+    {
+      "slice_id": "r2-snapshot-training-state",
+      "title": "Observe crew training state so add_training can be verified",
+      "priority": 100,
+      "domain": "account-state",
+      "allowed_paths": [
+        "sdk/state/",
+        "sdk/actions/",
+        "tests/",
+        "docs/baseline/"
+      ],
+      "depends_on": [
+        "r2-client-snapshot-provider"
+      ],
+      "max_files_changed": 6,
+      "notes": "Extend CrewMember with training_design_id and training_end (from @TrainingDesignId and @TrainingEndDate when present; unknown otherwise) and include training changes in SnapshotDelta. Change the add_training postcondition: VERIFIED when the crew member gains the requested training, NOT_OBSERVED when training is observed and unchanged, UNKNOWN when training fields were not observed. Update docs/baseline/action-catalog.md. Synthetic tests for every outcome.",
+      "status": "queued",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
+    },
+    {
+      "slice_id": "r2-targeted-room-upgrade",
+      "title": "Add a single-room upgrade call without changing upgradeRooms behaviour",
+      "priority": 110,
+      "domain": "gameplay-actions",
+      "allowed_paths": [
+        "sdk/client.py",
+        "sdk/actions/",
+        "sdk/execution/",
+        "tests/",
+        "docs/baseline/"
+      ],
+      "depends_on": [
+        "r2-snapshot-training-state"
+      ],
+      "max_files_changed": 8,
+      "notes": "Extract the existing per-room UpgradeRoom2 request inside Client.upgradeRooms into a public Client.upgradeRoom(roomId, upgradeRoomDesignId) method, and make upgradeRooms delegate to it so its room selection and resource checks are unchanged (preserve existing gameplay strategy; add a regression test pinning upgradeRooms' calls). Point the upgrade_room catalog spec and CALL_ARGUMENTS at the targeted method with an upgrade_room_design_id parameter. Add the method to docs/baseline/capability-inventory.json. Mocked requests only.",
+      "status": "queued",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
+    },
+    {
+      "slice_id": "r2-progression-policy",
+      "title": "Rank progression actions from a snapshot with a rule-based baseline policy (AUTO-005)",
+      "priority": 120,
+      "domain": "progression-policy",
+      "allowed_paths": [
+        "sdk/policy/",
+        "tests/",
+        "docs/baseline/"
+      ],
+      "depends_on": [
+        "r2-targeted-room-upgrade"
+      ],
+      "max_files_changed": 6,
+      "notes": "AUTO-005. Add sdk/policy/ with a pure, versioned policy interface: plan(snapshot, design_data, config) returns ordered ActionRequests (catalog action id, params, reason, expected cost) plus the candidates it rejected and why. Ship one policy, baseline-v1, that reproduces run.py's current daily order and resource checks as closely as the catalog allows, so automated runs can be compared against today's behaviour. Respect configurable mineral/gas reserves, skip actions whose preconditions fail, and never emit an action for an unobserved section. Design data (room upgrade costs, research costs) is passed in, not fetched. Synthetic tests only.",
+      "status": "queued",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
+    },
+    {
+      "slice_id": "r2-daily-progression-scheduler",
+      "title": "Execute a policy plan through the runner with budgets, cooldowns and an operator stop (AUTO-004)",
+      "priority": 130,
+      "domain": "gameplay-execution",
+      "allowed_paths": [
+        "sdk/scheduler/",
+        "tests/",
+        "docs/baseline/"
+      ],
+      "depends_on": [
+        "r2-progression-policy"
+      ],
+      "max_files_changed": 6,
+      "notes": "AUTO-004. Add sdk/scheduler/: run a policy plan for one account through ActionRunner, re-snapshotting between actions. Enforce once-per-period actions from journal history, a per-run action budget, a stop on the first CONTRADICTED or uncertain non-idempotent result, and an operator stop file checked before every action. Dry-run is the default; live execution needs an explicit execute=True argument. Fake client and temporary journal in tests; no network traffic. Do not wire into run.py.",
+      "status": "queued",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
+    },
+    {
+      "slice_id": "r2-progression-dry-run-command",
+      "title": "Add an offline-safe progression dry-run command to run.py",
+      "priority": 140,
+      "domain": "operator-ux",
+      "allowed_paths": [
+        "run.py",
+        "tests/",
+        "README.template",
+        "README.md",
+        "docs/baseline/"
+      ],
+      "depends_on": [
+        "r2-daily-progression-scheduler"
+      ],
+      "max_files_changed": 6,
+      "notes": "Add a run.py --progression-dry-run flag that authenticates as today, builds a snapshot through the client provider, plans with baseline-v1, and journals dry-run events to a local path (default under logs/, which must stay gitignored) without any mutating call. Print the plan and the rejected candidates. Mocked client in tests, including a test that fails if any mutating Client method is called. Document the flag in README.template, then README.md. No live execute flag in this slice.",
+      "status": "queued",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
+    },
+    {
+      "slice_id": "r2-progression-metrics-report",
+      "title": "Report progression and reliability metrics from the journal (R2 exit metrics)",
+      "priority": 150,
+      "domain": "observability",
+      "allowed_paths": [
+        "sdk/reports/",
+        "tests/",
+        "docs/baseline/"
+      ],
+      "depends_on": [
+        "r2-progression-dry-run-command"
+      ],
+      "max_files_changed": 5,
+      "notes": "R2 exit evidence. Add sdk/reports/progression.py: from journal events, compute per-account, per-day verified actions, verified action success rate, uncertain and failed counts, resources gained and spent per elapsed hour (from cost deltas), and a failure ledger. Every metric reports its sample size and time window; with no events it reports empty, not zero rates. Output JSON and a Markdown table. Synthetic journals in temporary directories.",
+      "status": "queued",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
+    },
+    {
+      "slice_id": "r2-live-progression-trial",
+      "title": "Run baseline-v1 against an owned test account and compare with the manual routine",
+      "status": "blocked",
+      "priority": 160,
+      "domain": "experiment",
+      "allowed_paths": [
+        "run.py",
+        "sdk/scheduler/",
+        "docs/experiments/",
+        "tests/"
+      ],
+      "depends_on": [
+        "r2-progression-metrics-report"
+      ],
+      "max_files_changed": 6,
+      "entry_condition": "Owner authorization required: confirm live automation runs on a named owned test account (credentials through the existing secret flow, never committed), define the manual baseline routine and the comparison window, then set this slice to queued. Live execution against a real account is not authorized yet.",
+      "notes": "R2 exit trial. Add an explicit live execute path for the scheduler, run it on the authorized test account for the agreed window, and record the progression metrics report against the manual baseline in docs/experiments/. Unit tests stay mocked; only the trial itself touches the live game.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
     }
   ]
 }
