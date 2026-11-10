@@ -73,12 +73,12 @@ class CatalogShapeTests(unittest.TestCase):
 
 class PreconditionTests(unittest.TestCase):
     def test_preconditions_pass_on_a_ready_account(self):
-        self.assertEqual(check_preconditions(get_spec("upgrade_room"), snap(), {"room_id": "r1"}), [])
+        self.assertEqual(check_preconditions(get_spec("upgrade_room"), snap(), {"room_id": "r1", "upgrade_room_design_id": "12"}), [])
         self.assertEqual(check_preconditions(get_spec("add_research"), snap(), {"research_design_id": "501"}), [])
 
     def test_preconditions_block_unsafe_or_unobserved_starts(self):
         upgrading = snap(rooms=[{"@RoomId": "r1", "@RoomStatus": "Upgrading"}])
-        self.assertIn("room r1 is already upgrading", check_preconditions(get_spec("upgrade_room"), upgrading, {"room_id": "r1"}))
+        self.assertIn("room r1 is already upgrading", check_preconditions(get_spec("upgrade_room"), upgrading, {"room_id": "r1", "upgrade_room_design_id": "12"}))
         self.assertIn(
             "research 500 is already completed",
             check_preconditions(get_spec("add_research"), snap(), {"research_design_id": "500"}),
@@ -123,7 +123,7 @@ class ReconcileTests(unittest.TestCase):
         self.assertIs(outcome("add_training", {"crew": None}, params, before_overrides=idle).status, U)
 
     def test_upgrade_room_outcomes(self):
-        params = {"room_id": "r1"}
+        params = {"room_id": "r1", "upgrade_room_design_id": "12"}
         self.assertIs(outcome("upgrade_room", {"rooms": [{"@RoomId": "r1", "@RoomDesignId": "11", "@RoomStatus": "Upgrading"}]}, params).status, V)
         self.assertIs(outcome("upgrade_room", {"rooms": [{"@RoomId": "r1", "@RoomDesignId": "12", "@RoomStatus": "Normal"}]}, params).status, V)
         self.assertIs(outcome("upgrade_room", {}, params).status, N)
@@ -145,7 +145,7 @@ class ReconcileTests(unittest.TestCase):
             ("collect_all_resources", None),
             ("collect_daily_reward", None),
             ("add_training", {"training_design_id": "1", "character_id": "c1"}),
-            ("upgrade_room", {"room_id": "r1"}),
+            ("upgrade_room", {"room_id": "r1", "upgrade_room_design_id": "12"}),
             ("add_research", {"research_design_id": "501"}),
         ):
             with self.subTest(action=action_id):
