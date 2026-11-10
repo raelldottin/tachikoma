@@ -135,6 +135,38 @@ class ClientSnapshotProviderTests(unittest.TestCase):
         self.assertNotIn(SYNTHETIC_EMAIL, serialised)
         self.assertNotIn(SYNTHETIC_ACCESS_TOKEN, serialised)
 
+    def test_present_but_empty_containers_are_observed_and_empty(self):
+        # Regression: <Researches/> parses to None and used to leave research "missing".
+        ship = {"Ship": {"@ShipLevel": "1", "Rooms": {}, "Researches": None}}
+        crew = {"CharacterService": {"ListAllCharactersOfUser": {"Characters": None}}}
+        items = {"ItemService": {"ListItemsOfAShip": {"Items": None}}}
+        provider, snapshot, _ = provide(FakeClient(ship=ship, crew=crew, items=items))
+        for section in ("rooms", "research", "crew", "inventory"):
+            self.assertIs(snapshot.section(section), Completeness.COMPLETE, section)
+        self.assertEqual((snapshot.rooms, snapshot.research, snapshot.crew, snapshot.inventory), ((), (), (), ()))
+        self.assertEqual(provider.failed_reads, ())
+
+    def test_absent_containers_stay_missing(self):
+        ship = {"Ship": {"@ShipLevel": "1"}}
+        crew = {"CharacterService": {"ListAllCharactersOfUser": {}}}
+        provider, snapshot, _ = provide(FakeClient(ship=ship, crew=crew))
+        for section in ("rooms", "research", "crew"):
+            self.assertIs(snapshot.section(section), Completeness.MISSING, section)
+        self.assertEqual(provider.failed_reads, ("listAllCharactersOfUser",))
+
+    def test_new_ship_with_no_research_gets_research_planned(self):
+        from sdk.policy import DesignData, PolicyConfig, get_policy
+
+        ship = {"Ship": {"@ShipLevel": "1", "Rooms": {"Room": {"@RoomId": "r1", "@RoomDesignId": "100"}},
+                         "Researches": None}}
+        _, snapshot, _ = provide(FakeClient(ship=ship))
+        design = DesignData.from_records(
+            research_designs=[{"@ResearchDesignId": "510", "@RootResearchDesignId": "510", "@GasCost": "50"}]
+        )
+        plan = get_policy("baseline-v1").plan(snapshot, design, PolicyConfig())
+        self.assertIn(("add_research", {"research_design_id": "510"}),
+                      [(request.action_id, dict(request.params)) for request in plan.requests])
+
     def test_invalid_alias_is_refused(self):
         with self.assertRaises(SnapshotInputError):
             ClientSnapshotProvider(FakeClient(), SYNTHETIC_EMAIL)
