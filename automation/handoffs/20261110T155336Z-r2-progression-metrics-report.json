@@ -1,0 +1,49 @@
+{
+  "slice_id": "r2-progression-metrics-report",
+  "status": "done",
+  "summary": "Added sdk/reports (progression.py, __init__.py). compute_progression_metrics groups journal events by account alias and UTC day of finished_at and returns DayMetrics: counts by outcome for attempted events, failed (error class recorded), skipped and dry-run counts, verified_success_rate, the attempt window and elapsed hours, resources gained and spent from *_delta costs with resource_samples, gained per hour, and a failure ledger of contradicted, unknown or errored attempts. Rates and per-hour figures are None without a sample; dry-run and skipped events never count as attempts. to_json and to_markdown render the report, including the failure ledger. Added 6 tests with temporary journals and docs/baseline/progression-metrics.md.",
+  "files_touched": [
+    "sdk/reports/__init__.py",
+    "sdk/reports/progression.py",
+    "tests/test_progression_report.py",
+    "docs/baseline/progression-metrics.md"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "R2 exit metrics",
+      "before": "Journal events had only per-account outcome counts",
+      "after": "Per-day scorecard inputs (verified success, failures, resources per hour) with sample sizes, windows and a failure ledger",
+      "proof": [
+        "tests.test_progression_report: 6 tests OK",
+        "make test: 542 tests OK (1 skipped)",
+        "scripts/ci.py lint: no new findings",
+        "run.py --help exits 0"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "Account growth velocity and operator time saved, both part of the R2 exit, need the manual baseline from the blocked live trial.",
+    "Resources per hour uses the attempt window, which understates the time between scheduled runs; cross-day rates need the live trial's observation window."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-10T15:54:47Z"
+}
