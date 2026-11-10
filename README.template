@@ -7,7 +7,7 @@ This repository contains scripts and resources for automating tasks in the mobil
 
 ## Product roadmap
 
-See the [Tachikoma Product Roadmap](docs/PRODUCT_ROADMAP.md) for the phased November 2026–June 2027 plan for offline ship progression, PvP strategy, native combat AI recommendations, battle analytics, and security/fair-play release gates. The roadmap distinguishes existing capabilities from unverified and proposed work.
+See the [Tachikoma Product Roadmap](docs/PRODUCT_ROADMAP.md) for the November 2026–June 2027 full-gameplay automation research program (R0–R6): account state, progression, PvP, economy, multi-account orchestration and adaptive optimization, each measured against manual play. The [capability inventory](docs/baseline/capability-inventory.md) records what the code does today and how strong the evidence is.
 
 ## GitHub validation and releases
 

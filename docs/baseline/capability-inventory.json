@@ -1,0 +1,921 @@
+{
+  "schema_version": 1,
+  "roadmap": "docs/PRODUCT_ROADMAP.md",
+  "epic": "AUTO-001",
+  "pillars": {
+    "platform": "Transport, authentication and session plumbing",
+    "A": "Account intelligence",
+    "B": "Autonomous progression",
+    "C": "Competitive PvP",
+    "D": "Game economy",
+    "E": "Multi-account orchestration",
+    "F": "Adaptive learning"
+  },
+  "evidence_levels": {
+    "mocked-test": "Exercised by a unit test with mocked game traffic; says nothing about the current live server",
+    "live-claimed": "Repository documentation claims live success; not re-verified by this inventory",
+    "untested": "No test references the capability"
+  },
+  "client_methods": [
+    {
+      "name": "request",
+      "pillar": "platform",
+      "kind": "read-only",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_battle_flow.py",
+        "tests/test_e2e_live_fixes.py",
+        "tests/test_live_auth.py",
+        "tests/test_mining_drones.py",
+        "tests/test_pvp_battles.py",
+        "tests/test_pvp_safety.py",
+        "tests/test_runtime_guards.py",
+        "tests/test_security.py"
+      ]
+    },
+    {
+      "name": "parseUserLoginData",
+      "pillar": "platform",
+      "kind": "read-only",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_e2e_live_fixes.py"
+      ]
+    },
+    {
+      "name": "getAccessToken",
+      "pillar": "platform",
+      "kind": "session",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_security.py"
+      ]
+    },
+    {
+      "name": "create_device_session",
+      "pillar": "platform",
+      "kind": "session",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_provision_account_secrets.py",
+        "tests/test_security.py"
+      ]
+    },
+    {
+      "name": "authorize_email_password",
+      "pillar": "platform",
+      "kind": "session",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_provision_account_secrets.py",
+        "tests/test_security.py"
+      ]
+    },
+    {
+      "name": "exchange_refresh_token",
+      "pillar": "platform",
+      "kind": "session",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_security.py"
+      ]
+    },
+    {
+      "name": "quickReload",
+      "pillar": "platform",
+      "kind": "session",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_e2e_live_fixes.py"
+      ]
+    },
+    {
+      "name": "login",
+      "pillar": "platform",
+      "kind": "session",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_live_auth.py",
+        "tests/test_pvp_safety.py",
+        "tests/test_runtime_guards.py",
+        "tests/test_security.py",
+        "tests/test_tui.py"
+      ]
+    },
+    {
+      "name": "getLatestVersion3",
+      "pillar": "platform",
+      "kind": "read-only",
+      "evidence": "untested",
+      "tests": []
+    },
+    {
+      "name": "getTodayLiveOps2",
+      "pillar": "platform",
+      "kind": "read-only",
+      "evidence": "untested",
+      "tests": []
+    },
+    {
+      "name": "listRoomDesigns2",
+      "pillar": "A",
+      "kind": "read-only",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_runtime_guards.py",
+        "tests/test_ship_layout.py"
+      ]
+    },
+    {
+      "name": "listAllTaskDesigns2",
+      "pillar": "A",
+      "kind": "read-only",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_e2e_live_fixes.py"
+      ]
+    },
+    {
+      "name": "listAllTrainingDesigns2",
+      "pillar": "A",
+      "kind": "read-only",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_runtime_guards.py"
+      ]
+    },
+    {
+      "name": "getShipByUserId",
+      "pillar": "A",
+      "kind": "read-only",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_battle_flow.py",
+        "tests/test_live_auth.py",
+        "tests/test_mining_drones.py",
+        "tests/test_runtime_guards.py",
+        "tests/test_ship_layout.py"
+      ]
+    },
+    {
+      "name": "listAchievementsOfAUser",
+      "pillar": "A",
+      "kind": "read-only",
+      "evidence": "untested",
+      "tests": []
+    },
+    {
+      "name": "listImportantMessagesForUser",
+      "pillar": "A",
+      "kind": "read-only",
+      "evidence": "untested",
+      "tests": []
+    },
+    {
+      "name": "listUserStarSystems",
+      "pillar": "A",
+      "kind": "read-only",
+      "evidence": "untested",
+      "tests": []
+    },
+    {
+      "name": "listStarSystemMarkersAndUserMarkers",
+      "pillar": "A",
+      "kind": "read-only",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_mining_drones.py"
+      ]
+    },
+    {
+      "name": "collectAvailableMarkers",
+      "pillar": "B",
+      "kind": "mutating",
+      "evidence": "untested",
+      "tests": []
+    },
+    {
+      "name": "listTasksOfAUser",
+      "pillar": "A",
+      "kind": "read-only",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_e2e_live_fixes.py"
+      ]
+    },
+    {
+      "name": "listCompletedMissionEvents",
+      "pillar": "A",
+      "kind": "read-only",
+      "evidence": "untested",
+      "tests": []
+    },
+    {
+      "name": "listSituations",
+      "pillar": "A",
+      "kind": "read-only",
+      "evidence": "untested",
+      "tests": []
+    },
+    {
+      "name": "listPvPBattles2",
+      "pillar": "C",
+      "kind": "read-only",
+      "evidence": "untested",
+      "tests": []
+    },
+    {
+      "name": "listMissionBattles",
+      "pillar": "C",
+      "kind": "read-only",
+      "evidence": "untested",
+      "tests": []
+    },
+    {
+      "name": "listActionTypes2",
+      "pillar": "A",
+      "kind": "read-only",
+      "evidence": "untested",
+      "tests": []
+    },
+    {
+      "name": "listConditionTypes2",
+      "pillar": "A",
+      "kind": "read-only",
+      "evidence": "untested",
+      "tests": []
+    },
+    {
+      "name": "listAllResearches",
+      "pillar": "A",
+      "kind": "read-only",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_runtime_guards.py"
+      ]
+    },
+    {
+      "name": "listItemsOfAShip",
+      "pillar": "A",
+      "kind": "read-only",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_e2e_live_fixes.py"
+      ]
+    },
+    {
+      "name": "listRoomsViaAccessToken",
+      "pillar": "A",
+      "kind": "read-only",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_runtime_guards.py"
+      ]
+    },
+    {
+      "name": "listAllCharactersOfUser",
+      "pillar": "A",
+      "kind": "read-only",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_e2e_live_fixes.py",
+        "tests/test_runtime_guards.py"
+      ]
+    },
+    {
+      "name": "getRoomName",
+      "pillar": "A",
+      "kind": "read-only",
+      "evidence": "untested",
+      "tests": []
+    },
+    {
+      "name": "finishTraining",
+      "pillar": "B",
+      "kind": "mutating",
+      "evidence": "untested",
+      "tests": []
+    },
+    {
+      "name": "getTrainingUpdate",
+      "pillar": "A",
+      "kind": "read-only",
+      "evidence": "untested",
+      "tests": []
+    },
+    {
+      "name": "listAllDesigns4",
+      "pillar": "A",
+      "kind": "read-only",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_battle_flow.py"
+      ]
+    },
+    {
+      "name": "listAllCharacterDesigns2",
+      "pillar": "A",
+      "kind": "read-only",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_e2e_live_fixes.py",
+        "tests/test_runtime_guards.py"
+      ]
+    },
+    {
+      "name": "addTraining",
+      "pillar": "B",
+      "kind": "mutating",
+      "evidence": "untested",
+      "tests": []
+    },
+    {
+      "name": "manageTraining",
+      "pillar": "B",
+      "kind": "mutating",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_e2e_live_fixes.py",
+        "tests/test_runtime_guards.py"
+      ]
+    },
+    {
+      "name": "getCharacterRooms",
+      "pillar": "A",
+      "kind": "read-only",
+      "evidence": "untested",
+      "tests": []
+    },
+    {
+      "name": "upgradeCharacter",
+      "pillar": "B",
+      "kind": "mutating",
+      "evidence": "untested",
+      "tests": []
+    },
+    {
+      "name": "upgradeCharacters",
+      "pillar": "B",
+      "kind": "mutating",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_e2e_live_fixes.py"
+      ]
+    },
+    {
+      "name": "listAllRoomActionsOfShip",
+      "pillar": "A",
+      "kind": "read-only",
+      "evidence": "untested",
+      "tests": []
+    },
+    {
+      "name": "pusherAuth",
+      "pillar": "platform",
+      "kind": "session",
+      "evidence": "untested",
+      "tests": []
+    },
+    {
+      "name": "listSystemMessagesForUser3",
+      "pillar": "A",
+      "kind": "read-only",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_e2e_live_fixes.py"
+      ]
+    },
+    {
+      "name": "listFriends",
+      "pillar": "A",
+      "kind": "read-only",
+      "evidence": "untested",
+      "tests": []
+    },
+    {
+      "name": "listMessagesForChannelKey",
+      "pillar": "A",
+      "kind": "read-only",
+      "evidence": "untested",
+      "tests": []
+    },
+    {
+      "name": "findUserRanking",
+      "pillar": "C",
+      "kind": "read-only",
+      "evidence": "untested",
+      "tests": []
+    },
+    {
+      "name": "activateItem3",
+      "pillar": "B",
+      "kind": "mutating",
+      "evidence": "untested",
+      "tests": []
+    },
+    {
+      "name": "useConsumable",
+      "pillar": "B",
+      "kind": "mutating",
+      "evidence": "untested",
+      "tests": []
+    },
+    {
+      "name": "findConsumableDesignId",
+      "pillar": "A",
+      "kind": "read-only",
+      "evidence": "untested",
+      "tests": []
+    },
+    {
+      "name": "print_market_data",
+      "pillar": "D",
+      "kind": "read-only",
+      "evidence": "untested",
+      "tests": []
+    },
+    {
+      "name": "listActiveMarketplaceMessages",
+      "pillar": "D",
+      "kind": "read-only",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_e2e_live_fixes.py"
+      ]
+    },
+    {
+      "name": "infoBux",
+      "pillar": "D",
+      "kind": "read-only",
+      "evidence": "untested",
+      "tests": []
+    },
+    {
+      "name": "collectAllResources",
+      "pillar": "B",
+      "kind": "mutating",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_e2e_live_fixes.py",
+        "tests/test_runtime_guards.py"
+      ]
+    },
+    {
+      "name": "getResourceTotals",
+      "pillar": "D",
+      "kind": "read-only",
+      "evidence": "untested",
+      "tests": []
+    },
+    {
+      "name": "collectDailyReward",
+      "pillar": "B",
+      "kind": "mutating",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_e2e_live_fixes.py"
+      ]
+    },
+    {
+      "name": "collectMiningDrone",
+      "pillar": "B",
+      "kind": "mutating",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_mining_drones.py"
+      ]
+    },
+    {
+      "name": "placeMiningDrone",
+      "pillar": "B",
+      "kind": "mutating",
+      "evidence": "untested",
+      "tests": []
+    },
+    {
+      "name": "collectReward2",
+      "pillar": "B",
+      "kind": "mutating",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_e2e_live_fixes.py"
+      ]
+    },
+    {
+      "name": "AddStarbux2",
+      "pillar": "D",
+      "kind": "mutating",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_e2e_live_fixes.py",
+        "tests/test_security.py"
+      ]
+    },
+    {
+      "name": "grabFlyingStarbux",
+      "pillar": "B",
+      "kind": "mutating",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_e2e_live_fixes.py"
+      ]
+    },
+    {
+      "name": "purchaseDrawWithStarbux",
+      "pillar": "D",
+      "kind": "mutating",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_battle_flow.py"
+      ]
+    },
+    {
+      "name": "purchaseCatalogItem",
+      "pillar": "D",
+      "kind": "mutating",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_battle_flow.py"
+      ]
+    },
+    {
+      "name": "purchaseScorchedPodIfAffordable",
+      "pillar": "D",
+      "kind": "mutating",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_battle_flow.py"
+      ]
+    },
+    {
+      "name": "getCatalogQuantity",
+      "pillar": "D",
+      "kind": "read-only",
+      "evidence": "untested",
+      "tests": []
+    },
+    {
+      "name": "speedUpResearchUsingBoostGauge",
+      "pillar": "B",
+      "kind": "mutating",
+      "evidence": "untested",
+      "tests": []
+    },
+    {
+      "name": "speedUpRoomConstructionUsingBoostGauge",
+      "pillar": "B",
+      "kind": "mutating",
+      "evidence": "untested",
+      "tests": []
+    },
+    {
+      "name": "rushResearchOrConstruction",
+      "pillar": "B",
+      "kind": "mutating",
+      "evidence": "untested",
+      "tests": []
+    },
+    {
+      "name": "upgradeResearches",
+      "pillar": "B",
+      "kind": "mutating",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_e2e_live_fixes.py",
+        "tests/test_runtime_guards.py"
+      ]
+    },
+    {
+      "name": "getResearchLevel",
+      "pillar": "A",
+      "kind": "read-only",
+      "evidence": "untested",
+      "tests": []
+    },
+    {
+      "name": "hasResearch",
+      "pillar": "A",
+      "kind": "read-only",
+      "evidence": "untested",
+      "tests": []
+    },
+    {
+      "name": "upgradeRooms",
+      "pillar": "B",
+      "kind": "mutating",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_e2e_live_fixes.py",
+        "tests/test_runtime_guards.py"
+      ]
+    },
+    {
+      "name": "listUpgradingRooms",
+      "pillar": "A",
+      "kind": "read-only",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_runtime_guards.py"
+      ]
+    },
+    {
+      "name": "listAllResearchDesigns2",
+      "pillar": "A",
+      "kind": "read-only",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_runtime_guards.py"
+      ]
+    },
+    {
+      "name": "addResearch",
+      "pillar": "B",
+      "kind": "mutating",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_runtime_guards.py"
+      ]
+    },
+    {
+      "name": "rebuildAmmo",
+      "pillar": "C",
+      "kind": "mutating",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_battle_flow.py",
+        "tests/test_security.py"
+      ]
+    },
+    {
+      "name": "updateMarkerMovement",
+      "pillar": "B",
+      "kind": "mutating",
+      "evidence": "untested",
+      "tests": []
+    },
+    {
+      "name": "collectMarker2",
+      "pillar": "B",
+      "kind": "mutating",
+      "evidence": "untested",
+      "tests": []
+    },
+    {
+      "name": "findMiningDrones",
+      "pillar": "A",
+      "kind": "read-only",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_mining_drones.py"
+      ]
+    },
+    {
+      "name": "goToStarSystem",
+      "pillar": "B",
+      "kind": "mutating",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_mining_drones.py"
+      ]
+    },
+    {
+      "name": "speedUpTravelling",
+      "pillar": "B",
+      "kind": "mutating",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_mining_drones.py"
+      ]
+    },
+    {
+      "name": "waitForArrival",
+      "pillar": "A",
+      "kind": "read-only",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_mining_drones.py"
+      ]
+    },
+    {
+      "name": "collectMiningDronesWithTravel",
+      "pillar": "B",
+      "kind": "mutating",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_mining_drones.py"
+      ]
+    },
+    {
+      "name": "getCrewInfo",
+      "pillar": "A",
+      "kind": "read-only",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_e2e_live_fixes.py"
+      ]
+    },
+    {
+      "name": "analyzeShipLayout",
+      "pillar": "C",
+      "kind": "read-only",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_ship_layout.py"
+      ]
+    },
+    {
+      "name": "getMessages",
+      "pillar": "A",
+      "kind": "read-only",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_e2e_live_fixes.py"
+      ]
+    },
+    {
+      "name": "listFinishTasks",
+      "pillar": "A",
+      "kind": "read-only",
+      "evidence": "untested",
+      "tests": []
+    },
+    {
+      "name": "collectTaskCompletion",
+      "pillar": "B",
+      "kind": "mutating",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_e2e_live_fixes.py"
+      ]
+    },
+    {
+      "name": "actionMessage",
+      "pillar": "B",
+      "kind": "mutating",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_e2e_live_fixes.py"
+      ]
+    },
+    {
+      "name": "collectTaskReward",
+      "pillar": "B",
+      "kind": "mutating",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_e2e_live_fixes.py"
+      ]
+    },
+    {
+      "name": "heartbeat",
+      "pillar": "platform",
+      "kind": "session",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_battle_flow.py"
+      ]
+    },
+    {
+      "name": "createBattle9",
+      "pillar": "C",
+      "kind": "mutating",
+      "evidence": "live-claimed",
+      "tests": [
+        "tests/test_battle_flow.py"
+      ],
+      "source": "README.template Battle Flow marks CreateBattle9 verified working against the live server"
+    },
+    {
+      "name": "acceptBattle5",
+      "pillar": "C",
+      "kind": "mutating",
+      "evidence": "live-claimed",
+      "tests": [
+        "tests/test_battle_flow.py"
+      ],
+      "source": "README.template Battle Flow marks AcceptBattle5 verified working"
+    },
+    {
+      "name": "createStarBattle5",
+      "pillar": "C",
+      "kind": "mutating",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_battle_flow.py",
+        "tests/test_pvp_battles.py"
+      ]
+    },
+    {
+      "name": "verifyBattle2",
+      "pillar": "C",
+      "kind": "mutating",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_battle_flow.py",
+        "tests/test_pvp_battles.py"
+      ]
+    },
+    {
+      "name": "finaliseBattle15",
+      "pillar": "C",
+      "kind": "mutating",
+      "evidence": "live-claimed",
+      "tests": [
+        "tests/test_battle_flow.py",
+        "tests/test_pvp_battles.py"
+      ],
+      "source": "README.template Battle Flow marks FinaliseBattle15 verified working"
+    },
+    {
+      "name": "getShipHpFraction",
+      "pillar": "C",
+      "kind": "read-only",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_battle_flow.py"
+      ]
+    },
+    {
+      "name": "getShipHp",
+      "pillar": "C",
+      "kind": "read-only",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_battle_flow.py"
+      ]
+    },
+    {
+      "name": "runBattleEndToEnd",
+      "pillar": "C",
+      "kind": "mutating",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_battle_flow.py"
+      ]
+    }
+  ],
+  "run_flags": [
+    {
+      "flag": "--auth-file",
+      "pillar": "platform",
+      "kind": "session",
+      "evidence": "untested",
+      "tests": []
+    },
+    {
+      "flag": "--login-email",
+      "pillar": "platform",
+      "kind": "session",
+      "evidence": "untested",
+      "tests": []
+    },
+    {
+      "flag": "--device-key",
+      "pillar": "platform",
+      "kind": "session",
+      "evidence": "untested",
+      "tests": []
+    },
+    {
+      "flag": "--smtp-email",
+      "pillar": "platform",
+      "kind": "read-only",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_runtime_guards.py"
+      ]
+    },
+    {
+      "flag": "--smtp-password-file",
+      "pillar": "platform",
+      "kind": "read-only",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_runtime_guards.py"
+      ]
+    },
+    {
+      "flag": "--recipient",
+      "pillar": "platform",
+      "kind": "read-only",
+      "evidence": "untested",
+      "tests": []
+    },
+    {
+      "flag": "--password-file",
+      "pillar": "platform",
+      "kind": "session",
+      "evidence": "untested",
+      "tests": []
+    },
+    {
+      "flag": "--run-battle",
+      "pillar": "C",
+      "kind": "mutating",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_ci.py"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,54 @@
+{
+  "slice_id": "r0-capability-baseline-inventory",
+  "status": "done",
+  "summary": "Added docs/baseline/capability-inventory.json (98 public Client methods and 8 run.py flags, each with roadmap pillar, read-only/mutating/session kind, evidence level and citing tests) and capability-inventory.md (gaps per release R1-R6). Added tests/test_capability_inventory.py: it parses sdk/client.py and run.py with ast and fails on method or flag drift, unknown classifications, or cited tests that no longer mention the capability. Corrected the outdated offline-only roadmap sentence in README.template, then mirrored the change in README.md.",
+  "files_touched": [
+    "docs/baseline/capability-inventory.json",
+    "docs/baseline/capability-inventory.md",
+    "tests/test_capability_inventory.py",
+    "README.template",
+    "README.md"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "AUTO-001 capability baseline",
+      "before": "No inventory; README described the roadmap as offline-only",
+      "after": "Versioned capability inventory with an ast-based drift test; README points to the full-gameplay research roadmap",
+      "proof": [
+        "make test: 444 tests OK (1 skipped) on Python 3.13 .venv",
+        "tests.test_capability_inventory: 5 tests OK",
+        "scripts/ci.py lint: no new findings",
+        "run.py --help exits 0"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "Pillar and kind classifications were assigned by name-prefix rules and reviewed by hand; the drift test enforces parity and citations, not semantic correctness.",
+    "live-claimed entries (createBattle9, acceptBattle5, finaliseBattle15) restate README claims and were not re-verified against the current game version.",
+    "make lint runs uv run, which rewrites .venv and uv.lock; the CI ratchet (scripts/ci.py lint) was used instead and uv.lock was restored."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-10T14:40:14Z",
+  "open_questions": [
+    "The Makefile falls back to system python3 (3.9 here) when .venv is absent, so make test fails on machines without a project venv. Should make test bootstrap or require a venv?"
+  ]
+}
