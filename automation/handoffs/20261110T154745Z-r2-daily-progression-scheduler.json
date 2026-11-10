@@ -1,0 +1,49 @@
+{
+  "slice_id": "r2-daily-progression-scheduler",
+  "status": "done",
+  "summary": "Added sdk/scheduler (daily.py, __init__.py) with DailyScheduler, SchedulerConfig (max_actions, period, stop_file), SkippedRequest and ScheduleReport. run() takes one alias-checked snapshot, plans with the given policy, and executes the requests in order through ActionRunner, which re-snapshots for every action. It is dry-run unless execute=True. It checks the stop file before every action, enforces the action budget, skips once-per-period actions whose journal shows a verified or uncertain attempt within the period, and stops on the first contradicted outcome, on an unknown outcome for a non-idempotent action, and on UncertainPriorAttemptError or AccountMismatchError. Added 10 fake-game tests and docs/baseline/daily-scheduler.md. Not wired into run.py.",
+  "files_touched": [
+    "sdk/scheduler/__init__.py",
+    "sdk/scheduler/daily.py",
+    "tests/test_daily_scheduler.py",
+    "docs/baseline/daily-scheduler.md"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "AUTO-004 daily progression scheduler",
+      "before": "Policy plans could not be executed; only single actions could run",
+      "after": "A dry-run-by-default scheduler executes policy plans with budgets, cooldowns, an operator stop and fail-safe stops",
+      "proof": [
+        "tests.test_daily_scheduler: 10 tests OK",
+        "make test: 532 tests OK (1 skipped)",
+        "scripts/ci.py lint: no new findings",
+        "run.py --help exits 0"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "The plan is made once per run from the first snapshot; later actions are checked against fresh state but are not re-planned.",
+    "Once-per-period detection depends on journal history; a reward collected outside Tachikoma (for example manually) is not seen and the scheduler will attempt it, which the runner reconciles as not-observed."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-10T15:49:02Z"
+}

@@ -322,7 +322,7 @@
       ],
       "max_files_changed": 6,
       "notes": "AUTO-004. Add sdk/scheduler/: run a policy plan for one account through ActionRunner, re-snapshotting between actions. Enforce once-per-period actions from journal history, a per-run action budget, a stop on the first CONTRADICTED or uncertain non-idempotent result, and an operator stop file checked before every action. Dry-run is the default; live execution needs an explicit execute=True argument. Fake client and temporary journal in tests; no network traffic. Do not wire into run.py.",
-      "status": "queued",
+      "status": "done",
       "required_validations": [
         "make syntax-check",
         "make test",
