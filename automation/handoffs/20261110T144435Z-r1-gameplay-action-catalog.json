@@ -1,0 +1,50 @@
+{
+  "slice_id": "r1-gameplay-action-catalog",
+  "status": "done",
+  "summary": "Added sdk/actions (catalog.py, __init__.py): ActionSpec records naming the Client method, mutating flag, idempotency class, required params, preconditions and postcondition for collect_all_resources, collect_daily_reward, add_training, upgrade_room and add_research. check_preconditions returns blocking reasons. reconcile() uses diff_snapshots and returns VERIFIED, NOT_OBSERVED, CONTRADICTED or UNKNOWN from observed state only; response_ok is recorded but never yields VERIFIED. Added 12 tests covering every outcome per action, HTTP-success-alone, cross-account refusal, and parity with the capability inventory. Added docs/baseline/action-catalog.md.",
+  "files_touched": [
+    "sdk/actions/__init__.py",
+    "sdk/actions/catalog.py",
+    "tests/test_action_catalog.py",
+    "docs/baseline/action-catalog.md"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "AUTO-003 action postconditions and reconciliation",
+      "before": "Mutating Client methods report success from HTTP responses or not at all",
+      "after": "Catalogued actions carry declared preconditions and observed-state postconditions with explicit unknown and contradicted outcomes",
+      "proof": [
+        "tests.test_action_catalog: 12 tests OK",
+        "make test: 473 tests OK (1 skipped)",
+        "scripts/ci.py lint: no new findings",
+        "run.py --help exits 0"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "Client.upgradeRooms upgrades all eligible rooms and takes no room id; the upgrade_room spec reconciles one room, so the runner must reconcile every room touched or add a targeted call.",
+    "add_training is always UNKNOWN until AccountSnapshot observes training state.",
+    "Concurrent spending on the same account would make collections look CONTRADICTED."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-10T14:46:09Z"
+}
