@@ -420,6 +420,122 @@
       ],
       "max_files_changed": 4,
       "notes": "Defect found in r2-progression-dry-run-command: ClientSnapshotProvider marks rooms, research, crew or inventory as missing when the response contains the container element (Rooms, Researches, Characters, Items) with no records, so a new ship with no research never gets research planned. A present container with no records must yield an observed, empty section; an absent container or a failed read stays missing. Add regression tests, including one proving baseline-v1 plans research for a ship whose Researches element is empty. Update docs/baseline/account-snapshot.md."
+    },
+    {
+      "slice_id": "r3-pvp-strategy-registry",
+      "title": "Versioned PvP strategy registry and experiment windows (AUTO-006)",
+      "status": "queued",
+      "priority": 170,
+      "domain": "pvp",
+      "allowed_paths": [
+        "sdk/pvp/",
+        "tests/",
+        "docs/baseline/"
+      ],
+      "depends_on": [
+        "r2-progression-metrics-report"
+      ],
+      "max_files_changed": 5,
+      "notes": "R3 start. Add sdk/pvp/strategies.py: a PvP strategy is data (strategy_id, version, description, native AI rule set, room/crew role assignments by reference, power and targeting preferences) with a deterministic content hash as its config version. Add an experiment window model that assigns at most one strategy to an account alias per non-overlapping UTC window, and a lookup that returns the strategy active for an alias at a time (or None). Ship two candidate strategies as data. Pure and offline; reuse sdk.pvp models and compute_ship_config_version where they fit. Synthetic tests only.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
+    },
+    {
+      "slice_id": "r3-pvp-battle-action",
+      "title": "Catalog a PvP battle action whose outcome is observed, not assumed (AUTO-007)",
+      "status": "queued",
+      "priority": 180,
+      "domain": "execution",
+      "allowed_paths": [
+        "sdk/actions/",
+        "sdk/execution/",
+        "sdk/state/",
+        "tests/",
+        "docs/baseline/"
+      ],
+      "depends_on": [
+        "r3-pvp-strategy-registry"
+      ],
+      "max_files_changed": 7,
+      "notes": "Add a run_pvp_battle ActionSpec mapped to the existing Client.runBattleEndToEnd flow, non-idempotent, with preconditions (full ship HP when observed) and a postcondition that needs an observed outcome: a trophy change or a battle record from a fresh read. If no verified read-only method returns current trophies or battle history, the postcondition stays not-observed and the outcome is unknown; an HTTP success alone never yields verified. Record evidence tiers (request accepted, battle created, finalised, outcome observed) in the journal event. Do not change runBattleEndToEnd or the existing run.py battle behaviour. Mocked client only.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
+    },
+    {
+      "slice_id": "r3-battle-results-from-journal",
+      "title": "Build PvP battle results from journaled battle events",
+      "status": "queued",
+      "priority": 190,
+      "domain": "pvp",
+      "allowed_paths": [
+        "sdk/pvp/",
+        "sdk/reports/",
+        "tests/",
+        "docs/baseline/"
+      ],
+      "depends_on": [
+        "r3-pvp-battle-action"
+      ],
+      "max_files_changed": 5,
+      "notes": "Convert run_pvp_battle journal events into sdk.pvp BattleResult records: account alias as pseudonym, strategy id and version from the experiment window active at the event time, trophy delta only when observed, outcome unknown unless the event's evidence tier reached outcome observed. Label opponent cohorts (hull bracket, trophy bracket) when known and 'unknown' otherwise. Synthetic journals in temporary directories.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
+    },
+    {
+      "slice_id": "r3-pvp-strategy-scorecard",
+      "title": "Offense/defense scorecards and strategy comparison by opponent cohort (R3 exit metrics)",
+      "status": "queued",
+      "priority": 200,
+      "domain": "observability",
+      "allowed_paths": [
+        "sdk/reports/",
+        "tests/",
+        "docs/baseline/"
+      ],
+      "depends_on": [
+        "r3-battle-results-from-journal"
+      ],
+      "max_files_changed": 5,
+      "notes": "Add sdk/reports/pvp.py: per alias, strategy version and opponent cohort, report attacks and defenses with known results, wins, losses, win rates with 95% Wilson intervals, net trophies, mean duration and resource cost where observed, and unknown-outcome counts. Compare two strategies: recommend one only when both meet a minimum sample size and their intervals do not overlap; otherwise report insufficient evidence. No sample means no number. JSON and Markdown output.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
+    },
+    {
+      "slice_id": "r3-live-pvp-trial",
+      "title": "Run two PvP strategies on an owned test account and record the comparison",
+      "status": "blocked",
+      "priority": 210,
+      "domain": "experiment",
+      "allowed_paths": [
+        "run.py",
+        "sdk/scheduler/",
+        "docs/experiments/",
+        "tests/"
+      ],
+      "depends_on": [
+        "r3-pvp-strategy-scorecard",
+        "r2-live-progression-trial"
+      ],
+      "max_files_changed": 6,
+      "entry_condition": "Owner authorization required: confirm live PvP runs on a named owned test account (credentials through the existing secret flow, never committed), choose the two strategies and the experimental windows, then set this slice to queued. Live execution against a real account is not authorized yet.",
+      "notes": "R3 exit trial. Run each strategy for its window, then record the scorecard and recommendation in docs/experiments/. Unit tests stay mocked; only the trial itself touches the live game.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
     }
   ]
 }
