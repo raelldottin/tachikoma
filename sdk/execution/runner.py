@@ -40,7 +40,7 @@ CALL_ARGUMENTS: dict[str, Callable[[Mapping[str, Any]], tuple]] = {
     "collect_all_resources": lambda params: (),
     "collect_daily_reward": lambda params: (),
     "add_training": lambda params: (params["training_design_id"], params["character_id"]),
-    "upgrade_room": lambda params: (),
+    "upgrade_room": lambda params: (params["room_id"], params["upgrade_room_design_id"]),
     "add_research": lambda params: (params["research_design_id"],),
 }
 
