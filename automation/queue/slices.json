@@ -153,7 +153,7 @@
     {
       "slice_id": "r1-gameplay-action-catalog",
       "title": "Add a typed gameplay action catalog with postcondition reconciliation (AUTO-003)",
-      "status": "queued",
+      "status": "done",
       "priority": 60,
       "domain": "gameplay-actions",
       "allowed_paths": [
