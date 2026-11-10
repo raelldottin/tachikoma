@@ -46,6 +46,25 @@ def _as_records(value: Any) -> Optional[list[dict]]:
     return None
 
 
+def _container_records(data: Any, container_key: str, record_key: str) -> Optional[list[dict]]:
+    """Records inside ``container_key`` (for example ``Researches``/``Research``).
+
+    A present container with no records (``<Researches/>`` parses to ``None``)
+    is observed and empty, so it returns ``[]``. Only an absent container
+    returns ``None``, which leaves the section missing.
+    """
+    if not isinstance(data, dict):
+        return None
+    if container_key in data:
+        container = data[container_key]
+        return _as_records(_find(container, record_key)) or []
+    for value in data.values():
+        found = _container_records(value, container_key, record_key)
+        if found is not None:
+            return found
+    return None
+
+
 def _resource_from_items(items: Optional[list[dict]], kind: str) -> Optional[str]:
     """Return the quantity of the item typed as ``kind`` (mineral or gas).
 
@@ -98,16 +117,20 @@ class ClientSnapshotProvider:
         if not isinstance(ship, dict):
             ship = None
             failed.append("getShipByUserId")
-        rooms = _as_records(_find(ship.get("Rooms"), "Room")) if ship else None
-        research = _as_records(_find(ship.get("Researches"), "Research")) if ship else None
+        rooms = _container_records(ship, "Rooms", "Room") if ship else None
+        research = _container_records(ship, "Researches", "Research") if ship else None
 
         crew_payload = self._read("listAllCharactersOfUser", "allCharactersOfUser")
-        crew = _as_records(_find(crew_payload, "Character")) if crew_payload is not None else None
+        crew = _container_records(crew_payload, "Characters", "Character") if crew_payload is not None else None
+        if crew is None and crew_payload is not None:
+            crew = _as_records(_find(crew_payload, "Character"))
         if crew is None:
             failed.append("listAllCharactersOfUser")
 
         items_payload = self._read("listItemsOfAShip", "itemsOfAShip")
-        items = _as_records(_find(items_payload, "Item")) if items_payload is not None else None
+        items = _container_records(items_payload, "Items", "Item") if items_payload is not None else None
+        if items is None and items_payload is not None:
+            items = _as_records(_find(items_payload, "Item"))
         if items is None:
             failed.append("listItemsOfAShip")
 

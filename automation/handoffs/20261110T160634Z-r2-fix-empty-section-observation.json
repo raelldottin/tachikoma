@@ -1,0 +1,47 @@
+{
+  "slice_id": "r2-fix-empty-section-observation",
+  "status": "done",
+  "summary": "Added _container_records to sdk/state/client_provider.py: it locates the container element (Rooms, Researches, Characters, Items) and returns [] when the container is present with no records, or None only when the container is absent. Rooms and research now use it; crew and inventory use it and fall back to the previous record search when no container exists. Added three regression tests: empty containers give complete, empty sections with no failed reads; absent containers stay missing; and baseline-v1 plans research for a new ship whose Researches element is empty. Both defect tests fail against the previous provider and pass with the fix. Documented the rule in docs/baseline/account-snapshot.md.",
+  "files_touched": [
+    "sdk/state/client_provider.py",
+    "tests/test_client_snapshot_provider.py",
+    "docs/baseline/account-snapshot.md"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "Snapshot section observation for empty containers",
+      "before": "A present but empty Rooms/Researches/Characters/Items element was reported as missing, blocking planning for new ships",
+      "after": "Present empty containers are observed and empty; only absent containers or failed reads are missing",
+      "proof": [
+        "tests.test_client_snapshot_provider: 11 tests OK; the 2 defect tests fail on the unfixed provider",
+        "make test: 545 tests OK (1 skipped)",
+        "scripts/ci.py lint: no new findings",
+        "run.py --help exits 0"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "The fix assumes the server always includes the container element when the read succeeds; that is inferred from client code and mocked payloads, not a live capture."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-10T16:07:21Z"
+}
