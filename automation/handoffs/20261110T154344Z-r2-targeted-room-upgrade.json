@@ -1,0 +1,53 @@
+{
+  "slice_id": "r2-targeted-room-upgrade",
+  "status": "done",
+  "summary": "Added Client.upgradeRoom(roomId, upgradeRoomDesignId), which sends exactly the UpgradeRoom2 request upgradeRooms used to build inline and returns the raw response. upgradeRooms now calls it and is otherwise unchanged. Three regression tests in tests/test_runtime_guards.py pin the request URL, the rooms upgradeRooms selects (skipping unaffordable and already-upgrading rooms), the follow-up collectAllResources call, and the stop at the concurrency limit. The upgrade_room spec now targets upgradeRoom with required params room_id and upgrade_room_design_id, CALL_ARGUMENTS passes both, and a runner test checks that one room is targeted and that the raw response is treated as ambiguous. Added upgradeRoom to capability-inventory.json and updated action-catalog.md.",
+  "files_touched": [
+    "sdk/client.py",
+    "sdk/actions/catalog.py",
+    "sdk/execution/runner.py",
+    "tests/test_runtime_guards.py",
+    "tests/test_action_catalog.py",
+    "tests/test_action_runner.py",
+    "docs/baseline/capability-inventory.json",
+    "docs/baseline/action-catalog.md"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "Targeted room upgrade",
+      "before": "Room upgrades were only possible through upgradeRooms, which upgrades every eligible room",
+      "after": "upgradeRoom upgrades one named room; upgradeRooms behaviour is preserved and pinned by tests",
+      "proof": [
+        "tests.test_runtime_guards, test_action_catalog, test_action_runner, test_capability_inventory: 64 tests OK",
+        "make test: 510 tests OK (1 skipped)",
+        "scripts/ci.py lint: no new findings",
+        "run.py --help exits 0"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "docs/baseline/capability-inventory.md summary counts (98 methods, pillar B 28) are now one short; it was left unchanged to stay within the 8-file budget, and the JSON, which the drift test enforces, is correct.",
+    "upgradeRoom does no affordability check; the R2 policy must decide eligibility before calling it."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-10T15:44:57Z"
+}
