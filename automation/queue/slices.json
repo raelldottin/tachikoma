@@ -175,7 +175,7 @@
     {
       "slice_id": "r1-gameplay-event-journal",
       "title": "Add an append-only, redacted gameplay event journal (R1 observability)",
-      "status": "queued",
+      "status": "done",
       "priority": 70,
       "domain": "observability",
       "allowed_paths": [

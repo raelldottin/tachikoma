@@ -1,0 +1,48 @@
+{
+  "slice_id": "r1-gameplay-event-journal",
+  "status": "done",
+  "summary": "Added sdk/journal.py: frozen GameplayEvent (alias, action id, attempt id, tz-aware start and finish, outcome, reason, attempted, expected effect, response_ok, error_class, dry_run, params, cost, schema_version) and an append-only, fsynced GameplayJournal. Params are redacted with sdk.redaction.redact_dict, and an event whose serialised form still matches a redaction pattern is refused. read_events ignores an interrupted final line and raises on any other malformed line. summarize() returns per-account attempted, verified, not_observed, contradicted, uncertain, failed and skipped counts. Added 10 tests using temporary directories, and docs/baseline/gameplay-journal.md.",
+  "files_touched": [
+    "sdk/journal.py",
+    "tests/test_gameplay_journal.py",
+    "docs/baseline/gameplay-journal.md"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "R1 gameplay evidence journal",
+      "before": "Action outcomes exist only in free-text log files",
+      "after": "Structured, redacted, append-only per-attempt events with per-account outcome summaries",
+      "proof": [
+        "tests.test_gameplay_journal: 10 tests OK",
+        "make test: 483 tests OK (1 skipped)",
+        "scripts/ci.py lint: no new findings",
+        "run.py --help exits 0"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "Concurrent writers to one journal file are not locked; the runner should use one writer per journal.",
+    "Secret detection relies on sdk.redaction patterns; a secret format those patterns miss would be written."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-10T14:48:13Z"
+}
