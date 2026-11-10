@@ -496,7 +496,7 @@
     {
       "slice_id": "r3-pvp-strategy-scorecard",
       "title": "Offense/defense scorecards and strategy comparison by opponent cohort (R3 exit metrics)",
-      "status": "queued",
+      "status": "done",
       "priority": 200,
       "domain": "observability",
       "allowed_paths": [
