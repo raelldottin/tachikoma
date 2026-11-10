@@ -49,6 +49,10 @@ class GameplayEvent:
     dry_run: bool = False
     params: Mapping[str, Any] = field(default_factory=dict)
     cost: Mapping[str, Optional[float]] = field(default_factory=dict)
+    # Optional, action-specific evidence derived from observation (for example
+    # battle evidence tiers). Lines written before this field existed read back
+    # with an empty mapping.
+    evidence: Mapping[str, Any] = field(default_factory=dict)
     schema_version: int = SCHEMA_VERSION
 
     @classmethod
@@ -98,6 +102,7 @@ class GameplayEvent:
         self.validate()
         payload = asdict(self)
         payload["params"] = redact_dict(dict(self.params))
+        payload["evidence"] = redact_dict(dict(self.evidence))
         line = json.dumps(payload, sort_keys=True, separators=(",", ":"))
         if redact_secrets(line) != line:
             raise JournalError("event still contains a secret-shaped value after redaction; refusing to write")

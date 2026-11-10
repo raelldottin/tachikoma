@@ -40,6 +40,10 @@ class Reconciliation:
 Params = Mapping[str, Any]
 Precondition = Callable[[AccountSnapshot, Params], Optional[str]]
 Postcondition = Callable[[SnapshotDelta, AccountSnapshot, AccountSnapshot, Params], tuple[ReconciliationStatus, str]]
+# Reads client attributes only (never calls the game) before and after the call.
+EvidenceProbe = Callable[[Any], Mapping[str, Any]]
+# Turns the before/after probes and the reconciled status into journal evidence.
+EvidenceBuilder = Callable[[Mapping[str, Any], Mapping[str, Any], ReconciliationStatus], Mapping[str, Any]]
 
 
 @dataclass(frozen=True)
@@ -52,6 +56,8 @@ class ActionSpec:
     preconditions: tuple[Precondition, ...]
     postcondition: Postcondition
     expected_effect: str
+    evidence_probe: Optional[EvidenceProbe] = None
+    evidence: Optional[EvidenceBuilder] = None
 
 
 class ActionSpecError(ValueError):
@@ -173,6 +179,54 @@ def _research_started(delta, before, after, params):
     return ReconciliationStatus.NOT_OBSERVED, f"research {design_id} not started"
 
 
+def _battle_outcome_observed(delta, before, after, params):
+    if delta.trophies is None:
+        return ReconciliationStatus.UNKNOWN, "trophies were not observed on both sides; battle outcome unknown"
+    if delta.trophies:
+        return ReconciliationStatus.VERIFIED, (
+            f"trophies changed {delta.trophies:+d} (a defense in the same interval would also change trophies)"
+        )
+    return ReconciliationStatus.NOT_OBSERVED, "trophies unchanged; no battle outcome observed"
+
+
+# --- evidence ----------------------------------------------------------------------
+
+# Battle evidence tiers, weakest first. A tier says how far the battle provably
+# got. Only "outcome-observed" rests on game state; the others rest on the
+# server accepting a request. FinaliseBattle15 carries an outcome type chosen by
+# the client, so its response is never evidence of a win.
+BATTLE_EVIDENCE_TIERS = ("request-sent", "battle-created", "battle-accepted", "finalised", "outcome-observed")
+_BATTLE_RESULT_ATTRIBUTES = {
+    "battle-created": "createBattle9Result",
+    "battle-accepted": "acceptBattle5Result",
+    "finalised": "finaliseBattle15Result",
+}
+
+
+def _battle_probe(client: Any) -> Mapping[str, Any]:
+    probe = {tier: getattr(client, attribute, None) for tier, attribute in _BATTLE_RESULT_ATTRIBUTES.items()}
+    probe["battle_id"] = getattr(client, "lastBattleId", None)
+    return probe
+
+
+def _battle_evidence(before: Mapping[str, Any], after: Mapping[str, Any], status: ReconciliationStatus):
+    # A step happened during this call only if its parsed response object was replaced.
+    reached = {tier: after.get(tier) is not None and after.get(tier) is not before.get(tier)
+               for tier in _BATTLE_RESULT_ATTRIBUTES}
+    reached["outcome-observed"] = status is ReconciliationStatus.VERIFIED
+    tier = "request-sent"
+    for name in BATTLE_EVIDENCE_TIERS[1:]:
+        if reached.get(name):
+            tier = name
+    battle_id = after.get("battle_id") if reached["battle-created"] else None
+    return {
+        "evidence_tier": tier,
+        "steps": {name: bool(reached.get(name)) for name in BATTLE_EVIDENCE_TIERS[1:]},
+        "battle_id": str(battle_id) if battle_id not in (None, "", "0") else None,
+        "client_reported_outcome_trusted": False,
+    }
+
+
 CATALOG: dict[str, ActionSpec] = {
     spec.action_id: spec
     for spec in (
@@ -225,6 +279,18 @@ CATALOG: dict[str, ActionSpec] = {
             preconditions=(_section_observed("research"), _research_not_started),
             postcondition=_research_started,
             expected_effect="the research state becomes Researching or Completed",
+        ),
+        ActionSpec(
+            action_id="run_pvp_battle",
+            client_method="runBattleEndToEnd",
+            mutating=True,
+            idempotency=Idempotency.NOT_IDEMPOTENT,
+            required_params=(),
+            preconditions=(_section_observed("ship"),),
+            postcondition=_battle_outcome_observed,
+            expected_effect="a battle outcome is observed as a trophy change",
+            evidence_probe=_battle_probe,
+            evidence=_battle_evidence,
         ),
     )
 }
