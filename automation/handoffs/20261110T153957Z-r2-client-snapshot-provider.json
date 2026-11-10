@@ -1,0 +1,50 @@
+{
+  "slice_id": "r2-client-snapshot-provider",
+  "status": "done",
+  "summary": "Added sdk/state/client_provider.py with ClientSnapshotProvider(client, alias). Each call invokes getShipByUserId, listAllCharactersOfUser and listItemsOfAShip, extracts the Ship, Room, Research, Character and Item records, and calls build_snapshot. A read that raises, returns False or gives no payload leaves its sections missing and is listed in failed_reads. Minerals and gas are taken only from a single item typed Mineral or Gas, with no positional fallback. Starbux and trophies held from login are deliberately not reported. Exported from sdk.state. Added 8 fake-client tests, including one whose fake client fails on any method the capability inventory does not mark read-only. Documented in docs/baseline/account-snapshot.md.",
+  "files_touched": [
+    "sdk/state/client_provider.py",
+    "sdk/state/__init__.py",
+    "tests/test_client_snapshot_provider.py",
+    "docs/baseline/account-snapshot.md"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "R2 live snapshot input",
+      "before": "Snapshots could only be built from dictionaries the caller assembled",
+      "after": "A provider builds fresh snapshots from read-only Client calls, with explicit missing sections and no mutating calls",
+      "proof": [
+        "tests.test_client_snapshot_provider: 8 tests OK",
+        "make test: 505 tests OK (1 skipped)",
+        "scripts/ci.py lint: no new findings",
+        "run.py --help exits 0"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "Payload shapes come from existing client code and mocked tests, not a current live capture.",
+    "Starbux and trophies are unknown in provider snapshots, so daily-reward reconciliation depends on resources and inventory only.",
+    "A secret-shaped copied value raises SnapshotInputError rather than leaving a section missing; this fails closed by design."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-10T15:41:22Z"
+}
