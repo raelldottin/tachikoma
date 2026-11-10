@@ -424,7 +424,7 @@
     {
       "slice_id": "r3-pvp-strategy-registry",
       "title": "Versioned PvP strategy registry and experiment windows (AUTO-006)",
-      "status": "queued",
+      "status": "done",
       "priority": 170,
       "domain": "pvp",
       "allowed_paths": [
