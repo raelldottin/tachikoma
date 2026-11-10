@@ -398,6 +398,28 @@
         "make test",
         "git diff --check"
       ]
+    },
+    {
+      "slice_id": "r2-fix-empty-section-observation",
+      "title": "Treat present-but-empty snapshot containers as observed and empty",
+      "status": "done",
+      "priority": 155,
+      "domain": "account-state",
+      "allowed_paths": [
+        "sdk/state/",
+        "tests/",
+        "docs/baseline/"
+      ],
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ],
+      "depends_on": [
+        "r2-progression-metrics-report"
+      ],
+      "max_files_changed": 4,
+      "notes": "Defect found in r2-progression-dry-run-command: ClientSnapshotProvider marks rooms, research, crew or inventory as missing when the response contains the container element (Rooms, Researches, Characters, Items) with no records, so a new ship with no research never gets research planned. A present container with no records must yield an observed, empty section; an absent container or a failed read stays missing. Add regression tests, including one proving baseline-v1 plans research for a ship whose Researches element is empty. Update docs/baseline/account-snapshot.md."
     }
   ]
 }
