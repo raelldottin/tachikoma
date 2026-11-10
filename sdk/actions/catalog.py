@@ -1,0 +1,256 @@
+"""Typed gameplay action catalog with postcondition reconciliation (R1 / AUTO-003).
+
+Each ``ActionSpec`` names the ``sdk.client.Client`` method that performs an
+action, how safe it is to retry, what must hold before it runs, and how its
+effect shows up in an ``AccountSnapshot`` diff. ``reconcile`` decides from
+observed state alone whether the effect happened. An HTTP success is never
+evidence of an effect.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from enum import Enum
+from typing import Any, Callable, Mapping, Optional
+
+from sdk.state import AccountSnapshot, Completeness, SnapshotDelta, diff_snapshots
+
+
+class Idempotency(str, Enum):
+    SAFE_TO_RETRY = "safe-to-retry"
+    ONCE_PER_PERIOD = "once-per-period"
+    NOT_IDEMPOTENT = "not-idempotent"
+
+
+class ReconciliationStatus(str, Enum):
+    VERIFIED = "verified"
+    NOT_OBSERVED = "not-observed"
+    CONTRADICTED = "contradicted"
+    UNKNOWN = "unknown"
+
+
+@dataclass(frozen=True)
+class Reconciliation:
+    action_id: str
+    status: ReconciliationStatus
+    reason: str
+    response_ok: Optional[bool] = None
+
+
+Params = Mapping[str, Any]
+Precondition = Callable[[AccountSnapshot, Params], Optional[str]]
+Postcondition = Callable[[SnapshotDelta, AccountSnapshot, AccountSnapshot, Params], tuple[ReconciliationStatus, str]]
+
+
+@dataclass(frozen=True)
+class ActionSpec:
+    action_id: str
+    client_method: str
+    mutating: bool
+    idempotency: Idempotency
+    required_params: tuple[str, ...]
+    preconditions: tuple[Precondition, ...]
+    postcondition: Postcondition
+    expected_effect: str
+
+
+class ActionSpecError(ValueError):
+    """Raised for an unknown action or missing parameters."""
+
+
+# --- preconditions -----------------------------------------------------------------
+
+
+def _section_observed(name: str) -> Precondition:
+    def check(snapshot: AccountSnapshot, params: Params) -> Optional[str]:
+        if snapshot.section(name) is Completeness.MISSING:
+            return f"{name} section was not observed before the action"
+        return None
+
+    return check
+
+
+def _crew_member_present(snapshot: AccountSnapshot, params: Params) -> Optional[str]:
+    if snapshot.crew_member(str(params["character_id"])) is None:
+        return f"crew member {params['character_id']} is not in the snapshot"
+    return None
+
+
+def _room_idle(snapshot: AccountSnapshot, params: Params) -> Optional[str]:
+    room = snapshot.room(str(params["room_id"]))
+    if room is None:
+        return f"room {params['room_id']} is not in the snapshot"
+    if room.upgrading:
+        return f"room {params['room_id']} is already upgrading"
+    return None
+
+
+def _research_not_started(snapshot: AccountSnapshot, params: Params) -> Optional[str]:
+    state = snapshot.research_state(str(params["research_design_id"]))
+    if state in ("Researching", "Completed"):
+        return f"research {params['research_design_id']} is already {state.lower()}"
+    return None
+
+
+# --- postconditions ----------------------------------------------------------------
+
+
+def _resources_collected(delta, before, after, params):
+    values = {"minerals": delta.minerals, "gas": delta.gas}
+    known = {name: value for name, value in values.items() if value is not None}
+    if not known:
+        return ReconciliationStatus.UNKNOWN, "minerals and gas were not observed on both sides"
+    if any(value > 0 for value in known.values()):
+        return ReconciliationStatus.VERIFIED, "resources increased: " + ", ".join(
+            f"{name} {value:+d}" for name, value in sorted(known.items())
+        )
+    if any(value < 0 for value in known.values()):
+        return ReconciliationStatus.CONTRADICTED, "resources decreased after a collection"
+    if len(known) < len(values):
+        return ReconciliationStatus.UNKNOWN, "no observed increase and one resource was not observed"
+    return ReconciliationStatus.NOT_OBSERVED, "minerals and gas unchanged"
+
+
+def _reward_received(delta, before, after, params):
+    base = {"minerals": delta.minerals, "gas": delta.gas, "starbux": delta.starbux}
+    inventory_observed = "inventory" not in delta.unknown_sections
+    gains = dict(base)
+    if inventory_observed:
+        gains.update({f"item {item}": change for item, change in delta.inventory_quantity.items()})
+    increased = sorted(name for name, value in gains.items() if value is not None and value > 0)
+    if increased:
+        return ReconciliationStatus.VERIFIED, "reward observed in " + ", ".join(increased)
+    if any(value is None for value in base.values()) or not inventory_observed:
+        return ReconciliationStatus.UNKNOWN, "no increase seen, but not every reward channel was observed on both sides"
+    return ReconciliationStatus.NOT_OBSERVED, "no resource, starbux or item increase observed"
+
+
+def _training_started(delta, before, after, params):
+    return (
+        ReconciliationStatus.UNKNOWN,
+        "AccountSnapshot does not observe training state; add it before this action can be verified",
+    )
+
+
+def _room_upgrade_started(delta, before, after, params):
+    room_id = str(params["room_id"])
+    if "rooms" in delta.unknown_sections:
+        return ReconciliationStatus.UNKNOWN, "rooms were not observed on both sides"
+    if after.room(room_id) is None:
+        return ReconciliationStatus.CONTRADICTED, f"room {room_id} disappeared after the upgrade request"
+    status_change = delta.room_status.get(room_id)
+    design_change = delta.room_design.get(room_id)
+    if status_change and status_change[1] == "Upgrading":
+        return ReconciliationStatus.VERIFIED, f"room {room_id} status is now Upgrading"
+    if design_change:
+        return ReconciliationStatus.VERIFIED, f"room {room_id} design changed {design_change[0]} -> {design_change[1]}"
+    return ReconciliationStatus.NOT_OBSERVED, f"room {room_id} unchanged"
+
+
+def _research_started(delta, before, after, params):
+    design_id = str(params["research_design_id"])
+    if "research" in delta.unknown_sections:
+        return ReconciliationStatus.UNKNOWN, "research was not observed on both sides"
+    state = after.research_state(design_id)
+    if state in ("Researching", "Completed"):
+        return ReconciliationStatus.VERIFIED, f"research {design_id} is now {state}"
+    if before.research_state(design_id) in ("Researching", "Completed") and state is None:
+        return ReconciliationStatus.CONTRADICTED, f"research {design_id} disappeared"
+    return ReconciliationStatus.NOT_OBSERVED, f"research {design_id} not started"
+
+
+CATALOG: dict[str, ActionSpec] = {
+    spec.action_id: spec
+    for spec in (
+        ActionSpec(
+            action_id="collect_all_resources",
+            client_method="collectAllResources",
+            mutating=True,
+            idempotency=Idempotency.SAFE_TO_RETRY,
+            required_params=(),
+            preconditions=(_section_observed("resources"),),
+            postcondition=_resources_collected,
+            expected_effect="minerals and/or gas increase",
+        ),
+        ActionSpec(
+            action_id="collect_daily_reward",
+            client_method="collectDailyReward",
+            mutating=True,
+            idempotency=Idempotency.ONCE_PER_PERIOD,
+            required_params=(),
+            preconditions=(_section_observed("resources"),),
+            postcondition=_reward_received,
+            expected_effect="a resource, starbux or inventory item increases",
+        ),
+        ActionSpec(
+            action_id="add_training",
+            client_method="addTraining",
+            mutating=True,
+            idempotency=Idempotency.NOT_IDEMPOTENT,
+            required_params=("training_design_id", "character_id"),
+            preconditions=(_section_observed("crew"), _crew_member_present),
+            postcondition=_training_started,
+            expected_effect="the crew member starts the training (not yet observable)",
+        ),
+        ActionSpec(
+            action_id="upgrade_room",
+            client_method="upgradeRooms",
+            mutating=True,
+            idempotency=Idempotency.NOT_IDEMPOTENT,
+            required_params=("room_id",),
+            preconditions=(_section_observed("rooms"), _room_idle),
+            postcondition=_room_upgrade_started,
+            expected_effect="the room status becomes Upgrading or its design advances",
+        ),
+        ActionSpec(
+            action_id="add_research",
+            client_method="addResearch",
+            mutating=True,
+            idempotency=Idempotency.NOT_IDEMPOTENT,
+            required_params=("research_design_id",),
+            preconditions=(_section_observed("research"), _research_not_started),
+            postcondition=_research_started,
+            expected_effect="the research state becomes Researching or Completed",
+        ),
+    )
+}
+
+
+def get_spec(action_id: str) -> ActionSpec:
+    try:
+        return CATALOG[action_id]
+    except KeyError:
+        raise ActionSpecError(f"unknown action {action_id!r}") from None
+
+
+def _require_params(spec: ActionSpec, params: Params) -> None:
+    missing = [name for name in spec.required_params if params.get(name) in (None, "")]
+    if missing:
+        raise ActionSpecError(f"{spec.action_id} requires parameters: {', '.join(missing)}")
+
+
+def check_preconditions(spec: ActionSpec, before: AccountSnapshot, params: Optional[Params] = None) -> list[str]:
+    """Return the reasons the action must not run; an empty list means it may."""
+    params = params or {}
+    _require_params(spec, params)
+    return [failure for check in spec.preconditions if (failure := check(before, params))]
+
+
+def reconcile(
+    spec: ActionSpec,
+    before: AccountSnapshot,
+    after: AccountSnapshot,
+    params: Optional[Params] = None,
+    response_ok: Optional[bool] = None,
+) -> Reconciliation:
+    """Decide from observed state whether the action's effect happened.
+
+    ``response_ok`` is recorded for context only. It never turns an
+    unobserved effect into ``VERIFIED``. Snapshots of different accounts raise
+    ``AccountMismatchError`` from ``diff_snapshots``.
+    """
+    params = params or {}
+    _require_params(spec, params)
+    delta = diff_snapshots(before, after)
+    status, reason = spec.postcondition(delta, before, after, params)
+    return Reconciliation(action_id=spec.action_id, status=status, reason=reason, response_ok=response_ok)
