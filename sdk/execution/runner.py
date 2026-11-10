@@ -42,6 +42,7 @@ CALL_ARGUMENTS: dict[str, Callable[[Mapping[str, Any]], tuple]] = {
     "add_training": lambda params: (params["training_design_id"], params["character_id"]),
     "upgrade_room": lambda params: (params["room_id"], params["upgrade_room_design_id"]),
     "add_research": lambda params: (params["research_design_id"],),
+    "run_pvp_battle": lambda params: (),
 }
 
 
@@ -165,6 +166,13 @@ class ActionRunner:
                                 dry_run=True)
 
         method = getattr(self.client, spec.client_method)
+        probe_before = spec.evidence_probe(self.client) if spec.evidence_probe else None
+
+        def evidence(status: ReconciliationStatus) -> dict:
+            if probe_before is None or spec.evidence is None:
+                return {}
+            return dict(spec.evidence(probe_before, spec.evidence_probe(self.client), status))
+
         response_ok: Optional[bool] = None
         error_class: Optional[str] = None
         try:
@@ -176,12 +184,14 @@ class ActionRunner:
             after = self._observe()
         except AccountMismatchError as error:
             self._record(spec, started, params, outcome="unknown", reason=str(error), attempted=True,
-                         response_ok=response_ok, error_class="AccountMismatchError")
+                         response_ok=response_ok, error_class="AccountMismatchError",
+                         evidence=evidence(ReconciliationStatus.UNKNOWN))
             raise
         except Exception as error:
             return self._record(spec, started, params, outcome="unknown",
                                 reason="after-snapshot failed; effect cannot be reconciled", attempted=True,
-                                response_ok=response_ok, error_class=error_class or type(error).__name__)
+                                response_ok=response_ok, error_class=error_class or type(error).__name__,
+                                evidence=evidence(ReconciliationStatus.UNKNOWN))
 
         result = reconcile(spec, before, after, params, response_ok=response_ok)
         outcome, reason = result.status, result.reason
@@ -195,4 +205,5 @@ class ActionRunner:
         # Signed observed resource deltas; negative values are spend. None = unobserved.
         cost = {"minerals_delta": delta.minerals, "gas_delta": delta.gas, "starbux_delta": delta.starbux}
         return self._record(spec, started, params, outcome=outcome.value, reason=reason, attempted=True,
-                            response_ok=response_ok, error_class=error_class, cost=cost)
+                            response_ok=response_ok, error_class=error_class, cost=cost,
+                            evidence=evidence(outcome))

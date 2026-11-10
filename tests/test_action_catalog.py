@@ -59,7 +59,8 @@ class CatalogShapeTests(unittest.TestCase):
     def test_representative_actions_are_present(self):
         self.assertEqual(
             set(CATALOG),
-            {"collect_all_resources", "collect_daily_reward", "add_training", "upgrade_room", "add_research"},
+            {"collect_all_resources", "collect_daily_reward", "add_training", "upgrade_room", "add_research",
+             "run_pvp_battle"},
         )
         self.assertIs(CATALOG["add_research"].idempotency, Idempotency.NOT_IDEMPOTENT)
         self.assertIs(CATALOG["collect_all_resources"].idempotency, Idempotency.SAFE_TO_RETRY)

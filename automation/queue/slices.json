@@ -446,7 +446,7 @@
     {
       "slice_id": "r3-pvp-battle-action",
       "title": "Catalog a PvP battle action whose outcome is observed, not assumed (AUTO-007)",
-      "status": "queued",
+      "status": "done",
       "priority": 180,
       "domain": "execution",
       "allowed_paths": [

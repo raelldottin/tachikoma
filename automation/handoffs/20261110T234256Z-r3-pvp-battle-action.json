@@ -1,0 +1,52 @@
+{
+  "slice_id": "r3-pvp-battle-action",
+  "status": "done",
+  "summary": "Added run_pvp_battle to sdk/actions/catalog.py (runBattleEndToEnd, not idempotent, ship observed precondition, trophy-change postcondition), optional evidence_probe/evidence hooks on ActionSpec, and battle evidence tiers derived from replaced step response objects (stale responses do not count; dummy battle id 0 is not recorded; client_reported_outcome_trusted is always false). ActionRunner probes before the call and journals evidence on every attempted path, including exceptions and failed after-snapshots. GameplayEvent has an optional, redacted evidence mapping; lines without it read back empty. runBattleEndToEnd and run.py are unchanged. 15 new tests in tests/test_pvp_battle_action.py; catalog id test updated; docs updated with the tiers and the trophy-observation gap.",
+  "files_touched": [
+    "sdk/actions/catalog.py",
+    "sdk/execution/runner.py",
+    "sdk/journal.py",
+    "tests/test_action_catalog.py",
+    "tests/test_pvp_battle_action.py",
+    "docs/baseline/action-catalog.md",
+    "docs/baseline/gameplay-journal.md"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "PvP battle action evidence (AUTO-007)",
+      "before": "Battles ran only through run.py with success taken from runBattleEndToEnd returning True if any step succeeded",
+      "after": "run_pvp_battle is a catalog action whose outcome needs an observed trophy change, with per-call evidence tiers journaled as data",
+      "proof": [
+        "tests.test_pvp_battle_action: 15 tests OK",
+        "make test: 571 tests OK (1 skipped)",
+        "scripts/ci.py lint: no new findings",
+        "run.py --help exits 0"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "No verified read-only method returns current trophies, so with ClientSnapshotProvider every battle outcome is unknown until a trophy read is verified against a live response.",
+    "A trophy change during the window could come from a defense rather than the attack."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-10T23:46:52Z"
+}
