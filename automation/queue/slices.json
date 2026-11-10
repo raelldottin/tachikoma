@@ -231,7 +231,7 @@
       ],
       "max_files_changed": 6,
       "notes": "R2 prerequisite. Add sdk/state/client_provider.py: a snapshot provider that calls only read-only Client methods (getShipByUserId, listAllCharactersOfUser, listItemsOfAShip and the resource totals the client already tracks) and feeds build_snapshot for a given alias. A read that fails or returns no data leaves its section missing; it never raises past the provider unless the alias is invalid. It must never call a mutating method, enforced by a test whose fake client fails on any method the capability inventory marks mutating. Fake-client tests only; no network traffic.",
-      "status": "queued",
+      "status": "done",
       "required_validations": [
         "make syntax-check",
         "make test",
