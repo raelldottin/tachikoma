@@ -17,6 +17,7 @@
 `diff_snapshots(before, after)` reports the observed change: resource, trophy and hull deltas, crew level changes, room design and status changes, research state changes, and inventory quantity changes.
 
 - `None` means unknown, never "no change".
+- `crew_training` lists `(design, end)` changes, but only for crew whose training was observed in both snapshots.
 - A keyed section that is missing on either side is listed in `unknown_sections`, and its mapping is empty. A missing section is therefore never reported as rooms or items being removed.
 - An item absent from an observed inventory counts as quantity 0. An item with an unparseable quantity yields `None`.
 
@@ -27,7 +28,7 @@
 | `trophies` | `User/@Trophy` |
 | `hull_level` | `Ship/@ShipLevel` |
 | `rooms` | `Room/@RoomId`, `@RoomDesignId`, `@RoomStatus` |
-| `crew` | `@CharacterId`, `@CharacterDesignId`, `@CharacterName`, `@Level`, `@Fatigue`, `@RoomId` |
+| `crew` | `@CharacterId`, `@CharacterDesignId`, `@CharacterName`, `@Level`, `@Fatigue`, `@RoomId`, `@TrainingEndDate`, `@TrainingDesignId` (training is observed only when `@TrainingEndDate` is present; empty means idle, and `0` means no design) |
 | `research` | `Research/@ResearchDesignId`, `@ResearchState` |
 | `inventory` | `@ItemDesignId`, `@Quantity` |
 | `resources` | `minerals`, `gas`, `starbux`, supplied by the caller from `Client` totals |

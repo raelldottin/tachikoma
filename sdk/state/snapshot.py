@@ -50,6 +50,17 @@ class CrewMember:
     level: Optional[int]
     fatigue: Optional[int]
     room_id: Optional[str]
+    # Training is observed only when the record carries @TrainingEndDate
+    # (empty when no training runs). Unobserved training stays None/False.
+    training_observed: bool = False
+    training_design_id: Optional[str] = None
+    training_end: Optional[str] = None
+
+    @property
+    def training_active(self) -> Optional[bool]:
+        if not self.training_observed:
+            return None
+        return bool(self.training_end)
 
 
 @dataclass(frozen=True)
@@ -143,6 +154,11 @@ def _int_or_none(value: Any) -> Optional[int]:
         return int(str(value).strip())
     except ValueError:
         return None
+
+
+def _training_design_id(value: Any) -> Optional[str]:
+    text = _clean_text(value, "crew.training_design_id")
+    return None if text in (None, "", "0") else text
 
 
 def _records(value: Any) -> Optional[list[Mapping[str, Any]]]:
@@ -251,6 +267,9 @@ def build_snapshot(
             level=_int_or_none(record.get("@Level")),
             fatigue=_int_or_none(record.get("@Fatigue")),
             room_id=_clean_text(record.get("@RoomId"), "crew.room_id"),
+            training_observed="@TrainingEndDate" in record,
+            training_design_id=_training_design_id(record.get("@TrainingDesignId")),
+            training_end=_clean_text(record.get("@TrainingEndDate"), "crew.training_end") or None,
         ),
     )
     room_records = builder.parse_section(
@@ -326,6 +345,9 @@ class SnapshotDelta:
     research_state: Mapping[str, tuple[Optional[str], Optional[str]]]
     inventory_quantity: Mapping[str, Optional[int]]
     unknown_sections: tuple[str, ...] = ()
+    # (training_design_id, training_end) before -> after, only for crew whose
+    # training was observed on both sides.
+    crew_training: Mapping[str, tuple[tuple, tuple]] = field(default_factory=dict)
 
 
 def _keyed_changes(before: Iterable, after: Iterable, key, value) -> dict[str, tuple]:
@@ -378,6 +400,16 @@ def diff_snapshots(before: AccountSnapshot, after: AccountSnapshot) -> SnapshotD
         if old != new:
             inventory_quantity[identifier] = _delta(old, new)
     rooms_before, rooms_after = observed("rooms", before), observed("rooms", after)
+    training_before = {m.character_id: m for m in observed("crew", before) if m.training_observed}
+    crew_training = {}
+    for member in observed("crew", after):
+        old = training_before.get(member.character_id)
+        if old is None or not member.training_observed:
+            continue
+        old_value = (old.training_design_id, old.training_end)
+        new_value = (member.training_design_id, member.training_end)
+        if old_value != new_value:
+            crew_training[member.character_id] = (old_value, new_value)
     return SnapshotDelta(
         account_alias=after.account_alias,
         elapsed_seconds=elapsed,
@@ -397,4 +429,5 @@ def diff_snapshots(before: AccountSnapshot, after: AccountSnapshot) -> SnapshotD
         ),
         inventory_quantity=inventory_quantity,
         unknown_sections=unknown,
+        crew_training=crew_training,
     )

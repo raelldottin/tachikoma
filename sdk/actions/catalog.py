@@ -126,10 +126,24 @@ def _reward_received(delta, before, after, params):
 
 
 def _training_started(delta, before, after, params):
-    return (
-        ReconciliationStatus.UNKNOWN,
-        "AccountSnapshot does not observe training state; add it before this action can be verified",
-    )
+    character_id = str(params["character_id"])
+    requested = str(params["training_design_id"])
+    if "crew" in delta.unknown_sections:
+        return ReconciliationStatus.UNKNOWN, "crew was not observed on both sides"
+    old, new = before.crew_member(character_id), after.crew_member(character_id)
+    if new is None:
+        return ReconciliationStatus.CONTRADICTED, f"crew member {character_id} disappeared"
+    if old is None or not (old.training_observed and new.training_observed):
+        return ReconciliationStatus.UNKNOWN, f"training state of {character_id} was not observed on both sides"
+    if new.training_design_id == requested and new.training_active:
+        return ReconciliationStatus.VERIFIED, f"{character_id} is training {requested} until {new.training_end}"
+    if not old.training_active and new.training_active and new.training_design_id is None:
+        return ReconciliationStatus.VERIFIED, f"{character_id} started training ending {new.training_end}"
+    if new.training_active and new.training_design_id not in (None, requested) and (
+        (old.training_design_id, old.training_end) != (new.training_design_id, new.training_end)
+    ):
+        return ReconciliationStatus.CONTRADICTED, f"{character_id} started different training {new.training_design_id}"
+    return ReconciliationStatus.NOT_OBSERVED, f"training of {character_id} unchanged"
 
 
 def _room_upgrade_started(delta, before, after, params):
@@ -190,7 +204,7 @@ CATALOG: dict[str, ActionSpec] = {
             required_params=("training_design_id", "character_id"),
             preconditions=(_section_observed("crew"), _crew_member_present),
             postcondition=_training_started,
-            expected_effect="the crew member starts the training (not yet observable)",
+            expected_effect="the crew member starts the requested training",
         ),
         ActionSpec(
             action_id="upgrade_room",

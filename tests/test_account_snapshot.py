@@ -162,6 +162,22 @@ class DiffSnapshotTests(unittest.TestCase):
         )
         self.assertEqual(diff_snapshots(before, after).inventory_quantity, {"900": None})
 
+    def test_training_state_is_observed_only_when_present(self):
+        idle = [dict(CREW[0], **{"@TrainingEndDate": "", "@TrainingDesignId": "0"}), CREW[1]]
+        busy = [dict(CREW[0], **{"@TrainingEndDate": "2026-11-10T13:00:00", "@TrainingDesignId": "7"}), CREW[1]]
+        before = full_snapshot(crew=idle)
+        after = full_snapshot(observed_at=T0 + timedelta(seconds=1), crew=busy)
+        self.assertIs(before.crew_member("c1").training_active, False)
+        self.assertIsNone(before.crew_member("c1").training_design_id)
+        self.assertIs(after.crew_member("c1").training_active, True)
+        self.assertIsNone(after.crew_member("c2").training_active)
+        self.assertEqual(
+            diff_snapshots(before, after).crew_training,
+            {"c1": ((None, None), ("7", "2026-11-10T13:00:00"))},
+        )
+        # c2 never reported training, so it has no training delta.
+        self.assertNotIn("c2", diff_snapshots(before, after).crew_training)
+
     def test_cross_account_comparison_is_refused(self):
         with self.assertRaises(AccountMismatchError):
             diff_snapshots(full_snapshot("alpha"), full_snapshot("bravo", observed_at=T0 + timedelta(seconds=1)))
