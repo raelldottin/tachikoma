@@ -402,7 +402,7 @@
     {
       "slice_id": "r2-fix-empty-section-observation",
       "title": "Treat present-but-empty snapshot containers as observed and empty",
-      "status": "queued",
+      "status": "done",
       "priority": 155,
       "domain": "account-state",
       "allowed_paths": [
