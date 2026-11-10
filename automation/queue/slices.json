@@ -131,7 +131,7 @@
     {
       "slice_id": "r1-account-snapshot-model",
       "title": "Add a typed, account-scoped game state snapshot (AUTO-002)",
-      "status": "queued",
+      "status": "done",
       "priority": 50,
       "domain": "account-state",
       "allowed_paths": [
