@@ -197,7 +197,7 @@
     {
       "slice_id": "r1-reconciled-action-runner",
       "title": "Execute catalog actions with before/after snapshots, reconciliation and journaling (R1 exit)",
-      "status": "queued",
+      "status": "done",
       "priority": 80,
       "domain": "gameplay-execution",
       "allowed_paths": [
