@@ -1,0 +1,49 @@
+{
+  "slice_id": "r1-account-snapshot-model",
+  "status": "done",
+  "summary": "Added sdk/state (snapshot.py, __init__.py): a frozen AccountSnapshot with alias, tz-aware observed_at, source, game_version, hull level, trophies, resources, crew, rooms, research and inventory, plus per-section complete/partial/missing status. build_snapshot copies only whitelisted fields from already-parsed xmltodict responses, marks missing or unparseable data as unknown instead of inventing it, refuses e-mail or display-name aliases, and refuses copied values that sdk.redaction would redact. diff_snapshots refuses cross-account and reversed-time comparisons and lists sections missing on either side as unknown_sections. Added 17 synthetic tests and docs/baseline/account-snapshot.md.",
+  "files_touched": [
+    "sdk/state/__init__.py",
+    "sdk/state/snapshot.py",
+    "tests/test_account_snapshot.py",
+    "docs/baseline/account-snapshot.md"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "AUTO-002 account-scoped state snapshot",
+      "before": "Client stores raw parsed XML on the instance with no alias, timestamp or completeness",
+      "after": "Typed AccountSnapshot and SnapshotDelta with account isolation, provenance, completeness and unknown-not-invented semantics",
+      "proof": [
+        "tests.test_account_snapshot: 17 tests OK",
+        "make test: 461 tests OK (1 skipped)",
+        "scripts/ci.py lint: no new findings",
+        "run.py --help exits 0"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "Attribute names (@ShipLevel, @Trophy, @ResearchState and others) come from existing client code and mocked tests, not from a current live capture.",
+    "Resources are passed in by the caller; no adapter from Client state to build_snapshot exists yet (planned for r1-reconciled-action-runner)."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-10T14:43:40Z"
+}
