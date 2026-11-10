@@ -471,7 +471,7 @@
     {
       "slice_id": "r3-battle-results-from-journal",
       "title": "Build PvP battle results from journaled battle events",
-      "status": "queued",
+      "status": "done",
       "priority": 190,
       "domain": "pvp",
       "allowed_paths": [
