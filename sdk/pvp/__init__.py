@@ -64,6 +64,16 @@ from .performance import (
 )
 from .planner import build_progression_roadmap
 from .report import render_account_report, render_performance_report
+from .strategies import (
+    STRATEGY_ID_PATTERN,
+    PvpStrategy,
+    StrategyRegistry,
+    ExperimentWindow,
+    ExperimentSchedule,
+    CANDIDATE_STRATEGIES,
+    candidate_registry,
+    strategy_index,
+)
 
 __all__ = [
     "UNKNOWN",
@@ -121,4 +131,12 @@ __all__ = [
     "build_progression_roadmap",
     "render_account_report",
     "render_performance_report",
+    "STRATEGY_ID_PATTERN",
+    "PvpStrategy",
+    "StrategyRegistry",
+    "ExperimentWindow",
+    "ExperimentSchedule",
+    "CANDIDATE_STRATEGIES",
+    "candidate_registry",
+    "strategy_index",
 ]

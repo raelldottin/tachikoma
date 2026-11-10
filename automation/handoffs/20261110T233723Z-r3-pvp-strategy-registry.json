@@ -1,0 +1,49 @@
+{
+  "slice_id": "r3-pvp-strategy-registry",
+  "status": "done",
+  "summary": "Added sdk/pvp/strategies.py with PvpStrategy (validated, content-hashed config_version that ignores description and evidence tier), StrategyRegistry (immutable published versions, latest lookup), ExperimentWindow and ExperimentSchedule (UTC-only half-open windows, no overlaps per alias, registered strategies only, active_strategy lookup), two candidate strategies as hypotheses, and strategy_index. Exported from sdk.pvp. 13 offline tests in tests/test_pvp_strategies.py; existing PvP safety tests still pass (no network imports, no mutation identifiers). Documented in docs/baseline/pvp-strategies.md.",
+  "files_touched": [
+    "sdk/pvp/strategies.py",
+    "sdk/pvp/__init__.py",
+    "tests/test_pvp_strategies.py",
+    "docs/baseline/pvp-strategies.md"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "PvP strategy versioning (AUTO-006)",
+      "before": "Battle strategy was a free enum label on BattleResult with no versioned configuration or experiment assignment",
+      "after": "Strategies are versioned, hashed data; experiment windows attribute any time to at most one strategy per account",
+      "proof": [
+        "tests.test_pvp_strategies: 13 tests OK",
+        "tests.test_pvp_safety: OK",
+        "make test: 558 tests OK (1 skipped)",
+        "scripts/ci.py lint: no new findings",
+        "run.py --help exits 0"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "The candidate strategies' AI rule vocabulary (conditions/actions strings) is descriptive; it is not yet mapped to the game's native AI condition/action ids."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-10T23:39:36Z"
+}
