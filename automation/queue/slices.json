@@ -106,6 +106,115 @@
       ],
       "max_files_changed": 8,
       "notes": "Replace hardcoded Python paths in Makefile with portable discovery. Add adapter-level schema validation against handoff.schema.json. Make handoff write truly atomic (temp + rename). Remove stale 'hermes -z' reference from queue notes. Add adapter test with fake Hermes executable."
+    },
+    {
+      "slice_id": "r0-capability-baseline-inventory",
+      "title": "Inventory current gameplay capabilities against the roadmap (AUTO-001)",
+      "status": "queued",
+      "priority": 40,
+      "domain": "research-baseline",
+      "allowed_paths": [
+        "docs/baseline/",
+        "tests/",
+        "README.template",
+        "README.md"
+      ],
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ],
+      "depends_on": [],
+      "max_files_changed": 6,
+      "notes": "R0/AUTO-001. Add docs/baseline/capability-inventory.json mapping every public sdk.client.Client method and run.py flag to a roadmap pillar (A-F), a mutating/read-only flag, and an evidence level (mocked-test, live-claimed, untested) citing the test file or README claim that supports it. Add docs/baseline/capability-inventory.md summarising gaps per release R1-R3. Add a test that fails when a public Client method is missing from the inventory, so the map cannot drift. Correct the outdated offline-only roadmap sentence in README.template, then regenerate README.md. No network traffic; do not claim live behaviour that is not already documented."
+    },
+    {
+      "slice_id": "r1-account-snapshot-model",
+      "title": "Add a typed, account-scoped game state snapshot (AUTO-002)",
+      "status": "queued",
+      "priority": 50,
+      "domain": "account-state",
+      "allowed_paths": [
+        "sdk/state/",
+        "tests/",
+        "docs/baseline/"
+      ],
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ],
+      "depends_on": [
+        "r0-capability-baseline-inventory"
+      ],
+      "max_files_changed": 8,
+      "notes": "R1/AUTO-002. Add sdk/state/ with a frozen AccountSnapshot (account alias, observed_at, source, game_version, per-section completeness, hull level, trophies, resources, crew, rooms, research, inventory) and a pure builder from already-parsed client response dicts. Missing sections are marked partial, never invented. Reject secret-shaped keys using sdk.redaction. Refuse to merge or diff snapshots from different account aliases. Tests use synthetic fixtures only."
+    },
+    {
+      "slice_id": "r1-gameplay-action-catalog",
+      "title": "Add a typed gameplay action catalog with postcondition reconciliation (AUTO-003)",
+      "status": "queued",
+      "priority": 60,
+      "domain": "gameplay-actions",
+      "allowed_paths": [
+        "sdk/actions/",
+        "tests/",
+        "docs/baseline/"
+      ],
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ],
+      "depends_on": [
+        "r1-account-snapshot-model"
+      ],
+      "max_files_changed": 8,
+      "notes": "R1/AUTO-003. Add sdk/actions/ with ActionSpec records (action id, Client method, mutating flag, idempotency class, preconditions, expected snapshot delta) for representative actions: collect all resources, collect daily reward, add training, upgrade room, add research. Add reconcile(spec, before, after) returning VERIFIED, NOT_OBSERVED, CONTRADICTED or UNKNOWN; an HTTP success alone is never VERIFIED. Pure functions; synthetic before/after snapshot tests for every outcome."
+    },
+    {
+      "slice_id": "r1-gameplay-event-journal",
+      "title": "Add an append-only, redacted gameplay event journal (R1 observability)",
+      "status": "queued",
+      "priority": 70,
+      "domain": "observability",
+      "allowed_paths": [
+        "sdk/journal.py",
+        "tests/",
+        "docs/baseline/"
+      ],
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ],
+      "depends_on": [
+        "r1-gameplay-action-catalog"
+      ],
+      "max_files_changed": 5,
+      "notes": "R1 evidence layer. Add sdk/journal.py: JSONL events with account alias, action id, attempt id, timestamps, expected effect, observed outcome, reconciliation status, error class and cost fields. Redact through sdk.redaction before writing; refuse secret-shaped values. Provide a reader and a per-account summary (attempted, verified, uncertain, failed). Tests write to temporary directories only."
+    },
+    {
+      "slice_id": "r1-reconciled-action-runner",
+      "title": "Execute catalog actions with before/after snapshots, reconciliation and journaling (R1 exit)",
+      "status": "queued",
+      "priority": 80,
+      "domain": "gameplay-execution",
+      "allowed_paths": [
+        "sdk/execution/",
+        "tests/",
+        "docs/baseline/"
+      ],
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ],
+      "depends_on": [
+        "r1-gameplay-event-journal"
+      ],
+      "max_files_changed": 8,
+      "notes": "R1 exit. Add sdk/execution/ with a runner that takes an injected client and snapshot provider, checks preconditions, captures before and after snapshots, invokes one catalog action, reconciles it and journals the result. Timeouts, exceptions and ambiguous responses are journaled explicitly as uncertain; no automatic retry of non-idempotent actions; a dry-run mode performs no mutating call. Refuse to run when the snapshot alias differs from the requested account. Tests use a fake client; no real network traffic. Do not wire it into run.py yet."
     }
   ]
 }
