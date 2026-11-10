@@ -40,6 +40,7 @@ These attribute names come from existing client code and mocked tests. Whether t
 `ClientSnapshotProvider(client, alias)` is the snapshot provider for `sdk.execution.ActionRunner`. Each call makes exactly three read-only calls, `getShipByUserId`, `listAllCharactersOfUser` and `listItemsOfAShip`, and builds a fresh snapshot. It never calls a method that changes the account. A test fails if it calls any method the [capability inventory](capability-inventory.json) does not list as `read-only`.
 
 - A read that raises, returns `False` or yields no payload leaves its sections `missing`. The method names are recorded in `failed_reads`.
+- A container element that is present but has no records, such as `<Researches/>` on a new ship, is observed and empty: the section is `complete`, with no records. Only an absent container, or a failed read, leaves the section `missing`.
 - Minerals and gas come only from inventory items whose `@ItemType`/`@Type` names them, with exactly one match each. Unlike `collectAllResources`, there is no fallback to item position.
 - Starbux and trophies are not reported, so the `profile` section stays `missing`. The client only holds those values from login, and reporting them would mislabel stale data with the current observation time.
 - A copied value that looks like a secret still raises `SnapshotInputError`. Refusing outright is deliberate.
