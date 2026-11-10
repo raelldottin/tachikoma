@@ -368,7 +368,7 @@
       ],
       "max_files_changed": 5,
       "notes": "R2 exit evidence. Add sdk/reports/progression.py: from journal events, compute per-account, per-day verified actions, verified action success rate, uncertain and failed counts, resources gained and spent per elapsed hour (from cost deltas), and a failure ledger. Every metric reports its sample size and time window; with no events it reports empty, not zero rates. Output JSON and a Markdown table. Synthetic journals in temporary directories.",
-      "status": "queued",
+      "status": "done",
       "required_validations": [
         "make syntax-check",
         "make test",
