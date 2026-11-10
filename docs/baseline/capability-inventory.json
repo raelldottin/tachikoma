@@ -926,6 +926,33 @@
       "tests": [
         "tests/test_ci.py"
       ]
+    },
+    {
+      "flag": "--progression-dry-run",
+      "pillar": "B",
+      "kind": "read-only",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_progression_dry_run.py"
+      ]
+    },
+    {
+      "flag": "--account-alias",
+      "pillar": "E",
+      "kind": "read-only",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_progression_dry_run.py"
+      ]
+    },
+    {
+      "flag": "--progression-journal",
+      "pillar": "platform",
+      "kind": "read-only",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_progression_dry_run.py"
+      ]
     }
   ]
 }

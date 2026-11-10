@@ -49,6 +49,19 @@ check coverage, lint baseline, local commands, and branch-protection setup.
 - End-to-end ship battle flow (CreateBattle9 → AcceptBattle5 → FinaliseBattle15).
 - Crew stat formula integration from the Crew Planning and Training Guide.
 
+### Progression dry run
+
+`--progression-dry-run` logs in, then makes only read-only calls to build an account snapshot and load room and research design data. It plans the day with the `baseline-v1` policy (research, room upgrades, daily reward; see [docs/baseline/progression-policy.md](docs/baseline/progression-policy.md)) and prints the planned actions and every rejected candidate with its reason. Each planned action is recorded as a dry-run event in a JSONL journal, then the script exits. Nothing in the account changes, and the normal daily automation does not run.
+
+```bash
+python run.py --login-email you@example.com --progression-dry-run --account-alias primary
+```
+
+- `--account-alias` is the lowercase label written to the journal (default `primary`). E-mail addresses and display names are refused.
+- `--progression-journal` sets the journal path. The default, `tachikoma-progression.log`, is covered by the repository's `*.log` ignore rule.
+
+There is no live-execute flag yet. Running the planner against a real account is the blocked roadmap slice `r2-live-progression-trial`.
+
 ### Battle Flow
 
 The `--run-battle` flag triggers an end-to-end ship battle:

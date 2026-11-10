@@ -1,0 +1,54 @@
+{
+  "slice_id": "r2-progression-dry-run-command",
+  "status": "done",
+  "summary": "Added run_progression_dry_run() and three flags to run.py: --progression-dry-run, --account-alias (default primary) and --progression-journal (default tachikoma-progression.log). After login the command loads room and research designs (listRoomDesigns2, listAllResearchDesigns2), builds a snapshot with ClientSnapshotProvider, runs DailyScheduler with baseline-v1 in dry-run mode, prints the planned actions, rejected candidates, skips and any stop reason, then exits 0 before any heartbeat, battle or daily automation. Added 4 tests with a fake client that fails on any mutating method and checks that only login plus read calls happen, that the journal holds dry-run events only, that invalid aliases are refused, and that the default journal path is gitignored. Documented in README.template, then README.md; added the flags to the capability inventory.",
+  "files_touched": [
+    "run.py",
+    "tests/test_progression_dry_run.py",
+    "README.template",
+    "README.md",
+    "docs/baseline/capability-inventory.json"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "Operator progression dry run",
+      "before": "Policy plans could only be produced from code",
+      "after": "An operator can see and journal today's baseline-v1 plan for a real account with no account changes",
+      "proof": [
+        "tests.test_progression_dry_run: 4 tests OK",
+        "make test: 536 tests OK (1 skipped)",
+        "scripts/ci.py lint: no new findings",
+        "run.py --help lists the new flags"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "Defect found, outside this slice's paths: ClientSnapshotProvider treats a present but empty Researches or Rooms element (a new ship with no research) as missing, so baseline-v1 never plans research for it. Needs a follow-up slice in sdk/state with a regression test; the dry-run test fixture includes one completed research to stay in scope.",
+    "The slice notes asked for a default under logs/, but logs/ is not gitignored and .gitignore is outside the allowed paths; the default is tachikoma-progression.log, which *.log covers.",
+    "Not run against the live game; the read path is covered by mocked tests only."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-10T15:53:13Z",
+  "open_questions": [
+    "Queue a follow-up slice to treat present-but-empty Rooms/Researches elements as observed and empty in ClientSnapshotProvider?"
+  ]
+}
