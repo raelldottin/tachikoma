@@ -452,6 +452,7 @@
       "allowed_paths": [
         "sdk/actions/",
         "sdk/execution/",
+        "sdk/journal.py",
         "sdk/state/",
         "tests/",
         "docs/baseline/"
@@ -460,7 +461,7 @@
         "r3-pvp-strategy-registry"
       ],
       "max_files_changed": 7,
-      "notes": "Add a run_pvp_battle ActionSpec mapped to the existing Client.runBattleEndToEnd flow, non-idempotent, with preconditions (full ship HP when observed) and a postcondition that needs an observed outcome: a trophy change or a battle record from a fresh read. If no verified read-only method returns current trophies or battle history, the postcondition stays not-observed and the outcome is unknown; an HTTP success alone never yields verified. Record evidence tiers (request accepted, battle created, finalised, outcome observed) in the journal event. Do not change runBattleEndToEnd or the existing run.py battle behaviour. Mocked client only.",
+      "notes": "Add a run_pvp_battle ActionSpec mapped to the existing Client.runBattleEndToEnd flow, non-idempotent, with preconditions (full ship HP when observed) and a postcondition that needs an observed outcome: a trophy change or a battle record from a fresh read. If no verified read-only method returns current trophies or battle history, the postcondition stays not-observed and the outcome is unknown; an HTTP success alone never yields verified. Record evidence tiers (request accepted, battle created, finalised, outcome observed) in the journal event. Do not change runBattleEndToEnd or the existing run.py battle behaviour. Mocked client only. Add an optional evidence mapping to GameplayEvent (schema-compatible: old journal lines without it still read) so the evidence tiers are stored as data, not parsed from reason text.",
       "required_validations": [
         "make syntax-check",
         "make test",
