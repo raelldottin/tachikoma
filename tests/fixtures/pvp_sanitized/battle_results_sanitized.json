@@ -1,0 +1,40 @@
+[
+  {
+    "battle_id": "b-001",
+    "account_pseudonym": "acctA",
+    "role": "attacker",
+    "opponent_pseudonym": "anon-opp-1",
+    "opponent_hull_level": 10,
+    "outcome": "win",
+    "trophy_delta": 12,
+    "battle_duration_s": 120,
+    "major_rooms_lost": [],
+    "battle_strategy": "focus_fire",
+    "suspected_loss_cause": "unknown",
+    "ship_config_version": "abc123def4567890",
+    "account_hull_level": 10,
+    "trophy_before": 1000,
+    "trophy_after": 1012,
+    "notes": "clean win",
+    "created_at": "2026-10-01T12:00:00"
+  },
+  {
+    "battle_id": "b-002",
+    "account_pseudonym": "acctA",
+    "role": "defender",
+    "opponent_pseudonym": "anon-opp-2",
+    "opponent_hull_level": 11,
+    "outcome": "loss",
+    "trophy_delta": -8,
+    "battle_duration_s": 180,
+    "major_rooms_lost": ["reactor", "weapon"],
+    "battle_strategy": "unknown",
+    "suspected_loss_cause": "boarding",
+    "ship_config_version": "abc123def4567890",
+    "account_hull_level": 10,
+    "trophy_before": 1012,
+    "trophy_after": 1004,
+    "notes": "suspected boarding",
+    "created_at": "2026-10-02T12:00:00"
+  }
+]
