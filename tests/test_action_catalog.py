@@ -106,10 +106,21 @@ class ReconcileTests(unittest.TestCase):
         self.assertIs(outcome("collect_daily_reward", {}).status, N)
         self.assertIs(outcome("collect_daily_reward", {"inventory": None}).status, U)
 
-    def test_add_training_is_never_verified_from_current_snapshots(self):
-        result = outcome("add_training", {"crew": [{"@CharacterId": "c1", "@Level": "4"}]},
-                         {"training_design_id": "1", "character_id": "c1"})
-        self.assertIs(result.status, U)
+    def test_add_training_outcomes(self):
+        params = {"training_design_id": "7", "character_id": "c1"}
+        idle = {"crew": [{"@CharacterId": "c1", "@TrainingEndDate": "", "@TrainingDesignId": "0"}]}
+
+        def training(design, end="2026-11-10T13:00:00"):
+            return {"crew": [{"@CharacterId": "c1", "@TrainingEndDate": end, "@TrainingDesignId": design}]}
+
+        self.assertIs(outcome("add_training", training("7"), params, before_overrides=idle).status, V)
+        self.assertIs(outcome("add_training", training(""), params, before_overrides=idle).status, V)
+        self.assertIs(outcome("add_training", idle, params, before_overrides=idle).status, N)
+        self.assertIs(outcome("add_training", training("8"), params, before_overrides=idle).status, C)
+        self.assertIs(outcome("add_training", {"crew": [{"@CharacterId": "c2"}]}, params, before_overrides=idle).status, C)
+        # Training fields absent on either side: unknown, never assumed.
+        self.assertIs(outcome("add_training", {"crew": [{"@CharacterId": "c1", "@Level": "4"}]}, params).status, U)
+        self.assertIs(outcome("add_training", {"crew": None}, params, before_overrides=idle).status, U)
 
     def test_upgrade_room_outcomes(self):
         params = {"room_id": "r1"}
