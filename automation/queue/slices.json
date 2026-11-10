@@ -539,6 +539,121 @@
         "make test",
         "git diff --check"
       ]
+    },
+    {
+      "slice_id": "r4-marketplace-listing-reads",
+      "title": "Typed marketplace listings from ListActiveMarketplaceMessages (AUTO-008)",
+      "status": "queued",
+      "priority": 220,
+      "domain": "economy",
+      "allowed_paths": [
+        "sdk/client.py",
+        "sdk/economy/",
+        "tests/",
+        "docs/baseline/"
+      ],
+      "depends_on": [
+        "r3-pvp-strategy-scorecard"
+      ],
+      "max_files_changed": 6,
+      "notes": "R4 start. Keep Client.listActiveMarketplaceMessages' request and logging unchanged, but also store the parsed messages on the client (for example self.marketplaceMessages) so they can be read without re-requesting. Add sdk/economy/market.py: a frozen MarketListing parsed from a message with whitelisted fields only (item design id, quantity, currency and price from @ActivityArgument, message/sale ids only when present), refusing secret-shaped values, and leaving unknown fields None rather than guessing. Mocked responses only; update the capability inventory entry's tests if the drift test requires it.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
+    },
+    {
+      "slice_id": "r4-economy-ledger",
+      "title": "Per-account currency and item ledger from snapshots and the journal",
+      "status": "queued",
+      "priority": 230,
+      "domain": "economy",
+      "allowed_paths": [
+        "sdk/economy/",
+        "tests/",
+        "docs/baseline/"
+      ],
+      "depends_on": [
+        "r4-marketplace-listing-reads"
+      ],
+      "max_files_changed": 5,
+      "notes": "Add sdk/economy/ledger.py: from an ordered series of AccountSnapshots and journal events for one account, record minerals, gas, starbux and per-item quantity changes, attributing each change to the journaled action whose before/after window contains it and marking the rest unattributed. Unobserved values stay unknown, never zero. Refuse snapshots from another account. Pure and offline.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
+    },
+    {
+      "slice_id": "r4-market-trade-reconciliation",
+      "title": "Reconcile a market trade's lifecycle from observations, never from listing creation alone",
+      "status": "queued",
+      "priority": 240,
+      "domain": "economy",
+      "allowed_paths": [
+        "sdk/economy/",
+        "tests/",
+        "docs/baseline/"
+      ],
+      "depends_on": [
+        "r4-economy-ledger"
+      ],
+      "max_files_changed": 5,
+      "notes": "Add sdk/economy/trades.py: a pure state machine for one trade (requested, listed, sold or purchased, expired, unknown) driven by observations: listing seen with an identity, the item leaving or entering inventory, the currency change, price and fees. A trade is complete only when the item and currency movements are both observed and consistent; a created listing alone is 'listed' at most. Record realized proceeds and fees when observed. Synthetic observations only.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
+    },
+    {
+      "slice_id": "r4-economy-experiment-report",
+      "title": "Market return and resource-allocation report (R4 exit metrics)",
+      "status": "queued",
+      "priority": 250,
+      "domain": "observability",
+      "allowed_paths": [
+        "sdk/economy/",
+        "sdk/reports/",
+        "tests/",
+        "docs/baseline/"
+      ],
+      "depends_on": [
+        "r4-market-trade-reconciliation"
+      ],
+      "max_files_changed": 5,
+      "notes": "Add a report over reconciled trades and the ledger: per account and strategy/policy version, market return (realized proceeds minus purchase cost and fees, completed trades only), unreconciled trade count, resources gained and spent per elapsed hour, and spend by action. Every figure carries its sample size; no sample means no number. JSON and Markdown output.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
+    },
+    {
+      "slice_id": "r4-live-market-trial",
+      "title": "Implement and reconcile a live market trade on an owned test account",
+      "status": "blocked",
+      "priority": 260,
+      "domain": "experiment",
+      "allowed_paths": [
+        "sdk/client.py",
+        "sdk/economy/",
+        "docs/experiments/",
+        "tests/"
+      ],
+      "depends_on": [
+        "r4-economy-experiment-report",
+        "r2-live-progression-trial"
+      ],
+      "max_files_changed": 6,
+      "entry_condition": "Owner input required: provide current captures for SellItem3 and Purchase4 (sanitized, no tokens) so the client calls can be implemented against the installed game version, authorize live trades on a named owned test account, and define the economic experiment. Live execution against a real account is not authorized yet.",
+      "notes": "R4 exit trial. Implement SellItem3/Purchase4 from the provided captures, run the agreed trades, and record the reconciled outcomes and market return in docs/experiments/. Unit tests stay mocked.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
     }
   ]
 }
