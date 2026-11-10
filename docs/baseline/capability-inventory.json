@@ -600,6 +600,16 @@
       "tests": []
     },
     {
+      "name": "upgradeRoom",
+      "pillar": "B",
+      "kind": "mutating",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_action_runner.py",
+        "tests/test_runtime_guards.py"
+      ]
+    },
+    {
       "name": "upgradeRooms",
       "pillar": "B",
       "kind": "mutating",

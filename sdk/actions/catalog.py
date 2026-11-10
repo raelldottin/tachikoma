@@ -208,10 +208,10 @@ CATALOG: dict[str, ActionSpec] = {
         ),
         ActionSpec(
             action_id="upgrade_room",
-            client_method="upgradeRooms",
+            client_method="upgradeRoom",
             mutating=True,
             idempotency=Idempotency.NOT_IDEMPOTENT,
-            required_params=("room_id",),
+            required_params=("room_id", "upgrade_room_design_id"),
             preconditions=(_section_observed("rooms"), _room_idle),
             postcondition=_room_upgrade_started,
             expected_effect="the room status becomes Upgrading or its design advances",

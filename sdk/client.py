@@ -2308,6 +2308,15 @@ class Client(object):
         """
         return self.getResearchLevel(researchName) >= minLevel
 
+    def upgradeRoom(self, roomId, upgradeRoomDesignId):
+        """Request one room upgrade (UpgradeRoom2) and return the raw response.
+
+        This is the single request ``upgradeRooms`` issues per eligible room.
+        It performs no eligibility or cost checks of its own; callers decide.
+        """
+        url = f"https://api.pixelstarships.com/RoomService/UpgradeRoom2?roomId={roomId}&upgradeRoomDesignId={upgradeRoomDesignId}&accessToken={self.accessToken}"
+        return self.request(url, "POST")
+
     def upgradeRooms(self):
         try:
             if not hasattr(self, "roomDesigns"):
@@ -2361,8 +2370,7 @@ class Client(object):
                                 logging.info(
                                     f'[{self.info["@Name"]}] Upgradng {roomName} to {upgradeRoomName}.'
                                 )
-                                url = f"https://api.pixelstarships.com/RoomService/UpgradeRoom2?roomId={roomId}&upgradeRoomDesignId={upgradeRoomDesignId}&accessToken={self.accessToken}"
-                                r = self.request(url, "POST")
+                                r = self.upgradeRoom(roomId, upgradeRoomDesignId)
                                 roomName = ""
                                 upgradeRoomName = ""
                                 if r and "concurrent" in r.text:

@@ -186,6 +186,63 @@ class TestRoomDesignShapeGuards(unittest.TestCase):
         self.client.listUpgradingRooms()
 
 
+class TestTargetedRoomUpgrade(unittest.TestCase):
+    """Regression: upgradeRooms delegates each UpgradeRoom2 request to upgradeRoom unchanged."""
+
+    def setUp(self):
+        self.device = MagicMock(spec=Device)  # type: ignore
+        self.device.languageKey = "en"
+        self.client = Client(device=self.device)
+        self.client.accessToken = "00000000-1111-2222-3333-444444444444"
+        self.client.info = {"@Name": ""}
+        self.client.listRoomDesigns2 = MagicMock(return_value=True)  # type: ignore
+        self.client.roomDesigns = {
+            "RoomDesign": [
+                {"@RoomDesignId": "100", "@RoomName": "Engine"},
+                {"@RoomDesignId": "101", "@RoomName": "Engine II", "@UpgradeFromRoomDesignId": "100",
+                 "@PriceString": "mineral:100"},
+                {"@RoomDesignId": "200", "@RoomName": "Shield"},
+                {"@RoomDesignId": "201", "@RoomName": "Shield II", "@UpgradeFromRoomDesignId": "200",
+                 "@PriceString": "gas:900"},
+            ]
+        }
+        self.client.listUpgradingRooms = MagicMock()  # type: ignore
+        self.client.getShipByUserId = MagicMock()  # type: ignore
+        self.client.shipByUserId = {"Ship": {"Rooms": {"Room": [
+            {"@RoomId": "1", "@RoomStatus": "Normal", "@RoomDesignId": "100"},
+            {"@RoomId": "2", "@RoomStatus": "Normal", "@RoomDesignId": "200"},
+            {"@RoomId": "3", "@RoomStatus": "Upgrading", "@RoomDesignId": "100"},
+        ]}}}
+        self.client.mineralTotal = 500
+        self.client.gasTotal = 500
+        self.client.collectAllResources = MagicMock()  # type: ignore
+
+    def test_upgrade_room_issues_one_upgraderoom2_request(self):
+        self.client.request = MagicMock(return_value="raw")  # type: ignore
+        self.assertEqual(self.client.upgradeRoom("7", "71"), "raw")
+        url, method = self.client.request.call_args.args
+        self.assertEqual(method, "POST")
+        self.assertIn("RoomService/UpgradeRoom2?roomId=7&upgradeRoomDesignId=71&", url)
+
+    def test_upgrade_rooms_selection_is_unchanged(self):
+        self.client.request = MagicMock(return_value=MagicMock(text="<UpgradeRoom2/>"))  # type: ignore
+        with patch.object(self.client, "upgradeRoom", wraps=self.client.upgradeRoom) as targeted:
+            self.assertTrue(self.client.upgradeRooms())
+        # Room 2 is unaffordable (gas 900 > 500) and room 3 is already upgrading.
+        targeted.assert_called_once_with("1", "101")
+        self.assertEqual(self.client.request.call_count, 1)
+        self.client.collectAllResources.assert_called_once()
+
+    def test_upgrade_rooms_still_stops_at_concurrency_limit(self):
+        self.client.gasTotal = 5000
+        self.client.request = MagicMock(return_value=MagicMock(text="max concurrent constructions"))  # type: ignore
+        with patch.object(self.client, "upgradeRoom", wraps=self.client.upgradeRoom) as targeted:
+            self.assertTrue(self.client.upgradeRooms())
+        targeted.assert_called_once_with("1", "101")
+        self.assertTrue(self.client.max_room_upgrades)
+        self.client.collectAllResources.assert_not_called()
+
+
 class TestResearchOutcomeClassification(unittest.TestCase):
     """Test research lab upgrade skip vs failure classification (R4)."""
 

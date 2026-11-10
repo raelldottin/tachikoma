@@ -96,6 +96,17 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(event.cost["minerals_delta"], 50)
         self.assertEqual(event.response_ok, True)
 
+    def test_room_upgrade_targets_one_room(self):
+        def upgrade(state):
+            state["rooms"] = [{"@RoomId": "r1", "@RoomDesignId": "11", "@RoomStatus": "Upgrading"}]
+
+        self.world.effect = upgrade
+        self.world.result = object()  # stands in for the raw HTTP response upgradeRoom returns
+        result = self.runner.run("upgrade_room", {"room_id": "r1", "upgrade_room_design_id": "12"})
+        self.assertEqual(self.world.calls, [("upgradeRoom", ("r1", "12"))])
+        # The raw HTTP response is not a boolean, so only the observed status verifies it.
+        self.assertEqual((result.outcome, result.event.response_ok), ("verified", None))
+
     def test_parameters_reach_the_client_method(self):
         self.world.effect = start_research
         result = self.runner.run("add_research", {"research_design_id": "501"})
@@ -156,10 +167,10 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(self.world.calls, [])
 
     def test_dry_run_makes_no_mutating_call(self):
-        result = self.runner.run("upgrade_room", {"room_id": "r1"}, dry_run=True)
+        result = self.runner.run("upgrade_room", {"room_id": "r1", "upgrade_room_design_id": "12"}, dry_run=True)
         self.assertEqual(result.outcome, "skipped")
         self.assertTrue(result.event.dry_run)
-        self.assertIn("would call Client.upgradeRooms", result.reason)
+        self.assertIn("would call Client.upgradeRoom", result.reason)
         self.assertEqual(self.world.calls, [])
 
     def test_snapshot_for_another_account_is_refused_before_any_call(self):
@@ -179,7 +190,7 @@ class RunnerTests(unittest.TestCase):
     def test_summary_reflects_runner_history(self):
         self.world.effect = gain_minerals
         self.runner.run("collect_all_resources")
-        self.runner.run("upgrade_room", {"room_id": "r1"}, dry_run=True)
+        self.runner.run("upgrade_room", {"room_id": "r1", "upgrade_room_design_id": "12"}, dry_run=True)
         summary = summarize(self.journal.read())["alpha"]
         self.assertEqual((summary["attempted"], summary["verified"], summary["skipped"]), (1, 1, 1))
 
