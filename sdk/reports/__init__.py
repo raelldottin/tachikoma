@@ -1,5 +1,16 @@
-"""Reports over the gameplay journal (roadmap R2 exit metrics)."""
+"""Reports over the gameplay journal (roadmap R2 and R3 metrics)."""
 
+from sdk.reports.battles import JournalBattle, battles_from_events, hull_bracket, trophy_bracket
 from sdk.reports.progression import DayMetrics, FailureEntry, compute_progression_metrics, to_json, to_markdown
 
-__all__ = ["DayMetrics", "FailureEntry", "compute_progression_metrics", "to_json", "to_markdown"]
+__all__ = [
+    "DayMetrics",
+    "FailureEntry",
+    "JournalBattle",
+    "battles_from_events",
+    "compute_progression_metrics",
+    "hull_bracket",
+    "to_json",
+    "to_markdown",
+    "trophy_bracket",
+]
