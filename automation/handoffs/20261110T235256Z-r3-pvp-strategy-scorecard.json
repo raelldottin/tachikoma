@@ -1,0 +1,50 @@
+{
+  "slice_id": "r3-pvp-strategy-scorecard",
+  "status": "done",
+  "summary": "Added sdk/reports/pvp.py: wilson_interval, RoleStats, ScorecardRow, compute_scorecard (per alias/strategy/cohort; known-result rates; unknowns counted separately; net observed trophies; resource spend), StrategyComparison and compare_strategies (recommend only with min_sample known results per side and non-overlapping 95% intervals, blocked when cohorts disagree), plus JSON and Markdown output. JournalBattle carries the event cost. Exported from sdk.reports. 16 tests in tests/test_pvp_scorecard.py, including journal-to-scorecard flow. Documented in docs/baseline/pvp-scorecard.md.",
+  "files_touched": [
+    "sdk/reports/pvp.py",
+    "sdk/reports/battles.py",
+    "sdk/reports/__init__.py",
+    "tests/test_pvp_scorecard.py",
+    "docs/baseline/pvp-scorecard.md"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "R3 PvP scorecard and strategy comparison",
+      "before": "No offense/defense scorecard by cohort and no rule for when a strategy comparison is conclusive",
+      "after": "Scorecards report known-result win rates with intervals; recommendations require sample size and separated intervals",
+      "proof": [
+        "tests.test_pvp_scorecard: 16 tests OK",
+        "make test: 594 tests OK (1 skipped)",
+        "scripts/ci.py lint: no new findings",
+        "run.py --help exits 0"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "Until a trophy read is verified live, journaled outcomes are unknown and the scorecard reports counts only.",
+    "Defenses are not journaled yet (only attacks are run actions), so defense rows stay empty."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-10T23:54:49Z"
+}

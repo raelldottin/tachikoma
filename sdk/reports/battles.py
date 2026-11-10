@@ -19,9 +19,9 @@ Rules:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Iterable, List, Optional
+from typing import Iterable, List, Mapping, Optional
 
 from sdk.journal import GameplayEvent
 from sdk.pvp import BattleOutcome, BattleResult, BattleRole, BattleStrategy, ExperimentSchedule
@@ -69,6 +69,8 @@ class JournalBattle:
     opponent_trophy_bracket: str
     started_at: str
     finished_at: str
+    # Observed resource deltas from the event (negative values are spend); None = unobserved.
+    cost: Mapping[str, Optional[float]] = field(default_factory=dict)
 
     @property
     def outcome_known(self) -> bool:
@@ -122,5 +124,6 @@ def battles_from_events(
             opponent_trophy_bracket=trophy_bracket(opponent_trophies),
             started_at=event.started_at,
             finished_at=event.finished_at,
+            cost=dict(event.cost or {}),
         ))
     return battles
