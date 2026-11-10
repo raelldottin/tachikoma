@@ -1,0 +1,50 @@
+{
+  "slice_id": "r2-progression-policy",
+  "status": "done",
+  "summary": "Added sdk/policy (progression.py, __init__.py) with DesignData (parsed from RoomDesign and ResearchDesign records), PolicyConfig (mineral and gas reserves, allow_starbux_spend, max_requests), ActionRequest, Rejection, Plan and a policy registry. baseline-v1 orders research (first open design per research line, skipping busy lines and, unless allowed, starbux-priced designs), then room upgrades for rooms with an upgrade design (each followed by collect_all_resources, as upgradeRooms does), then the daily reward. Every candidate must pass its catalog preconditions; costs are checked against observed balances minus reserves and deducted cumulatively; unobserved sections and balances produce rejections, not actions; training is reported as not modelled. Added 12 tests and docs/baseline/progression-policy.md, which lists the differences from run.py.",
+  "files_touched": [
+    "sdk/policy/__init__.py",
+    "sdk/policy/progression.py",
+    "tests/test_progression_policy.py",
+    "docs/baseline/progression-policy.md"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "AUTO-005 progression policy",
+      "before": "Progression decisions exist only as imperative code inside run.py and Client methods",
+      "after": "A pure, versioned planner whose baseline-v1 reproduces run.py's order, returning explained requests and rejections",
+      "proof": [
+        "tests.test_progression_policy: 12 tests OK",
+        "make test: 522 tests OK (1 skipped)",
+        "scripts/ci.py lint: no new findings",
+        "run.py --help exits 0"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "baseline-v1 omits crew training and every run.py step outside the catalog, so it covers only part of today's routine.",
+    "Research prerequisites such as lab level are not modelled; the server may reject a planned research (LAB_UPGRADE_REQUIRED), which the runner journals as unknown.",
+    "Room and research design attribute names come from existing client code, not a live capture."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-10T15:47:14Z"
+}
