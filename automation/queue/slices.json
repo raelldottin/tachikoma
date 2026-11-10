@@ -110,7 +110,7 @@
     {
       "slice_id": "r0-capability-baseline-inventory",
       "title": "Inventory current gameplay capabilities against the roadmap (AUTO-001)",
-      "status": "queued",
+      "status": "done",
       "priority": 40,
       "domain": "research-baseline",
       "allowed_paths": [
