@@ -42,8 +42,11 @@ Precondition = Callable[[AccountSnapshot, Params], Optional[str]]
 Postcondition = Callable[[SnapshotDelta, AccountSnapshot, AccountSnapshot, Params], tuple[ReconciliationStatus, str]]
 # Reads client attributes only (never calls the game) before and after the call.
 EvidenceProbe = Callable[[Any], Mapping[str, Any]]
-# Turns the before/after probes and the reconciled status into journal evidence.
-EvidenceBuilder = Callable[[Mapping[str, Any], Mapping[str, Any], ReconciliationStatus], Mapping[str, Any]]
+# Turns the before/after probes, the reconciled status and the snapshot delta
+# (None when the after-snapshot could not be observed) into journal evidence.
+EvidenceBuilder = Callable[
+    [Mapping[str, Any], Mapping[str, Any], ReconciliationStatus, Optional[SnapshotDelta]], Mapping[str, Any]
+]
 
 
 @dataclass(frozen=True)
@@ -209,7 +212,8 @@ def _battle_probe(client: Any) -> Mapping[str, Any]:
     return probe
 
 
-def _battle_evidence(before: Mapping[str, Any], after: Mapping[str, Any], status: ReconciliationStatus):
+def _battle_evidence(before: Mapping[str, Any], after: Mapping[str, Any], status: ReconciliationStatus,
+                     delta: Optional[SnapshotDelta] = None):
     # A step happened during this call only if its parsed response object was replaced.
     reached = {tier: after.get(tier) is not None and after.get(tier) is not before.get(tier)
                for tier in _BATTLE_RESULT_ATTRIBUTES}
@@ -224,6 +228,7 @@ def _battle_evidence(before: Mapping[str, Any], after: Mapping[str, Any], status
         "steps": {name: bool(reached.get(name)) for name in BATTLE_EVIDENCE_TIERS[1:]},
         "battle_id": str(battle_id) if battle_id not in (None, "", "0") else None,
         "client_reported_outcome_trusted": False,
+        "trophies_delta": delta.trophies if delta is not None else None,
     }
 
 

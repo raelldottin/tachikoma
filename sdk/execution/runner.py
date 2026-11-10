@@ -168,10 +168,10 @@ class ActionRunner:
         method = getattr(self.client, spec.client_method)
         probe_before = spec.evidence_probe(self.client) if spec.evidence_probe else None
 
-        def evidence(status: ReconciliationStatus) -> dict:
+        def evidence(status: ReconciliationStatus, delta=None) -> dict:
             if probe_before is None or spec.evidence is None:
                 return {}
-            return dict(spec.evidence(probe_before, spec.evidence_probe(self.client), status))
+            return dict(spec.evidence(probe_before, spec.evidence_probe(self.client), status, delta))
 
         response_ok: Optional[bool] = None
         error_class: Optional[str] = None
@@ -206,4 +206,4 @@ class ActionRunner:
         cost = {"minerals_delta": delta.minerals, "gas_delta": delta.gas, "starbux_delta": delta.starbux}
         return self._record(spec, started, params, outcome=outcome.value, reason=reason, attempted=True,
                             response_ok=response_ok, error_class=error_class, cost=cost,
-                            evidence=evidence(outcome))
+                            evidence=evidence(outcome, delta))

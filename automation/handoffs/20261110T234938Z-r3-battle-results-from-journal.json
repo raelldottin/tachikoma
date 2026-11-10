@@ -1,0 +1,51 @@
+{
+  "slice_id": "r3-battle-results-from-journal",
+  "status": "done",
+  "summary": "Added sdk/reports/battles.py: JournalBattle and battles_from_events (attempted run_pvp_battle events only; win/loss only for verified + outcome-observed + non-zero observed trophy delta; strategy from the experiment window at battle start; battle id from evidence or attempt id; hull/trophy cohort brackets, unknown unless recorded). EvidenceBuilder now receives the snapshot delta and battle evidence records trophies_delta (None when unobserved). Exported from sdk.reports. 9 tests in tests/test_battle_results_from_journal.py including a runner-to-journal-to-result round trip. Documented in docs/baseline/pvp-battle-results.md.",
+  "files_touched": [
+    "sdk/actions/catalog.py",
+    "sdk/execution/runner.py",
+    "sdk/reports/battles.py",
+    "sdk/reports/__init__.py",
+    "tests/test_battle_results_from_journal.py",
+    "docs/baseline/pvp-battle-results.md"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "PvP battle results from the journal",
+      "before": "Journaled battles could not be turned into BattleResult records and the trophy change was not journaled",
+      "after": "Each attempted battle yields a BattleResult with observed-only outcomes, strategy attribution and cohort labels",
+      "proof": [
+        "tests.test_battle_results_from_journal: 9 tests OK",
+        "make test: 580 tests OK (1 skipped)",
+        "scripts/ci.py lint: no new findings",
+        "run.py --help exits 0"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "No journaled event records opponent hull or trophies yet, so every cohort is unknown until a battle read is verified.",
+    "The existing sdk.pvp attack_win_rate counts unknown outcomes in its denominator; the scorecard slice must use known-result rates."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-10T23:51:30Z"
+}
