@@ -1,0 +1,53 @@
+{
+  "slice_id": "r1-reconciled-action-runner",
+  "status": "done",
+  "summary": "Added sdk/execution (runner.py, __init__.py): ActionRunner takes an injected client, snapshot provider, journal and clock. It refuses and journals a snapshot from another alias before any call, journals precondition failures as skipped, journals dry runs without making a mutating call, calls the Client method exactly once with no retry, and refuses (UncertainPriorAttemptError) to repeat a non-idempotent action whose last attempt with the same params is unknown unless allow_after_uncertain is set. Exceptions, non-boolean responses and failed after-snapshots are journaled as unknown unless the effect was observed; outcomes carry signed resource deltas. Added 14 fake-client tests covering every path, and docs/baseline/action-runner.md. Not wired into run.py, per the slice notes.",
+  "files_touched": [
+    "sdk/execution/__init__.py",
+    "sdk/execution/runner.py",
+    "tests/test_action_runner.py",
+    "docs/baseline/action-runner.md"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "R1 exit: scheduled, attributed, observed and reconciled operations",
+      "before": "No component links an action call to observed state change or to a durable record",
+      "after": "One catalog action can be executed for a named account with before/after snapshots, reconciliation, explicit uncertainty and a journal record, offline-tested with a fake client",
+      "proof": [
+        "tests.test_action_runner: 14 tests OK",
+        "make test: 497 tests OK (1 skipped)",
+        "scripts/ci.py lint: no new findings",
+        "run.py --help exits 0"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "No live snapshot provider exists yet, so the runner has not been exercised against the game; the R1 exit evidence is offline only.",
+    "Client.upgradeRooms is untargeted; upgrade_room reconciliation covers only the requested room.",
+    "The uncertain-prior check reads the whole journal on each non-idempotent run; this is fine for small journals but should be indexed before long-running schedules."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-10T14:50:24Z",
+  "open_questions": [
+    "R2 needs a live snapshot provider built from Client reads and a daily scheduler; should those be queued as the next slices, and may they run against an owned test account?"
+  ]
+}
