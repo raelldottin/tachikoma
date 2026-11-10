@@ -1,0 +1,51 @@
+{
+  "slice_id": "r2-snapshot-training-state",
+  "status": "done",
+  "summary": "CrewMember now records training_observed (True only when @TrainingEndDate is present), training_design_id (0 or empty means None) and training_end, with a training_active property. SnapshotDelta gains crew_training, listing (design, end) changes only for crew whose training was observed in both snapshots. The add_training postcondition is VERIFIED when the member trains the requested design (or starts training whose design is not reported), CONTRADICTED when different training starts or the member disappears, NOT_OBSERVED when training is observed and unchanged, and UNKNOWN when crew or training fields were not observed on both sides. Replaced the always-unknown test with tests for every outcome, and added a delta test. Docs updated.",
+  "files_touched": [
+    "sdk/state/snapshot.py",
+    "sdk/actions/catalog.py",
+    "tests/test_account_snapshot.py",
+    "tests/test_action_catalog.py",
+    "docs/baseline/account-snapshot.md",
+    "docs/baseline/action-catalog.md"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "add_training reconciliation",
+      "before": "add_training always reconciled as UNKNOWN because snapshots did not observe training",
+      "after": "Training state is observed when reported, and add_training has verified, not-observed, contradicted and unknown outcomes",
+      "proof": [
+        "tests.test_action_catalog and tests.test_account_snapshot: 30 tests OK",
+        "make test: 506 tests OK (1 skipped)",
+        "scripts/ci.py lint: no new findings",
+        "run.py --help exits 0"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "@TrainingDesignId on character records is assumed from field naming in client code; only @TrainingEndDate is read by existing client logic.",
+    "A training that starts and finishes between the two snapshots would reconcile as NOT_OBSERVED."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-10T15:42:59Z"
+}

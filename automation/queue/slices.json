@@ -254,7 +254,7 @@
       ],
       "max_files_changed": 6,
       "notes": "Extend CrewMember with training_design_id and training_end (from @TrainingDesignId and @TrainingEndDate when present; unknown otherwise) and include training changes in SnapshotDelta. Change the add_training postcondition: VERIFIED when the crew member gains the requested training, NOT_OBSERVED when training is observed and unchanged, UNKNOWN when training fields were not observed. Update docs/baseline/action-catalog.md. Synthetic tests for every outcome.",
-      "status": "queued",
+      "status": "done",
       "required_validations": [
         "make syntax-check",
         "make test",
