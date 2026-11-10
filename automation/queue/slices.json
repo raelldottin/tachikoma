@@ -346,7 +346,7 @@
       ],
       "max_files_changed": 6,
       "notes": "Add a run.py --progression-dry-run flag that authenticates as today, builds a snapshot through the client provider, plans with baseline-v1, and journals dry-run events to a local path (default under logs/, which must stay gitignored) without any mutating call. Print the plan and the rejected candidates. Mocked client in tests, including a test that fails if any mutating Client method is called. Document the flag in README.template, then README.md. No live execute flag in this slice.",
-      "status": "queued",
+      "status": "done",
       "required_validations": [
         "make syntax-check",
         "make test",

@@ -9,7 +9,7 @@ import argparse
 import logging
 import io
 from pathlib import Path
-from sdk.client import Client
+from sdk.client import Client, _extract_collection
 from sdk.device import Device
 from sdk.redaction import redact_secrets
 
@@ -93,6 +93,50 @@ def read_auth_file(path: str) -> str:
     return content
 
 
+PROGRESSION_JOURNAL_DEFAULT = "tachikoma-progression.log"  # JSONL; *.log is gitignored
+
+
+def run_progression_dry_run(client, account_alias, journal_path):
+    """Plan with baseline-v1 and journal a dry run. Makes no mutating call.
+
+    Reads design data and a fresh snapshot through read-only Client methods,
+    plans, and records each planned action as a dry-run journal event.
+    Returns a process exit code.
+    """
+    from sdk.execution import ActionRunner
+    from sdk.journal import GameplayJournal
+    from sdk.policy import DesignData, PolicyConfig, get_policy
+    from sdk.scheduler import DailyScheduler
+    from sdk.state import ClientSnapshotProvider
+
+    client.listRoomDesigns2()
+    client.listAllResearchDesigns2()
+    design = DesignData.from_records(
+        _extract_collection(getattr(client, "roomDesigns", None), "RoomDesign"),
+        _extract_collection(getattr(client, "allResearchDesigns", None), "ResearchDesign"),
+    )
+    provider = ClientSnapshotProvider(client, account_alias, source="run.py --progression-dry-run")
+    runner = ActionRunner(account_alias, client, provider, GameplayJournal(journal_path))
+    report = DailyScheduler(runner, get_policy("baseline-v1"), design, PolicyConfig()).run(execute=False)
+
+    print(f"Progression dry run for {account_alias} ({report.plan.policy}, observed {report.plan.observed_at})")
+    if provider.failed_reads:
+        print("  reads that returned no data: " + ", ".join(provider.failed_reads))
+    print(f"  planned actions: {len(report.plan.requests)}")
+    for index, request in enumerate(report.plan.requests, start=1):
+        params = ", ".join(f"{key}={value}" for key, value in request.params.items())
+        print(f"    {index}. {request.action_id}({params}): {request.reason}")
+    print(f"  rejected candidates: {len(report.plan.rejected)}")
+    for rejection in report.plan.rejected:
+        print(f"    - {rejection.candidate}: {rejection.reason}")
+    for skip in report.skipped:
+        print(f"  skipped {skip.request.action_id}: {skip.reason}")
+    if report.stop_reason:
+        print(f"  stopped: {report.stop_reason}")
+    print(f"  journal: {journal_path}")
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Automate trivial tasks in Pixel Starships Mobile Starategy Sci-Fi MMORPG"
@@ -145,6 +189,25 @@ def main():
         action="store_true",
         default=False,
         help="run end-to-end ship battle (CreateStarBattle5 -> VerifyBattle2 -> FinaliseBattle15)",
+    )
+    parser.add_argument(
+        "--progression-dry-run",
+        dest="progression_dry_run",
+        action="store_true",
+        default=False,
+        help="log in, plan the day with baseline-v1 and journal it without changing the account, then exit",
+    )
+    parser.add_argument(
+        "--account-alias",
+        dest="account_alias",
+        default="primary",
+        help="lowercase account alias used in the progression journal (default: primary)",
+    )
+    parser.add_argument(
+        "--progression-journal",
+        dest="progression_journal",
+        default=PROGRESSION_JOURNAL_DEFAULT,
+        help=f"progression journal path (default: {PROGRESSION_JOURNAL_DEFAULT})",
     )
     args = parser.parse_args()
 
@@ -228,6 +291,9 @@ def main():
         if not client.login():
             logging.warning("[authenticate] failed to login")
             sys.exit(1)
+
+    if args.progression_dry_run:
+        sys.exit(run_progression_dry_run(client, args.account_alias, args.progression_journal))
 
     # Run battle if requested
     runtime_failed = False
