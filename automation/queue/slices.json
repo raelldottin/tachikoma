@@ -278,7 +278,7 @@
       ],
       "max_files_changed": 8,
       "notes": "Extract the existing per-room UpgradeRoom2 request inside Client.upgradeRooms into a public Client.upgradeRoom(roomId, upgradeRoomDesignId) method, and make upgradeRooms delegate to it so its room selection and resource checks are unchanged (preserve existing gameplay strategy; add a regression test pinning upgradeRooms' calls). Point the upgrade_room catalog spec and CALL_ARGUMENTS at the targeted method with an upgrade_room_design_id parameter. Add the method to docs/baseline/capability-inventory.json. Mocked requests only.",
-      "status": "queued",
+      "status": "done",
       "required_validations": [
         "make syntax-check",
         "make test",
