@@ -475,6 +475,8 @@
       "priority": 190,
       "domain": "pvp",
       "allowed_paths": [
+        "sdk/actions/",
+        "sdk/execution/",
         "sdk/pvp/",
         "sdk/reports/",
         "tests/",
@@ -483,8 +485,8 @@
       "depends_on": [
         "r3-pvp-battle-action"
       ],
-      "max_files_changed": 5,
-      "notes": "Convert run_pvp_battle journal events into sdk.pvp BattleResult records: account alias as pseudonym, strategy id and version from the experiment window active at the event time, trophy delta only when observed, outcome unknown unless the event's evidence tier reached outcome observed. Label opponent cohorts (hull bracket, trophy bracket) when known and 'unknown' otherwise. Synthetic journals in temporary directories.",
+      "max_files_changed": 7,
+      "notes": "Convert run_pvp_battle journal events into sdk.pvp BattleResult records: account alias as pseudonym, strategy id and version from the experiment window active at the event time, trophy delta only when observed, outcome unknown unless the event's evidence tier reached outcome observed. Label opponent cohorts (hull bracket, trophy bracket) when known and 'unknown' otherwise. Synthetic journals in temporary directories. The journal does not yet carry the observed trophy change: pass the snapshot delta to the action's evidence builder so run_pvp_battle evidence records trophies_delta (None when unobserved).",
       "required_validations": [
         "make syntax-check",
         "make test",
