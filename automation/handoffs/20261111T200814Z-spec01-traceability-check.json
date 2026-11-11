@@ -1,0 +1,44 @@
+{
+  "slice_id": "spec01-traceability-check",
+  "status": "done",
+  "summary": "The spec-driven plan relies on every MUST requirement having a test, but nothing checked that: a spec could be marked verified with uncovered requirements, or tests could cite ids that no longer exist.  scripts/spec_trace.py parses docs/specs/SPEC-*.md (status, requirements, and the acceptance-criteria Proves/Kind columns, expanding R1\u2013R9 ranges and ACk references) and the \"# Verifies:\" comments under tests/ and automation/tests/. check() fails on malformed specs, unknown or withdrawn citations, MUSTs with no acceptance criterion (any status but Draft), uncited offline MUSTs in Verified offline or Done specs, and Done specs without evidence. Approved specs are reported, never failed. `python scripts/spec_trace.py --report` prints the coverage table.  tests/test_spec_traceability.py runs under make test and scripts/ci.py test discovery; it covers every rule on synthetic spec trees in temporary directories and checks the real repository with sockets blocked.  Implements S01-R1..R9. Implemented by the SPEC-01 builder specialist subagent in an isolated worktree, independently reviewed by the verifier subagent (tests cite its requirement ids; parent re-validated in a scratch clone), and re-validated by the parent.",
+  "files_touched": [
+    "scripts/spec_trace.py",
+    "tests/test_spec_traceability.py"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "SPEC-01: spec traceability check",
+      "before": "Roadmap item not implemented",
+      "after": "SPEC-01: spec traceability check (offline)",
+      "proof": [
+        "make syntax-check, make test, scripts/ci.py lint and git diff --check pass on current main",
+        "verifier verdict: tests cite its requirement ids; parent re-validated in a scratch clone"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "Offline only; no live game verification."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-11T20:08:28Z"
+}
