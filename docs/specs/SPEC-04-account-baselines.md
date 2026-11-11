@@ -1,6 +1,6 @@
 # SPEC-04: Per-ship baselines and game-version provenance
 
-**Status:** Approved
+**Status:** Verified offline
 **Approval:** owner, 2026-11-11, through the session goal "complete the plan in docs/specs/". This approves building and testing the spec offline; owner questions take their safe defaults. It does not open any live gate (G1–G5), so live acceptance criteria stay pending.
 **Release:** R0 (the remaining part)
 **Owner gate:** G1
@@ -67,6 +67,8 @@ R0's exit needs a recorded starting state for every participating ship and the g
 | S04-Q2 | May baseline files be committed to the repository, or kept private? | AC4 | Kept private; only the summary table is committed |
 
 ## Evidence
+
+**Offline verification:** every MUST with an offline acceptance criterion is covered by a test that cites it (checked by `scripts/spec_trace.py`). Implemented in #166, #175.
 
 Pending.
 

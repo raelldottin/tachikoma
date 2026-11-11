@@ -1,6 +1,6 @@
 # SPEC-05: Authorized live execution with a canary and kill switch
 
-**Status:** Approved
+**Status:** Verified offline
 **Approval:** owner, 2026-11-11, through the session goal "complete the plan in docs/specs/". This approves building and testing the spec offline; owner questions take their safe defaults. It does not open any live gate (G1–G5), so live acceptance criteria stay pending.
 **Release:** R2 (prerequisite for every live trial)
 **Owner gate:** none to build (offline); G2 to use
@@ -74,6 +74,8 @@ The scheduler, runner and fleet orchestrator can execute actions (`run(execute=T
 | S05-Q2 | The share of stopped accounts that halts the fleet | approval | Any one account in a two-account trial |
 
 ## Evidence
+
+**Offline verification:** every MUST with an offline acceptance criterion is covered by a test that cites it (checked by `scripts/spec_trace.py`). Implemented in #162, #171.
 
 Pending (recorded under SPEC-07).
 
