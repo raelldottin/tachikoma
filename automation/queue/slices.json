@@ -1134,7 +1134,7 @@
       ],
       "max_files_changed": 6,
       "notes": "UX lane. Render progression, PvP, fleet and audit reports from journal files into one self-contained HTML file (no external assets, no network, escaped content) via `run.py --report dashboard --output PATH`, handled before any login like the other offline reports. Update README.template then README.md and the capability inventory flags.",
-      "status": "queued",
+      "status": "done",
       "depends_on": [
         "r6-release-and-limitations"
       ],
