@@ -1368,7 +1368,7 @@
     {
       "slice_id": "spec03-fixture-scan",
       "title": "SPEC-03: sanitized-capture scan",
-      "status": "queued",
+      "status": "done",
       "priority": 375,
       "domain": "safety",
       "allowed_paths": [
