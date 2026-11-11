@@ -1,6 +1,7 @@
 # SPEC-02: Local test runs never touch real credential files
 
-**Status:** Draft
+**Status:** Approved
+**Approval:** owner, 2026-11-11, through the session goal "complete the plan in docs/specs/". This approves building and testing the spec offline; owner questions take their safe defaults. It does not open any live gate (G1–G5), so live acceptance criteria stay pending.
 **Release:** safety (prerequisite for every live spec)
 **Owner gate:** G0 (approve); owner action A-0 (check the existing `.device`)
 **Depends on:** —
@@ -26,7 +27,7 @@ Running `make test` or `scripts/ci.py test` from the repository root rewrites th
 
 ## Interfaces
 
-This is delivered by the Bazel plan's slice `b0-make-hermetic-local`. This spec gives it acceptance criteria that do not depend on Bazel. `scripts/ci.py run_tests` gains the temporary directory; the `Makefile` recipes use an absolute interpreter path; `tests/__init__.py` gains the guard.
+Delivered by slice `spec02-credential-safety`, which takes over the temporary-directory part of the Bazel plan's `b0-make-hermetic-local` (that slice keeps its `make lint` work). `scripts/ci.py run_tests` gains the temporary directory; the `Makefile` test recipes use an absolute interpreter path; `tests/__init__.py` gains the guard.
 
 ## Safety invariants
 
@@ -48,7 +49,7 @@ Extend `tests/test_ci.py` with a sentinel test that runs `run_tests` on one modu
 
 | Slice id | Requirements | Files | Kind |
 | --- | --- | --- | --- |
-| `b0-make-hermetic-local` (from the Bazel plan) | R1–R6 | as listed in [bazel-migration-queue-entries.json](../bazel-migration-queue-entries.json) | agent |
+| `spec02-credential-safety` | R1–R6 | `Makefile`, `scripts/ci.py`, `tests/__init__.py`, `tests/test_ci.py`, `tests/test_pvp_sanitized_inputs.py`, `docs/specs/SPEC-02-local-credential-safety.md` | agent |
 
 ## Owner decisions
 

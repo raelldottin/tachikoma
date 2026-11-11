@@ -1,6 +1,7 @@
 # SPEC-05: Authorized live execution with a canary and kill switch
 
-**Status:** Draft
+**Status:** Approved
+**Approval:** owner, 2026-11-11, through the session goal "complete the plan in docs/specs/". This approves building and testing the spec offline; owner questions take their safe defaults. It does not open any live gate (G1–G5), so live acceptance criteria stay pending.
 **Release:** R2 (prerequisite for every live trial)
 **Owner gate:** none to build (offline); G2 to use
 **Depends on:** SPEC-01, SPEC-02
