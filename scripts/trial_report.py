@@ -124,12 +124,48 @@ end (R6). The modes are compared (R5), ``sequential`` as the baseline and
 run-hour (one value per run), failure rate and uncertain rate (per attempt),
 next to incident counts and sample sizes.
 
+With ``--study`` it aggregates the per-trial outputs into the figures of the
+study report (SPEC-12 R1, R4, R6). Each ``--trial PATH`` is one JSON output,
+recognised by its content: a progression report (study A, this script's
+``--json`` output), a ``--pvp`` report (study C), a ``--fleet`` report (study
+D) or a market trial result (the R4 market trial, format below); at most one
+per study. For every study, in the fixed order A, C, D, R4-market, the report
+states the question, arms, windows, game versions, sample sizes and minimum,
+the primary result per arm with its 95% interval, the ``decide()`` outcome
+(regenerated from each strategy's pooled wins and known attacks for study C,
+whose report has none, and not applicable to a one-arm market trial), costs,
+failures and the trial's limitations (R1). A study without an output, short
+of its minimum sample, or whose ``decide()`` gave neither ``adopt`` nor
+``reject``, is ``inconclusive`` with its reasons, and never left out (R4); a
+trial that stopped early is ``aborted``. The figures come only from the given
+outputs, keyed by file name and the first 16 hex digits of the file's
+SHA-256, and no current time enters the report, so the same outputs give the
+same JSON and Markdown byte for byte (R6). ``--study`` takes no other input.
+
+Market trial result format (version 1, provisional until SPEC-09 adds
+``--market``): a JSON object with ``report`` (``market-trial``),
+``format_version`` (1), ``trial_id``, ``hypothesis``, ``account_alias``,
+``arms`` (one or two variant ids, the baseline first), ``currency`` (every
+amount is in it), ``min_sample`` (completed trades per arm), ``window_start``,
+``window_end`` and ``evaluated_at`` (UTC), ``trades`` and optionally
+``operator_minutes`` and ``notes``. Each trade has ``trade_id``, ``side``
+(``sell`` or ``buy``), ``state`` (as ``reconcile_trade`` decided it: a sell is
+``requested``, ``listed``, ``completed``, ``expired`` or ``unknown``; a buy
+``requested``, ``completed`` or ``unknown``), ``at`` (UTC, inside the window)
+and ``price``, and optionally ``arm`` (required with two arms),
+``item_design_id``, ``quantity``, ``proceeds``, ``cost``, ``fees`` (integers
+or ``null``) and ``game_version``. A completed sell needs its proceeds and a
+completed buy its cost. Market return counts completed trades only: sell
+proceeds minus buy cost; the primary metric is that signed amount per
+completed trade.
+
 Offline only: it reads files and makes no network call.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import re
@@ -142,6 +178,15 @@ from typing import Any, Iterable, Mapping, Optional, Sequence
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from sdk.economy.ledger import CURRENCIES, build_ledger  # noqa: E402
+from sdk.economy.trades import (  # noqa: E402
+    BUY as TRADE_BUY,
+    COMPLETED as TRADE_COMPLETED,
+    EXPIRED as TRADE_EXPIRED,
+    LISTED as TRADE_LISTED,
+    REQUESTED as TRADE_REQUESTED,
+    SELL as TRADE_SELL,
+    UNKNOWN as TRADE_UNKNOWN,
+)
 from sdk.experiments import (  # noqa: E402
     KIND_PROPORTION,
     Experiment,
@@ -2056,6 +2101,551 @@ def fleet_to_markdown(report: Mapping[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
+# -- study report aggregate (SPEC-12 R1, R4, R6) -------------------------------------------------
+
+STUDY_REPORT_VERSION = 1
+MARKET_TRIAL_VERSION = 1  # provisional: see the module docstring
+# (study id, input kind, spec, the question the study answers). The order is the report's order.
+STUDIES = (
+    ("A", "progression", "SPEC-07",
+     "Does rule-based automation (baseline-v1) grow an account faster per account-day than the owner's manual "
+     "routine?"),
+    ("C", "pvp", "SPEC-08",
+     "Which of two PvP strategies wins a larger share of known-result attacks?"),
+    ("D", "fleet", "SPEC-10",
+     "Does concurrent fleet operation verify more actions per run-hour than sequential operation?"),
+    ("R4-market", "market", "SPEC-09",
+     "Do market trades reconcile as completed, and what do completed trades return net of fees?"),
+)
+STUDY_KINDS = tuple(kind for _, kind, _, _ in STUDIES)
+REPORT_KINDS = {"pvp-strategy-comparison": "pvp", "fleet-trial": "fleet", "market-trial": "market"}
+PROGRESSION_REPORT_KEYS = frozenset({"trial_id", "arms", "decision", "early_stop", "min_sample", "window"})
+MARKET_METRIC = "market-return-per-completed-trade"
+MARKET_TRIAL_KEYS = frozenset({"report", "format_version", "trial_id", "hypothesis", "account_alias", "arms",
+                               "currency", "min_sample", "window_start", "window_end", "evaluated_at", "trades",
+                               "operator_minutes", "notes"})
+REQUIRED_MARKET_TRIAL_KEYS = ("report", "format_version", "trial_id", "hypothesis", "account_alias", "arms",
+                              "currency", "min_sample", "window_start", "window_end", "evaluated_at", "trades")
+MARKET_TRADE_KEYS = frozenset({"trade_id", "arm", "side", "state", "at", "item_design_id", "quantity", "price",
+                               "proceeds", "cost", "fees", "game_version"})
+REQUIRED_MARKET_TRADE_KEYS = ("trade_id", "side", "state", "at", "price")
+MARKET_STATES = {TRADE_SELL: (TRADE_REQUESTED, TRADE_LISTED, TRADE_COMPLETED, TRADE_EXPIRED, TRADE_UNKNOWN),
+                 TRADE_BUY: (TRADE_REQUESTED, TRADE_COMPLETED, TRADE_UNKNOWN)}
+CONCLUSIVE, INCONCLUSIVE, ABORTED = "conclusive", "inconclusive", "aborted"
+
+
+def study_kind(payload: Any) -> str:
+    """Which per-trial output a JSON payload is: ``progression``, ``pvp``, ``fleet`` or ``market``."""
+    if isinstance(payload, Mapping):
+        if payload.get("report") in REPORT_KINDS:
+            return REPORT_KINDS[payload["report"]]
+        if "report" not in payload and PROGRESSION_REPORT_KEYS <= set(payload):
+            return "progression"
+    raise TrialInputError("a --trial file is not a progression, PvP, fleet or market trial output")
+
+
+def _optional_amount(value: Any, label: str) -> Optional[int]:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise TrialInputError(f"{label} must be a non-negative integer or null")
+    return value
+
+
+def market_trial_from_dict(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Check a provisional market-trial result (see the module docstring) and return it normalized."""
+    if not isinstance(payload, Mapping):
+        raise TrialInputError("the market trial must be a JSON object")
+    _refuse_secrets(payload, "the market trial")
+    unknown = sorted(set(payload) - MARKET_TRIAL_KEYS)
+    if unknown:
+        raise TrialInputError(f"unknown market trial keys: {', '.join(unknown)}")
+    missing = [key for key in REQUIRED_MARKET_TRIAL_KEYS if key not in payload]
+    if missing:
+        raise TrialInputError(f"the market trial is missing: {', '.join(missing)}")
+    if payload["report"] != "market-trial" or payload["format_version"] != MARKET_TRIAL_VERSION:
+        raise TrialInputError(f"the market trial must be report market-trial, format_version {MARKET_TRIAL_VERSION}")
+    alias = payload["account_alias"]
+    if not isinstance(alias, str) or not ACCOUNT_ALIAS_PATTERN.match(alias):
+        raise TrialInputError("account_alias must be a lowercase alias, not an e-mail or display name")
+    if not isinstance(payload["hypothesis"], str) or not payload["hypothesis"].strip():
+        raise TrialInputError("hypothesis is required")
+    arms = payload["arms"]
+    if not isinstance(arms, list) or len(arms) not in (1, 2):
+        raise TrialInputError("arms must list one or two arms, the baseline first")
+    arms = [_identifier(arm, "each arm") for arm in arms]
+    if len(set(arms)) != len(arms):
+        raise TrialInputError("the two arms must differ")
+    min_sample = _positive_int(payload["min_sample"], "min_sample", 1)
+    start, end = _utc(payload["window_start"], "window_start"), _utc(payload["window_end"], "window_end")
+    if end <= start:
+        raise TrialInputError("window_end must be after window_start")
+    evaluated = _utc(payload["evaluated_at"], "evaluated_at")
+    minutes = payload.get("operator_minutes")
+    if minutes is not None and (not _number(minutes) or minutes < 0):
+        raise TrialInputError("operator_minutes must be a non-negative number or null")
+    if not isinstance(payload["trades"], list):
+        raise TrialInputError("trades must be a list")
+    trades, seen = [], set()
+    for number, item in enumerate(payload["trades"], start=1):
+        label = f"trade {number}"
+        if not isinstance(item, Mapping):
+            raise TrialInputError(f"{label} must be a JSON object")
+        unknown = sorted(set(item) - MARKET_TRADE_KEYS)
+        if unknown:
+            raise TrialInputError(f"{label} has unknown keys: {', '.join(unknown)}")
+        missing = [key for key in REQUIRED_MARKET_TRADE_KEYS if key not in item]
+        if missing:
+            raise TrialInputError(f"{label} is missing: {', '.join(missing)}")
+        trade_id = _identifier(item["trade_id"], f"{label} trade_id")
+        if trade_id in seen:
+            raise TrialInputError(f"{label} repeats a trade_id")
+        seen.add(trade_id)
+        arm = item.get("arm", arms[0] if len(arms) == 1 else None)
+        if arm not in arms:
+            raise TrialInputError(f"{label} must name one of the trial's arms")
+        side, state = item["side"], item["state"]
+        if side not in MARKET_STATES or state not in MARKET_STATES[side]:
+            raise TrialInputError(f"{label} has an unknown side or a state that side cannot reach")
+        at = _utc(item["at"], f"{label} at")
+        if not start <= at < end:
+            raise TrialInputError(f"{label} is outside the trial window")
+        quantity = item.get("quantity")
+        if quantity is not None and (isinstance(quantity, bool) or not isinstance(quantity, int) or quantity < 1):
+            raise TrialInputError(f"{label} quantity must be a positive integer or null")
+        version = item.get("game_version")
+        if version is not None and (not isinstance(version, str) or not version.strip()):
+            raise TrialInputError(f"{label} game_version must be text or null")
+        trade = {
+            "trade_id": trade_id, "arm": arm, "side": side, "state": state, "at": at.isoformat(),
+            "item_design_id": _optional_text(item.get("item_design_id")), "quantity": quantity,
+            "price": _optional_amount(item["price"], f"{label} price"),
+            "proceeds": _optional_amount(item.get("proceeds"), f"{label} proceeds"),
+            "cost": _optional_amount(item.get("cost"), f"{label} cost"),
+            "fees": _optional_amount(item.get("fees"), f"{label} fees"),
+            "game_version": version,
+        }
+        if state == TRADE_COMPLETED and trade["proceeds" if side == TRADE_SELL else "cost"] is None:
+            raise TrialInputError(f"{label} is completed but has no {'proceeds' if side == TRADE_SELL else 'cost'}")
+        trades.append(trade)
+    return {
+        "report": "market-trial", "format_version": MARKET_TRIAL_VERSION,
+        "trial_id": _identifier(payload["trial_id"], "trial_id"), "hypothesis": payload["hypothesis"],
+        "account_alias": alias, "arms": arms, "currency": _identifier(payload["currency"], "currency"),
+        "min_sample": min_sample, "window_start": start.isoformat(), "window_end": end.isoformat(),
+        "evaluated_at": evaluated.isoformat(), "operator_minutes": minutes,
+        "notes": _optional_text(payload.get("notes")),
+        "trades": sorted(trades, key=lambda trade: (trade["at"], trade["trade_id"])),
+    }
+
+
+def _primary_row(arm: str, n: int, estimate: Optional[float], interval: Optional[Sequence[float]]) -> dict[str, Any]:
+    return {"arm": arm, "n": n, "estimate": estimate, "interval_95": None if interval is None else list(interval)}
+
+
+def _window_span(windows: Sequence[Mapping[str, Any]]) -> tuple[datetime, datetime]:
+    return (min(_utc(w["start"], "window start") for w in windows),
+            max(_utc(w["end"], "window end") for w in windows))
+
+
+def _progression_study(report: Mapping[str, Any]) -> dict[str, Any]:
+    arms = report["arms"]
+    return {
+        "trial_id": report["trial_id"], "hypothesis": report["hypothesis"], "accounts": [report["account_alias"]],
+        "evaluated_at": report["evaluated_at"], "trial_status": report["status"], "recommendation": None,
+        "arms": [{"arm": arm["arm"], "role": arm["role"]} for arm in arms],
+        "windows": [{"label": "trial", "start": report["window"]["start"], "end": report["window"]["end"]}],
+        "game_versions": list(report["game_versions"]),
+        "min_sample": report["min_sample"], "sample_unit": "account-day",
+        "sample_sizes": {arm["arm"]: arm["sample_size"] for arm in arms},
+        "primary_result": {
+            "metric": report["metric"], "higher_is_better": report["higher_is_better"], "unit": "account-day",
+            "source": GROWTH_SOURCE,
+            "arms": [_primary_row(arm["arm"], arm["growth_velocity"]["n"], arm["growth_velocity"]["mean"],
+                                  arm["growth_velocity"]["interval_95"]) for arm in arms],
+        },
+        "decide": dict(report["decision"]),
+        "decide_note": None,
+        "secondary_decisions": {},
+        "costs": {
+            "operator_minutes_per_account_day": {arm["arm"]: arm["operator_minutes"]["mean"] for arm in arms},
+            "operator_minutes_logged_days": {arm["arm"]: arm["operator_minutes"]["n"] for arm in arms},
+            "operator_minutes_total": {arm["arm"]: arm["operator_minutes"]["total"] for arm in arms},
+            "operator_minutes_saved_per_account_day": report["operator_minutes_saved_per_account_day"],
+            "snapshot_spent_per_hour": {arm["arm"]: {name: arm["resources_per_hour"][name]["spent_per_hour"]
+                                                     for name in CURRENCIES} for arm in arms},
+            "journal_starbux_spent": {arm["arm"]: arm["journal_resources"]["starbux"]["spent"] for arm in arms},
+        },
+        "failures": {arm["arm"]: {key: arm["failures"][key] for key in ("attempted", "failed", "uncertain",
+                                                                         "contradicted", "failure_rate")}
+                     for arm in arms},
+        "stopped": report["early_stop"] is not None,
+        "extra_reasons": [],
+        "limitations": list(report["limitations"]),
+    }
+
+
+def _pvp_study(report: Mapping[str, Any]) -> dict[str, Any]:
+    keys = [strategy["key"] for strategy in report["strategies"]]
+    rows = {row["strategy"]: row for row in report["attack"]["per_strategy"]}
+    start, end = _window_span(report["windows"])
+    min_sample = report["min_sample"]
+    experiment = Experiment(
+        experiment_id=report["trial_id"], hypothesis=report["hypothesis"], baseline=keys[0], candidate=keys[1],
+        metric=PVP_METRIC, higher_is_better=True, min_sample=max(2, min_sample), window_start=start, window_end=end,
+    )
+    decision = decide(experiment, ProportionSample(rows[keys[0]]["wins"], rows[keys[0]]["known"]),
+                      ProportionSample(rows[keys[1]]["wins"], rows[keys[1]]["known"]),
+                      _utc(report["evaluated_at"], "evaluated_at"))
+    note = ("decide() is regenerated here from each strategy's pooled wins and known-result attacks; the trial's own "
+            "verdict comes from compare_strategies, stratified by opponent cohort when one was observed")
+    if min_sample < 2:
+        note += "; decide() needs at least 2 per arm, so its minimum is 2"
+    extra = [] if report["verdict"] == "recommend" else [
+        f"the trial's stratified comparison returned {report['verdict']}"]
+    return {
+        "trial_id": report["trial_id"], "hypothesis": report["hypothesis"], "accounts": [report["account_alias"]],
+        "evaluated_at": report["evaluated_at"], "trial_status": report["verdict"],
+        "recommendation": report["recommendation"],
+        "arms": [{"arm": key, "role": "baseline" if index == 0 else "candidate"} for index, key in enumerate(keys)],
+        "windows": [{"label": w["strategy"], "start": w["start"], "end": w["end"]} for w in report["windows"]],
+        "game_versions": [] if report["game_version"] is None else [report["game_version"]],
+        "min_sample": min_sample, "sample_unit": "known-result attack",
+        "sample_sizes": {key: rows[key]["known"] for key in keys},
+        "primary_result": {
+            "metric": PVP_METRIC, "higher_is_better": True, "unit": "known-result attack",
+            "source": report["attack"]["source"],
+            "arms": [_primary_row(key, rows[key]["known"], rows[key]["win_rate"], rows[key]["interval_95"])
+                     for key in keys],
+        },
+        "decide": asdict(decision),
+        "decide_note": note,
+        "secondary_decisions": {},
+        "costs": {
+            "resources_spent": {key: rows[key]["resource_cost"]["spent"] for key in keys},
+            "resource_samples": {key: rows[key]["resource_cost"]["samples"] for key in keys},
+        },
+        "failures": {key: {"attacks": rows[key]["battles"], "unknown_outcomes": rows[key]["unknown"]}
+                     for key in keys},
+        "stopped": False,
+        "extra_reasons": extra,
+        "limitations": list(report["limitations"]),
+    }
+
+
+def _fleet_game_versions(runs: Sequence[Mapping[str, Any]]) -> list[str]:
+    versions = set()
+    for run in runs:
+        version = run.get("game_version")
+        if isinstance(version, Mapping):
+            versions |= {f"{side} {version[side]}" for side in ("client", "server") if version.get(side)}
+        elif version:
+            versions.add(str(version))
+    return sorted(versions)
+
+
+def _fleet_study(report: Mapping[str, Any]) -> dict[str, Any]:
+    modes = report["modes"]
+    names = [FLEET_BASELINE, FLEET_CANDIDATE]
+    primary = FLEET_METRICS[0][0]
+    operator = {}
+    for name in names:
+        logged = [a["operator_minutes"] for a in modes[name]["accounts"].values() if a["operator_minutes"] is not None]
+        operator[name] = round(sum(logged), 2) if logged else None
+    extra = []
+    if report["recommendation"] is None and not report["stop"]:
+        extra.append("the trial makes no recommendation")
+    return {
+        "trial_id": report["trial_id"], "hypothesis": report["hypothesis"], "accounts": list(report["accounts"]),
+        "evaluated_at": report["evaluated_at"], "trial_status": report["status"],
+        "recommendation": report["recommendation"],
+        "arms": [{"arm": name, "role": "baseline" if name == FLEET_BASELINE else "candidate"} for name in names],
+        "windows": [{"label": w["mode"], "start": w["start"], "end": w["end"]} for w in report["schedule"]],
+        "game_versions": _fleet_game_versions(report["runs"]),
+        "min_sample": report["min_sample"], "sample_unit": "run",
+        "sample_sizes": {name: modes[name]["runs"] for name in names},
+        "primary_result": {
+            "metric": primary, "higher_is_better": True, "unit": "run",
+            "source": modes[FLEET_BASELINE]["verified_actions_per_hour"]["source"],
+            "arms": [_primary_row(name, modes[name]["verified_actions_per_hour"]["n"],
+                                  modes[name]["verified_actions_per_hour"]["mean"],
+                                  modes[name]["verified_actions_per_hour"]["interval_95"]) for name in names],
+        },
+        "decide": dict(report["decisions"][primary]),
+        "decide_note": None,
+        "secondary_decisions": {metric: {"decision": d["decision"], "reason": d["reason"]}
+                                for metric, d in report["decisions"].items() if metric != primary},
+        "costs": {
+            "run_hours": {name: modes[name]["run_hours"] for name in names},
+            "operator_minutes": operator,
+            "time_saved_minutes": {name: modes[name]["time_saved_minutes"] for name in names},
+        },
+        "failures": {name: {"attempted": modes[name]["attempted"], "failed": modes[name]["failed"],
+                            "uncertain": modes[name]["uncertain"], "failure_rate": modes[name]["failure_rate"]["rate"],
+                            "uncertain_rate": modes[name]["uncertain_rate"]["rate"],
+                            "incidents": modes[name]["incidents"], "alerts": modes[name]["alerts"]} for name in names},
+        "stopped": report["stop"] is not None,
+        "extra_reasons": extra,
+        "limitations": list(report["limitations"]),
+    }
+
+
+def _market_study(trial: Mapping[str, Any]) -> dict[str, Any]:
+    arms, trades = trial["arms"], trial["trades"]
+    samples, returns, fees, buy_cost, states = {}, {}, {}, {}, {}
+    for arm in arms:
+        own = [t for t in trades if t["arm"] == arm]
+        done = [t for t in own if t["state"] == TRADE_COMPLETED]
+        signed = [t["proceeds"] if t["side"] == TRADE_SELL else -t["cost"] for t in done]
+        samples[arm] = MeanSample(tuple(float(value) for value in signed))
+        returns[arm] = sum(signed) if done else None
+        charged = [t["fees"] for t in done if t["fees"] is not None]
+        fees[arm] = {"total": sum(charged) if charged else None, "samples": len(charged)}
+        buys = [t["cost"] for t in done if t["side"] == TRADE_BUY]
+        buy_cost[arm] = sum(buys) if buys else None
+        states[arm] = {"trades": len(own), **{state: sum(1 for t in own if t["state"] == state)
+                                              for state in MARKET_STATES[TRADE_SELL]}}
+        states[arm]["unreconciled"] = sum(states[arm][s] for s in (TRADE_REQUESTED, TRADE_LISTED, TRADE_UNKNOWN))
+    decision, note = None, None
+    if len(arms) == 2:
+        experiment = Experiment(
+            experiment_id=trial["trial_id"], hypothesis=trial["hypothesis"], baseline=arms[0], candidate=arms[1],
+            metric=MARKET_METRIC, higher_is_better=True, min_sample=max(2, trial["min_sample"]),
+            window_start=_utc(trial["window_start"], "window_start"),
+            window_end=_utc(trial["window_end"], "window_end"))
+        decision = asdict(decide(experiment, samples[arms[0]], samples[arms[1]],
+                                 _utc(trial["evaluated_at"], "evaluated_at")))
+    else:
+        note = "a single-arm trial has no comparison, so decide() does not apply"
+    versions = sorted({t["game_version"] for t in trades if t["game_version"] is not None})
+    limitations = [
+        f"The market-trial format is provisional (version {MARKET_TRIAL_VERSION}) until SPEC-09 adds "
+        "trial_report.py --market; its figures come from the trade states the trial recorded.",
+        "Market return counts completed trades only: sell proceeds minus buy cost, in the trial currency. Fees are "
+        "already inside proceeds and cost and are reported separately.",
+    ]
+    if not versions:
+        limitations.append("No trade recorded a game version.")
+    elif len(versions) > 1:
+        limitations.append("The game version changed during the trial; analyse each part separately.")
+    unreconciled = sum(row["unreconciled"] for row in states.values())
+    if unreconciled:
+        limitations.append(f"{unreconciled} trade(s) are still requested, listed or unknown; they are counted but "
+                           "never treated as completed.")
+    if trial["notes"]:
+        limitations.append(f"Trial notes: {trial['notes']}")
+    now = _utc(trial["evaluated_at"], "evaluated_at")
+    return {
+        "trial_id": trial["trial_id"], "hypothesis": trial["hypothesis"], "accounts": [trial["account_alias"]],
+        "evaluated_at": trial["evaluated_at"],
+        "trial_status": "in-progress" if now < _utc(trial["window_end"], "window_end") else "complete",
+        "recommendation": None,
+        "arms": [{"arm": arm, "role": "baseline" if index == 0 else "candidate"} for index, arm in enumerate(arms)],
+        "windows": [{"label": "trial", "start": trial["window_start"], "end": trial["window_end"]}],
+        "game_versions": versions,
+        "min_sample": trial["min_sample"], "sample_unit": "completed trade",
+        "sample_sizes": {arm: samples[arm].n for arm in arms},
+        "primary_result": {
+            "metric": MARKET_METRIC, "higher_is_better": True, "unit": "completed trade",
+            "source": f"completed trades only: sell proceeds or minus buy cost, in {trial['currency']}",
+            "currency": trial["currency"], "market_return": returns,
+            "arms": [_primary_row(arm, samples[arm].n, samples[arm].estimate(), samples[arm].interval())
+                     for arm in arms],
+        },
+        "decide": decision,
+        "decide_note": note,
+        "secondary_decisions": {},
+        "costs": {"fees": fees, "buy_cost": buy_cost, "operator_minutes": trial["operator_minutes"]},
+        "failures": states,
+        "stopped": False,
+        "extra_reasons": [],
+        "limitations": limitations,
+    }
+
+
+STUDY_BUILDERS = {"progression": _progression_study, "pvp": _pvp_study, "fleet": _fleet_study,
+                  "market": _market_study}
+STUDY_FIELDS = ("trial_id", "hypothesis", "accounts", "evaluated_at", "trial_status", "recommendation", "arms",
+                "windows", "game_versions", "min_sample", "sample_unit", "sample_sizes", "primary_result", "decide",
+                "decide_note", "secondary_decisions", "costs", "failures", "limitations")
+
+
+def _conclude(study: Mapping[str, Any], stopped: bool, extra: Sequence[str]) -> tuple[str, Optional[bool], list[str]]:
+    """The study's conclusion, whether every arm reached its minimum sample, and why it is not conclusive (R4)."""
+    if study["status"] == "missing":
+        return INCONCLUSIVE, None, ["no trial output was given for this study"]
+    short = [f"{arm} has {n} {study['sample_unit']}(s), under the minimum of {study['min_sample']}"
+             for arm, n in study["sample_sizes"].items() if n < study["min_sample"]]
+    reasons = list(short)
+    if stopped:
+        reasons.append("the trial stopped early; its results are for reference only")
+    decision = study["decide"]
+    if decision is not None and decision["decision"] not in (ADOPT, REJECT):
+        reasons.append(f"decide() returned {decision['decision']}: {decision['reason']}")
+    reasons += extra
+    if short:
+        return INCONCLUSIVE, False, reasons
+    if stopped:
+        return ABORTED, True, reasons
+    return (INCONCLUSIVE if reasons else CONCLUSIVE), True, reasons
+
+
+def _missing_study() -> dict[str, Any]:
+    empty: dict[str, Any] = dict.fromkeys(STUDY_FIELDS)
+    empty.update(accounts=[], arms=[], windows=[], game_versions=[], sample_sizes={}, secondary_decisions={},
+                 costs={}, failures={}, limitations=[])
+    return empty
+
+
+def build_study_report(trials: Mapping[str, Mapping[str, Any]],
+                       sources: Optional[Mapping[str, Mapping[str, Any]]] = None) -> dict[str, Any]:
+    """Aggregate per-trial outputs, keyed by kind (``progression``, ``pvp``, ``fleet``, ``market``), into the study
+    report. Every study appears; one without an output, or short of its minimum sample, is inconclusive (R4). The
+    result depends only on the inputs, so the same outputs give the same report byte for byte (R6)."""
+    unknown = set(trials) - set(STUDY_KINDS)
+    if unknown:
+        raise TrialInputError("trials are keyed by progression, pvp, fleet or market")
+    sources = sources or {}
+    studies = []
+    for study_id, kind, spec, question in STUDIES:
+        payload = trials.get(kind)
+        if payload is None:
+            fields, stopped, extra = _missing_study(), False, []
+        else:
+            payload = json.loads(json.dumps(payload, sort_keys=True))  # a JSON file and a dict give one result
+            _refuse_secrets(payload, f"the {kind} trial output")
+            if study_kind(payload) != kind:
+                raise TrialInputError(f"the {kind} input is not a {kind} trial output")
+            if kind == "market":
+                payload = market_trial_from_dict(payload)
+            try:
+                built = STUDY_BUILDERS[kind](payload)
+            except (KeyError, TypeError, IndexError, AttributeError):
+                raise TrialInputError(f"the {kind} trial output is missing a field or has a malformed one") from None
+            stopped, extra = built.pop("stopped"), built.pop("extra_reasons")
+            fields = built
+        study = {"study": study_id, "kind": kind, "spec": spec, "question": question,
+                 "status": "missing" if payload is None else "reported", "source": sources.get(kind), **fields}
+        study["conclusion"], study["reached_min_sample"], study["inconclusive_reasons"] = _conclude(
+            study, stopped, extra)
+        studies.append(study)
+    report = {
+        "report": "study",
+        "format_version": STUDY_REPORT_VERSION,
+        "generated_by": "scripts/trial_report.py --study",
+        "studies": studies,
+        "summary": {
+            "reported": [s["study"] for s in studies if s["status"] == "reported"],
+            "missing": [s["study"] for s in studies if s["status"] == "missing"],
+            CONCLUSIVE: [s["study"] for s in studies if s["conclusion"] == CONCLUSIVE],
+            INCONCLUSIVE: [s["study"] for s in studies if s["conclusion"] == INCONCLUSIVE],
+            ABORTED: [s["study"] for s in studies if s["conclusion"] == ABORTED],
+        },
+    }
+    _refuse_secrets(report, "the study report")
+    return json.loads(to_json(report))  # the in-memory report is exactly what its JSON file holds, key order too
+
+
+def load_study_inputs(paths: Sequence[Path]) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
+    """Read per-trial output files, each identified by its content; at most one per study."""
+    trials: dict[str, Any] = {}
+    sources: dict[str, dict[str, Any]] = {}
+    for path in paths:
+        if not path.is_file():
+            raise TrialInputError("a --trial path is not a file")
+        try:
+            raw = path.read_bytes()
+            payload = json.loads(raw.decode("utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise TrialInputError(f"cannot read a --trial file ({type(error).__name__})") from None
+        kind = study_kind(payload)
+        if kind in trials:
+            raise TrialInputError(f"two --trial files are {kind} trial outputs; give one per study")
+        trials[kind] = payload
+        sources[kind] = {"file": path.name,
+                         "sha256": "sha256:" + hashlib.sha256(raw).hexdigest()[:SHORT_HASH_DIGITS]}
+    return trials, sources
+
+
+def _value_cell(value: Any) -> str:
+    if isinstance(value, Mapping):
+        return ", ".join(f"{key} {_value_cell(item)}" for key, item in sorted(value.items())) or "none"
+    return _cell(value)
+
+
+def study_to_markdown(report: Mapping[str, Any]) -> str:
+    lines = [
+        "# Automation effectiveness study: figures",
+        "",
+        "Regenerated by `scripts/trial_report.py --study` from the per-trial outputs listed under Sources. The same "
+        "outputs always give this file byte for byte. A study without an output, or short of its minimum sample, is "
+        "reported as inconclusive, never left out.",
+        "",
+        "## Summary",
+        "",
+        "| Study | Spec | Trial | Conclusion | decide() | Sample per arm (minimum) |",
+        "| --- | --- | --- | --- | --- | --- |",
+    ]
+    for s in report["studies"]:
+        decision = "n/a" if s["decide"] is None else s["decide"]["decision"]
+        sizes = ", ".join(f"{a['arm']} {s['sample_sizes'][a['arm']]}" for a in s["arms"]) or "none"
+        minimum = "" if s["min_sample"] is None else f" ({s['min_sample']})"
+        lines.append(f"| {s['study']} | {s['spec']} | {_cell(s['trial_id'])} | **{s['conclusion']}** | {decision} | "
+                     f"{_cell(sizes)}{minimum} |")
+    for s in report["studies"]:
+        lines += ["", f"## Study {s['study']} ({s['kind']}, {s['spec']})", "", f"- Question: {s['question']}"]
+        if s["status"] == "missing":
+            lines += [f"- Conclusion: **{s['conclusion']}**: {'; '.join(s['inconclusive_reasons'])}."]
+            continue
+        reasons = f": {_cell('; '.join(s['inconclusive_reasons']))}" if s["inconclusive_reasons"] else ""
+        lines += [
+            f"- Trial: {s['trial_id']} ({_cell(s['hypothesis'])})",
+            f"- Accounts: {', '.join(s['accounts'])}",
+            f"- Evaluated at: {s['evaluated_at']}; trial status: {s['trial_status']}; recommendation: "
+            f"{_cell(s['recommendation'])}",
+            "- Arms: " + ", ".join(f"{a['arm']} ({a['role']})" for a in s["arms"]),
+            "- Windows: " + "; ".join(f"{w['label']} {w['start']} to {w['end']}" for w in s["windows"]),
+            f"- Game versions: {', '.join(s['game_versions']) or 'none recorded'}",
+            f"- Minimum sample: {s['min_sample']} {s['sample_unit']}(s) per arm; reached: "
+            f"{'yes' if s['reached_min_sample'] else 'no'}",
+            f"- Conclusion: **{s['conclusion']}**{reasons}",
+            "",
+        ]
+        primary = s["primary_result"]
+        lines += [f"Primary result: {primary['metric']} per {primary['unit']} "
+                  f"({'higher' if primary['higher_is_better'] else 'lower'} is better). Source: "
+                  f"{_cell(primary['source'])}.", "",
+                  "| Arm | n | Estimate | 95% interval |", "| --- | --- | --- | --- |"]
+        lines += [f"| {row['arm']} | {row['n']} | {_cell(row['estimate'])} | {_interval_cell(row['interval_95'])} |"
+                  for row in primary["arms"]]
+        if "market_return" in primary:
+            lines += ["", f"Market return ({primary['currency']}, completed trades): "
+                          f"{_value_cell(primary['market_return'])}."]
+        lines.append("")
+        if s["decide"] is None:
+            lines.append(f"`decide()`: not applicable ({_cell(s['decide_note'])}).")
+        else:
+            d = s["decide"]
+            lines.append(f"`decide()` returned **{d['decision']}** (n {d['baseline_n']} / {d['candidate_n']}): "
+                         f"{_cell(d['reason'])}.")
+            if s["decide_note"]:
+                lines.append(f"Note: {_cell(s['decide_note'])}.")
+        for metric, d in s["secondary_decisions"].items():
+            lines.append(f"- Secondary {metric}: {d['decision']} ({_cell(d['reason'])})")
+        lines += ["", "| Cost | Value |", "| --- | --- |"]
+        lines += [f"| {name} | {_cell(_value_cell(value))} |" for name, value in s["costs"].items()]
+        lines += ["", "| Failures | Value |", "| --- | --- |"]
+        lines += [f"| {a['arm']} | {_cell(_value_cell(s['failures'][a['arm']]))} |" for a in s["arms"]]
+        lines += ["", "Limitations carried from the trial output:", ""]
+        lines += [f"- {note}" for note in s["limitations"]] or ["- none recorded"]
+    lines += ["", "## Sources", "", "| Study | File | SHA-256 (first 16 hex digits) |", "| --- | --- | --- |"]
+    lines += [f"| {s['study']} | {_cell(s['source']['file'])} | {s['source']['sha256']} |"
+              for s in report["studies"] if s["source"]]
+    if not any(s["source"] for s in report["studies"]):
+        lines.append("| none | n/a | n/a |")
+    return "\n".join(lines) + "\n"
+
+
 # -- command line --------------------------------------------------------------------------------
 
 
@@ -2092,12 +2682,16 @@ def _arm_paths(values: Sequence[str], flag: str) -> dict[str, Path]:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         description="Build the progression trial exit report (SPEC-07), with --pvp the PvP strategy "
-                    "comparison (SPEC-08), or with --fleet the fleet trial report (SPEC-10).")
-    parser.add_argument("--plan", required=True, type=Path,
-                        help="trial plan JSON (a PvP plan with --pvp, a fleet plan with --fleet)")
+                    "comparison (SPEC-08), with --fleet the fleet trial report (SPEC-10), or with --study the "
+                    "study report aggregate of the per-trial outputs (SPEC-12).")
+    parser.add_argument("--plan", type=Path,
+                        help="trial plan JSON (a PvP plan with --pvp, a fleet plan with --fleet); required "
+                             "except with --study")
     kind = parser.add_mutually_exclusive_group()
     kind.add_argument("--pvp", action="store_true", help="build the PvP strategy comparison (SPEC-08)")
     kind.add_argument("--fleet", action="store_true", help="build the fleet trial report (SPEC-10)")
+    kind.add_argument("--study", action="store_true",
+                      help="aggregate per-trial outputs given with --trial into the study report (SPEC-12)")
     parser.add_argument("--snapshots", action="append", default=[], metavar="ARM=PATH",
                         help="an arm's snapshot JSON file or directory (repeat per arm)")
     parser.add_argument("--journal", action="append", default=[], metavar="ARM=PATH",
@@ -2112,30 +2706,22 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--registry", type=Path, help="with --fleet: the account registry JSON")
     parser.add_argument("--run", action="append", default=[], type=Path, dest="runs", metavar="PATH",
                         help="with --fleet: an execute journal directory or one runs/*.json run record (repeatable)")
+    parser.add_argument("--trial", action="append", default=[], type=Path, dest="trials", metavar="PATH",
+                        help="with --study: a per-trial output JSON (the progression, --pvp or --fleet --json "
+                             "report, or a market trial result); one per study, repeatable")
     parser.add_argument("--now", help="evaluation time, ISO 8601 UTC (default: the current time)")
     parser.add_argument("--json", type=Path, dest="json_out", help="write the JSON report here")
     parser.add_argument("--markdown", type=Path, help="write the Markdown report here")
     args = parser.parse_args(argv)
-    render = to_markdown
+    if not args.study and args.plan is None:
+        parser.error("the following arguments are required: --plan")
     try:
-        now = _utc(args.now, "--now") if args.now else datetime.now(timezone.utc)
-        if args.fleet:
-            report, render = _fleet_from_args(args, now), fleet_to_markdown
-        elif args.registry or args.runs:
-            raise TrialInputError("--registry and --run need --fleet")
-        elif args.pvp:
-            report, render = _pvp_from_args(args, now), pvp_to_markdown
+        if args.study:
+            report, render = _study_from_args(args), study_to_markdown
+        elif args.trials:
+            raise TrialInputError("--trial needs --study")
         else:
-            if args.adoptions or args.battle_history:
-                raise TrialInputError("--adoptions and --battle-history need --pvp")
-            plan = plan_from_dict(_read_json(args.plan, "the trial plan"))
-            snapshots = {arm: load_snapshots(path)
-                         for arm, path in _arm_paths(args.snapshots, "--snapshots").items()}
-            journals = {arm: read_events(path) for arm, path in _arm_paths(args.journal, "--journal").items()}
-            minutes = minutes_from_list(_read_json(args.minutes, "operator minutes"), plan) if args.minutes else {}
-            interventions = (interventions_from_list(_read_json(args.interventions, "the intervention log"), plan)
-                             if args.interventions else [])
-            report = build_trial_report(plan, snapshots, journals, minutes, interventions, now=now)
+            report, render = _trial_from_args(args)
     except ValueError as error:
         print(f"trial_report: error: {error}", file=sys.stderr)
         return 2
@@ -2146,6 +2732,35 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if not args.json_out and not args.markdown:
         sys.stdout.write(render(report))
     return 0
+
+
+def _study_from_args(args: argparse.Namespace) -> dict[str, Any]:
+    others = (args.plan, args.snapshots, args.journal, args.minutes, args.interventions, args.adoptions,
+              args.battle_history, args.registry, args.runs, args.now)
+    if any(others):
+        raise TrialInputError("--study reads only --trial outputs; the per-trial inputs and --now do not apply")
+    trials, sources = load_study_inputs(args.trials)
+    return build_study_report(trials, sources)
+
+
+def _trial_from_args(args: argparse.Namespace) -> tuple[dict[str, Any], Any]:
+    """One per-trial report and its Markdown renderer."""
+    now = _utc(args.now, "--now") if args.now else datetime.now(timezone.utc)
+    if args.fleet:
+        return _fleet_from_args(args, now), fleet_to_markdown
+    if args.registry or args.runs:
+        raise TrialInputError("--registry and --run need --fleet")
+    if args.pvp:
+        return _pvp_from_args(args, now), pvp_to_markdown
+    if args.adoptions or args.battle_history:
+        raise TrialInputError("--adoptions and --battle-history need --pvp")
+    plan = plan_from_dict(_read_json(args.plan, "the trial plan"))
+    snapshots = {arm: load_snapshots(path) for arm, path in _arm_paths(args.snapshots, "--snapshots").items()}
+    journals = {arm: read_events(path) for arm, path in _arm_paths(args.journal, "--journal").items()}
+    minutes = minutes_from_list(_read_json(args.minutes, "operator minutes"), plan) if args.minutes else {}
+    interventions = (interventions_from_list(_read_json(args.interventions, "the intervention log"), plan)
+                     if args.interventions else [])
+    return build_trial_report(plan, snapshots, journals, minutes, interventions, now=now), to_markdown
 
 
 def _pvp_from_args(args: argparse.Namespace, now: datetime) -> dict[str, Any]:

@@ -1,0 +1,44 @@
+{
+  "slice_id": "spec12-study-aggregate",
+  "status": "done",
+  "summary": "The roadmap's final deliverable is one study report drawn from every trial report. Its figures should come from the committed per-trial outputs, not be copied by hand, so the report can be regenerated and checked.  trial_report.py --study takes one --trial JSON output per study, recognised by content: the progression report (study A), the --pvp report (study C), the --fleet report (study D) and a market trial result (R4). No market report exists yet, so a minimal market-trial result format (version 1) is defined and documented as provisional until SPEC-09 adds --market; market return counts completed trades only.  For every study, in a fixed order, the aggregate states the question, arms, windows, game versions, sample sizes and minimum, the primary result per arm with its 95% interval, the decide() outcome (regenerated from pooled known results for study C, whose report has none), costs, failures and the trial's limitations (R1). A study with no output, short of its minimum sample, or without an adopt/reject decision is reported as inconclusive with its reasons and never omitted; a stopped trial is aborted (R4). No current time enters the report and sources are identified by file name and a short SHA-256, so the same outputs give byte-identical JSON and Markdown (R6). The progression, --pvp and --fleet reports are unchanged; --plan is now required by every mode except --study. Implemented by the SPEC-12 builder specialist subagent in an isolated worktree, independently reviewed by the verifier subagent (tests cite S12-R1, R4, R6; parent re-validated in a scratch clone), and re-validated by the parent.",
+  "files_touched": [
+    "scripts/trial_report.py",
+    "tests/test_trial_report_study.py"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "SPEC-12: study report aggregate",
+      "before": "Roadmap item not implemented",
+      "after": "SPEC-12: study report aggregate (offline)",
+      "proof": [
+        "make syntax-check, make test, scripts/ci.py lint and git diff --check pass on current main",
+        "verifier verdict: tests cite S12-R1, R4, R6; parent re-validated in a scratch clone"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "Offline only; no live game verification."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-11T21:34:00Z"
+}
