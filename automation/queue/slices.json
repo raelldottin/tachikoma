@@ -1277,6 +1277,28 @@
         "make test",
         "git diff --check"
       ]
+    },
+    {
+      "slice_id": "spec-driven-plan-docs",
+      "title": "Spec-driven plan for completing the roadmap",
+      "status": "queued",
+      "priority": 382,
+      "domain": "docs",
+      "allowed_paths": [
+        "docs/specs/",
+        "docs/baseline/known-limitations.md",
+        "docs/PRODUCT_ROADMAP.md"
+      ],
+      "depends_on": [
+        "bazel-migration-roadmap-docs"
+      ],
+      "max_files_changed": 16,
+      "notes": "Add docs/specs/: the spec-driven process and index, a spec template, and SPEC-01..12 covering the remaining roadmap work (traceability, credential safety, verified reads, baselines, live execution gate, legacy daily-run fencing, the R2-R5 trials and the R6 study report), each with requirement ids, acceptance criteria, slices and owner decisions. Also correct four known-limitations lines made stale by #152 and link the roadmap status to docs/specs. Documentation only.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
     }
   ]
 }
