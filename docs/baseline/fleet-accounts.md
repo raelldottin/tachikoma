@@ -89,6 +89,8 @@ Error messages name the location but never repeat the offending value. `AccountR
 
 After the run, the command reads every registered alias's journal, runs `audit_fleet`, and prints the accounts table, `sdk/reports/fleet` Markdown and `sdk/reports/alerts` Markdown with that audit.
 
+- **Dry-run stamp.** The command passes `dry_run_registry_stamp=registry_stamp(registry)` to the factory, so each account's journal is a `DryRunJournal`. It validates every dry-run event when it is appended (a secret-shaped value is still refused at once) but holds it until the run ends; `read()` includes held events. `factory.commit_dry_runs(statuses)` then writes them. An account whose `AccountRun.status` is `completed` gets a stamp merged into each event's `evidence`: `dry_run_policy` (its `policy_id`), `dry_run_registry` (`registry_stamp`: the first 16 hex digits of `registry_hash`, short enough that journal redaction keeps it) and `dry_run_id` (one random hex id for the batch). Any other account's events are written unchanged. `registry_hash(registry)` is `sha256:` plus the hex SHA-256 of the registry's canonical JSON (version and each profile's `to_dict()` in alias order, sorted keys, no spaces).
+
 ## Live execution authorization
 
 `sdk/fleet/authorization.py` reads the owner-written file that [SPEC-05](../specs/SPEC-05-live-execution-gate.md) requires before any execute run (S05-R2). It names who authorized the run, which registry accounts and catalog actions it covers, when it is valid and how much each account may spend. It holds no credential, and this module has no execute path: it only loads and checks the file.
@@ -133,6 +135,51 @@ Every field is required.
 A malformed alias, action id or mode is shown as `<malformed>`, never repeated.
 
 `authorization_hash(auth)` is `sha256:` followed by the hex SHA-256 of the authorization's canonical JSON (`to_dict()` with sorted keys, no spaces, ASCII, and times written with `Z`). Key order and an equivalent UTC spelling do not change it, so a run record can name the exact authorization it ran under.
+
+## Live execution
+
+`run.py --fleet-execute --registry PATH --authorization PATH --identity-salt-env NAME [--mode canary|full] [--halt-share SHARE] [--concurrent N] [--fleet-journal-dir DIR] [--plan-only]` is the only code path that calls a fleet orchestrator's `run(execute=True)` ([SPEC-05](../specs/SPEC-05-live-execution-gate.md), S05-R1). Like the dry run, it is handled before any SMTP setup or single-account login.
+
+### Checks before any login
+
+The command exits with code 2, listing every reason on standard error, and constructs no client when:
+
+- the registry or the authorization is missing or invalid (`load_registry`, `load_authorization`);
+- `check_authorization(auth, registry, now, <enabled aliases>, (), mode)` returns any reason: the time is outside the window, the mode is not allowed, or an enabled account is not named (so the whole run is refused rather than silently skipping an account);
+- `--identity-salt-env` is missing, or the variable is unset or too short (S05-R8);
+- an enabled profile declares no `expected_game_identity` (S05-R8);
+- an enabled account has no qualifying dry run (S05-R3, below);
+- `<journal dir>/STOP` exists.
+
+**How a dry run is recognised (S05-R3).** `latest_dry_run(events, profile, stamp, now)` reads the account's `<journal dir>/<alias>.log`. A dry run is a batch of dry-run, not-attempted events of that alias that share one `evidence.dry_run_id`, which `--fleet-dry-run` writes only for an account whose dry run completed. The latest batch, by its last `finished_at`, must name the profile's current `policy_id` and the current registry stamp, and must have finished within the 24 hours before now and not after it. An older batch never stands in for a newer one. So any registry change, including enrolling `expected_game_identity`, needs a new dry run; a dry run whose plan was empty leaves no events and therefore no stamp.
+
+### The execute gate
+
+`sdk/fleet/factory.py` holds the gate. `ExecuteFleetOrchestrator` and `ConcurrentExecuteFleetOrchestrator` add it to the sequential and concurrent orchestrators, so their per-account steps, claims, isolation and failure containment are unchanged. `ExecutionGate(authorization, registry, mode, clock)` answers, through `check_authorization` for one alias and one action at the current time, whether an action may run. For `run_pvp_battle` it passes the account's journal events as `battle_events`, so the authorization's battle cap (S08-R2) applies; without a journal reader, or when the journal cannot be read, the battle is refused. `AuthorizedPolicy` and `GatedActionRunner` both pass the account's journal, and `--plan-only` the events it read.
+
+- **Plan.** The account's policy is wrapped in `AuthorizedPolicy`: requests the gate refuses, and any request with a planned starbux cost, move to `rejected`. In `canary` mode (the default, S05-R4) only the first remaining request whose catalog idempotency is safe-to-retry is kept, and the scheduler may execute one action; the policy still plans up to `max_actions` requests, so the canary is chosen from the whole plan. In `full` mode the authorized part of the plan runs, up to `max_actions`.
+- **Budgets.** Each budget is the tighter of the registry's and the authorization's cap for minerals and gas, and starbux is 0 whatever the registry says (S05-R6). They go through `budgeted_policy_config`, so the policy plans within what remains this period.
+- **Runner.** `GatedActionRunner` re-checks each action before any call: a fleet halt (below), the gate, any planned starbux, a non-idempotent action other than `run_pvp_battle` with no planned cost while the account has caps (an empty planned cost would otherwise pass any cap, even 0), a battle while any capped mineral or gas budget has less than `BATTLE_REARM_ALLOWANCE` (1) left this period, and whether the planned cost plus the spend already charged this period (`spent_in_period`) would exceed a budget. A refusal is journaled as a `skipped` event with `error_class` `ExecutionRefusedError` and raised as that error, a subclass of the runner's `UncertainPriorAttemptError`, so the scheduler stops the account through its existing refusal path. A retry after an uncertain attempt is never allowed. Battles are the exception to the planned-cost rule because no plan can price them: `Client.runBattleEndToEnd` first rearms with `rebuildAmmo` (`RebuildAmmo3`), whose mineral or gas cost the repo does not record. A battle is therefore held to the authorization's battle cap and to the rearm allowance, a floor rather than an estimate, and its observed spend is charged to the period afterwards like any other attempt's.
+- **Stops (S05-R5).** An account stops on its first `contradicted` result, on an `unknown` result of a non-idempotent action, on an isolation refusal (it then ends with `error`), and when a cap would be exceeded. The fleet stops when the stop file exists (checked before each account and between actions) or when more than `halt_share` of the enabled accounts ended `stopped` or `error`. `halt_share` defaults to 0 (S05-Q2's safe default: any one account in a two-account trial), and `--halt-share SHARE` (or `run_fleet_execute(..., halt_share=...)`) sets it to any value from 0 to below 1. Accounts not yet started are then `not-run` with a `fleet halted: ...` reason, which is also the fleet's `stop_reason`, and every account still running is refused its next action by its `GatedActionRunner`, so it stops between actions as with the stop file; in concurrent mode, an action already in flight finishes.
+
+### Output and run record (S05-R7, S05-R9)
+
+The command prints the accounts table, a reconciliation table (one row per scheduler result: action, attempted, outcome, reason), the fleet report and the alerts, and exits with 0 when every enabled account completed and the fleet did not stop, otherwise 1. Every attempt is journaled by the runner in the account's journal. Each run writes `<journal dir>/runs/<UTC time>.json` (a new file each run, written atomically) with:
+
+| Field | Content |
+| --- | --- |
+| `version`, `kind`, `mode`, `orchestrator` | `1`, `fleet-execute`, `canary` or `full`, `sequential` or `concurrent` |
+| `started_at`, `finished_at` | The fleet run's times |
+| `authorization_hash`, `authorization` | `authorization_hash(auth)`, and its owner, window and actions |
+| `registry_hash` | `registry_hash(registry)` |
+| `policy_versions` | Enabled alias to `policy_id` |
+| `game_version` | `client`: the version this build declares (`sdk.compat.DECLARED_CLIENT_VERSION`); `server`: `null`, because the command does not observe it |
+| `halt_share`, `stop_reason` | The halt threshold and the fleet's stop reason |
+| `accounts` | Per alias: status, reason, `policy_version`, `dry_run_id` and its finish time, `game_identity` fingerprint, planned, attempted and verified counts, spend this period, remaining budget, `results` (attempt id, action, attempted, outcome, reason), and `rejected` (each plan candidate not run, with its reason, such as a full battle cap) |
+
+The command reuses the dry run's scrubbing: `LogScrubber` sits on the log handlers during the run with every account's credential values, the salt and the display names seen at login, and every printed or recorded reason passes through it. Credentials, the salt, raw user ids and display names therefore never reach the output, the log, the journals or the run record. Scrubbing can also hide a long path in a reason (it looks like a token to `redact_secrets`).
+
+`--plan-only` (S05-R10) makes every check above, then prints for each account, from its latest dry run, what the run would execute (in canary mode, the first authorized safe-to-retry action), the planned actions the authorization does not allow, and the caps. It never logs in, executes nothing and writes no run record. The execute run plans again from a fresh snapshot, so it can differ.
 
 ## Game identity
 

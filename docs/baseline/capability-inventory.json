@@ -982,7 +982,8 @@
       "evidence": "mocked-test",
       "tests": [
         "tests/test_offline_reports.py",
-        "tests/test_fleet_dry_run.py"
+        "tests/test_fleet_dry_run.py",
+        "tests/test_fleet_execute.py"
       ]
     },
     {
@@ -1018,7 +1019,8 @@
       "kind": "read-only",
       "evidence": "mocked-test",
       "tests": [
-        "tests/test_fleet_dry_run.py"
+        "tests/test_fleet_dry_run.py",
+        "tests/test_fleet_execute.py"
       ]
     },
     {
@@ -1027,7 +1029,8 @@
       "kind": "read-only",
       "evidence": "mocked-test",
       "tests": [
-        "tests/test_fleet_dry_run.py"
+        "tests/test_fleet_dry_run.py",
+        "tests/test_fleet_execute.py"
       ]
     },
     {
@@ -1036,7 +1039,53 @@
       "kind": "read-only",
       "evidence": "mocked-test",
       "tests": [
-        "tests/test_fleet_dry_run.py"
+        "tests/test_fleet_dry_run.py",
+        "tests/test_fleet_execute.py"
+      ]
+    },
+    {
+      "flag": "--fleet-execute",
+      "pillar": "E",
+      "kind": "mutating",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_fleet_execute.py"
+      ]
+    },
+    {
+      "flag": "--authorization",
+      "pillar": "E",
+      "kind": "read-only",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_fleet_execute.py"
+      ]
+    },
+    {
+      "flag": "--mode",
+      "pillar": "E",
+      "kind": "read-only",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_fleet_execute.py"
+      ]
+    },
+    {
+      "flag": "--plan-only",
+      "pillar": "E",
+      "kind": "read-only",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_fleet_execute.py"
+      ]
+    },
+    {
+      "flag": "--halt-share",
+      "pillar": "E",
+      "kind": "read-only",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_fleet_execute.py"
       ]
     }
   ]
