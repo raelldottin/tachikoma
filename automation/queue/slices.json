@@ -849,6 +849,11 @@
         "README.md"
       ],
       "depends_on": [
+        "r6-fix-battle-outcome-evidence",
+        "r6-fix-budget-spend-caps",
+        "r6-fix-economy-attribution",
+        "r6-fix-experiment-and-simulation",
+        "r6-fix-uncertain-spend-charging",
         "r6-report-cli"
       ],
       "max_files_changed": 6,
@@ -879,6 +884,123 @@
       "max_files_changed": 6,
       "entry_condition": "Requires the live trials (r2, r3, r4, r5) to have run with owner authorization and recorded results. Nothing live has been authorized yet.",
       "notes": "R6 exit. Write the study report quantifying when automation helped, failed or cost more than manual play, from the recorded live trial evidence, with sample sizes and limitations.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
+    },
+    {
+      "slice_id": "r6-fix-budget-spend-caps",
+      "title": "Enforce fleet budgets against the planning snapshot and reject unknown costs",
+      "status": "queued",
+      "priority": 341,
+      "domain": "safety",
+      "allowed_paths": [
+        "sdk/policy/",
+        "sdk/fleet/",
+        "tests/",
+        "docs/baseline/"
+      ],
+      "depends_on": [
+        "r6-report-cli"
+      ],
+      "max_files_changed": 6,
+      "notes": "Review defects: (1) the orchestrator computed reserves from its own snapshot while the scheduler planned from a later one, so balance growth became extra budget; (4) the policy treated a missing or unparseable room price, or a missing research starbux cost, as free. Add explicit spend caps to PolicyConfig that the policy applies against the snapshot it plans from, have the orchestrator pass remaining budget as caps, and reject candidates whose cost is unknown. Regression tests must fail on the old code.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
+    },
+    {
+      "slice_id": "r6-fix-battle-outcome-evidence",
+      "title": "Never verify a battle outcome without a battle step; tolerate non-UTC journal times",
+      "status": "queued",
+      "priority": 342,
+      "domain": "safety",
+      "allowed_paths": [
+        "sdk/actions/",
+        "sdk/execution/",
+        "sdk/reports/",
+        "tests/",
+        "docs/baseline/"
+      ],
+      "depends_on": [
+        "r6-report-cli"
+      ],
+      "max_files_changed": 6,
+      "notes": "Review defects: (3) a run_pvp_battle call that raised before any battle step was journaled verified with tier outcome-observed when an unrelated trophy change occurred, and reported as a win; (7) battles_from_events crashed on journal times not in UTC. Require a battle step for outcome-observed, downgrade such a verified outcome to unknown, require no error for win/loss, and normalise times to UTC before the schedule lookup. Regression tests must fail on the old code.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
+    },
+    {
+      "slice_id": "r6-fix-economy-attribution",
+      "title": "Tighten trade completion and ledger attribution",
+      "status": "queued",
+      "priority": 343,
+      "domain": "economy",
+      "allowed_paths": [
+        "sdk/economy/",
+        "tests/",
+        "docs/baseline/"
+      ],
+      "depends_on": [
+        "r6-report-cli"
+      ],
+      "max_files_changed": 6,
+      "notes": "Review defects: (5) buys completed on any item arrival plus any spend >= price with no upper bound, and sells completed from the item leaving at listing time plus any unrelated currency gain; (6) the ledger attributed a change to one action while another action overlapped the end of the interval; (10) sell listings matched any own listing at the same price. Bound buy cost and sell proceeds, require the listing to be gone and newly seen after the request, treat end-overlapping actions as candidates (ambiguous), and prefer item-design matches. Regression tests must fail on the old code.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
+    },
+    {
+      "slice_id": "r6-fix-experiment-and-simulation",
+      "title": "Robust experiment intervals and simulation correctness",
+      "status": "queued",
+      "priority": 344,
+      "domain": "experiment",
+      "allowed_paths": [
+        "sdk/experiments/",
+        "sdk/simulation/",
+        "tests/",
+        "docs/baseline/"
+      ],
+      "depends_on": [
+        "r6-report-cli"
+      ],
+      "max_files_changed": 6,
+      "notes": "Review defects: (8) MeanSample used a z interval from n >= 2 and zero variance gave zero-width intervals, so two measurements could adopt a variant; simulation charged nothing for gas-priced room upgrades and appended to existing journals when a workdir was reused, breaking byte-identical reports. Use a t-based interval, refuse decisions on zero-variance samples, charge gas prices, and start each scenario from empty journals. Regression tests must fail on the old code.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
+    },
+    {
+      "slice_id": "r6-fix-uncertain-spend-charging",
+      "title": "Charge expected cost of uncertain attempts against budgets",
+      "status": "queued",
+      "priority": 345,
+      "domain": "safety",
+      "allowed_paths": [
+        "sdk/execution/",
+        "sdk/scheduler/",
+        "sdk/fleet/",
+        "tests/",
+        "docs/baseline/"
+      ],
+      "depends_on": [
+        "r6-fix-budget-spend-caps",
+        "r6-fix-battle-outcome-evidence"
+      ],
+      "max_files_changed": 7,
+      "notes": "Review defect (2): an attempt whose after-snapshot failed was journaled unknown with no cost, so neither spent_in_period nor the audit charged it and the next run started with the full budget. Pass the planned expected cost from the scheduler to the runner, record it as <kind>_uncertain cost for attempts whose effect was not observed, and charge it in the orchestrator's spend and the audit. Regression tests must fail on the old code.",
       "required_validations": [
         "make syntax-check",
         "make test",
