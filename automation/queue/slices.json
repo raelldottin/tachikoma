@@ -1303,7 +1303,7 @@
     {
       "slice_id": "spec-approvals-docs",
       "title": "Record owner approval of the specs and amend SPEC-01",
-      "status": "queued",
+      "status": "done",
       "priority": 383,
       "domain": "docs",
       "allowed_paths": [

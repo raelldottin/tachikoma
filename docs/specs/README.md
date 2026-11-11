@@ -1,6 +1,6 @@
 # Spec-driven plan for completing the roadmap
 
-**Status:** Proposed, 2026-11-11. No spec is approved yet.
+**Status:** In progress, 2026-11-11. All twelve specs are approved for offline work (gate G0); no live gate is open.
 **Covers:** everything left in [PRODUCT_ROADMAP.md](../PRODUCT_ROADMAP.md) after #152. The [Bazel migration](../BAZEL_MIGRATION_ROADMAP.md) is a separate track with its own plan.
 
 Every offline slice of R0–R6 is merged. What is left is live work that changes real accounts, reads whose response shapes were never confirmed, and some library pieces that nothing uses yet. Mistakes in that work are hard to undo, so each piece starts as a spec: what must be true, how it will be proven, and what the owner must decide. Code comes after.
@@ -23,7 +23,7 @@ A spec that needs no live evidence goes from stage 6 straight to `Done`.
 
 - **No code without an approved spec.** A queue slice for spec work names the spec and the requirement ids it implements in its `notes`, and its `allowed_paths` stay inside what the spec lists.
 - **Ids are permanent.** Requirements are `Snn-Rk`, acceptance criteria `Snn-ACk`. A removed requirement is marked `Withdrawn`, never renumbered.
-- **Traceability.** Each test that proves a requirement carries a comment `# Verifies: Snn-Rk`. [SPEC-01](SPEC-01-traceability.md) makes CI fail when an approved spec has a MUST with no test, or a test cites an id that does not exist.
+- **Traceability.** Each test that proves a requirement carries a comment `# Verifies: Snn-Rk`. [SPEC-01](SPEC-01-traceability.md) makes CI fail when a spec marked `Verified offline` or `Done` has a MUST with an offline acceptance criterion but no test, or a test cites an id that does not exist. Requirements proved only by live acceptance criteria need evidence instead of a test.
 - **Live steps belong to the owner.** An agent never runs a live acceptance criterion, never edits a workflow that holds secrets, and never handles real credentials. Agent slices build and test offline; the owner runs and records.
 - **The project invariants apply to every spec.** An API success is never a verified effect. Unobserved values are `None`, never 0. Accounts never mix. Secrets never reach journals, reports or error text. Starbux is never spent by fleet runs. Non-idempotent actions are not retried after an uncertain outcome. Each spec states how it keeps them.
 

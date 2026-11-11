@@ -1,6 +1,7 @@
 # SPEC-04: Per-ship baselines and game-version provenance
 
-**Status:** Draft
+**Status:** Approved
+**Approval:** owner, 2026-11-11, through the session goal "complete the plan in docs/specs/". This approves building and testing the spec offline; owner questions take their safe defaults. It does not open any live gate (G1–G5), so live acceptance criteria stay pending.
 **Release:** R0 (the remaining part)
 **Owner gate:** G1
 **Depends on:** SPEC-01, SPEC-03
