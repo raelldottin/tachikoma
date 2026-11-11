@@ -1,0 +1,45 @@
+{
+  "slice_id": "spec04-baseline-format",
+  "status": "done",
+  "summary": "R0 needs a recorded starting state per ship and the game version it was observed on. This adds the file format only; the --baseline command and summary table are a later slice.  sdk/state/baseline.py writes one AccountSnapshot as stable JSON (<alias>-<UTC time>.json) holding the alias, UTC observation time, game version and every snapshot section, with unobserved sections null and each section's completeness recorded (S04-R2). Files are created exclusively, so a second write for the same alias and second is refused (S04-R4). load_baseline returns a snapshot equal to the one written, so diff_snapshots can compare a later snapshot with it (S04-R5).  Nothing is written or loaded that fails the secret scan: the sdk.redaction patterns plus a numeric id in a UserId/Id field, the S03-R2 capture rules, implemented locally so this slice does not depend on SPEC-03 code. JSON files are also scanned per decoded string, because JSON escaping hides quoted patterns such as \"DeviceKey\":\"...\" from the raw-text scan. scan_baseline_directory applies the same rules to docs/experiments/baselines/ (S04-R7). The game_identity fingerprint is kept; a raw user id is refused. Implemented by the SPEC-04 builder specialist subagent in an isolated worktree, independently reviewed by the verifier subagent (tests cite its requirement ids; parent re-validated in a scratch clone), and re-validated by the parent.",
+  "files_touched": [
+    "docs/baseline/account-snapshot.md",
+    "sdk/state/baseline.py",
+    "tests/test_account_baselines.py"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "SPEC-04: baseline file format",
+      "before": "Roadmap item not implemented",
+      "after": "SPEC-04: baseline file format (offline)",
+      "proof": [
+        "make syntax-check, make test, scripts/ci.py lint and git diff --check pass on current main",
+        "verifier verdict: tests cite its requirement ids; parent re-validated in a scratch clone"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "Offline only; no live game verification."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-11T20:11:33Z"
+}

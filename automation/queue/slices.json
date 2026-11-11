@@ -1389,7 +1389,7 @@
     {
       "slice_id": "spec04-baseline-format",
       "title": "SPEC-04: baseline file format",
-      "status": "queued",
+      "status": "done",
       "priority": 387,
       "domain": "state",
       "allowed_paths": [
