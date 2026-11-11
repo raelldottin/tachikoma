@@ -137,17 +137,21 @@ def run_progression_dry_run(client, account_alias, journal_path):
     return 0
 
 
-REPORT_KINDS = ("progression", "pvp", "fleet")
+REPORT_KINDS = ("progression", "pvp", "fleet", "dashboard")
 REPORT_FORMATS = ("markdown", "json")
 
 
-def run_offline_report(kind, journal_paths, registry_path=None, report_format="markdown", out=None):
+def run_offline_report(kind, journal_paths, registry_path=None, report_format="markdown", out=None,
+                       output_path=None):
     """Print a report built from local journal files. Needs no login.
 
     Never constructs a Device or Client and makes no network call. For the
-    fleet report, events are grouped by their own ``account_alias`` across all
-    given journals; the registry is only read for the fleet report. Returns a process exit code: 0 on success, 2 when a journal
-    or registry is missing or invalid.
+    fleet report and the dashboard, events are grouped by their own
+    ``account_alias`` across all given journals; the registry is only read for
+    those two. The dashboard is written atomically to ``output_path`` as one
+    self-contained HTML file and the path is printed. Returns a process exit
+    code: 0 on success, 2 when a journal or registry is missing or invalid, or
+    the dashboard cannot be written.
     """
     from sdk.fleet.accounts import RegistryError, load_registry
     from sdk.journal import JournalError, read_events
@@ -162,7 +166,7 @@ def run_offline_report(kind, journal_paths, registry_path=None, report_format="m
                 return 2
             events.extend(read_events(path))
         registry = None
-        if registry_path is not None and kind == "fleet":
+        if registry_path is not None and kind in ("fleet", "dashboard"):
             if not Path(registry_path).is_file():
                 print(f"error: registry not found: {registry_path}", file=sys.stderr)
                 return 2
@@ -170,6 +174,27 @@ def run_offline_report(kind, journal_paths, registry_path=None, report_format="m
     except (JournalError, RegistryError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
+
+    if kind == "dashboard":
+        from sdk.reports import dashboard
+
+        target = Path(output_path)
+        resolved = target.resolve()
+        if any(resolved == Path(journal_path).resolve() for journal_path in journal_paths):
+            print(f"error: --output would overwrite a journal: {output_path}", file=sys.stderr)
+            return 2
+        if registry_path is not None and resolved == Path(registry_path).resolve():
+            print(f"error: --output would overwrite the registry: {output_path}", file=sys.stderr)
+            return 2
+        board = dashboard.build_dashboard(events, registry=registry,
+                                          journal_names=[Path(journal_path).name for journal_path in journal_paths])
+        try:
+            dashboard.write_dashboard(dashboard.render_html(board), target)
+        except OSError as error:
+            print(f"error: cannot write dashboard: {error}", file=sys.stderr)
+            return 2
+        out.write(f"{output_path}\n")
+        return 0
 
     if kind == "progression":
         from sdk.reports import progression
@@ -274,7 +299,8 @@ def main():
         dest="report",
         choices=REPORT_KINDS,
         default=None,
-        help="print an offline report from --journal files and exit; never logs in or touches the network",
+        help="print an offline report from --journal files and exit (dashboard writes HTML to --output); "
+        "never logs in or touches the network",
     )
     parser.add_argument(
         "--journal",
@@ -296,7 +322,14 @@ def main():
         dest="report_format",
         choices=REPORT_FORMATS,
         default="markdown",
-        help="output format for --report (default: markdown)",
+        help="output format for --report (default: markdown); not used by the dashboard",
+    )
+    parser.add_argument(
+        "--output",
+        dest="output",
+        default=None,
+        metavar="PATH",
+        help="HTML file to write for --report dashboard (required there); replaced atomically",
     )
     args = parser.parse_args()
 
@@ -305,9 +338,14 @@ def main():
     if args.report:
         if not args.journals:
             parser.error("--report needs at least one --journal PATH")
-        sys.exit(run_offline_report(args.report, args.journals, args.registry, args.report_format))
-    if args.journals or args.registry:
-        parser.error("--journal and --registry are only used with --report")
+        if args.report == "dashboard" and not args.output:
+            parser.error("--report dashboard needs --output PATH")
+        if args.output and args.report != "dashboard":
+            parser.error("--output is only used with --report dashboard")
+        sys.exit(run_offline_report(args.report, args.journals, args.registry, args.report_format,
+                                    output_path=args.output))
+    if args.journals or args.registry or args.output:
+        parser.error("--journal, --registry and --output are only used with --report")
 
     # Validate SMTP configuration before Device/Client creation or network activity
     smtp_email = args.smtp_email
