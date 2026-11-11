@@ -1,0 +1,49 @@
+{
+  "slice_id": "spec04-baseline-command",
+  "status": "done",
+  "summary": "R0 needs a recorded starting state per participating ship and the game version it was observed on before the study can start. sdk.state.baseline (#166) defined the file format; this adds the command that takes the snapshots.  run.py --baseline --registry PATH --output DIR logs each enabled account in through the fleet factory (same credential forms, EphemeralDevice, scrubbed errors and LogScrubber as --fleet-dry-run), takes one snapshot with the provider's three read-only calls and writes it with write_baseline. It builds no orchestrator, policy, scheduler or action runner, so there is no execute path. Identities are claimed with FleetClaims so two aliases never share one game account, and an existing file for the same alias and time is refused, not overwritten.  The game version comes from the Setting record of client.latestVersion, which Client.login fills from GetLatestVersion3, never from the ClientVersion the client declares; it is None when no expected attribute is present (the attribute names are unverified live). A Markdown summary of every baseline in the directory (alias, time, version, hull bracket, missing sections) is printed and, with --baseline-summary PATH, written after the secret scan. Implemented by the SPEC-04 builder specialist subagent in an isolated worktree, independently reviewed by the verifier subagent (tests cite S04-R1, R3, R6; parent re-validated in a scratch clone), and re-validated by the parent.",
+  "files_touched": [
+    "README.md",
+    "README.template",
+    "docs/baseline/account-snapshot.md",
+    "docs/baseline/capability-inventory.json",
+    "run.py",
+    "sdk/fleet/factory.py",
+    "tests/test_baseline_command.py"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "SPEC-04: read-only baseline command",
+      "before": "Roadmap item not implemented",
+      "after": "SPEC-04: read-only baseline command (offline)",
+      "proof": [
+        "make syntax-check, make test, scripts/ci.py lint and git diff --check pass on current main",
+        "verifier verdict: tests cite S04-R1, R3, R6; parent re-validated in a scratch clone"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "Offline only; no live game verification."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-11T21:32:30Z"
+}

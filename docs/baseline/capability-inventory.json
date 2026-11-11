@@ -106,8 +106,10 @@
       "name": "getLatestVersion3",
       "pillar": "platform",
       "kind": "read-only",
-      "evidence": "untested",
-      "tests": []
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_baseline_command.py"
+      ]
     },
     {
       "name": "getTodayLiveOps2",
@@ -987,7 +989,8 @@
       "tests": [
         "tests/test_offline_reports.py",
         "tests/test_fleet_dry_run.py",
-        "tests/test_fleet_execute.py"
+        "tests/test_fleet_execute.py",
+        "tests/test_baseline_command.py"
       ]
     },
     {
@@ -1005,7 +1008,8 @@
       "kind": "read-only",
       "evidence": "mocked-test",
       "tests": [
-        "tests/test_dashboard_report.py"
+        "tests/test_dashboard_report.py",
+        "tests/test_baseline_command.py"
       ]
     },
     {
@@ -1024,7 +1028,8 @@
       "evidence": "mocked-test",
       "tests": [
         "tests/test_fleet_dry_run.py",
-        "tests/test_fleet_execute.py"
+        "tests/test_fleet_execute.py",
+        "tests/test_baseline_command.py"
       ]
     },
     {
@@ -1044,7 +1049,26 @@
       "evidence": "mocked-test",
       "tests": [
         "tests/test_fleet_dry_run.py",
-        "tests/test_fleet_execute.py"
+        "tests/test_fleet_execute.py",
+        "tests/test_baseline_command.py"
+      ]
+    },
+    {
+      "flag": "--baseline",
+      "pillar": "E",
+      "kind": "read-only",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_baseline_command.py"
+      ]
+    },
+    {
+      "flag": "--baseline-summary",
+      "pillar": "E",
+      "kind": "read-only",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_baseline_command.py"
       ]
     },
     {

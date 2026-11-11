@@ -251,6 +251,194 @@ def run_fleet_dry_run(registry_path, journal_dir=None, concurrent=None, identity
     return 0
 
 
+BASELINE_SOURCE = "run.py --baseline"
+
+
+def run_baseline(registry_path, output_dir, concurrent=None, identity_salt_env=None, summary_path=None,
+                 out=None, environ=None, client_cls=None, device_cls=None, clock=None):
+    """Write one read-only baseline per enabled registry account (SPEC-04, S04-R1, S04-R3, S04-R6).
+
+    Each enabled account logs in with the credentials its ``credentials_secret``
+    names in the environment (``sdk.fleet.factory``), takes one snapshot with
+    the snapshot provider's read-only calls, and is written with
+    ``sdk.state.baseline.write_baseline`` to ``<output_dir>/<alias>-<UTC time>.json``.
+    The game version is the server's latest-version setting
+    (``sdk.fleet.factory.server_game_version``), ``None`` when not observed.
+    There is no execute path: no orchestrator, policy or action runner is
+    built. Two aliases that logged in to the same game account (by
+    ``game_identity``) or an identity that differs from the profile's
+    ``expected_game_identity`` are refused, and a file that already exists
+    for the same alias and time is never overwritten. One account's failure
+    is reported and the others are still written.
+
+    Prints the accounts table and a Markdown summary of every baseline in
+    ``output_dir`` (alias, observed time, game version, hull bracket, missing
+    sections); with ``summary_path`` the summary is also written there.
+    Returns 0 when every enabled account was written, 1 when any was not or
+    the summary could not be written, and 2 when the registry, the identity
+    salt or the output directory is missing or invalid.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    from sdk.fleet.accounts import RegistryError, load_registry
+    from sdk.fleet.factory import EnvironmentAccountFactory, LogScrubber
+    from sdk.fleet.orchestrator import FleetClaims, error_reason
+    from sdk.state.baseline import BaselineError, BaselineExistsError, scan_text, write_baseline
+    from sdk.state.snapshot import SnapshotInputError, identity_salt_key
+
+    out = out or sys.stdout
+    environ = os.environ if environ is None else environ
+    output_dir = Path(output_dir)
+
+    if not Path(registry_path).is_file():
+        print(f"error: registry not found: {registry_path}", file=sys.stderr)
+        return 2
+    try:
+        registry = load_registry(registry_path)
+    except RegistryError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 2
+
+    identity_salt = None
+    if identity_salt_env:
+        identity_salt = environ.get(identity_salt_env) or None
+        if identity_salt is None:
+            print(f"error: identity salt variable {identity_salt_env} is not set", file=sys.stderr)
+            return 2
+        try:
+            identity_salt_key(identity_salt)
+        except SnapshotInputError as error:  # the message never repeats the salt
+            print(f"error: {identity_salt_env}: {error}", file=sys.stderr)
+            return 2
+
+    try:
+        output_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as error:
+        print(f"error: cannot create baseline directory {output_dir}: {error.strerror}", file=sys.stderr)
+        return 2
+    if summary_path is not None and Path(summary_path).suffix.lower() == ".json":
+        print("error: --baseline-summary must not be a .json file (baseline files are .json)", file=sys.stderr)
+        return 2
+
+    scrubber = LogScrubber()
+    scrubber.add_secrets([identity_salt])
+    factory_options = {"device_cls": device_cls} if device_cls is not None else {}
+    factory = EnvironmentAccountFactory(
+        output_dir, client_cls=client_cls or Client, environ=environ,
+        client_settings=CLIENT_CHECKSUM_SETTINGS, identity_salt=identity_salt, log_scrubber=scrubber,
+        source=BASELINE_SOURCE, **factory_options,
+    )
+
+    def observe(profile):
+        try:
+            return factory.open_baseline(profile, clock=clock), None
+        except Exception as error:  # one account's failure must not stop the others
+            return None, error_reason(error)
+
+    enabled = registry.enabled()
+    with scrubber.installed():
+        if concurrent is not None and len(enabled) > 1:
+            with ThreadPoolExecutor(max_workers=concurrent) as pool:
+                observed = list(pool.map(observe, enabled))
+        else:
+            observed = [observe(profile) for profile in enabled]
+
+    # Accounts never mix: identities are claimed in alias order, as in the fleet orchestrators.
+    claims = FleetClaims(registry)
+    results = {}  # alias -> (status, file name, game version, reason)
+    for profile, (observation, reason) in zip(enabled, observed):
+        if observation is None:
+            results[profile.alias] = ("error", None, None, reason)
+            continue
+        refusal = claims.claim_snapshot(profile.alias, observation.snapshot)
+        if refusal is not None:
+            results[profile.alias] = ("refused", None, observation.game_version, refusal)
+            continue
+        try:
+            path = write_baseline(observation.snapshot, output_dir, observation.game_version)
+        except (BaselineExistsError, BaselineError, OSError) as error:
+            results[profile.alias] = ("error", None, observation.game_version, error_reason(error))
+            continue
+        failed = (f"reads that returned no data: {', '.join(observation.failed_reads)}"
+                  if observation.failed_reads else None)
+        results[profile.alias] = ("written", path.name, observation.game_version, failed)
+
+    notes = factory.notes()
+    lines = [
+        "# Account baselines",
+        "",
+        f"Registry: {registry_path} ({len(enabled)} of {len(registry)} accounts enabled). "
+        f"Baselines: {output_dir}. Read-only: no action was executed.",
+        "",
+        "## Accounts",
+        "",
+        "| Account | Status | Baseline | Game version | Notes |",
+        "| --- | --- | --- | --- | --- |",
+    ]
+    for alias in registry.aliases():
+        status, name, version, reason = results.get(alias, ("disabled", None, None, None))
+        reason = "; ".join(filter(None, [reason and scrubber.scrub(reason, names=False), *notes.get(alias, ())]))
+        lines.append(f"| {alias} | {status} | {_md_cell(name)} | {_md_cell(version)} | {_md_cell(reason or None)} |")
+    summary = baseline_summary(output_dir)
+    lines += ["", "## Summary", "", summary.rstrip("\n")]
+
+    code = 0 if all(results[profile.alias][0] == "written" for profile in enabled) else 1
+    if summary_path is not None:
+        findings = scan_text(summary)
+        target = Path(summary_path)
+        if findings:
+            lines += ["", "Summary not written: it fails the secret scan."]
+            code = 1
+        else:
+            try:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(summary, encoding="utf-8")
+            except OSError as error:
+                lines += ["", f"Summary not written: {error.strerror}."]
+                code = 1
+            else:
+                lines += ["", f"Summary written: {target}"]
+    out.write("\n".join(lines) + "\n")
+    return code
+
+
+def baseline_summary(directory):
+    """Markdown table of every baseline file in ``directory`` (SPEC-04, S04-R6), oldest first per alias.
+
+    Columns: alias, observation time (UTC), game version, hull bracket and the
+    sections whose completeness is ``missing``. A file that does not load is
+    listed by name with the reason, which never repeats a refused value.
+    """
+    from sdk.reports.battles import hull_bracket
+    from sdk.state.baseline import load_baseline_file
+    from sdk.state.snapshot import SECTIONS, Completeness
+
+    lines = [
+        "| Account | Observed (UTC) | Game version | Hull bracket | Missing sections |",
+        "| --- | --- | --- | --- | --- |",
+    ]
+    unreadable = []
+    rows = []
+    for path in sorted(Path(directory).glob("*.json")):
+        try:
+            loaded = load_baseline_file(path)
+        except (ValueError, TypeError, OSError) as error:  # BaselineError is a ValueError
+            unreadable.append(f"- {_md_cell(path.name)}: {_md_cell(type(error).__name__)}: {_md_cell(str(error))}")
+            continue
+        snapshot = loaded.snapshot
+        missing = [name for name in SECTIONS if snapshot.section(name) is Completeness.MISSING]
+        rows.append((snapshot.account_alias, snapshot.observed_at,
+                     f"| {snapshot.account_alias} | {snapshot.observed_at.strftime('%Y-%m-%dT%H:%M:%SZ')} | "
+                     f"{_md_cell(loaded.game_version)} | {hull_bracket(snapshot.hull_level)} | "
+                     f"{', '.join(missing) or 'none'} |"))
+    lines += [row for _, _, row in sorted(rows, key=lambda item: (item[0], item[1]))]
+    if not rows:
+        lines.append("| n/a | n/a | n/a | n/a | n/a |")
+    if unreadable:
+        lines += ["", "Files that are not valid baselines:", "", *unreadable]
+    return "\n".join(lines) + "\n"
+
+
 def _read_fleet_journals(registry, factory):
     """Every registered alias's journal that exists, or ``None`` after printing why one is unreadable."""
     from sdk.journal import JournalError, read_events
@@ -918,8 +1106,8 @@ def main():
         dest="registry",
         default=None,
         metavar="PATH",
-        help="account registry JSON: required by --fleet-dry-run and --fleet-execute; adds the isolation audit "
-        "to --report fleet",
+        help="account registry JSON: required by --fleet-dry-run, --fleet-execute and --baseline; adds the "
+        "isolation audit to --report fleet",
     )
     parser.add_argument(
         "--report-format",
@@ -933,7 +1121,8 @@ def main():
         dest="output",
         default=None,
         metavar="PATH",
-        help="HTML file to write for --report dashboard (required there); replaced atomically",
+        help="HTML file to write for --report dashboard (required there; replaced atomically), or the "
+        "directory --baseline writes <alias>-<UTC time>.json files to (required there; never overwritten)",
     )
     parser.add_argument(
         "--fleet-dry-run",
@@ -993,12 +1182,30 @@ def main():
         f"{DASHBOARD_DEFAULT}); replaced atomically",
     )
     parser.add_argument(
+        "--baseline",
+        dest="baseline",
+        action="store_true",
+        default=False,
+        help="log in to every enabled --registry account (credentials from the environment variables its "
+        "credentials_secret names), take one read-only snapshot each, write one baseline file per alias to "
+        "--output DIR with the server's game version, print a summary table, then exit; never changes an "
+        "account",
+    )
+    parser.add_argument(
+        "--baseline-summary",
+        dest="baseline_summary",
+        default=None,
+        metavar="PATH",
+        help="with --baseline: also write the Markdown summary table of every baseline in --output to PATH",
+    )
+    parser.add_argument(
         "--concurrent",
         dest="concurrent",
         type=positive_int,
         default=None,
         metavar="N",
-        help="with --fleet-dry-run or --fleet-execute: run up to N accounts at once (default: one at a time)",
+        help="with --fleet-dry-run, --fleet-execute or --baseline: run up to N accounts at once (default: one at "
+        "a time)",
     )
     parser.add_argument(
         "--fleet-journal-dir",
@@ -1013,12 +1220,12 @@ def main():
         dest="identity_salt_env",
         default=None,
         metavar="NAME",
-        help="with --fleet-dry-run or --fleet-execute (required there): environment variable holding the game "
-        "identity salt",
+        help="with --fleet-dry-run, --baseline or --fleet-execute (required there): environment variable holding "
+        "the game identity salt",
     )
     args = parser.parse_args()
 
-    # The fleet commands are handled before any SMTP setup or single-account login.
+    # The fleet and baseline commands are handled before any SMTP setup or single-account login.
     single_account_flags = (
         ("--report", args.report), ("--journal", args.journals), ("--output", args.output),
         ("--progression-dry-run", args.progression_dry_run), ("--run-battle", args.run_battle),
@@ -1030,6 +1237,24 @@ def main():
         ("--smtp-email", args.smtp_email), ("--smtp-password-file", args.smtp_password_file),
         ("--recipient", args.recipient),
     )
+    if args.baseline:
+        # Read-only: none of the execute, dry-run, report or single-account flags apply (SPEC-04, S04-R1).
+        other_flags = (
+            ("--fleet-dry-run", args.fleet_dry_run), ("--fleet-execute", args.fleet_execute),
+            ("--authorization", args.authorization), ("--mode", args.mode), ("--plan-only", args.plan_only),
+            ("--halt-share", args.halt_share is not None), ("--dashboard-out", args.dashboard_out),
+            ("--fleet-journal-dir", args.fleet_journal_dir),
+            *(item for item in single_account_flags if item[0] != "--output"), *smtp_flags,
+        )
+        conflicting = [flag for flag, value in other_flags if value]
+        if conflicting:
+            parser.error(f"--baseline cannot be combined with {', '.join(conflicting)}")
+        if not args.registry or not args.output:
+            parser.error("--baseline needs --registry PATH and --output DIR")
+        sys.exit(run_baseline(args.registry, args.output, args.concurrent, args.identity_salt_env,
+                              args.baseline_summary))
+    if args.baseline_summary:
+        parser.error("--baseline-summary is only used with --baseline")
     if args.fleet_execute:
         conflicting = [flag for flag, value in (("--fleet-dry-run", args.fleet_dry_run), *single_account_flags)
                        if value]
@@ -1058,7 +1283,7 @@ def main():
                                    args.identity_salt_env))
     if args.concurrent is not None or args.fleet_journal_dir or args.identity_salt_env:
         parser.error("--concurrent, --fleet-journal-dir and --identity-salt-env are only used with --fleet-dry-run "
-                     "or --fleet-execute")
+                     "or --fleet-execute (--concurrent and --identity-salt-env also with --baseline)")
 
     # Offline reports read local journals only: handled before any SMTP setup,
     # Device/Client construction, credential prompt, login or network access.
@@ -1068,7 +1293,7 @@ def main():
         if args.report == "dashboard" and not args.output:
             parser.error("--report dashboard needs --output PATH")
         if args.output and args.report != "dashboard":
-            parser.error("--output is only used with --report dashboard")
+            parser.error("--output is only used with --report dashboard or --baseline")
         sys.exit(run_offline_report(args.report, args.journals, args.registry, args.report_format,
                                     output_path=args.output))
     if args.journals or args.registry or args.output:
