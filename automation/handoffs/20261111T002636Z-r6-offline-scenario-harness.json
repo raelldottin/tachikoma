@@ -1,0 +1,50 @@
+{
+  "slice_id": "r6-offline-scenario-harness",
+  "status": "done",
+  "summary": "Added sdk/simulation: SimulatedClock, SimulatedGame (collections, daily reward once per day, mineral-priced room upgrades returning a raw response, gas-priced research, training unmodelled, seeded trophy changes; day-boundary completion), load_scenario, run_scenario and ScenarioResult with progression, fleet and audit JSON, plus scenarios single-account (3 days, 800-mineral budget) and two-accounts (bravo budget blocks upgrades). 7 tests in tests/test_simulation.py: determinism per scenario, seed sensitivity, budget adherence, isolation with a clean audit, attempt-id renumbering, and a socket-blocked run. Documented in docs/baseline/simulation.md.",
+  "files_touched": [
+    "sdk/simulation/__init__.py",
+    "sdk/simulation/game.py",
+    "sdk/simulation/scenarios/single-account.json",
+    "sdk/simulation/scenarios/two-accounts.json",
+    "tests/test_simulation.py",
+    "docs/baseline/simulation.md"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "Offline scenario harness (AUTO-014)",
+      "before": "No end-to-end offline scenario exercised registry, orchestrator, runner, journals and reports together",
+      "after": "Seeded scenarios run the full stack offline and reproduce byte-identical reports",
+      "proof": [
+        "tests.test_simulation: 7 tests OK",
+        "make test: 680 tests OK (1 skipped)",
+        "scripts/ci.py lint: no new findings",
+        "run.py --help exits 0"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "The simulated game's economics are illustrative, not calibrated to the live game."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-11T00:28:51Z"
+}

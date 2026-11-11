@@ -794,7 +794,7 @@
     {
       "slice_id": "r6-offline-scenario-harness",
       "title": "Deterministic offline gameplay scenarios end to end (AUTO-014)",
-      "status": "queued",
+      "status": "done",
       "priority": 330,
       "domain": "testing",
       "allowed_paths": [
