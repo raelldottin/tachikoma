@@ -768,6 +768,122 @@
         "make test",
         "git diff --check"
       ]
+    },
+    {
+      "slice_id": "r6-policy-experiment-loop",
+      "title": "Policy evaluation loop with recorded, versioned decisions (AUTO-011)",
+      "status": "queued",
+      "priority": 320,
+      "domain": "experiment",
+      "allowed_paths": [
+        "sdk/experiments/",
+        "tests/",
+        "docs/baseline/"
+      ],
+      "depends_on": [
+        "r5-fleet-report"
+      ],
+      "max_files_changed": 5,
+      "notes": "R6 start. Add sdk/experiments/: an Experiment record (id, hypothesis, baseline and candidate variants, primary metric, minimum sample per variant, window) and a decide function that turns measured samples into adopt, reject, keep-running or insufficient-evidence using 95% intervals, never adopting without the minimum sample. Decisions are appended to a JSONL decision log with the experiment, evidence and timestamp; nothing is rolled out automatically. Pure and offline.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
+    },
+    {
+      "slice_id": "r6-offline-scenario-harness",
+      "title": "Deterministic offline gameplay scenarios end to end (AUTO-014)",
+      "status": "queued",
+      "priority": 330,
+      "domain": "testing",
+      "allowed_paths": [
+        "sdk/simulation/",
+        "tests/",
+        "docs/baseline/"
+      ],
+      "depends_on": [
+        "r6-policy-experiment-loop"
+      ],
+      "max_files_changed": 6,
+      "notes": "Add sdk/simulation/: a deterministic fake game (resources, rooms, research, trophies) exposing the Client method names the catalog uses, seeded scenarios loaded from JSON, and a runner that drives registry -> fleet orchestrator -> journals -> progression, fleet and audit reports for a scenario, with no network. The same scenario and seed must give byte-identical reports. Ship two scenarios (single account, two accounts) and regression tests over them.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
+    },
+    {
+      "slice_id": "r6-report-cli",
+      "title": "Offline report command over journals",
+      "status": "queued",
+      "priority": 340,
+      "domain": "operator",
+      "allowed_paths": [
+        "run.py",
+        "README.template",
+        "README.md",
+        "docs/baseline/",
+        "tests/"
+      ],
+      "depends_on": [
+        "r6-offline-scenario-harness"
+      ],
+      "max_files_changed": 6,
+      "notes": "Add a run.py report mode that needs no login: given journal paths (and optionally a registry), print the progression, PvP, economy-from-journal or fleet report as Markdown or JSON and exit. It must not construct a game client or touch the network. Update README.template first, then README.md, and the capability inventory's run.py flags.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
+    },
+    {
+      "slice_id": "r6-release-and-limitations",
+      "title": "Release instructions, known limitations and roadmap status (R6 docs)",
+      "status": "queued",
+      "priority": 350,
+      "domain": "docs",
+      "allowed_paths": [
+        "docs/",
+        "README.template",
+        "README.md"
+      ],
+      "depends_on": [
+        "r6-report-cli"
+      ],
+      "max_files_changed": 6,
+      "notes": "Write release instructions (versioning, the CI gates, how a release is cut), a consolidated known-limitations page drawn from the baseline docs (unverified reads, unimplemented market endpoints, untrusted battle outcomes, blocked live trials), and update docs/PRODUCT_ROADMAP.md with what has actually merged per release and what remains blocked. Documentation only; no code changes.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
+    },
+    {
+      "slice_id": "r6-study-report",
+      "title": "Automation effectiveness study report from live trials",
+      "status": "blocked",
+      "priority": 360,
+      "domain": "experiment",
+      "allowed_paths": [
+        "docs/experiments/",
+        "tests/"
+      ],
+      "depends_on": [
+        "r6-release-and-limitations",
+        "r2-live-progression-trial",
+        "r3-live-pvp-trial",
+        "r4-live-market-trial",
+        "r5-live-fleet-trial"
+      ],
+      "max_files_changed": 6,
+      "entry_condition": "Requires the live trials (r2, r3, r4, r5) to have run with owner authorization and recorded results. Nothing live has been authorized yet.",
+      "notes": "R6 exit. Write the study report quantifying when automation helped, failed or cost more than manual play, from the recorded live trial evidence, with sample sizes and limitations.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
     }
   ]
 }
