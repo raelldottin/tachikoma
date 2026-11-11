@@ -44,27 +44,63 @@ returns nothing, they stay empty and the reason is recorded in
 research designs come from ``listRoomDesigns2`` and
 ``listAllResearchDesigns2``, as in ``run.py --progression-dry-run``. Those
 calls run after ``listAllDesigns4``, so their payloads are the ones parsed.
+
+Dry-run plan stamps (SPEC-05, S05-R3). With ``dry_run_registry_stamp`` the
+factory gives each account a ``DryRunJournal``: it holds the account's dry-run
+events until ``commit_dry_runs`` learns how the account's dry run ended. Events
+of an account whose dry run *completed* are written with a stamp in
+``evidence`` (``dry_run_policy``, ``dry_run_registry``, ``dry_run_id``); any
+other account's events are written unchanged. ``latest_dry_run`` reads the
+stamps back for ``run.py --fleet-execute``.
+
+Execute gate (SPEC-05, S05-R1 and S05-R4 to S05-R6). ``ExecuteFleetOrchestrator``
+and ``ConcurrentExecuteFleetOrchestrator`` run the fleet orchestrators' own
+per-account steps under an ``ExecutionGate`` built from an owner-written
+``Authorization``: the plan keeps only authorized actions (in ``canary`` mode
+only the first safe-to-retry one), budgets are the tighter of the registry's
+and the authorization's caps with starbux at 0, ``GatedActionRunner`` refuses
+an action outside the authorization or one whose cap would be exceeded, and
+the fleet halts when more than ``halt_share`` of its accounts stopped.
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import os
 import re
 import threading
 from contextlib import contextmanager
+from dataclasses import dataclass, replace
+from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Callable, Iterable, Mapping, Optional
+from typing import Any, Callable, Iterable, Mapping, Optional, Sequence
 from urllib.parse import quote, quote_plus
 
+from sdk.actions import Idempotency, get_spec
 from sdk.client import _extract_collection
 from sdk.device import Device
-from sdk.fleet.accounts import AccountProfile
-from sdk.fleet.orchestrator import AccountContext
-from sdk.journal import GameplayJournal
-from sdk.policy import DesignData
+from sdk.execution import ActionRunner, UncertainPriorAttemptError
+from sdk.execution.runner import planned_cost
+from sdk.fleet.accounts import REGISTRY_VERSION, AccountProfile, AccountRegistry
+from sdk.fleet.authorization import BATTLE_ACTION_ID, Authorization, check_authorization
+from sdk.fleet.concurrent import ConcurrentFleetOrchestrator
+from sdk.fleet.orchestrator import (
+    AccountContext,
+    AccountRun,
+    FleetClaims,
+    FleetOrchestrator,
+    FleetRun,
+    budgeted_policy_config,
+    error_reason,
+    spent_in_period,
+)
+from sdk.journal import GameplayEvent, GameplayJournal, new_attempt_id
+from sdk.policy import DesignData, Plan, PolicyConfig, ProgressionPolicy, Rejection, get_policy
 from sdk.redaction import redact_secrets
-from sdk.state import ClientSnapshotProvider
+from sdk.scheduler import DailyScheduler, ScheduleReport, SchedulerConfig
+from sdk.state import AccountSnapshot, ClientSnapshotProvider
 
 EMAIL_SUFFIX = "_EMAIL"
 PASSWORD_SUFFIX = "_PASSWORD"
@@ -327,7 +363,10 @@ class EnvironmentAccountFactory:
     ``allow_email_password_login``. ``identity_salt`` is handed to each
     ``ClientSnapshotProvider`` and never stored anywhere else. With a
     ``log_scrubber``, each account's credential values are registered with it
-    before login, and its display names after login.
+    before login, and its display names after login. With
+    ``dry_run_registry_stamp`` (``--fleet-dry-run`` passes ``registry_stamp``),
+    each account's journal is a ``DryRunJournal``; call ``commit_dry_runs``
+    after the run to write the held events.
     """
 
     def __init__(
@@ -341,6 +380,7 @@ class EnvironmentAccountFactory:
         identity_salt: Optional[bytes | str] = None,
         log_scrubber: Optional[LogScrubber] = None,
         source: str = SOURCE,
+        dry_run_registry_stamp: Optional[str] = None,
     ) -> None:
         self.journal_dir = Path(journal_dir)
         self.client_cls = client_cls
@@ -350,8 +390,10 @@ class EnvironmentAccountFactory:
         self._identity_salt = identity_salt
         self.log_scrubber = log_scrubber
         self.source = source
+        self.dry_run_registry_stamp = dry_run_registry_stamp
         self._lock = threading.Lock()
         self._notes: dict[str, list[str]] = {}
+        self._dry_run_journals: dict[str, DryRunJournal] = {}
 
     def journal_path(self, alias: str) -> Path:
         return self.journal_dir / f"{alias}{JOURNAL_SUFFIX}"
@@ -405,4 +447,441 @@ class EnvironmentAccountFactory:
         self._note(profile.alias, notes)
         provider = ClientSnapshotProvider(client, profile.alias, source=self.source,
                                           identity_salt=self._identity_salt)
-        return AccountContext(client, provider, GameplayJournal(self.journal_path(profile.alias)), design)
+        return AccountContext(client, provider, self._journal(profile), design)
+
+    def _journal(self, profile: AccountProfile) -> GameplayJournal:
+        path = self.journal_path(profile.alias)
+        if self.dry_run_registry_stamp is None:
+            return GameplayJournal(path)
+        journal = DryRunJournal(path, policy_id=profile.policy_id, registry_stamp=self.dry_run_registry_stamp)
+        with self._lock:
+            self._dry_run_journals[profile.alias] = journal
+        return journal
+
+    def commit_dry_runs(self, statuses: Mapping[str, str]) -> None:
+        """Write every held dry-run event; ``statuses`` maps alias to its ``AccountRun.status``.
+
+        Only an account whose status is ``completed`` gets the dry-run stamp.
+        """
+        with self._lock:
+            journals = dict(self._dry_run_journals)
+        for alias, journal in sorted(journals.items()):
+            journal.commit(completed=statuses.get(alias) == "completed")
+
+
+# --- Dry-run plan stamps (SPEC-05, S05-R3) ------------------------------------------------------
+
+DRY_RUN_POLICY = "dry_run_policy"
+DRY_RUN_REGISTRY = "dry_run_registry"
+DRY_RUN_ID = "dry_run_id"
+DRY_RUN_MAX_AGE = timedelta(hours=24)
+DRY_RUN_PLANNED_PREFIX = "dry run: would call "
+# Journal redaction treats 40+ character alphanumeric runs as tokens, so the stamp keeps 16 hex digits.
+REGISTRY_STAMP_LENGTH = 16
+
+
+def registry_hash(registry: AccountRegistry) -> str:
+    """``sha256:`` plus the hex SHA-256 of the registry's canonical JSON (profiles in alias order)."""
+    payload = {"version": REGISTRY_VERSION,
+               "accounts": [registry.get(alias).to_dict() for alias in registry.aliases()]}
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def registry_stamp(registry: AccountRegistry) -> str:
+    """The first 16 hex digits of ``registry_hash``, as journaled in a dry-run stamp."""
+    return registry_hash(registry).split(":", 1)[1][:REGISTRY_STAMP_LENGTH]
+
+
+class DryRunJournal(GameplayJournal):
+    """An account's journal during ``--fleet-dry-run``.
+
+    Dry-run events are validated when appended (so a secret-shaped value is
+    still refused at once) but held until ``commit``. ``read`` includes the
+    held events, so the scheduler sees the same history as with a plain
+    journal. ``commit(completed=True)`` writes them stamped in ``evidence``
+    with the policy id, the registry stamp and a new dry-run id;
+    ``commit(completed=False)`` writes them unchanged, as a plain journal
+    would have. Events that are not dry-run events are written at once.
+    """
+
+    def __init__(self, path: Path | str, *, policy_id: str, registry_stamp: str) -> None:
+        super().__init__(path)
+        self.policy_id = policy_id
+        self.registry_stamp = registry_stamp
+        self._held: list[GameplayEvent] = []
+        self._held_lock = threading.Lock()
+
+    def append(self, event: GameplayEvent) -> None:
+        if not event.dry_run:
+            super().append(event)
+            return
+        event.to_json_line()  # validate and refuse secret-shaped values now, as a plain append would
+        with self._held_lock:
+            self._held.append(event)
+
+    def read(self) -> list[GameplayEvent]:
+        with self._held_lock:
+            held = list(self._held)
+        return super().read() + held
+
+    def commit(self, *, completed: bool) -> int:
+        """Write the held events; return how many were written."""
+        with self._held_lock:
+            held, self._held = self._held, []
+        stamp = ({DRY_RUN_POLICY: self.policy_id, DRY_RUN_REGISTRY: self.registry_stamp,
+                  DRY_RUN_ID: new_attempt_id()} if completed else None)
+        for event in held:
+            super().append(replace(event, evidence={**event.evidence, **stamp}) if stamp else event)
+        return len(held)
+
+
+@dataclass(frozen=True)
+class DryRunPlan:
+    """An account's latest completed, stamped dry run."""
+
+    alias: str
+    policy_id: str
+    dry_run_id: str
+    finished_at: datetime
+    events: tuple[GameplayEvent, ...]
+
+    def would_call(self) -> tuple[GameplayEvent, ...]:
+        """The planned actions that passed their preconditions, in plan order."""
+        return tuple(event for event in self.events if event.reason.startswith(DRY_RUN_PLANNED_PREFIX))
+
+
+def _finished(event: GameplayEvent) -> datetime:
+    return datetime.fromisoformat(event.finished_at)
+
+
+def latest_dry_run(events: Iterable[GameplayEvent], profile: AccountProfile, stamp: str, now: datetime,
+                   max_age: timedelta = DRY_RUN_MAX_AGE) -> tuple[Optional[DryRunPlan], Optional[str]]:
+    """The account's latest stamped dry run, or ``None`` and why it does not qualify.
+
+    A dry run is recognised by its stamp: dry-run events of ``profile.alias``
+    whose ``evidence`` holds a ``dry_run_id``, written by ``--fleet-dry-run``
+    only for an account whose dry run completed. The latest batch (by its
+    last ``finished_at``) qualifies when it names ``profile.policy_id`` and
+    the current registry ``stamp``, and finished within ``max_age`` before
+    ``now`` (not after it). An older batch never stands in for the latest.
+    """
+    batches: dict[str, list[GameplayEvent]] = {}
+    for event in events:
+        evidence = event.evidence or {}
+        if event.dry_run and not event.attempted and event.account_alias == profile.alias \
+                and isinstance(evidence.get(DRY_RUN_ID), str):
+            batches.setdefault(evidence[DRY_RUN_ID], []).append(event)
+    if not batches:
+        return None, "no completed --fleet-dry-run plan in its journal"
+    dry_run_id, batch = max(batches.items(), key=lambda item: max(_finished(event) for event in item[1]))
+    finished_at = max(_finished(event) for event in batch)
+    evidence = batch[0].evidence
+    if evidence.get(DRY_RUN_POLICY) != profile.policy_id:
+        return None, f"its latest dry run did not use policy {profile.policy_id!r}"
+    if evidence.get(DRY_RUN_REGISTRY) != stamp:
+        return None, "its latest dry run was of a different registry"
+    if finished_at > now:
+        return None, "its latest dry run is dated in the future"
+    if now - finished_at > max_age:
+        hours = int(max_age.total_seconds() // 3600)
+        return None, f"its latest dry run is older than {hours} hours"
+    return DryRunPlan(profile.alias, profile.policy_id, dry_run_id, finished_at, tuple(batch)), None
+
+
+# --- Execute gate (SPEC-05, S05-R1, S05-R4 to S05-R6) -------------------------------------------
+
+EXECUTE_SOURCE = "run.py --fleet-execute"
+CANARY, FULL = "canary", "full"
+CAP_KINDS = ("minerals", "gas")
+DEFAULT_HALT_SHARE = 0.0  # any stopped account halts the fleet (S05-Q2 safe default)
+# A battle rearms first (RebuildAmmo3) at a cost the repo does not record, so it may only start while at least
+# this much of each capped mineral and gas budget is left this period. It is a floor, not an estimate.
+BATTLE_REARM_ALLOWANCE = 1
+
+
+class ExecutionRefusedError(UncertainPriorAttemptError):
+    """The gate refused an action before any call.
+
+    It subclasses the runner's refusal so that ``DailyScheduler`` stops the
+    account through its existing refusal path and keeps the results so far.
+    """
+
+
+class ExecutionGate:
+    """What an authorized execute run may do: actions, time, mode and per-account budgets."""
+
+    def __init__(self, authorization: Authorization, registry: AccountRegistry, mode: str,
+                 clock: Callable[[], datetime]) -> None:
+        if mode not in (CANARY, FULL):
+            raise ValueError("mode must be canary or full")
+        self.authorization = authorization
+        self.registry = registry
+        self.mode = mode
+        self.clock = clock
+
+    @property
+    def canary(self) -> bool:
+        return self.mode == CANARY
+
+    def refusal(self, alias: str, action_id: str,
+                events: Optional[Callable[[], Iterable[GameplayEvent]]] = None) -> Optional[str]:
+        """Why ``alias`` may not run ``action_id`` now, or ``None``.
+
+        ``events`` reads the account's journal. A battle is checked against the
+        authorization's battle cap with those events (S08-R2), and is refused
+        when there is no reader or the journal cannot be read: the cap fails closed.
+        """
+        battle_events = None
+        if action_id == BATTLE_ACTION_ID:
+            if events is None:
+                return "the battle cap cannot be checked without the account's journal; refusing"
+            try:
+                battle_events = list(events())
+            except Exception as error:  # an unreadable journal must never leave the cap unchecked
+                return f"cannot read the journal to check the battle cap ({type(error).__name__}); refusing"
+        reasons = check_authorization(self.authorization, self.registry, self.clock(), [alias], [action_id],
+                                      self.mode, battle_events=battle_events)
+        return "; ".join(reasons) if reasons else None
+
+    def budgets(self, profile: AccountProfile) -> dict[str, int]:
+        """Per-period budgets: the tighter of the registry's and the authorization's, starbux always 0."""
+        budgets = {"starbux": 0}
+        for kind in CAP_KINDS:
+            cap = self.authorization.cap(profile.alias, kind)
+            limit = profile.budget(kind)
+            budgets[kind] = cap if limit is None else min(limit, cap)
+        return budgets
+
+    def profile(self, profile: AccountProfile) -> AccountProfile:
+        """``profile`` with the gate's budgets."""
+        return replace(profile, budgets=self.budgets(profile))
+
+    def max_actions(self, profile: AccountProfile) -> int:
+        """Actions the scheduler may execute: one in canary mode, else the profile's ``max_actions``.
+
+        The policy still plans up to ``max_actions`` requests, so that the
+        canary is chosen from the whole plan, not from its first request.
+        """
+        return 1 if self.canary else profile.max_actions
+
+
+def _candidate(action_id: str, params: Mapping[str, Any]) -> str:
+    return " ".join([action_id, *(str(value) for value in params.values())])
+
+
+class AuthorizedPolicy:
+    """A progression policy whose plan keeps only what the gate allows.
+
+    Requests the authorization does not allow, and any request with a planned
+    starbux cost, move to ``rejected``. In canary mode only the first
+    remaining safe-to-retry request is kept. ``journal`` supplies the events
+    the battle cap is checked with.
+    """
+
+    def __init__(self, policy: ProgressionPolicy, gate: ExecutionGate,
+                 journal: Optional[GameplayJournal] = None) -> None:
+        self.policy = policy
+        self.gate = gate
+        self.journal = journal
+        self.name = policy.name
+
+    def plan(self, snapshot: AccountSnapshot, design: DesignData, config: PolicyConfig) -> Plan:
+        plan = self.policy.plan(snapshot, design, config)
+        kept, rejected = [], list(plan.rejected)
+        events = self.journal.read if self.journal is not None else None
+        for request in plan.requests:
+            label = _candidate(request.action_id, request.params)
+            refusal = self.gate.refusal(snapshot.account_alias, request.action_id, events)
+            if refusal is not None:
+                rejected.append(Rejection(label, f"not authorized: {refusal}"))
+            elif planned_cost(request.expected_cost).get("starbux"):
+                rejected.append(Rejection(label, "starbux spending is disabled in execute runs"))
+            else:
+                kept.append(request)
+        if self.gate.canary:
+            canary = next((request for request in kept
+                           if get_spec(request.action_id).idempotency is Idempotency.SAFE_TO_RETRY), None)
+            rejected += [Rejection(_candidate(request.action_id, request.params),
+                                   "canary: only the first safe-to-retry action runs")
+                         for request in kept if request is not canary]
+            kept = [canary] if canary is not None else []
+        return replace(plan, requests=tuple(kept), rejected=tuple(rejected))
+
+
+class GatedActionRunner(ActionRunner):
+    """``ActionRunner`` that refuses, before any call, what the gate does not allow.
+
+    Refused: every action once ``halted()`` returns a fleet halt reason (so a
+    running account stops between actions when another account halted the
+    fleet); an action outside the authorization (account, action, time, mode,
+    or the battle cap checked with this journal's events); any planned
+    starbux cost; a non-idempotent action other than a battle that carries no
+    planned cost while the account has caps, because its spend could not be
+    checked; a battle while any capped mineral or gas budget has less than
+    ``BATTLE_REARM_ALLOWANCE`` left this period (``Client.runBattleEndToEnd``
+    first rearms with ``rebuildAmmo``, ``RebuildAmmo3``, whose cost the repo
+    does not record, so a battle has no planned cost and is held to this
+    allowance and its battle cap instead; its observed spend is charged
+    afterwards like any other); and an action whose planned cost plus the
+    spend already charged this period would exceed a budget. A refusal is
+    journaled as ``skipped`` and raised as ``ExecutionRefusedError``. A retry
+    after an uncertain attempt is never allowed.
+    """
+
+    def __init__(self, gate: ExecutionGate, budgets: Mapping[str, int], period: timedelta, *args: Any,
+                 halted: Callable[[], Optional[str]] = lambda: None, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.gate = gate
+        self.budgets = dict(budgets)
+        self.period = period
+        self.halted = halted
+
+    def _refusal(self, action_id: str, planned: Mapping[str, int]) -> Optional[str]:
+        halt = self.halted()
+        if halt is not None:
+            return halt
+        refusal = self.gate.refusal(self.account_alias, action_id, self.journal.read)
+        if refusal is not None:
+            return refusal
+        if planned.get("starbux"):
+            return "starbux spending is disabled in execute runs"
+        if (not planned and action_id != BATTLE_ACTION_ID
+                and get_spec(action_id).idempotency is Idempotency.NOT_IDEMPOTENT
+                and any(self.budgets.get(kind) is not None for kind in CAP_KINDS)):
+            return "a non-idempotent action without a planned cost cannot be checked against the caps"
+        spent = spent_in_period(self.journal, self.account_alias, self.clock() - self.period)
+        if action_id == BATTLE_ACTION_ID:
+            for kind in CAP_KINDS:
+                limit = self.budgets.get(kind)
+                if limit is not None and limit - spent.get(kind, 0) < BATTLE_REARM_ALLOWANCE:
+                    return (f"a battle may rearm at an unrecorded {kind} cost, and {max(limit - spent.get(kind, 0), 0)} "
+                            f"{kind} of the cap is left (it needs at least {BATTLE_REARM_ALLOWANCE})")
+        for kind, amount in sorted(planned.items()):
+            limit = self.budgets.get(kind)
+            if limit is not None and spent.get(kind, 0) + amount > limit:
+                return f"{kind} cap would be exceeded ({spent.get(kind, 0)} spent + {amount} planned > {limit})"
+        return None
+
+    def run(self, action_id: str, params: Optional[Mapping[str, Any]] = None, *, dry_run: bool = False,
+            allow_after_uncertain: bool = False, expected_cost: Optional[Mapping[str, Any]] = None):
+        refusal = self._refusal(action_id, planned_cost(expected_cost))
+        if refusal is not None:
+            self._record(get_spec(action_id), self.clock(), dict(params or {}), outcome="skipped",
+                         reason=f"execute gate refused: {refusal}", attempted=False,
+                         error_class="ExecutionRefusedError", dry_run=dry_run)
+            raise ExecutionRefusedError(refusal)
+        return super().run(action_id, params, dry_run=dry_run, allow_after_uncertain=False,
+                           expected_cost=expected_cost)
+
+
+class _ExecuteGateMixin:
+    """The execute gate on top of a fleet orchestrator's own per-account steps.
+
+    ``_run_scheduler`` is the orchestrator's, with the gate's budgets,
+    ``AuthorizedPolicy`` and ``GatedActionRunner``; each account's
+    ``ScheduleReport`` is kept in ``reports``. Every account that ends
+    ``stopped`` or ``error`` counts as stopped; once more than ``halt_share``
+    of the enabled accounts stopped, ``_stop_requested`` holds, so accounts not
+    yet started are ``not-run``, and every running account's
+    ``GatedActionRunner`` refuses its next action, so it stops between actions
+    as with the stop file (in concurrent mode, an action already in flight
+    finishes). The fleet run's reasons then name the halt, not the stop file,
+    and the halt is the fleet's ``stop_reason``.
+    """
+
+    def __init__(self, registry: AccountRegistry, factory: Callable[[AccountProfile], AccountContext], *,
+                 gate: ExecutionGate, halt_share: float = DEFAULT_HALT_SHARE, **kwargs: Any) -> None:
+        if isinstance(halt_share, bool) or not isinstance(halt_share, (int, float)) or not 0 <= halt_share < 1:
+            raise ValueError("halt_share must be at least 0 and below 1")
+        super().__init__(registry, factory, **kwargs)
+        self.gate = gate
+        self.halt_share = halt_share
+        self._gate_lock = threading.Lock()
+        self.reports: dict[str, ScheduleReport] = {}
+        self._stopped: set[str] = set()
+        self.halt_reason: Optional[str] = None
+
+    def _finish(self, profile: AccountProfile, started: float, status: str, reason: Optional[str],
+                **fields: Any) -> AccountRun:
+        run = super()._finish(profile, started, status, reason, **fields)
+        if status in ("stopped", "error"):
+            enabled = max(len(self.registry.enabled()), 1)
+            with self._gate_lock:
+                self._stopped.add(profile.alias)
+                if self.halt_reason is None and len(self._stopped) / enabled > self.halt_share:
+                    self.halt_reason = (f"fleet halted: {len(self._stopped)} of {enabled} accounts stopped "
+                                        f"(more than {self.halt_share:.0%})")
+        return run
+
+    def _halted(self) -> Optional[str]:
+        with self._gate_lock:
+            return self.halt_reason
+
+    def _stop_requested(self) -> bool:
+        return super()._stop_requested() or self._halted() is not None
+
+    def _run_scheduler(self, profile: AccountProfile, context: AccountContext, execute: bool,
+                       started: float, claims: Optional[FleetClaims] = None) -> AccountRun:
+        identity = claims.identity(profile.alias) if claims is not None else None
+        try:
+            gated = self.gate.profile(profile)
+            spent = spent_in_period(context.journal, profile.alias, self.clock() - self.period)
+            policy_config, remaining = budgeted_policy_config(gated, spent, self.base_policy_config)
+            provider = (claims.pinned_provider(profile.alias, context.snapshot_provider) if claims is not None
+                        else context.snapshot_provider)
+            runner = GatedActionRunner(self.gate, gated.budgets, self.period, profile.alias, context.client,
+                                       provider, context.journal, clock=self.clock, halted=self._halted)
+            scheduler = DailyScheduler(
+                runner, AuthorizedPolicy(get_policy(profile.policy_id), self.gate, context.journal), context.design,
+                policy_config,
+                SchedulerConfig(max_actions=self.gate.max_actions(gated), period=self.period,
+                                stop_file=self.stop_file),
+                clock=self.clock,
+            )
+            report = scheduler.run(execute=execute)
+        except Exception as error:  # one account's failure must not stop the others
+            return self._finish(profile, started, "error", error_reason(error))
+        with self._gate_lock:
+            self.reports[profile.alias] = report
+        attempted = sum(1 for result in report.results if result.attempted)
+        verified = sum(1 for result in report.results if result.outcome == "verified")
+        return self._finish(
+            profile, started, "completed" if report.completed else "stopped", report.stop_reason,
+            attempted=attempted, verified=verified, planned=len(report.plan.requests),
+            spent_this_period=spent, budget_remaining=remaining, game_identity=identity,
+        )
+
+    def run(self, *, execute: bool = False) -> FleetRun:
+        with self._gate_lock:
+            self.reports, self._stopped, self.halt_reason = {}, set(), None
+        fleet_run = super().run(execute=execute)
+        if self.halt_reason is None or (self.stop_file is not None and self.stop_file.exists()):
+            return fleet_run
+        stop_text = f"fleet stop file present: {self.stop_file}"
+
+        def relabel(reason: Optional[str]) -> Optional[str]:
+            return reason.replace(stop_text, self.halt_reason) if reason else reason
+
+        accounts = tuple(replace(run, reason=relabel(run.reason)) if run.status == "not-run" else run
+                         for run in fleet_run.accounts)
+        # The halt is the fleet's stop reason even when no account was left to skip.
+        return replace(fleet_run, accounts=accounts, stop_reason=relabel(fleet_run.stop_reason) or self.halt_reason)
+
+
+class ExecuteFleetOrchestrator(_ExecuteGateMixin, FleetOrchestrator):
+    """``FleetOrchestrator`` under an ``ExecutionGate``."""
+
+
+class ConcurrentExecuteFleetOrchestrator(_ExecuteGateMixin, ConcurrentFleetOrchestrator):
+    """``ConcurrentFleetOrchestrator`` under an ``ExecutionGate``."""
+
+
+def canary_choice(actions: Sequence[str], gate: ExecutionGate, alias: str,
+                  events: Optional[Callable[[], Iterable[GameplayEvent]]] = None) -> Optional[str]:
+    """The action a canary run would take from ``actions`` (plan order), or ``None``."""
+    for action_id in actions:
+        if (get_spec(action_id).idempotency is Idempotency.SAFE_TO_RETRY
+                and gate.refusal(alias, action_id, events) is None):
+            return action_id
+    return None
