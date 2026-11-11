@@ -1,0 +1,48 @@
+{
+  "slice_id": "r6-failure-injection-scenarios",
+  "status": "done",
+  "summary": "The offline harness only exercised the happy path, so the runner, scheduler, orchestrator and audit safety rules were never driven end to end by a failing game. Scenario accounts can now list faults: a snapshot read that fails, a call that raises after taking effect, an ambiguous (non-boolean) response, the player spending between snapshots, and a snapshot labelled with another account. Faults trigger on counted invocations (per day or per run) or with a probability drawn from a generator seeded by the scenario seed and alias, so reports stay byte-identical for the same seed and the game's own random amounts are untouched.  Two shipped scenarios and regression tests assert the outcomes: an unobserved effect is unknown, never verified; a non-idempotent retry is refused after an uncertain outcome; uncertain spend is journaled as <kind>_uncertain and charged by spent_in_period and the audit; a foreign snapshot ends that account with no calls while others run; a contradicted collection stops the account. The baseline scenarios carry no faults and their reports are unchanged (hash-compared before/after). Implemented by the test specialist subagent in an isolated worktree, independently reviewed by the verifier subagent (APPROVE-WITH-NITS; strict fault validation added in 717b7fe), and re-validated by the parent.",
+  "files_touched": [
+    "docs/baseline/simulation.md",
+    "sdk/simulation/__init__.py",
+    "sdk/simulation/game.py",
+    "sdk/simulation/scenarios/faults-contradicted-and-foreign.json",
+    "sdk/simulation/scenarios/faults-uncertain-outcomes.json",
+    "tests/test_simulation.py"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "Failure-injection simulation scenarios (AUTO-014)",
+      "before": "Roadmap item not implemented",
+      "after": "Failure-injection simulation scenarios (AUTO-014) (offline)",
+      "proof": [
+        "make syntax-check, make test, scripts/ci.py lint and git diff --check pass on current main",
+        "verifier verdict: APPROVE-WITH-NITS; strict fault validation added in 717b7fe"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "Offline only; no live game verification."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-11T11:52:48Z"
+}
