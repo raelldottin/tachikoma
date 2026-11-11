@@ -816,7 +816,7 @@
     {
       "slice_id": "r6-report-cli",
       "title": "Offline report command over journals",
-      "status": "queued",
+      "status": "done",
       "priority": 340,
       "domain": "operator",
       "allowed_paths": [
