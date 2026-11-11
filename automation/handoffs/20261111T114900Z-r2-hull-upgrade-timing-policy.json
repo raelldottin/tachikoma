@@ -1,0 +1,46 @@
+{
+  "slice_id": "r2-hull-upgrade-timing-policy",
+  "status": "done",
+  "summary": "The roadmap (R2) asks for hull-upgrade timing to be modelled as a strategy that can be compared, not a universal rule. hull-reserve-v1 plans exactly what baseline-v1 plans, except that when the ship is near its next hull upgrade it raises the mineral reserve to that hull's mineral cost, so room upgrades that would delay the hull are rejected with the reason.  \"Near\" uses only what an AccountSnapshot observes: every crew member at the current hull's crew level cap (the crew criterion of sdk.pvp.scoring.hull_upgrade_readiness, via sdk.pvp.config.crew_level_cap) and a next hull that raises that cap. The next hull's cost comes from new, optional DesignData.hulls (ShipDesign @ShipLevel / @MineralCost); it is empty by default. When the hull level, crew levels or an unambiguous next-hull cost is not observed, the variant falls back to baseline-v1's requests and records a hull_reserve rejection saying why, rather than guessing.  baseline-v1 remains the default and its behaviour is unchanged. The hypothesis is documented as unproven, with its inputs, limitations (no caller passes ship designs yet, every owned character counts) and how to compare it with baseline-v1 through sdk.experiments. Implemented by the researcher specialist subagent in an isolated worktree, independently reviewed by the verifier subagent (APPROVE), and re-validated by the parent.",
+  "files_touched": [
+    "docs/baseline/progression-policy.md",
+    "sdk/policy/__init__.py",
+    "sdk/policy/progression.py",
+    "tests/test_hull_reserve_policy.py"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "Hull-upgrade timing as a testable policy variant",
+      "before": "Roadmap item not implemented",
+      "after": "Hull-upgrade timing as a testable policy variant (offline)",
+      "proof": [
+        "make syntax-check, make test, scripts/ci.py lint and git diff --check pass on current main",
+        "verifier verdict: APPROVE"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "Offline only; no live game verification."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-11T11:49:14Z"
+}
