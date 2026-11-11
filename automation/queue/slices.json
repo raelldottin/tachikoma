@@ -680,7 +680,7 @@
     {
       "slice_id": "r5-fleet-orchestrator",
       "title": "Sequential fleet orchestration with per-account isolation and budgets",
-      "status": "queued",
+      "status": "done",
       "priority": 280,
       "domain": "fleet",
       "allowed_paths": [

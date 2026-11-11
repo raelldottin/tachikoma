@@ -28,7 +28,7 @@
 | `objective` | Non-empty label of at most 200 characters |
 | `policy_id` | A registered [progression policy](progression-policy.md) |
 | `pvp_strategy` | Optional [strategy key](pvp-strategies.md) such as `weapon-focus-fire@v1` |
-| `budgets` | Spend limit per period for `minerals`, `gas` and `starbux`, as non-negative integers. The default is `{"starbux": 0}`; an unset currency has no limit. |
+| `budgets` | Spend limit per period for `minerals`, `gas` and `starbux`, as non-negative integers. An unset `minerals` or `gas` budget has no limit; an unset `starbux` budget is 0, so premium currency is never unlimited by omission. |
 | `max_actions` | Positive integer, default 20 |
 | `enabled` | `true` or `false`, default `true` |
 | `credentials_secret` | The name of the secret that holds the account's credentials, in upper snake case. Never the value. |
@@ -43,3 +43,15 @@
 - any value that `redact_secrets` would change, such as an e-mail address or a token.
 
 Error messages name the location but never repeat the offending value. `AccountRegistry.enabled()` returns enabled profiles in alias order.
+
+## Orchestration
+
+`sdk/fleet/orchestrator.py` runs the [daily scheduler](daily-scheduler.md) for each enabled account, one at a time, in alias order (`mode` `sequential`). Dry run is the default; `run(execute=True)` makes mutating calls.
+
+- **Isolation.** An injected factory returns each account's `AccountContext`: client, snapshot provider, journal and design data. The orchestrator builds that account's runner with the account's own alias. A first snapshot of another account, or a journal file already used by another account in the same run, ends that account with `error` before any call.
+- **Failure containment.** An exception in one account (for example a failed login) is recorded as `error`, with secret-shaped text redacted, and the next account still runs. A safety stop inside the scheduler ends that account as `stopped`.
+- **Fleet stop.** If the stop file exists, the remaining accounts are `not-run`. The same file is passed to each scheduler, so it also stops an account between actions.
+- **Budgets.** Spend already journaled in the current period (negative cost deltas) is subtracted from each budget. The policy's mineral and gas reserves are raised to `balance - remaining budget`, so the plan cannot spend more than remains. Starbux spending is never allowed in a fleet run, because the policy cannot cap a starbux amount.
+- **Limits.** `max_actions` caps both planned requests and executed actions.
+
+`FleetRun` records the mode, dry-run flag, start and finish times, the fleet stop reason, and one `AccountRun` per registered account: status (`completed`, `stopped`, `error`, `disabled` or `not-run`), reason, attempted, verified and planned counts, elapsed seconds, spend this period and remaining budget.
