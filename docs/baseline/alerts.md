@@ -2,7 +2,7 @@
 
 `sdk/reports/alerts.py` decides when a fleet run needs an operator's attention. `evaluate_alerts(journals, now=..., audit=None, rules=DEFAULT_RULES)` takes a mapping of journal owner alias → that account's [journal](gameplay-journal.md) events, an optional [isolation audit](fleet-audit.md) `AuditReport`, a timezone-aware evaluation time `now`, and a set of declarative `AlertRule`s. It returns an `AlertReport`.
 
-This is a library only. Sending alerts (e-mail, chat, pager, webhooks) is out of scope: render the report with `to_json(report)` or `to_markdown(report)` and deliver it however you choose.
+The module only decides what to alert on: render the report with `to_json(report)` or `to_markdown(report)`. `run.py --fleet-dry-run` and `--fleet-execute` print it, and `--fleet-execute` also records it and can e-mail a summary (see [After a fleet execute run](#after-a-fleet-execute-run)). Chat, pager and webhook delivery, and scheduled runs, are out of scope.
 
 ## Default rules
 
@@ -31,3 +31,14 @@ An `AlertRule` has `rule_id`, `kind`, `severity` (`critical`, `warning` or `info
 Each `Alert` names `rule_id`, `severity`, `account_alias`, a one-line `message` and `evidence`: `counts`, `attempt_ids`, `window_start`/`window_end` (journal rules), `rate` and `threshold`, `audit_rule` and the audit incident `details` (audit rules), and `last_verified_at` (`no-verified`). Attempt ids are ordered by finish time; audit attempt ids are sorted.
 
 `AlertReport` states `evaluated_at`, `accounts_checked`, `events_checked`, `rules_evaluated` and `rules_not_evaluated` even when no alert fires, and offers `by_severity()`. Alerts are ordered by severity (critical first), then account alias, then rule id, then audit rule, so the output does not depend on journal, event or rule order. `to_json` writes every field with sorted keys. `to_markdown` writes a severity summary and one table row per alert, listing at most five attempt ids per alert followed by `(+N more)`.
+
+## After a fleet execute run
+
+`run.py --fleet-execute` ends with a post-run step ([SPEC-11](../specs/SPEC-11-alert-delivery.md)). No other command has it: `--fleet-dry-run` prints the alerts only, and `--fleet-execute --plan-only` evaluates nothing.
+
+- **When.** After every enabled account has finished (or the fleet stopped), never between accounts, so a critical alert never stops a running fleet. Stopping is the execute gate's job.
+- **What.** The journals of the registered accounts (`<journal dir>/<alias>.log`, earlier runs included), the isolation audit over them with the registry, and `DEFAULT_RULES` evaluated at the end of the run. Audit rules are therefore always evaluated, never listed as not evaluated.
+- **Run record.** `alerts` holds the whole `AlertReport` (as `to_json`) plus `by_severity`, with each alert's `message` and evidence `details` passed through the fleet scrubber. It is `null` when the alerts could not be evaluated; `post_run_errors` then says why. `dashboard` is the path of the dashboard written, or `null`.
+- **Dashboard.** The `--report dashboard` page over the same journals with the registry, written atomically to `--dashboard-out PATH` (default `<journal dir>/dashboard.html`).
+- **Exit code.** Any `critical` alert makes the exit code 1; warnings and info do not. A post-run error (unreadable journal, failed evaluation, dashboard not written) also makes it 1, and the run record is still written.
+- **Summary e-mail.** Off by default (S11-Q1's safe default). With all three SMTP flags (`--smtp-email`, `--smtp-password-file`, `--recipient`) the run sends exactly one e-mail through `run.send_email`, the transport the log delivery uses, after the run record is written. The subject gives the counts by severity; the body gives the account statuses, the run record and dashboard file names, and the alerts as `- <alias> / <rule id>: <message>` under Critical, Warning and Info (each section says `none` when empty). Subject and body pass through the fleet scrubber, which also knows the SMTP settings, so credentials, the salt, raw user ids, e-mail addresses and display names do not reach it. A failed delivery is logged and shown and leaves the exit code alone. Incomplete SMTP flags or an unreadable or empty password file refuse the run before any login.
