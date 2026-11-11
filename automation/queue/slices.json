@@ -1006,6 +1006,208 @@
         "make test",
         "git diff --check"
       ]
+    },
+    {
+      "slice_id": "r0-study-design",
+      "title": "Manual-vs-automation study design and sample-size planning (AUTO-010)",
+      "priority": 370,
+      "domain": "experiment",
+      "allowed_paths": [
+        "sdk/experiments/",
+        "docs/experiments/",
+        "tests/"
+      ],
+      "max_files_changed": 5,
+      "notes": "Analyst lane. Write docs/experiments/study-design.md: comparison modes (manual control, rule-based, adaptive, fleet variants), matching or adjustment across hull levels, primary and secondary metrics mapped to the scorecard, interventions to record, windows and stopping rules. Add sdk/experiments/study.py with a StudyPlan record and sample-size helpers (two-proportion and two-mean, 95%/80% defaults, standard library only) so a trial's minimum sample can be computed before it starts.",
+      "status": "queued",
+      "depends_on": [
+        "r6-release-and-limitations"
+      ],
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
+    },
+    {
+      "slice_id": "r5-concurrent-orchestration",
+      "title": "Concurrent fleet orchestration mode with the same isolation guarantees",
+      "priority": 380,
+      "domain": "fleet",
+      "allowed_paths": [
+        "sdk/fleet/",
+        "tests/",
+        "docs/baseline/"
+      ],
+      "max_files_changed": 5,
+      "notes": "Architect lane. Add a concurrent mode (bounded worker pool, one worker per account at a time) that reuses the sequential orchestrator's per-account logic, records mode 'concurrent', and keeps every guarantee: per-account factories, journal ownership, failure containment, fleet stop file, budgets, dry run by default. Results must be deterministic in order (alias order) regardless of completion order. Prefer a new module; keep orchestrator.py edits minimal.",
+      "status": "queued",
+      "depends_on": [
+        "r6-release-and-limitations"
+      ],
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
+    },
+    {
+      "slice_id": "r5-game-identity-check",
+      "title": "Verify game account identity, not just aliases",
+      "priority": 390,
+      "domain": "safety",
+      "allowed_paths": [
+        "sdk/state/",
+        "sdk/fleet/",
+        "tests/",
+        "docs/baseline/"
+      ],
+      "max_files_changed": 6,
+      "notes": "Safety lane. Isolation checks compare alias labels only, so a factory that loads the wrong credentials passes them. Record a non-secret, salted fingerprint of the logged-in game user id in snapshots (never the raw id or any credential), let AccountProfile declare the expected fingerprint, and have the orchestrator refuse an account whose observed fingerprint differs before any call. Unknown fingerprint = refuse when the profile declares one.",
+      "status": "queued",
+      "depends_on": [
+        "r6-release-and-limitations"
+      ],
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
+    },
+    {
+      "slice_id": "r6-release-archive-data-files",
+      "title": "Include package data files in source release archives",
+      "priority": 400,
+      "domain": "release",
+      "allowed_paths": [
+        "scripts/ci.py",
+        "tests/test_ci.py",
+        "docs/RELEASE.md"
+      ],
+      "max_files_changed": 3,
+      "notes": "Release lane. The release archive includes only .py files under sdk/, so sdk/simulation/scenarios/*.json is missing. Include tracked non-Python package data under sdk/ (at least *.json) while keeping archives byte-reproducible and still excluding tests, captures, secrets and logs. Update tests and docs/RELEASE.md.",
+      "status": "queued",
+      "depends_on": [
+        "r6-release-and-limitations"
+      ],
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
+    },
+    {
+      "slice_id": "r6-patch-aware-compatibility",
+      "title": "Versioned game-rule and endpoint evidence ledger (AUTO-015)",
+      "priority": 410,
+      "domain": "protocol",
+      "allowed_paths": [
+        "sdk/compat/",
+        "docs/baseline/",
+        "tests/"
+      ],
+      "max_files_changed": 5,
+      "notes": "Protocol lane. Add sdk/compat/: a ledger of game rules and endpoints, each with an evidence class (official release, announcement, community, static analysis, dynamically demonstrated), the game version it was observed on, and its source. Ship entries for the battle chain, marketplace path and formulas the repo relies on, using only facts already recorded in the repository. A check reports entries whose evidence predates a given game version or that rely only on weak evidence. Offline.",
+      "status": "queued",
+      "depends_on": [
+        "r6-release-and-limitations"
+      ],
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
+    },
+    {
+      "slice_id": "r6-local-dashboard",
+      "title": "Local static HTML dashboard from journals (AUTO-012)",
+      "priority": 420,
+      "domain": "operator",
+      "allowed_paths": [
+        "sdk/reports/",
+        "run.py",
+        "README.template",
+        "README.md",
+        "docs/baseline/",
+        "tests/"
+      ],
+      "max_files_changed": 6,
+      "notes": "UX lane. Render progression, PvP, fleet and audit reports from journal files into one self-contained HTML file (no external assets, no network, escaped content) via `run.py --report dashboard --output PATH`, handled before any login like the other offline reports. Update README.template then README.md and the capability inventory flags.",
+      "status": "queued",
+      "depends_on": [
+        "r6-release-and-limitations"
+      ],
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
+    },
+    {
+      "slice_id": "r6-alert-rules",
+      "title": "Alert rules over journals and reports (AUTO-012)",
+      "priority": 430,
+      "domain": "observability",
+      "allowed_paths": [
+        "sdk/reports/",
+        "docs/baseline/",
+        "tests/"
+      ],
+      "max_files_changed": 4,
+      "notes": "SRE lane. Add sdk/reports/alerts.py: declarative thresholds (failure rate, uncertain rate, contradicted actions, isolation incidents, budget exceeded, no verified action in a period) evaluated over journals and the audit, returning alerts with severity, account and evidence. Library only (no notification transport). Sample size guards: no alert from rates with too few attempts.",
+      "status": "queued",
+      "depends_on": [
+        "r6-release-and-limitations"
+      ],
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
+    },
+    {
+      "slice_id": "r2-hull-upgrade-timing-policy",
+      "title": "Hull-upgrade timing as a testable policy variant",
+      "priority": 440,
+      "domain": "policy",
+      "allowed_paths": [
+        "sdk/policy/",
+        "docs/baseline/",
+        "tests/"
+      ],
+      "max_files_changed": 5,
+      "notes": "Researcher lane. The roadmap asks to model hull-upgrade timing as a testable strategy rather than a rule. Add a new registered policy variant (baseline-v1 stays the default and unchanged) that plans the same daily actions but holds a mineral reserve toward the next hull upgrade when sdk.pvp hull readiness says the ship is close, so it can be compared with baseline-v1 in the experiment loop. Document the hypothesis and that it is unproven.",
+      "status": "queued",
+      "depends_on": [
+        "r6-release-and-limitations"
+      ],
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
+    },
+    {
+      "slice_id": "r6-failure-injection-scenarios",
+      "title": "Failure-injection simulation scenarios (AUTO-014)",
+      "priority": 450,
+      "domain": "testing",
+      "allowed_paths": [
+        "sdk/simulation/",
+        "tests/",
+        "docs/baseline/"
+      ],
+      "max_files_changed": 6,
+      "notes": "Test lane. Extend the simulated game with seeded, scenario-configured faults: read failures, calls that raise after taking effect, ambiguous responses, concurrent spend by the player, and a wrong-account snapshot. Ship scenarios that exercise them and regression tests that assert the safety outcomes (unknown not verified, retry blocked, uncertain spend charged, foreign snapshot refused, contradicted stops the account) with deterministic reports.",
+      "status": "queued",
+      "depends_on": [
+        "r6-release-and-limitations"
+      ],
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
     }
   ]
 }
