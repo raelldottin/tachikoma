@@ -76,6 +76,9 @@ class AccountProfile:
             raise RegistryError(f"{self.alias}: pvp_strategy must look like strategy-id@v1")
         if not isinstance(self.budgets, Mapping):
             raise RegistryError(f"{self.alias}: budgets must be a mapping")
+        if "starbux" not in self.budgets:
+            # Premium currency is never unlimited by omission.
+            object.__setattr__(self, "budgets", {**self.budgets, "starbux": 0})
         for currency, limit in self.budgets.items():
             if currency not in BUDGET_CURRENCIES:
                 raise RegistryError(f"{self.alias}: unknown budget currency {currency!r}")
