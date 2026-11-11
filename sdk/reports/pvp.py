@@ -79,10 +79,8 @@ class ScorecardRow:
     resource_samples: int = 0
 
 
-def _row(key: tuple, battles: Sequence[JournalBattle]) -> ScorecardRow:
-    alias, strategy_key, hull, trophies = key
-    observed = [b.trophy_delta for b in battles if b.trophy_delta is not None]
-    durations = [b.result.battle_duration_s for b in battles if b.result.battle_duration_s is not None]
+def observed_spend(battles: Iterable[JournalBattle]) -> tuple[dict, int]:
+    """Observed spend per currency (from negative cost deltas) and how many battles observed any cost."""
     spent: dict = {}
     resource_samples = 0
     for battle in battles:
@@ -92,6 +90,19 @@ def _row(key: tuple, battles: Sequence[JournalBattle]) -> ScorecardRow:
         for name, value in deltas.items():
             if value is not None and value < 0:
                 spent[name] = spent.get(name, 0) - value
+    return spent, resource_samples
+
+
+def cohort_label(battle: JournalBattle) -> str:
+    """The opponent cohort ``compare_strategies`` stratifies by: hull bracket / trophy bracket."""
+    return f"{battle.opponent_hull_bracket} / {battle.opponent_trophy_bracket}"
+
+
+def _row(key: tuple, battles: Sequence[JournalBattle]) -> ScorecardRow:
+    alias, strategy_key, hull, trophies = key
+    observed = [b.trophy_delta for b in battles if b.trophy_delta is not None]
+    durations = [b.result.battle_duration_s for b in battles if b.result.battle_duration_s is not None]
+    spent, resource_samples = observed_spend(battles)
     return ScorecardRow(
         account_alias=alias,
         strategy_key=strategy_key,
@@ -166,8 +177,7 @@ def compare_strategies(
         if name is None:
             continue
         by_side[name].append(battle)
-        cohort = f"{battle.opponent_hull_bracket} / {battle.opponent_trophy_bracket}"
-        cohorts.setdefault(cohort, {"a": [], "b": []})[name].append(battle)
+        cohorts.setdefault(cohort_label(battle), {"a": [], "b": []})[name].append(battle)
 
     a, b = _role_stats(by_side["a"]), _role_stats(by_side["b"])
     cohort_stats = {

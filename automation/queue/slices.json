@@ -1528,7 +1528,7 @@
     {
       "slice_id": "spec08-pvp-report",
       "title": "SPEC-08: PvP trial report",
-      "status": "queued",
+      "status": "done",
       "priority": 393,
       "domain": "observability",
       "allowed_paths": [
