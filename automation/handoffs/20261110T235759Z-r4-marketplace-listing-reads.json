@@ -1,0 +1,51 @@
+{
+  "slice_id": "r4-marketplace-listing-reads",
+  "status": "done",
+  "summary": "Client.listActiveMarketplaceMessages now sets marketplaceMessages (None at call start and on failure, [] on an empty success, the message list otherwise) without changing its request or logging. Added sdk/economy with MarketListing, parse_listing (whitelisted @Message, @ActivityArgument currency:price, optional @SaleId/@MessageId/@ItemDesignId/@Quantity; unparseable values None; secret-shaped values refused), listings_from_messages and observed_listings (None when unread). 10 tests in tests/test_marketplace_listings.py with mocked responses; inventory entry cites them; documented in docs/baseline/economy-market.md.",
+  "files_touched": [
+    "sdk/client.py",
+    "sdk/economy/__init__.py",
+    "sdk/economy/market.py",
+    "tests/test_marketplace_listings.py",
+    "docs/baseline/capability-inventory.json",
+    "docs/baseline/economy-market.md"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "Marketplace listing reads (AUTO-008)",
+      "before": "Marketplace messages were only logged; nothing could read listings programmatically",
+      "after": "Listings are typed, whitelisted records with explicit not-observed vs empty states",
+      "proof": [
+        "tests.test_marketplace_listings: 10 tests OK",
+        "tests.test_e2e_live_fixes: OK",
+        "make test: 604 tests OK (1 skipped)",
+        "scripts/ci.py lint: no new findings",
+        "run.py --help exits 0"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "@SaleId, @MessageId, @ItemDesignId and @Quantity are unverified attribute names from prior capture analysis; only @Message and @ActivityArgument appear in fixtures."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-10T23:59:29Z"
+}

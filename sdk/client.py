@@ -1723,6 +1723,8 @@ class Client(object):
         url = "https://api.pixelstarships.com/MessageService/ListActiveMarketplaceMessages5?itemSubType=None&rarity=None&currencyType=Unknown&itemDesignId=0&userId={}&accessToken={}".format(
             user_id, self.accessToken
         )
+        # Parsed Message records from the last successful read; None until one succeeds.
+        self.marketplaceMessages = None
         try:
             r = self.request(url, "GET")
             if not r or not r.content:
@@ -1735,6 +1737,7 @@ class Client(object):
                 return False
 
             messages = _extract_collection(d, "Message")
+            self.marketplaceMessages = messages
             if not messages:
                 logging.debug(
                     f'[{self.info.get("@Name", "")}] You have no items listed on the marketplace.'

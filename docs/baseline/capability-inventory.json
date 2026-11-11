@@ -440,7 +440,8 @@
       "kind": "read-only",
       "evidence": "mocked-test",
       "tests": [
-        "tests/test_e2e_live_fixes.py"
+        "tests/test_e2e_live_fixes.py",
+        "tests/test_marketplace_listings.py"
       ]
     },
     {
