@@ -1209,6 +1209,26 @@
         "make test",
         "git diff --check"
       ]
+    },
+    {
+      "slice_id": "r6-status-refresh-specialists",
+      "title": "Refresh roadmap status and known limitations after the specialist slices",
+      "status": "queued",
+      "priority": 379,
+      "domain": "docs",
+      "allowed_paths": [
+        "docs/"
+      ],
+      "depends_on": [
+        "r5-game-identity-check"
+      ],
+      "max_files_changed": 4,
+      "notes": "Update docs/PRODUCT_ROADMAP.md Implementation status and docs/baseline/known-limitations.md for the nine specialist slices (study design, concurrent orchestration, game identity, release data files, compatibility ledger, dashboard, alerts, hull-reserve policy, fault injection): what merged with PR numbers, what is still not wired (hull designs, identity salt, alert transport, concurrent mode in run.py), and what remains blocked on the owner. Documentation only.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
     }
   ]
 }
