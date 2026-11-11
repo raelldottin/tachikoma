@@ -1598,7 +1598,7 @@
     {
       "slice_id": "spec04-baseline-command",
       "title": "SPEC-04: read-only baseline command",
-      "status": "queued",
+      "status": "done",
       "priority": 396,
       "domain": "state",
       "allowed_paths": [
