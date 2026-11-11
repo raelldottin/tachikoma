@@ -1,0 +1,46 @@
+{
+  "slice_id": "r0-study-design",
+  "status": "done",
+  "summary": "R0 needs the manual-vs-automation comparison defined before any live trial, and decide() needs a minimum sample that is planned, not guessed.  docs/experiments/study-design.md sets the protocol: the arms (manual control, rule-based baseline-v1, adaptive policy versions, fleet variants, PvP strategies) and their state on main; one primary metric per study, measured from snapshots so the unjournaled manual arm is comparable; every roadmap scorecard metric mapped to the existing sdk/reports field; ABBA within-account crossover or matched pairs by hull bracket, with per-bracket analysis and block splitting on hull upgrades; the intervention log; windows with a measurement-only baseline window first; and stopping rules tied to decide(). It states that no baseline data exists and lists what the owner must supply.  sdk/experiments/study.py adds a validated StudyPlan, standard-library two-proportion (Fleiss pooled, or unpooled) and two-mean sample sizes, and per_arm_min_sample / experiments_for to feed Experiment.min_sample. Because decide() adopts only on non-overlapping 95% intervals, a conventionally sized trial would adopt a real effect only about half the time; the default rule therefore sizes for decide() itself (t critical values for means, an exact binomial search over Wilson intervals for proportions). Tests check textbook values (388/385 for 0.5 vs 0.6, 63 for d = 0.5), the exact power against full enumeration, and decide() by seeded simulation. Implemented by the analyst specialist subagent in an isolated worktree, independently reviewed by the verifier subagent (APPROVE), and re-validated by the parent.",
+  "files_touched": [
+    "docs/experiments/study-design.md",
+    "sdk/experiments/__init__.py",
+    "sdk/experiments/study.py",
+    "tests/test_experiment_study.py"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "Manual-vs-automation study design and sample-size planning (AUTO-010)",
+      "before": "Roadmap item not implemented",
+      "after": "Manual-vs-automation study design and sample-size planning (AUTO-010) (offline)",
+      "proof": [
+        "make syntax-check, make test, scripts/ci.py lint and git diff --check pass on current main",
+        "verifier verdict: APPROVE"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "Offline only; no live game verification."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-11T11:44:42Z"
+}

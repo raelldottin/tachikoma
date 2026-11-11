@@ -1,4 +1,4 @@
-"""Policy evaluation loop (roadmap R6)."""
+"""Policy evaluation loop (roadmap R6) and study planning (roadmap R0)."""
 
 from sdk.experiments.loop import (
     ADOPT,
@@ -15,19 +15,49 @@ from sdk.experiments.loop import (
     decide_and_record,
     samples_from_outcomes,
 )
+from sdk.experiments.study import (
+    KIND_MEAN,
+    KIND_PROPORTION,
+    RULE_DECIDE,
+    RULE_TEST,
+    StudyPlan,
+    experiments_for,
+    non_overlap_mean_power,
+    non_overlap_mean_sample_size,
+    non_overlap_proportion_power,
+    non_overlap_proportion_sample_size,
+    per_arm_min_sample,
+    two_mean_sample_size,
+    two_proportion_sample_size,
+    z_quantile,
+)
 
 __all__ = [
     "ADOPT",
     "INSUFFICIENT",
     "KEEP_RUNNING",
+    "KIND_MEAN",
+    "KIND_PROPORTION",
     "REJECT",
+    "RULE_DECIDE",
+    "RULE_TEST",
     "Decision",
     "DecisionLog",
     "Experiment",
     "ExperimentError",
     "MeanSample",
     "ProportionSample",
+    "StudyPlan",
     "decide",
     "decide_and_record",
+    "experiments_for",
+    "non_overlap_mean_power",
+    "non_overlap_mean_sample_size",
+    "non_overlap_proportion_power",
+    "non_overlap_proportion_sample_size",
+    "per_arm_min_sample",
     "samples_from_outcomes",
+    "two_mean_sample_size",
+    "two_proportion_sample_size",
+    "z_quantile",
 ]

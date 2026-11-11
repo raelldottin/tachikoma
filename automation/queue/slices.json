@@ -1019,7 +1019,7 @@
       ],
       "max_files_changed": 5,
       "notes": "Analyst lane. Write docs/experiments/study-design.md: comparison modes (manual control, rule-based, adaptive, fleet variants), matching or adjustment across hull levels, primary and secondary metrics mapped to the scorecard, interventions to record, windows and stopping rules. Add sdk/experiments/study.py with a StudyPlan record and sample-size helpers (two-proportion and two-mean, 95%/80% defaults, standard library only) so a trial's minimum sample can be computed before it starts.",
-      "status": "queued",
+      "status": "done",
       "depends_on": [
         "r6-release-and-limitations"
       ],
