@@ -1576,7 +1576,7 @@
     {
       "slice_id": "spec10-fleet-report",
       "title": "SPEC-10: fleet trial report",
-      "status": "queued",
+      "status": "done",
       "priority": 395,
       "domain": "observability",
       "allowed_paths": [

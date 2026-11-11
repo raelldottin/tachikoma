@@ -77,6 +77,53 @@ Battle-history file format (version 1, provisional until SPEC-03 lands the
 
 No other key is accepted, and a ``(battle_id, role)`` pair may appear once.
 
+With ``--fleet`` it builds study D's fleet trial report (SPEC-10 R3-R6) from:
+
+- a fleet plan (JSON): ``trial_id``, ``hypothesis``, ``accounts`` (the two
+  registry aliases), ``schedule`` (a list of ``mode`` - ``sequential`` or
+  ``concurrent`` - ``start`` and ``end`` in UTC, fixed before the trial, R2),
+  ``min_sample`` (runs per mode), ``window_start``, ``window_end`` and
+  optionally ``min_attempts`` (attempts per mode for the rate comparisons;
+  default ``min_sample``), ``concurrency`` (default 2), ``manual_minutes``
+  (each account's manual routine minutes per run) and ``notes``;
+- the account registry (``sdk/fleet/accounts.py`` JSON);
+- one or more ``--run`` paths: an execute journal directory (its
+  ``<alias>.log`` journals and every run record under ``runs/``), or one run
+  record file ``<journal dir>/runs/<UTC time>.json``;
+- optionally operator minutes (JSON list of ``run_id`` - the run record's
+  file name without ``.json`` - ``account_alias`` and ``operator_minutes``).
+
+The run record is the one ``run.py --fleet-execute`` writes. The report reads
+only this subset and ignores every other field: ``started_at`` and
+``finished_at`` (UTC, required); ``accounts`` (required: a list of objects
+with ``alias`` and ``status``, and optionally ``reason``, ``game_identity``
+and ``attempted``); ``version`` (1 when present); ``kind``
+(``fleet-execute`` when present); ``orchestrator`` (``sequential`` or
+``concurrent``: the mode that ran); ``mode`` (``canary`` or ``full``, or the
+orchestrator mode when ``orchestrator`` is absent); ``authorization_hash``
+and ``registry_hash`` (``sha256:`` hashes, reported by their first 16 hex
+digits); ``policy_versions`` (alias to policy id) or ``policy_version``;
+``game_version`` (text, or an object with ``client`` and ``server``); and
+``stop_reason``. A run's mode is the record's orchestrator mode, else the
+plan's schedule at the run's start; a record that contradicts the schedule
+is listed as a deviation.
+
+Each run is audited with ``audit_fleet`` over every journal event since the
+previous run record in the same directory (so the run's dry run and anything
+journaled between runs are audited too) up to the run's end (R3). A run
+whose record shows an account with no declared fingerprint, or a game
+identity other than the registry's, adds an ``identity-not-enforced``
+incident (S10-R1 is enforced by the execute command; this only checks its
+records). The first run with any incident stops the trial: it is listed with
+its incidents, and later runs are left out of the comparison. Per run, the
+events inside the run's start and end feed ``compute_fleet_report`` (R4;
+time saved only when the plan's manual minutes and the run's operator
+minutes are both given for an account) and ``evaluate_alerts`` at the run's
+end (R6). The modes are compared (R5), ``sequential`` as the baseline and
+``concurrent`` as the candidate, with ``decide()`` on verified actions per
+run-hour (one value per run), failure rate and uncertain rate (per attempt),
+next to incident counts and sample sizes.
+
 Offline only: it reads files and makes no network call.
 """
 
@@ -85,6 +132,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import re
 import sys
 from dataclasses import asdict, dataclass, field, replace
 from datetime import date, datetime, timedelta, timezone
@@ -103,7 +151,11 @@ from sdk.experiments import (  # noqa: E402
     decide,
     per_arm_min_sample,
 )
-from sdk.experiments.loop import ID_PATTERN  # noqa: E402
+from sdk.experiments.loop import ADOPT, ID_PATTERN, REJECT, Decision  # noqa: E402
+from sdk.fleet.accounts import AccountRegistry, load_registry  # noqa: E402
+from sdk.fleet.audit import audit_fleet  # noqa: E402
+from sdk.fleet.concurrent import MODE_CONCURRENT  # noqa: E402
+from sdk.fleet.orchestrator import MODE_SEQUENTIAL, AccountRun, FleetRun  # noqa: E402
 from sdk.journal import GameplayEvent, read_events  # noqa: E402
 from sdk.pvp import BattleOutcome, BattleResult, BattleRole, BattleStrategy  # noqa: E402
 from sdk.pvp.strategies import (  # noqa: E402
@@ -117,6 +169,7 @@ from sdk.pvp.strategies import (  # noqa: E402
     candidate_registry,
 )
 from sdk.redaction import redact_secrets  # noqa: E402
+from sdk.reports.alerts import evaluate_alerts  # noqa: E402
 from sdk.reports.battles import (  # noqa: E402
     BATTLE_ACTION_ID,
     UNKNOWN_COHORT,
@@ -125,12 +178,14 @@ from sdk.reports.battles import (  # noqa: E402
     hull_bracket,
     trophy_bracket,
 )
+from sdk.reports.fleet import compute_fleet_report  # noqa: E402
 from sdk.reports.progression import compute_progression_metrics  # noqa: E402
 from sdk.reports.pvp import RoleStats, cohort_label, compare_strategies, observed_spend  # noqa: E402
 from sdk.state.snapshot import (  # noqa: E402
     ACCOUNT_ALIAS_PATTERN,
     SECTIONS,
     AccountMismatchError,
+    GAME_IDENTITY_PATTERN,
     AccountSnapshot,
     Completeness,
     CrewMember,
@@ -1326,6 +1381,681 @@ def load_journals(paths: Sequence[Path]) -> list[GameplayEvent]:
     return events
 
 
+# -- fleet trial (SPEC-10 R3-R6) -----------------------------------------------------------------
+
+FLEET_MODES = (MODE_SEQUENTIAL, MODE_CONCURRENT)
+FLEET_BASELINE, FLEET_CANDIDATE = MODE_SEQUENTIAL, MODE_CONCURRENT
+EXECUTE_MODES = ("canary", "full")
+FLEET_PLAN_KEYS = frozenset({"trial_id", "hypothesis", "accounts", "schedule", "min_sample", "min_attempts",
+                             "window_start", "window_end", "concurrency", "manual_minutes", "notes"})
+REQUIRED_FLEET_PLAN_KEYS = ("trial_id", "hypothesis", "accounts", "schedule", "min_sample", "window_start",
+                            "window_end")
+FLEET_METRICS = (("verified-actions-per-hour", True), ("failure-rate", False), ("uncertain-rate", False))
+RUN_RECORD_DIR = "runs"  # <journal dir>/runs/<UTC time>.json, as run.py --fleet-execute writes it
+RUN_RECORD_KIND = "fleet-execute"
+RUN_RECORD_VERSION = 1
+FLEET_JOURNAL_SUFFIX = ".log"  # <journal dir>/<alias>.log, as sdk.fleet.factory names a journal
+HASH_PATTERN = re.compile(r"^sha256:([0-9a-f]{64})$")
+SHORT_HASH_DIGITS = 16  # a full sha256 is secret-shaped to the redactor; 16 hex digits identify a file
+IDENTITY_RULE = "identity-not-enforced"
+UNOBSERVED_STATUSES = frozenset({"disabled", "not-run"})
+
+
+@dataclass(frozen=True)
+class ScheduledWindow:
+    mode: str
+    start: datetime
+    end: datetime
+
+
+@dataclass(frozen=True)
+class FleetPlan:
+    trial_id: str
+    hypothesis: str
+    accounts: tuple[str, str]
+    schedule: tuple[ScheduledWindow, ...]
+    min_sample: int
+    min_attempts: int
+    window_start: datetime
+    window_end: datetime
+    concurrency: int = 2
+    manual_minutes: Mapping[str, float] = field(default_factory=dict)
+
+    def scheduled_mode(self, moment: datetime) -> Optional[str]:
+        for window in self.schedule:
+            if window.start <= moment < window.end:
+                return window.mode
+        return None
+
+    def experiment(self, metric: str, higher_is_better: bool) -> Experiment:
+        return Experiment(
+            experiment_id=self.trial_id, hypothesis=self.hypothesis, baseline=FLEET_BASELINE,
+            candidate=FLEET_CANDIDATE, metric=metric, higher_is_better=higher_is_better,
+            min_sample=self.min_sample if metric == FLEET_METRICS[0][0] else self.min_attempts,
+            window_start=self.window_start, window_end=self.window_end,
+        )
+
+
+def _positive_int(value: Any, label: str, minimum: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+        raise TrialInputError(f"{label} must be an integer of at least {minimum}")
+    return value
+
+
+def fleet_plan_from_dict(payload: Mapping[str, Any]) -> FleetPlan:
+    if not isinstance(payload, Mapping):
+        raise TrialInputError("the fleet plan must be a JSON object")
+    _refuse_secrets(payload, "the fleet plan")
+    unknown = sorted(set(payload) - FLEET_PLAN_KEYS)
+    if unknown:
+        raise TrialInputError(f"unknown fleet plan keys: {', '.join(unknown)}")
+    missing = [key for key in REQUIRED_FLEET_PLAN_KEYS if key not in payload]
+    if missing:
+        raise TrialInputError(f"the fleet plan is missing: {', '.join(missing)}")
+    accounts = payload["accounts"]
+    if (not isinstance(accounts, list) or len(accounts) != 2
+            or not all(isinstance(a, str) and ACCOUNT_ALIAS_PATTERN.match(a) for a in accounts)):
+        raise TrialInputError("accounts must list exactly two lowercase registry aliases")
+    if accounts[0] == accounts[1]:
+        raise TrialInputError("the two accounts must differ")
+    window_start = _utc(payload["window_start"], "window_start")
+    window_end = _utc(payload["window_end"], "window_end")
+    schedule = payload["schedule"]
+    if not isinstance(schedule, list) or not schedule:
+        raise TrialInputError("schedule must be a non-empty list")
+    windows = []
+    for number, item in enumerate(schedule, start=1):
+        if not isinstance(item, Mapping) or set(item) != {"mode", "start", "end"}:
+            raise TrialInputError(f"schedule window {number} needs exactly mode, start and end")
+        if item["mode"] not in FLEET_MODES:
+            raise TrialInputError(f"schedule window {number} mode must be sequential or concurrent")
+        window = ScheduledWindow(item["mode"], _utc(item["start"], f"schedule window {number} start"),
+                                 _utc(item["end"], f"schedule window {number} end"))
+        if not window_start <= window.start < window.end <= window_end:
+            raise TrialInputError(f"schedule window {number} must be a non-empty span inside the trial window")
+        windows.append(window)
+    windows.sort(key=lambda w: w.start)
+    if any(later.start < earlier.end for earlier, later in zip(windows, windows[1:])):
+        raise TrialInputError("schedule windows must not overlap")
+    if {w.mode for w in windows} != set(FLEET_MODES):
+        raise TrialInputError("the schedule must give both sequential and concurrent windows")
+    min_sample = _positive_int(payload["min_sample"], "min_sample", 2)
+    manual = payload.get("manual_minutes") or {}
+    if not isinstance(manual, Mapping):
+        raise TrialInputError("manual_minutes must be a JSON object of account alias to minutes")
+    for alias, value in manual.items():
+        if alias not in accounts:
+            raise TrialInputError("manual_minutes names an account that is not in the plan")
+        if value is not None and (not _number(value) or value < 0):
+            raise TrialInputError("manual_minutes values must be non-negative numbers or null")
+    plan = FleetPlan(
+        trial_id=_identifier(payload["trial_id"], "trial_id"), hypothesis=payload["hypothesis"],
+        accounts=(accounts[0], accounts[1]), schedule=tuple(windows), min_sample=min_sample,
+        min_attempts=_positive_int(payload.get("min_attempts", min_sample), "min_attempts", 2),
+        window_start=window_start, window_end=window_end,
+        concurrency=_positive_int(payload.get("concurrency", 2), "concurrency", 2),
+        manual_minutes={alias: float(value) for alias, value in manual.items() if value is not None},
+    )
+    for metric, higher in FLEET_METRICS:
+        plan.experiment(metric, higher)  # the Experiment checks the hypothesis, sample floor and window
+    return plan
+
+
+@dataclass(frozen=True)
+class RunRecord:
+    """The subset of a ``--fleet-execute`` run record this report reads (see the module docstring)."""
+
+    run_id: str
+    journal_dir: Path
+    started_at: datetime
+    finished_at: datetime
+    accounts: tuple[Mapping[str, Any], ...]
+    orchestrator: Optional[str] = None
+    execute_mode: Optional[str] = None
+    authorization_hash: Optional[str] = None
+    registry_hash: Optional[str] = None
+    policy_versions: Mapping[str, str] = field(default_factory=dict)
+    game_version: Any = None
+    stop_reason: Optional[str] = None
+
+
+def _short_hash(value: Any, label: str) -> Optional[str]:
+    if value is None:
+        return None
+    match = HASH_PATTERN.match(value) if isinstance(value, str) else None
+    if match is None:
+        raise TrialInputError(f"{label} must be a sha256: hash")
+    return f"sha256:{match.group(1)[:SHORT_HASH_DIGITS]}"
+
+
+def _record_text(value: Any, label: str) -> Optional[str]:
+    if value is not None and not isinstance(value, str):
+        raise TrialInputError(f"{label} must be text or null")
+    return value
+
+
+def run_record_from_dict(payload: Mapping[str, Any], run_id: str, journal_dir: Path) -> RunRecord:
+    label = f"run record {run_id}"
+    if not isinstance(payload, Mapping):
+        raise TrialInputError(f"{label} must be a JSON object")
+    if payload.get("version", RUN_RECORD_VERSION) != RUN_RECORD_VERSION:
+        raise TrialInputError(f"{label} has an unsupported version")
+    if payload.get("kind", RUN_RECORD_KIND) != RUN_RECORD_KIND:
+        raise TrialInputError(f"{label} is not a --fleet-execute run record")
+    started = _utc(payload.get("started_at"), f"{label} started_at")
+    finished = _utc(payload.get("finished_at"), f"{label} finished_at")
+    if finished < started:
+        raise TrialInputError(f"{label} finished before it started")
+    orchestrator, execute_mode = payload.get("orchestrator"), payload.get("mode")
+    if orchestrator is not None and orchestrator not in FLEET_MODES:
+        raise TrialInputError(f"{label} orchestrator must be sequential or concurrent")
+    if execute_mode in FLEET_MODES:
+        orchestrator, execute_mode = orchestrator or execute_mode, None
+    elif execute_mode is not None and execute_mode not in EXECUTE_MODES:
+        raise TrialInputError(f"{label} mode must be canary, full, sequential or concurrent")
+    accounts = payload.get("accounts")
+    if not isinstance(accounts, list):
+        raise TrialInputError(f"{label} accounts must be a list")
+    entries, seen = [], set()
+    for number, entry in enumerate(accounts, start=1):
+        if not isinstance(entry, Mapping):
+            raise TrialInputError(f"{label} account {number} must be a JSON object")
+        alias = entry.get("alias")
+        if not isinstance(alias, str) or not ACCOUNT_ALIAS_PATTERN.match(alias):
+            raise TrialInputError(f"{label} account {number} alias must be a lowercase alias")
+        if alias in seen:
+            raise TrialInputError(f"{label} repeats an account")
+        seen.add(alias)
+        status = entry.get("status")
+        if not isinstance(status, str) or not ID_PATTERN.match(status):
+            raise TrialInputError(f"{label} account {number} status must be a lowercase word")
+        identity = entry.get("game_identity")
+        if identity is not None and (not isinstance(identity, str) or not GAME_IDENTITY_PATTERN.match(identity)):
+            raise TrialInputError(f"{label} account {number} game_identity must be a gid1- fingerprint or null")
+        attempted = entry.get("attempted")
+        if attempted is not None and (isinstance(attempted, bool) or not isinstance(attempted, int)):
+            raise TrialInputError(f"{label} account {number} attempted must be an integer or null")
+        entries.append({"alias": alias, "status": status,
+                        "reason": _record_text(entry.get("reason"), f"{label} account {number} reason"),
+                        "game_identity": identity, "attempted": attempted})
+    policies = payload.get("policy_versions")
+    if policies is None and payload.get("policy_version") is not None:
+        policies = {entry["alias"]: payload["policy_version"] for entry in entries}
+    policies = policies or {}
+    if not isinstance(policies, Mapping) or not all(isinstance(v, str) for v in policies.values()):
+        raise TrialInputError(f"{label} policy_versions must map aliases to policy ids")
+    game_version = payload.get("game_version")
+    if isinstance(game_version, Mapping):
+        game_version = {key: _record_text(game_version.get(key), f"{label} game_version {key}")
+                        for key in ("client", "server")}
+    else:
+        game_version = _record_text(game_version, f"{label} game_version")
+    return RunRecord(
+        run_id=run_id, journal_dir=journal_dir, started_at=started, finished_at=finished, accounts=tuple(entries),
+        orchestrator=orchestrator, execute_mode=execute_mode,
+        authorization_hash=_short_hash(payload.get("authorization_hash"), f"{label} authorization_hash"),
+        registry_hash=_short_hash(payload.get("registry_hash"), f"{label} registry_hash"),
+        policy_versions=dict(policies), game_version=game_version,
+        stop_reason=_record_text(payload.get("stop_reason"), f"{label} stop_reason"),
+    )
+
+
+@dataclass(frozen=True)
+class FleetRunInput:
+    """One run record with every journal of its directory (owner alias -> events)."""
+
+    record: RunRecord
+    journals: Mapping[str, Sequence[GameplayEvent]]
+
+
+def load_fleet_runs(paths: Sequence[Path]) -> list[FleetRunInput]:
+    """Run records and their directories' journals from ``--run`` directories or run record files."""
+    records: dict[Path, Path] = {}  # record file -> journal dir
+    for path in paths:
+        if path.is_dir():
+            found = sorted((path / RUN_RECORD_DIR).glob("*.json"))
+            if not found:
+                raise TrialInputError(f"a --run directory has no run record under {RUN_RECORD_DIR}/")
+            pairs = [(file, path) for file in found]
+        elif path.is_file() and path.suffix == ".json" and path.parent.name == RUN_RECORD_DIR:
+            pairs = [(path, path.parent.parent)]
+        else:
+            raise TrialInputError(f"a --run path must be a journal directory or a {RUN_RECORD_DIR}/*.json record")
+        for file, journal_dir in pairs:
+            if file.resolve() in records:
+                raise TrialInputError("a run record is given twice")
+            records[file.resolve()] = journal_dir.resolve()
+    journals: dict[Path, dict[str, list[GameplayEvent]]] = {}
+    runs, run_ids = [], set()
+    for file, journal_dir in records.items():
+        if file.stem in run_ids:
+            raise TrialInputError("two run records share a file name; run ids must be unique")
+        run_ids.add(file.stem)
+        if journal_dir not in journals:
+            journals[journal_dir] = {log.name[:-len(FLEET_JOURNAL_SUFFIX)]: read_events(log)
+                                     for log in sorted(journal_dir.glob(f"*{FLEET_JOURNAL_SUFFIX}")) if log.is_file()}
+        record = run_record_from_dict(_read_json(file, "a run record"), file.stem, journal_dir)
+        runs.append(FleetRunInput(record, journals[journal_dir]))
+    return sorted(runs, key=lambda run: (run.record.started_at, run.record.run_id))
+
+
+def fleet_minutes_from_list(payload: Any, plan: FleetPlan) -> dict[str, dict[str, float]]:
+    """Operator minutes per run id and account. A ``null`` entry is a run without a log (unobserved)."""
+    if not isinstance(payload, list):
+        raise TrialInputError("operator minutes must be a JSON list")
+    _refuse_secrets(payload, "operator minutes")
+    minutes: dict[str, dict[str, float]] = {}
+    seen = set()
+    for number, item in enumerate(payload, start=1):
+        if not isinstance(item, Mapping) or set(item) != {"run_id", "account_alias", "operator_minutes"}:
+            raise TrialInputError(f"minutes entry {number} needs exactly run_id, account_alias and operator_minutes")
+        if item["account_alias"] not in plan.accounts:
+            raise AccountMismatchError(f"minutes entry {number} names an account that is not in the plan")
+        if not isinstance(item["run_id"], str) or not item["run_id"]:
+            raise TrialInputError(f"minutes entry {number} run_id must be a run record name")
+        key = (item["run_id"], item["account_alias"])
+        if key in seen:
+            raise TrialInputError(f"minutes entry {number} repeats a run and account")
+        seen.add(key)
+        value = item["operator_minutes"]
+        if value is not None and (not _number(value) or value < 0):
+            raise TrialInputError(f"minutes entry {number} operator_minutes must be a non-negative number or null")
+        if value is not None:
+            minutes.setdefault(item["run_id"], {})[item["account_alias"]] = float(value)
+    return minutes
+
+
+def _identity_incidents(plan: FleetPlan, registry: AccountRegistry, record: RunRecord,
+                        window: Mapping[str, Sequence[GameplayEvent]]) -> list[dict[str, Any]]:
+    """Accounts whose run record does not show the S10-R1 identity check (fingerprint declared and matched)."""
+    incidents = []
+    for entry in record.accounts:
+        alias = entry["alias"]
+        expected = registry.get(alias).expected_game_identity if alias in registry else None
+        attempted = entry["attempted"] if entry["attempted"] is not None else sum(
+            1 for e in window.get(alias, ()) if e.account_alias == alias and e.attempted)
+        detail = None
+        if alias not in registry:
+            detail = f"run record account {alias!r} is not in the registry"
+        elif expected is None and entry["status"] not in UNOBSERVED_STATUSES:
+            detail = f"{alias!r} declares no expected_game_identity in the registry"
+        elif entry["game_identity"] is not None and entry["game_identity"] != expected:
+            detail = f"{alias!r} ran as a game identity other than its expected_game_identity"
+        elif entry["game_identity"] is None and attempted:
+            detail = f"{alias!r} attempted actions but the run record shows no accepted game identity"
+        if detail:
+            incidents.append({"rule": IDENTITY_RULE, "account_alias": alias, "attempt_ids": [], "detail": detail})
+    return incidents
+
+
+def _run_mode(plan: FleetPlan, record: RunRecord) -> tuple[Optional[str], Optional[str], Optional[str]]:
+    """The mode the run counts under, where it came from, and a schedule deviation if any."""
+    scheduled = plan.scheduled_mode(record.started_at)
+    if record.orchestrator is not None:
+        deviation = None
+        if scheduled is None:
+            deviation = "the run started outside every scheduled window"
+        elif scheduled != record.orchestrator:
+            deviation = f"the schedule names {scheduled} but the run record shows {record.orchestrator}"
+        return record.orchestrator, "run record", deviation
+    if scheduled is not None:
+        return scheduled, "schedule", None
+    return None, None, "the run record names no mode and the run started outside every scheduled window"
+
+
+def _run_section(plan: FleetPlan, registry: AccountRegistry, run: FleetRunInput, previous_end: Optional[datetime],
+                 minutes: Mapping[str, Mapping[str, float]]) -> dict[str, Any]:
+    record = run.record
+    start, end = record.started_at, record.finished_at
+    scope = {alias: [e for e in events if (previous_end is None or _as_utc(e.finished_at) > previous_end)
+                     and _as_utc(e.finished_at) <= end] for alias, events in run.journals.items()}
+    window = {alias: [e for e in events if _as_utc(e.started_at) >= start] for alias, events in scope.items()}
+    audit = audit_fleet(registry, scope)
+    incidents = [{**asdict(incident), "attempt_ids": list(incident.attempt_ids)} for incident in audit.incidents]
+    incidents += _identity_incidents(plan, registry, record, window)
+    fleet_run = FleetRun(
+        mode=record.orchestrator or "unknown", dry_run=False, started_at=start.isoformat(),
+        finished_at=end.isoformat(), stop_reason=record.stop_reason,
+        accounts=tuple(AccountRun(entry["alias"], entry["status"], entry["reason"]) for entry in record.accounts),
+    )
+    fleet = compute_fleet_report(window, fleet_run=fleet_run, audit=audit, manual_minutes=plan.manual_minutes,
+                                 operator_minutes=minutes.get(record.run_id, {}))
+    alerts = evaluate_alerts(window, now=end, audit=audit)
+    mode, mode_source, deviation = _run_mode(plan, record)
+    hours = (end - start).total_seconds() / 3600
+    verified = fleet.fleet.verified
+    return {
+        "run_id": record.run_id,
+        "journal_dir": record.journal_dir.name,
+        "started_at": start.isoformat(),
+        "finished_at": end.isoformat(),
+        "hours": round(hours, 4),
+        "mode": mode,
+        "mode_source": mode_source,
+        "scheduled_mode": plan.scheduled_mode(start),
+        "schedule_deviation": deviation,
+        "execute_mode": record.execute_mode,
+        "authorization_hash": record.authorization_hash,
+        "registry_hash": record.registry_hash,
+        "policy_versions": dict(record.policy_versions),
+        "game_version": record.game_version,
+        "stop_reason": record.stop_reason,
+        "accounts": [dict(entry) for entry in record.accounts],
+        "events_audited": audit.events_checked,
+        "attempted_outside_run": sum(1 for alias, events in scope.items() for e in events
+                                     if e.attempted and e.account_alias == alias and _as_utc(e.started_at) < start),
+        "audit": {"clean": not incidents, "accounts_checked": audit.accounts_checked,
+                  "events_checked": audit.events_checked, "by_rule": _count_rules(incidents)},
+        "incidents": incidents,
+        "fleet_report": asdict(fleet),
+        "verified_per_hour": round(verified / hours, 4) if hours > 0 else None,
+        "alerts": asdict(alerts),
+    }
+
+
+def _count_rules(incidents: Sequence[Mapping[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for incident in incidents:
+        counts[incident["rule"]] = counts.get(incident["rule"], 0) + 1
+    return counts
+
+
+def _mode_summary(plan: FleetPlan, mode: str, runs: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    fleet = [run["fleet_report"]["fleet"] for run in runs]
+    totals = {key: sum(row[key] for row in fleet) for key in ("attempted", "verified", "failed", "uncertain",
+                                                              "contradicted")}
+    per_hour = MeanSample(tuple(run["verified_per_hour"] for run in runs if run["verified_per_hour"] is not None))
+    failure = ProportionSample(totals["failed"], totals["attempted"])
+    uncertain = ProportionSample(totals["uncertain"], totals["attempted"])
+    accounts = {}
+    for alias in plan.accounts:
+        rows = [row for run in runs for row in run["fleet_report"]["accounts"] if row["account_alias"] == alias]
+        sums = {key: sum(row["throughput"][key] for row in rows) for key in ("attempted", "verified", "failed",
+                                                                             "uncertain", "contradicted")}
+        saved = [row["time_saved_minutes"] for row in rows if row["time_saved_minutes"] is not None]
+        operator = [row["operator_minutes"] for row in rows if row["operator_minutes"] is not None]
+        accounts[alias] = {
+            "runs": len(rows), **sums,
+            "success_rate": ProportionSample(sums["verified"], sums["attempted"]).estimate(),
+            "failure_rate": ProportionSample(sums["failed"], sums["attempted"]).estimate(),
+            "uncertain_rate": ProportionSample(sums["uncertain"], sums["attempted"]).estimate(),
+            "incidents": sum(row["incidents"] for row in rows),
+            "operator_minutes": round(sum(operator), 2) if operator else None,
+            "time_saved_minutes": round(sum(saved), 2) if saved else None,
+            "time_saved_runs": len(saved),
+        }
+    saved_runs = [run["fleet_report"]["time_saved_minutes"] for run in runs
+                  if run["fleet_report"]["time_saved_minutes"] is not None]
+    return {
+        "mode": mode,
+        "runs": len(runs),
+        "run_hours": round(sum(run["hours"] for run in runs), 4),
+        **totals,
+        "verified_actions_per_hour": {**_mean_summary(per_hour), "unit": "run",
+                                      "source": "fleet verified actions / run record duration, one value per run"},
+        "failure_rate": {"n": failure.n, "rate": failure.estimate(), "interval_95": failure.interval()},
+        "uncertain_rate": {"n": uncertain.n, "rate": uncertain.estimate(), "interval_95": uncertain.interval()},
+        "incidents": sum(len(run["incidents"]) for run in runs),
+        "alerts": sum(len(run["alerts"]["alerts"]) for run in runs),
+        "time_saved_minutes": round(sum(saved_runs), 2) if saved_runs else None,
+        "accounts": accounts,
+        "_samples": (per_hour, failure, uncertain),
+    }
+
+
+def _recommendation(decisions: Mapping[str, Decision]) -> Optional[str]:
+    throughput = decisions[FLEET_METRICS[0][0]].decision
+    if throughput == REJECT:
+        return FLEET_BASELINE
+    if throughput == ADOPT and all(decisions[m].decision != REJECT for m, _ in FLEET_METRICS[1:]):
+        return FLEET_CANDIDATE
+    return None
+
+
+def build_fleet_trial_report(
+    plan: FleetPlan,
+    registry: AccountRegistry,
+    runs: Sequence[FleetRunInput],
+    minutes: Optional[Mapping[str, Mapping[str, float]]] = None,
+    *,
+    now: datetime,
+) -> dict[str, Any]:
+    now = _utc(now, "now")
+    minutes = minutes or {}
+    missing = [alias for alias in plan.accounts if alias not in registry]
+    if missing:
+        raise TrialInputError("a plan account is not in the registry")
+    runs = sorted(runs, key=lambda run: (run.record.started_at, run.record.run_id))
+    unknown_runs = set(minutes) - {run.record.run_id for run in runs}
+    if unknown_runs:
+        raise TrialInputError("operator minutes name a run that is not given with --run")
+
+    previous_end: dict[Path, datetime] = {}
+    sections, stop = [], None
+    for run in sorted(runs, key=lambda run: (run.record.finished_at, run.record.run_id)):
+        section = _run_section(plan, registry, run, previous_end.get(run.record.journal_dir), minutes)
+        previous_end[run.record.journal_dir] = run.record.finished_at
+        sections.append(section)
+    sections.sort(key=lambda section: (section["started_at"], section["run_id"]))
+    for section in sections:
+        excluded = None
+        if stop is not None:
+            excluded = f"after the trial stopped at run {stop['run_id']}"
+        elif not (plan.window_start <= _utc(section["started_at"], "started_at")
+                  and _utc(section["finished_at"], "finished_at") <= plan.window_end):
+            excluded = "outside the trial window"
+        elif section["mode"] is None:
+            excluded = "mode unknown"
+        section["counted"], section["excluded"] = excluded is None, excluded
+        if stop is None and section["incidents"]:  # S10-R3: any incident stops the trial from this run
+            stop = {"run_id": section["run_id"], "finished_at": section["finished_at"],
+                    "incidents": section["incidents"]}
+
+    modes, decisions = {}, {}
+    for mode in FLEET_MODES:
+        modes[mode] = _mode_summary(plan, mode, [s for s in sections if s["counted"] and s["mode"] == mode])
+    for index, (metric, higher) in enumerate(FLEET_METRICS):
+        decisions[metric] = decide(plan.experiment(metric, higher), modes[FLEET_BASELINE]["_samples"][index],
+                                   modes[FLEET_CANDIDATE]["_samples"][index], now)
+    for summary in modes.values():
+        del summary["_samples"]
+    after_last = 0
+    for journal_dir, end in previous_end.items():
+        journals = next(run.journals for run in runs if run.record.journal_dir == journal_dir)
+        after_last += sum(1 for events in journals.values() for e in events if _as_utc(e.finished_at) > end)
+    saved = [s["fleet_report"]["time_saved_minutes"] for s in sections
+             if s["counted"] and s["fleet_report"]["time_saved_minutes"] is not None]
+    report = {
+        "report": "fleet-trial",
+        "trial_id": plan.trial_id,
+        "hypothesis": plan.hypothesis,
+        "accounts": list(plan.accounts),
+        "concurrency": plan.concurrency,
+        "window": {"start": plan.window_start.isoformat(), "end": plan.window_end.isoformat()},
+        "schedule": [{"mode": w.mode, "start": w.start.isoformat(), "end": w.end.isoformat()} for w in plan.schedule],
+        "evaluated_at": now.isoformat(),
+        "min_sample": plan.min_sample,
+        "min_attempts": plan.min_attempts,
+        "manual_minutes": dict(plan.manual_minutes),
+        "status": "stopped" if stop else ("in-progress" if now < plan.window_end else "complete"),
+        "stop": stop,
+        "incidents": [{"run_id": s["run_id"], **incident} for s in sections for incident in s["incidents"]],
+        "runs": sections,
+        "modes": modes,
+        "decisions": {metric: asdict(decision) for metric, decision in decisions.items()},
+        "recommendation": None if stop else _recommendation(decisions),
+        "time_saved_minutes": round(sum(saved), 2) if saved else None,
+        "events_after_last_run": after_last,
+        "registry_hashes": sorted({s["registry_hash"] for s in sections if s["registry_hash"]}),
+    }
+    report["limitations"] = _fleet_limitations(report)
+    _refuse_secrets(report, "the fleet trial report")
+    return report
+
+
+def _fleet_limitations(report: Mapping[str, Any]) -> list[str]:
+    notes = [
+        "Both accounts share the client's process-wide rate limit, so concurrent runs may gain little. The "
+        "journals do not record rate-limit waits, so this report cannot say whether throughput was rate-limited.",
+        "Modes run in different windows, so changes in the game or the accounts between windows are confounded "
+        "with the mode.",
+        "Runs of one account are serially correlated, so the 95% intervals and the decide() results are "
+        "optimistic.",
+        "Verified actions per hour divide by the run record's duration, which includes logins and snapshots.",
+    ]
+    if report["stop"]:
+        notes.insert(0, f"The trial stopped at run {report['stop']['run_id']} on {len(report['stop']['incidents'])} "
+                        "isolation incident(s). Later runs are left out; the comparison and decide() results are "
+                        "for reference only and must not be acted on.")
+    for mode, summary in report["modes"].items():
+        if summary["runs"] < report["min_sample"]:
+            notes.append(f"{mode} has {summary['runs']} counted run(s), under the planned minimum of "
+                         f"{report['min_sample']}.")
+        if summary["attempted"] < report["min_attempts"]:
+            notes.append(f"{mode} has {summary['attempted']} attempt(s), under the planned minimum of "
+                         f"{report['min_attempts']} for the rate comparisons.")
+    deviations = [s["run_id"] for s in report["runs"] if s["schedule_deviation"]]
+    if deviations:
+        notes.append(f"{len(deviations)} run(s) did not follow the schedule ({', '.join(deviations)}); each counts "
+                     "under the mode its run record shows.")
+    excluded = [s for s in report["runs"] if not s["counted"]]
+    if excluded:
+        notes.append(f"{len(excluded)} run(s) are left out of the comparison: "
+                     + "; ".join(f"{s['run_id']} ({s['excluded']})" for s in excluded) + ".")
+    outside = sum(s["attempted_outside_run"] for s in report["runs"])
+    if outside:
+        notes.append(f"{outside} attempted action(s) were journaled between runs, outside every run record; they "
+                     "were audited but are not in any run's metrics.")
+    if report["events_after_last_run"]:
+        notes.append(f"{report['events_after_last_run']} journal event(s) finished after the last run record of "
+                     "their directory and were not audited.")
+    if len(report["registry_hashes"]) > 1:
+        notes.append("The registry changed between runs (several registry hashes).")
+    elif not report["registry_hashes"]:
+        notes.append("No run record carries a registry hash.")
+    servers = {s["game_version"].get("server") if isinstance(s["game_version"], Mapping) else s["game_version"]
+               for s in report["runs"]}
+    if servers <= {None}:
+        notes.append("No run record observed the server's game version.")
+    elif len(servers - {None}) > 1:
+        notes.append("The game version changed during the trial; analyse each part separately.")
+    if report["time_saved_minutes"] is None:
+        notes.append("Time saved is not reported: it needs an account's manual routine minutes in the plan and "
+                     "its operator minutes for a run.")
+    others = sorted({entry["alias"] for s in report["runs"] for entry in s["accounts"]} - set(report["accounts"]))
+    if others:
+        notes.append(f"Run records include account(s) outside the plan: {', '.join(others)}.")
+    notes.append("decide() has no futility rule and no non-inferiority mode: it cannot show the modes are "
+                 "equivalent.")
+    return notes
+
+
+def _pct_cell(value: Optional[float]) -> str:
+    return "n/a" if value is None else f"{value:.0%}"
+
+
+def _interval_cell(interval: Optional[Sequence[float]], percent: bool = False) -> str:
+    if interval is None:
+        return "n/a"
+    render = _pct_cell if percent else _cell
+    return f"{render(interval[0])} to {render(interval[1])}"
+
+
+def fleet_to_markdown(report: Mapping[str, Any]) -> str:
+    lines = [
+        f"# Fleet trial report: {report['trial_id']}",
+        "",
+        f"- Accounts: {', '.join(report['accounts'])}",
+        f"- Window: {report['window']['start']} to {report['window']['end']}",
+        f"- Evaluated at: {report['evaluated_at']}",
+        f"- Modes: {FLEET_BASELINE} (baseline) vs {FLEET_CANDIDATE} (candidate, {report['concurrency']} workers); "
+        f"minimum {report['min_sample']} runs and {report['min_attempts']} attempts per mode",
+        f"- Status: **{report['status']}**",
+        f"- Recommendation: {report['recommendation'] or 'none'}",
+        f"- Time saved (min): {_cell(report['time_saved_minutes'])}",
+        "",
+    ]
+    if report["stop"]:
+        lines += ["## Trial stopped", "", f"Run {report['stop']['run_id']} (finished {report['stop']['finished_at']}) "
+                  "had isolation incidents, so the trial stopped there. The comparison below is for reference only.",
+                  ""]
+    lines += ["## Isolation incidents", ""]
+    if report["incidents"]:
+        lines += ["| Run | Rule | Account | Attempts | Detail |", "| --- | --- | --- | --- | --- |"]
+        lines += [f"| {i['run_id']} | {i['rule']} | {i['account_alias']} | {_cell(', '.join(i['attempt_ids']) or '')} "
+                  f"| {_cell(i['detail'])} |" for i in report["incidents"]]
+    else:
+        lines.append("_Every run's audit was clean._")
+    lines += ["", "## Runs", "",
+              "| Run | Mode (source) | Scheduled | Start | Hours | Attempted | Verified | Failed | Uncertain | "
+              "Verified/h | Incidents | Alerts | Counted |",
+              "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
+    for s in report["runs"]:
+        t = s["fleet_report"]["fleet"]
+        mode = f"{s['mode']} ({s['mode_source']})" if s["mode"] else "n/a"
+        counted = "yes" if s["counted"] else f"no: {s['excluded']}"
+        lines.append(f"| {s['run_id']} | {mode} | {_cell(s['scheduled_mode'])} | {s['started_at']} | "
+                     f"{_cell(s['hours'])} | {t['attempted']} | {t['verified']} | {t['failed']} | {t['uncertain']} | "
+                     f"{_cell(s['verified_per_hour'])} | {len(s['incidents'])} | {len(s['alerts']['alerts'])} | "
+                     f"{_cell(counted)} |")
+    lines += ["", "## Accounts per run", "",
+              "| Run | Account | Status | Attempted | Verified | Success | Uncertain | Failed | Actions/h | "
+              "Incidents | Operator min | Time saved (min) |",
+              "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
+    for s in report["runs"]:
+        for row in s["fleet_report"]["accounts"]:
+            t = row["throughput"]
+            lines.append(f"| {s['run_id']} | {row['account_alias']} | {_cell(row['status'])} | {t['attempted']} | "
+                         f"{t['verified']} | {_pct_cell(t['success_rate'])} | {_pct_cell(t['uncertain_rate'])} | "
+                         f"{_pct_cell(t['failure_rate'])} | {_cell(t['actions_per_hour'])} | {row['incidents']} | "
+                         f"{_cell(row['operator_minutes'])} | {_cell(row['time_saved_minutes'])} |")
+    lines += ["", "## Mode comparison", "",
+              "| Mode | Runs (n) | Attempted (n) | Verified/h (mean) | 95% interval | Failure rate | 95% interval | "
+              "Uncertain rate | 95% interval | Incidents | Alerts | Time saved (min) |",
+              "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
+    for mode, m in report["modes"].items():
+        lines.append(f"| {mode} | {m['runs']} | {m['attempted']} | {_cell(m['verified_actions_per_hour']['mean'])} | "
+                     f"{_interval_cell(m['verified_actions_per_hour']['interval_95'])} | "
+                     f"{_pct_cell(m['failure_rate']['rate'])} | {_interval_cell(m['failure_rate']['interval_95'], True)} | "
+                     f"{_pct_cell(m['uncertain_rate']['rate'])} | "
+                     f"{_interval_cell(m['uncertain_rate']['interval_95'], True)} | {m['incidents']} | {m['alerts']} | "
+                     f"{_cell(m['time_saved_minutes'])} |")
+    lines += ["", "| Metric | decide() | n (sequential / concurrent) | Reason |", "| --- | --- | --- | --- |"]
+    for metric, d in report["decisions"].items():
+        lines.append(f"| {metric} | **{d['decision']}** | {d['baseline_n']} / {d['candidate_n']} | {_cell(d['reason'])} |")
+    lines += ["", "## Per account and mode", "",
+              "| Mode | Account | Runs | Attempted | Verified | Success | Failure | Uncertain | Incidents | "
+              "Operator min | Time saved (min) |",
+              "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
+    for mode, m in report["modes"].items():
+        for alias, a in m["accounts"].items():
+            lines.append(f"| {mode} | {alias} | {a['runs']} | {a['attempted']} | {a['verified']} | "
+                         f"{_pct_cell(a['success_rate'])} | {_pct_cell(a['failure_rate'])} | "
+                         f"{_pct_cell(a['uncertain_rate'])} | {a['incidents']} | {_cell(a['operator_minutes'])} | "
+                         f"{_cell(a['time_saved_minutes'])} |")
+    alerts = [(s["run_id"], alert) for s in report["runs"] for alert in s["alerts"]["alerts"]]
+    lines += ["", "## Alerts", ""]
+    if alerts:
+        lines += ["| Run | Severity | Rule | Account | Message |", "| --- | --- | --- | --- | --- |"]
+        lines += [f"| {run_id} | {a['severity']} | {a['rule_id']} | {a['account_alias']} | {_cell(a['message'])} |"
+                  for run_id, a in alerts]
+    else:
+        lines.append("_No alerts in any run._")
+    lines += ["", "## Run records", "",
+              "| Run | Journal dir | Execute mode | Authorization | Registry | Policies | Game version | Stop reason |",
+              "| --- | --- | --- | --- | --- | --- | --- | --- |"]
+    for s in report["runs"]:
+        version = s["game_version"]
+        if isinstance(version, Mapping):
+            version = f"client {_cell(version.get('client'))}, server {_cell(version.get('server'))}"
+        policies = ", ".join(f"{alias} {policy}" for alias, policy in sorted(s["policy_versions"].items()))
+        lines.append(f"| {s['run_id']} | {_cell(s['journal_dir'])} | {_cell(s['execute_mode'])} | "
+                     f"{_cell(s['authorization_hash'])} | {_cell(s['registry_hash'])} | {_cell(policies or None)} | "
+                     f"{_cell(version)} | {_cell(s['stop_reason'])} |")
+    lines += ["", "## Limitations", ""] + [f"- {note}" for note in report["limitations"]]
+    return "\n".join(lines) + "\n"
+
+
 # -- command line --------------------------------------------------------------------------------
 
 
@@ -1361,20 +2091,27 @@ def _arm_paths(values: Sequence[str], flag: str) -> dict[str, Path]:
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Build the progression trial exit report (SPEC-07), or with --pvp the PvP strategy "
-                    "comparison (SPEC-08).")
-    parser.add_argument("--plan", required=True, type=Path, help="trial plan JSON (a PvP plan with --pvp)")
-    parser.add_argument("--pvp", action="store_true", help="build the PvP strategy comparison (SPEC-08)")
+        description="Build the progression trial exit report (SPEC-07), with --pvp the PvP strategy "
+                    "comparison (SPEC-08), or with --fleet the fleet trial report (SPEC-10).")
+    parser.add_argument("--plan", required=True, type=Path,
+                        help="trial plan JSON (a PvP plan with --pvp, a fleet plan with --fleet)")
+    kind = parser.add_mutually_exclusive_group()
+    kind.add_argument("--pvp", action="store_true", help="build the PvP strategy comparison (SPEC-08)")
+    kind.add_argument("--fleet", action="store_true", help="build the fleet trial report (SPEC-10)")
     parser.add_argument("--snapshots", action="append", default=[], metavar="ARM=PATH",
                         help="an arm's snapshot JSON file or directory (repeat per arm)")
     parser.add_argument("--journal", action="append", default=[], metavar="ARM=PATH",
                         help="an arm's gameplay journal JSONL (repeat per arm); with --pvp, a journal PATH "
                              "of the trial account (repeatable)")
-    parser.add_argument("--minutes", type=Path, help="operator minutes per account-day JSON")
+    parser.add_argument("--minutes", type=Path,
+                        help="operator minutes JSON: per account-day, or with --fleet per run and account")
     parser.add_argument("--interventions", type=Path, help="intervention log JSON")
     parser.add_argument("--adoptions", type=Path, help="with --pvp: the strategy adoption log JSON")
     parser.add_argument("--battle-history", type=Path, dest="battle_history",
                         help="with --pvp: parsed battle-history records JSON")
+    parser.add_argument("--registry", type=Path, help="with --fleet: the account registry JSON")
+    parser.add_argument("--run", action="append", default=[], type=Path, dest="runs", metavar="PATH",
+                        help="with --fleet: an execute journal directory or one runs/*.json run record (repeatable)")
     parser.add_argument("--now", help="evaluation time, ISO 8601 UTC (default: the current time)")
     parser.add_argument("--json", type=Path, dest="json_out", help="write the JSON report here")
     parser.add_argument("--markdown", type=Path, help="write the Markdown report here")
@@ -1382,7 +2119,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     render = to_markdown
     try:
         now = _utc(args.now, "--now") if args.now else datetime.now(timezone.utc)
-        if args.pvp:
+        if args.fleet:
+            report, render = _fleet_from_args(args, now), fleet_to_markdown
+        elif args.registry or args.runs:
+            raise TrialInputError("--registry and --run need --fleet")
+        elif args.pvp:
             report, render = _pvp_from_args(args, now), pvp_to_markdown
         else:
             if args.adoptions or args.battle_history:
@@ -1418,6 +2159,20 @@ def _pvp_from_args(args: argparse.Namespace, now: datetime) -> dict[str, Any]:
                if args.battle_history else None)
     return build_pvp_report(plan, load_journals([Path(value) for value in args.journal]), adoptions, history,
                             now=now)
+
+
+def _fleet_from_args(args: argparse.Namespace, now: datetime) -> dict[str, Any]:
+    if args.snapshots or args.journal or args.interventions or args.adoptions or args.battle_history:
+        raise TrialInputError("--snapshots, --journal, --interventions, --adoptions and --battle-history do not "
+                              "apply to --fleet; journals are read from each --run directory")
+    if not args.registry or not args.runs:
+        raise TrialInputError("--fleet needs --registry and at least one --run")
+    plan = fleet_plan_from_dict(_read_json(args.plan, "the fleet plan"))
+    if not args.registry.is_file():
+        raise TrialInputError("the --registry path is not a file")
+    registry = load_registry(args.registry)
+    minutes = fleet_minutes_from_list(_read_json(args.minutes, "operator minutes"), plan) if args.minutes else {}
+    return build_fleet_trial_report(plan, registry, load_fleet_runs(args.runs), minutes, now=now)
 
 
 if __name__ == "__main__":

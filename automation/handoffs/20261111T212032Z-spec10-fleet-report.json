@@ -1,0 +1,44 @@
+{
+  "slice_id": "spec10-fleet-report",
+  "status": "done",
+  "summary": "Study D needs an exit report that compares sequential and concurrent fleet runs and stops the trial on the first isolation incident. The pieces existed (audit_fleet, compute_fleet_report, evaluate_alerts, decide()), but nothing tied them to the journal directories and run records that run.py --fleet-execute writes.  trial_report.py --fleet --plan PLAN --registry REG --run PATH... reads each execute journal directory (<alias>.log plus runs/*.json) or a single run record. It reads a documented subset of the run record and ignores the rest, and shortens the sha256 hashes to 16 hex digits so the report passes the secret scan.  - R3: each run is audited over every event since the previous run record in   its directory, so the run's dry run and anything journaled between runs   are audited too. A record that shows an account without a declared   fingerprint, or with a game identity other than the registry's, adds an   identity-not-enforced incident. The first run with any incident stops the   trial. That run and its incidents are listed, and later runs are left out   of the comparison. - R4: per-run per-account and fleet metrics come from compute_fleet_report,   with the mode. Time saved is reported only when the plan's manual minutes   and the run's operator minutes are both given. - R5: sequential (baseline) is compared with concurrent (candidate) using   decide() on verified actions per run-hour, failure rate and uncertain   rate, next to sample sizes and incident counts. The mode comes from the   record's orchestrator field, or from the plan's fixed schedule.   Deviations from the schedule are listed. - R6: alerts are evaluated per run at the run's end, with its audit.  The progression and --pvp reports are unchanged. --registry and --run are refused without --fleet, and --fleet cannot be combined with --pvp. Tests use synthetic journals, plus one test that runs the real --fleet-dry-run and --fleet-execute commands with fakes and reads their output. Sockets are blocked in every test. Implemented by the SPEC-10 builder specialist subagent in an isolated worktree, independently reviewed by the verifier subagent (tests cite S10-R3..R6; parent re-validated in a scratch clone), and re-validated by the parent.",
+  "files_touched": [
+    "scripts/trial_report.py",
+    "tests/test_trial_report_fleet.py"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "SPEC-10: fleet trial report",
+      "before": "Roadmap item not implemented",
+      "after": "SPEC-10: fleet trial report (offline)",
+      "proof": [
+        "make syntax-check, make test, scripts/ci.py lint and git diff --check pass on current main",
+        "verifier verdict: tests cite S10-R3..R6; parent re-validated in a scratch clone"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "Offline only; no live game verification."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-11T21:20:49Z"
+}
