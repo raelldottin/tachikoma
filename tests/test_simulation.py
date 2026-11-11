@@ -1,14 +1,17 @@
 """Tests for sdk.simulation: deterministic offline scenarios through the real stack. No network."""
 
 import json
+import random
 import socket
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
 from sdk.journal import GameplayJournal
-from sdk.simulation import SCENARIO_DIR, load_scenario, run_scenario
+from sdk.policy import DesignData
+from sdk.simulation import SCENARIO_DIR, SimulatedClock, SimulatedGame, load_scenario, run_scenario
 
 
 def run(name, **kwargs):
@@ -73,6 +76,26 @@ class ScenarioTests(unittest.TestCase):
         self.assertEqual([e.attempt_id for e in renumbered["alpha"]], ["sim-00001", "sim-00003"])
         self.assertEqual([e.attempt_id for e in renumbered["bravo"]], ["sim-00002"])
 
+    def test_reused_workdir_is_refused(self):
+        # Regression: a second run appended to the first run's journals, changing every report.
+        with tempfile.TemporaryDirectory() as tmp:
+            first = run_scenario(load_scenario("two-accounts"), tmp)
+            journal = Path(tmp) / "alpha.jsonl"
+            before = journal.read_bytes()
+            with self.assertRaisesRegex(FileExistsError, "alpha.jsonl"):
+                run_scenario(load_scenario("two-accounts"), tmp)
+            self.assertEqual(journal.read_bytes(), before)
+        fresh, _ = run("two-accounts")
+        self.assertEqual(first.progression_json, fresh.progression_json)
+
+    def test_unrelated_files_in_workdir_are_allowed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "notes.txt").write_text("kept")
+            (Path(tmp) / "charlie.jsonl").write_text("")  # not an account in this scenario
+            result = run_scenario(load_scenario("two-accounts"), tmp)
+            self.assertEqual((Path(tmp) / "notes.txt").read_text(), "kept")
+        self.assertEqual(result.progression_json, run("two-accounts")[0].progression_json)
+
     def test_no_network_is_used(self):
         def blocked(*args, **kwargs):
             raise AssertionError("network access attempted")
@@ -80,6 +103,48 @@ class ScenarioTests(unittest.TestCase):
         with patch.object(socket, "socket", blocked), patch.object(socket, "create_connection", blocked):
             result, _ = run("two-accounts")
         self.assertTrue(result.calls["alpha"])
+
+
+class SimulatedGameTests(unittest.TestCase):
+    def game(self, price, **resources):
+        design = DesignData.from_records(room_designs=[
+            {"@RoomDesignId": "300"},
+            {"@RoomDesignId": "301", "@UpgradeFromRoomDesignId": "300", "@PriceString": price},
+        ])
+        rooms = [{"@RoomId": "r1", "@RoomDesignId": "300", "@RoomStatus": "Normal"}]
+        clock = SimulatedClock(datetime(2027, 6, 1, tzinfo=timezone.utc))
+        return SimulatedGame("alpha", dict(resources, rooms=rooms), design, random.Random(0), clock)
+
+    def test_gas_priced_upgrade_charges_gas(self):
+        # Regression: only mineral prices were charged, so gas-priced upgrades were free.
+        game = self.game("gas:200", minerals=1000, gas=250)
+        game.upgradeRoom("r1", "301")
+        self.assertEqual((game.gas, game.minerals), (50, 1000))
+        self.assertEqual(game.rooms[0]["@RoomStatus"], "Upgrading")
+
+    def test_unaffordable_gas_upgrade_is_refused(self):
+        game = self.game("gas:200", minerals=1000, gas=199)
+        game.upgradeRoom("r1", "301")
+        self.assertEqual((game.gas, game.minerals), (199, 1000))
+        self.assertEqual(game.rooms[0]["@RoomStatus"], "Normal")
+
+    def test_mineral_priced_upgrade_still_charges_minerals(self):
+        game = self.game("mineral:300", minerals=300, gas=0)
+        game.upgradeRoom("r1", "301")
+        self.assertEqual((game.minerals, game.rooms[0]["@RoomStatus"]), (0, "Upgrading"))
+        refused = self.game("mineral:300", minerals=299, gas=5000)
+        refused.upgradeRoom("r1", "301")
+        self.assertEqual((refused.minerals, refused.gas, refused.rooms[0]["@RoomStatus"]), (299, 5000, "Normal"))
+
+    def test_unmodelled_price_kind_is_refused(self):
+        game = self.game("starbux:10", minerals=1000, gas=1000, starbux=50)
+        game.upgradeRoom("r1", "301")
+        self.assertEqual((game.starbux, game.rooms[0]["@RoomStatus"]), (50, "Normal"))
+
+    def test_unpriced_upgrade_is_free(self):
+        game = self.game("", minerals=0, gas=0)
+        game.upgradeRoom("r1", "301")
+        self.assertEqual(game.rooms[0]["@RoomStatus"], "Upgrading")
 
 
 if __name__ == "__main__":

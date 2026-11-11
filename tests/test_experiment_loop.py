@@ -59,6 +59,59 @@ class DecideTests(unittest.TestCase):
         self.assertEqual(decision.candidate_estimate, 0.9)
         self.assertLess(decision.baseline_interval[1], decision.candidate_interval[0])
 
+    def test_mean_interval_uses_student_t(self):
+        # Regression: a z interval from n = 2 made (90, 110) vs (130, 131) look conclusive.
+        pair = replace(EXP, metric="minerals-per-hour", min_sample=2)
+        low, high = MeanSample((90.0, 110.0)).interval()  # 100 +/- t(1) * 10, with t(1) = 12.706205
+        self.assertAlmostEqual(low, -27.06205, delta=1e-4)
+        self.assertAlmostEqual(high, 227.06205, delta=1e-4)
+        self.assertEqual(decide(pair, MeanSample((90.0, 110.0)), MeanSample((130.0, 131.0)), OPEN).decision,
+                         "keep-running")
+        self.assertEqual(decide(pair, MeanSample((90.0, 110.0)), MeanSample((130.0, 131.0)), CLOSED).decision,
+                         "insufficient-evidence")
+
+    def test_t_quantile_matches_reference_values(self):
+        from sdk.experiments.loop import Z_95, t_quantile_975
+
+        reference = {1: 12.706205, 2: 4.302653, 5: 2.570582, 10: 2.228139, 30: 2.042272, 31: 2.039513,
+                     40: 2.021075, 60: 2.000298, 100: 1.983972, 1000: 1.962339}
+        for df, expected in reference.items():
+            with self.subTest(df=df):
+                self.assertAlmostEqual(t_quantile_975(df), expected, delta=1e-6)
+        values = [t_quantile_975(df) for df in range(1, 200)]
+        self.assertEqual(values, sorted(values, reverse=True))
+        self.assertGreater(values[-1], Z_95)
+        for bad in (0, -1, 1.5, True):
+            with self.subTest(bad=bad), self.assertRaises(ExperimentError):
+                t_quantile_975(bad)
+
+    def test_zero_variance_never_decides(self):
+        # Regression: identical values gave zero-width intervals, so (100, 100) vs (100.5, 100.5) adopted.
+        pair = replace(EXP, metric="minerals-per-hour", min_sample=2)
+        for baseline, candidate in (((100.0, 100.0), (100.5, 100.5)),
+                                    ((100, 101, 99, 100, 102, 98), (200,) * 6),
+                                    ((200,) * 6, (100, 101, 99, 100, 102, 98)),
+                                    ((0.1, 0.1, 0.1), (5.0, 5.1, 4.9, 5.0))):
+            with self.subTest(baseline=baseline, candidate=candidate):
+                running = decide(pair, MeanSample(baseline), MeanSample(candidate), OPEN)
+                self.assertEqual(running.decision, "keep-running")
+                self.assertIn("zero-width", running.reason)
+                self.assertEqual(decide(pair, MeanSample(baseline), MeanSample(candidate), CLOSED).decision,
+                                 "insufficient-evidence")
+        early = decide(replace(pair, min_sample=3), MeanSample((1.0, 1.0)), MeanSample((2.0, 3.0)), OPEN)
+        self.assertIn("needs 3", early.reason)  # min_sample is still checked first
+
+    def test_collapsed_proportion_interval_never_decides(self):
+        # A Wilson interval is never zero width, but rounding to 4 places collapses it for 0 (or all)
+        # successes in about 77,000 or more trials.
+        huge = replace(EXP, min_sample=2)
+        self.assertEqual(ProportionSample(0, 100_000).interval(), (0.0, 0.0))
+        self.assertGreater(ProportionSample(0, 1_000).interval()[1], 0.0)
+        self.assertEqual(decide(huge, ProportionSample(0, 100_000), ProportionSample(60, 100_000), OPEN).decision,
+                         "keep-running")
+        self.assertEqual(decide(huge, ProportionSample(100_000, 100_000), ProportionSample(0, 100_000),
+                                CLOSED).decision, "insufficient-evidence")
+
     def test_mixed_sample_kinds_and_naive_time_are_refused(self):
         with self.assertRaises(ExperimentError):
             decide(EXP, ProportionSample(1, 2), MeanSample((1.0, 2.0)), OPEN)

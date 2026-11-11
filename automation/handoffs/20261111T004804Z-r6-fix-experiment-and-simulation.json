@@ -1,0 +1,51 @@
+{
+  "slice_id": "r6-fix-experiment-and-simulation",
+  "status": "done",
+  "summary": "loop.py: t_quantile_975 (6-decimal table df 1..30 checked against NIST/SEMATECH, Cornish-Fisher A&S 26.7.5 beyond, input validated), MeanSample.interval uses it, MeanSample.zero_variance, and decide returns keep-running/insufficient-evidence when either interval has zero width (also covers proportions collapsed by rounding). game.py: upgradeRoom charges mineral or gas by price kind, refuses unaffordable or unmodelled kinds; run_scenario raises FileExistsError if a scenario journal already exists in the workdir. Shipped scenarios produce identical reports before and after (hashed). 11 new tests; regression tests fail on the old code. Implemented by a subagent in a worktree; re-validated by the parent.",
+  "files_touched": [
+    "sdk/experiments/loop.py",
+    "sdk/simulation/game.py",
+    "tests/test_experiment_loop.py",
+    "tests/test_simulation.py",
+    "docs/baseline/experiment-loop.md",
+    "docs/baseline/simulation.md"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "Experiment decisions and simulation correctness",
+      "before": "Two identical measurements per variant could adopt a change; simulated gas upgrades were free and reused workdirs broke determinism",
+      "after": "Mean intervals are t-based and zero-width intervals never decide; simulation charges gas and starts from fresh journals",
+      "proof": [
+        "reviewer repro now gives keep-running for both pairs",
+        "regression tests fail on the previous code and pass now",
+        "make test passes",
+        "scripts/ci.py lint: no new findings",
+        "shipped scenario reports unchanged (hash-compared)"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "Mean intervals still assume independent measurements."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-11T00:48:12Z"
+}

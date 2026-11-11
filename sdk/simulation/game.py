@@ -10,8 +10,9 @@ registry, fleet orchestrator, per-account journals, then the progression,
 fleet and isolation-audit reports. Rooms that were upgrading and research
 that was running finish at each day boundary. The same scenario and seed
 give byte-identical reports: the clock is simulated, elapsed timers are
-fixed, and journal attempt ids (random UUIDs on disk) are renumbered in run
-order before reporting.
+fixed, journal attempt ids (random UUIDs on disk) are renumbered in run
+order before reporting, and a workdir that already holds one of the
+scenario's journals is refused, so every run starts from empty journals.
 """
 
 from __future__ import annotations
@@ -113,10 +114,17 @@ class SimulatedGame:
         self.calls.append("upgradeRoom")
         room = next((r for r in self.rooms if r.get("@RoomId") == room_id), None)
         target = next((d for d in self.design.rooms if d.design_id == str(upgrade_room_design_id)), None)
-        cost = target.cost_amount or 0 if target is not None and target.cost_kind == "mineral" else 0
-        if room is None or target is None or room.get("@RoomStatus") == "Upgrading" or self.minerals < cost:
+        if room is None or target is None or room.get("@RoomStatus") == "Upgrading":
             return object()  # raw response; the runner treats it as ambiguous
-        self.minerals -= cost
+        # Charge the price in its own currency; refuse an unaffordable or unmodelled one.
+        cost = target.cost_amount or 0
+        if target.cost_kind and cost > 0:
+            if target.cost_kind == "mineral" and self.minerals >= cost:
+                self.minerals -= cost
+            elif target.cost_kind == "gas" and self.gas >= cost:
+                self.gas -= cost
+            else:
+                return object()
         room["@RoomStatus"] = "Upgrading"
         self._upgrade_targets[room_id] = str(upgrade_room_design_id)
         return object()
@@ -171,6 +179,12 @@ def _renumber(journals: Mapping[str, list[GameplayEvent]]) -> dict[str, list[Gam
 
 
 def run_scenario(scenario: Mapping[str, Any], workdir: Path | str, *, seed: Optional[int] = None) -> ScenarioResult:
+    """Run ``scenario`` with its journals in ``workdir``.
+
+    Journals are append-only, so a workdir that already holds a journal for
+    one of the scenario's accounts (``<alias>.jsonl``) is refused with
+    ``FileExistsError`` rather than appended to; nothing is written in that
+    case. Other files in the workdir are left alone."""
     workdir = Path(workdir)
     seed = scenario.get("seed", 0) if seed is None else seed
     rng = random.Random(seed)
@@ -179,6 +193,10 @@ def run_scenario(scenario: Mapping[str, Any], workdir: Path | str, *, seed: Opti
     registry = registry_from_dict(scenario["registry"])
     games = {alias: SimulatedGame(alias, state, design, rng, clock)
              for alias, state in sorted(scenario["accounts"].items())}
+    existing = [str(workdir / f"{alias}.jsonl") for alias in games if (workdir / f"{alias}.jsonl").exists()]
+    if existing:
+        raise FileExistsError(f"scenario workdir already has journals ({', '.join(existing)}); "
+                              "use an empty directory so the run starts from empty journals")
 
     def factory(profile) -> AccountContext:
         game = games[profile.alias]

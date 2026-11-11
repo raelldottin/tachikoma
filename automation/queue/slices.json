@@ -962,7 +962,7 @@
     {
       "slice_id": "r6-fix-experiment-and-simulation",
       "title": "Robust experiment intervals and simulation correctness",
-      "status": "queued",
+      "status": "done",
       "priority": 344,
       "domain": "experiment",
       "allowed_paths": [
