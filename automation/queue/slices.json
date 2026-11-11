@@ -1178,7 +1178,7 @@
       ],
       "max_files_changed": 5,
       "notes": "Researcher lane. The roadmap asks to model hull-upgrade timing as a testable strategy rather than a rule. Add a new registered policy variant (baseline-v1 stays the default and unchanged) that plans the same daily actions but holds a mineral reserve toward the next hull upgrade when sdk.pvp hull readiness says the ship is close, so it can be compared with baseline-v1 in the experiment loop. Document the hypothesis and that it is unproven.",
-      "status": "queued",
+      "status": "done",
       "depends_on": [
         "r6-release-and-limitations"
       ],
