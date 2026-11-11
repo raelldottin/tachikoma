@@ -1,0 +1,49 @@
+{
+  "slice_id": "spec05-execute-command",
+  "status": "done",
+  "summary": "Every live trial needs an execute path that cannot run by accident, stops on the first sign of trouble and leaves a complete record. Until now run.py had dry runs only. This adds run.py --fleet-execute, the only code path that calls a fleet orchestrator's run(execute=True) (S05-R1).  Before any login it refuses (exit 2) a missing, invalid, expired or out-of-scope authorization, a missing or short identity salt, an enabled profile without expected_game_identity (S05-R8), the fleet stop file, and an account without a completed dry run of the same registry and policy in the last 24 hours (S05-R3). A dry run is recognised by a stamp: --fleet-dry-run now holds each account's plan events until the account's outcome is known and, when it completed, journals them with dry_run_policy, dry_run_registry (16 hex digits of the registry hash, short enough to survive journal redaction) and dry_run_id in evidence. Other accounts' events are written unchanged.  The execute gate in sdk/fleet/factory.py wraps both orchestrators: the plan keeps only authorized actions (canary mode, the default, keeps the first safe-to-retry one, S05-R4), budgets are the tighter of the registry's and the authorization's caps with starbux always 0 (S05-R6), and the runner refuses before any call an action outside the authorization or whose cap would be exceeded. Accounts stop on contradicted, unknown non-idempotent, isolation refusal or cap; the fleet stops on <journal dir>/STOP or when more than halt_share (default 0) of the accounts stopped (S05-R5). Each run prints the reconciliation and writes <journal dir>/runs/<UTC time>.json with the authorization and registry hashes, policy versions, game version, times and per-account outcomes (S05-R7), all through the dry run's scrubbing (S05-R9). --plan-only prints what would run without logging in (S05-R10).  Tests use fakes and the real Client behind an in-memory adapter, with sockets blocked; nothing was run against a real account. Implemented by the SPEC-05 builder specialist subagent in an isolated worktree, independently reviewed by the verifier subagent (CHANGES-REQUIRED, then APPROVE-WITH-NITS; halt, no-cost, battle-cap and rearm fixes in f78ac7f and bddeb80), and re-validated by the parent.",
+  "files_touched": [
+    "README.md",
+    "README.template",
+    "docs/baseline/capability-inventory.json",
+    "docs/baseline/fleet-accounts.md",
+    "run.py",
+    "sdk/fleet/factory.py",
+    "tests/test_fleet_execute.py"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "SPEC-05: authorized live execute command (built and tested offline)",
+      "before": "Roadmap item not implemented",
+      "after": "SPEC-05: authorized live execute command (built and tested offline) (offline)",
+      "proof": [
+        "make syntax-check, make test, scripts/ci.py lint and git diff --check pass on current main",
+        "verifier verdict: CHANGES-REQUIRED, then APPROVE-WITH-NITS; halt, no-cost, battle-cap and rearm fixes in f78ac7f and bddeb80"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "Offline only; no live game verification."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-11T21:12:46Z"
+}
