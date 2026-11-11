@@ -893,7 +893,7 @@
     {
       "slice_id": "r6-fix-budget-spend-caps",
       "title": "Enforce fleet budgets against the planning snapshot and reject unknown costs",
-      "status": "queued",
+      "status": "done",
       "priority": 341,
       "domain": "safety",
       "allowed_paths": [

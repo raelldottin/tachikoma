@@ -168,24 +168,48 @@ class FleetTests(unittest.TestCase):
         self.assertEqual(run.accounts[0].spent_this_period, {"minerals": 900})
         self.assertNotIn("upgradeRoom", self.games["alpha"].calls)
 
+    def test_balance_growth_before_the_planning_snapshot_adds_no_budget(self):
+        # The orchestrator's first snapshot sees 100 minerals; by the scheduler's planning
+        # snapshot the balance is 1000. A 50-mineral budget must still refuse the 300 upgrade.
+        game = FakeGame("alpha", self.clock, minerals="100")
+        snapshots = []
+
+        def snapshot():
+            snapshots.append(1)
+            if len(snapshots) == 2:
+                game.state["resources"] = dict(game.state["resources"], minerals="1000")
+            return game.snapshot()
+
+        def factory(profile):
+            return AccountContext(game, snapshot, GameplayJournal(self.dir / "alpha.jsonl"), DESIGN)
+
+        run = self.orchestrator(profile("alpha", budgets={"minerals": 50, "starbux": 0}),
+                                factory=factory).run(execute=True)
+        self.assertEqual(run.accounts[0].status, "completed")
+        self.assertNotIn("upgradeRoom", game.calls)
+        journal = GameplayJournal(self.dir / "alpha.jsonl")
+        self.assertNotIn("minerals", spent_in_period(journal, "alpha", T0))
+
 
 class BudgetHelperTests(unittest.TestCase):
-    def test_reserves_and_starbux(self):
+    def test_caps_and_starbux(self):
         registry = registry_from_dict({"version": 1, "accounts": [
             profile("alpha", budgets={"minerals": 300, "gas": 2000}, max_actions=5),
             profile("bravo", budgets={}),
         ]})
-        snap = build_snapshot("alpha", T0, "x", resources={"minerals": "1000", "gas": "500", "starbux": "9"})
-        config, remaining = budgeted_policy_config(registry.get("alpha"), snap, {"minerals": 100},
-                                                   PolicyConfig(allow_starbux_spend=True))
-        self.assertEqual((config.mineral_reserve, config.gas_reserve), (800, 0))
+        base = PolicyConfig(allow_starbux_spend=True, mineral_reserve=40, gas_reserve=7, max_gas_spend=1500)
+        config, remaining = budgeted_policy_config(registry.get("alpha"), {"minerals": 100}, base)
+        # Remaining budget becomes an absolute spend cap; the base reserves and a tighter base cap are kept.
+        self.assertEqual((config.max_mineral_spend, config.max_gas_spend), (200, 1500))
+        self.assertEqual((config.mineral_reserve, config.gas_reserve), (40, 7))
         self.assertEqual(remaining, {"minerals": 200, "gas": 2000, "starbux": 0})
         self.assertFalse(config.allow_starbux_spend)
         self.assertEqual(config.max_requests, 5)
-        unlimited, remaining = budgeted_policy_config(registry.get("bravo"), snap, {},
-                                                      PolicyConfig(allow_starbux_spend=True))
+        unlimited, remaining = budgeted_policy_config(registry.get("bravo"), {}, PolicyConfig(allow_starbux_spend=True))
         self.assertFalse(unlimited.allow_starbux_spend)
-        self.assertEqual((unlimited.mineral_reserve, remaining), (0, {"starbux": 0}))
+        self.assertEqual((unlimited.max_mineral_spend, unlimited.max_gas_spend, unlimited.mineral_reserve),
+                         (None, None, 0))
+        self.assertEqual(remaining, {"starbux": 0})
 
     def test_spent_in_period_ignores_old_foreign_and_skipped(self):
         with tempfile.TemporaryDirectory() as tmp:
