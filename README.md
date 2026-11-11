@@ -65,6 +65,22 @@ python run.py --login-email you@example.com --progression-dry-run --account-alia
 
 There is no live-execute flag yet. Running the planner against a real account is the blocked roadmap slice `r2-live-progression-trial`.
 
+### Offline reports
+
+`--report` prints a report from local journal files and exits. It needs no login: it never creates a device or client, prompts for a password, or opens a network connection.
+
+```bash
+python run.py --report progression --journal tachikoma-progression.log
+python run.py --report pvp --journal battles.log --report-format json
+python run.py --report fleet --journal alpha.log --journal bravo.log --registry fleet.json
+```
+
+- `progression`: per-account, per-day verified actions, success rate and failure ledger (see [docs/baseline/progression-metrics.md](docs/baseline/progression-metrics.md)).
+- `pvp`: the battle scorecard. No experiment schedule is applied, so every strategy shows as `none`.
+- `fleet`: throughput per account and for the fleet. Events are grouped by their own `account_alias` across all `--journal` files, so the file an event came from does not matter. With `--registry`, the isolation audit runs too and its incidents are counted. Because events are grouped by alias, the audit's `foreign-event` rule cannot fire here; the other rules apply.
+- `--journal PATH` is repeatable and required. A missing or malformed journal, or an invalid registry, prints an error and exits with code 2. An empty journal prints the report's empty output.
+- `--report-format` is `markdown` (default) or `json`. `--registry` is read only for `fleet`.
+
 ### Battle Flow
 
 The `--run-battle` flag triggers an end-to-end ship battle:
