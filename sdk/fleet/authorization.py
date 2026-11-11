@@ -11,6 +11,25 @@ It holds no credential, and starbux is never authorizable.
 requested run falls outside the authorization (an empty list means it is
 inside). ``authorization_hash`` identifies the exact authorization in a run
 record. This module has no execute path.
+
+Optional sections, all still ``version`` 1 (a file without them loads as
+before and hashes the same):
+
+- ``legacy_run_skipped`` (SPEC-06, S06-R2): the ``PSS_ACCOUNT_N`` numbers the
+  owner confirms are listed in the legacy daily run's ``LEGACY_RUN_SKIP``.
+  ``check_authorization`` refuses an account whose registry profile declares
+  ``legacy_run_account: N`` unless N is listed here.
+- ``battles`` (SPEC-08, S08-R2): ``{"max_per_window", "window_hours"}``,
+  required exactly when ``run_pvp_battle`` is in ``actions``.
+  ``battle_cap_refusal`` and ``battle_fits_cap`` decide from journal events
+  whether one more battle fits the cap in the rolling window ending now.
+- ``market`` (SPEC-09, S09-R4): ``{"item_design_ids", "max_value_per_trade",
+  "max_value_per_window", "window_hours"}``, required exactly when a market
+  action is in ``actions``. The market action ids ``sell_item`` and
+  ``purchase_item`` are not in the action catalog yet (``spec09-trade-actions``
+  adds them); until then they are accepted in ``actions`` only when the file
+  also has a ``market`` section. ``check_trade`` returns why one trade falls
+  outside the section. A starbux trade is always refused.
 """
 
 from __future__ import annotations
@@ -21,15 +40,17 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable, Mapping, Optional
 
 from sdk.actions import CATALOG
 from sdk.fleet.accounts import FORBIDDEN_KEYS, AccountRegistry
+from sdk.journal import GameplayEvent
 from sdk.redaction import redact_secrets
 from sdk.state.snapshot import ACCOUNT_ALIAS_PATTERN
 
 AUTHORIZATION_VERSION = 1
 MAX_WINDOW = timedelta(days=14)
+MAX_WINDOW_HOURS = int(MAX_WINDOW.total_seconds() // 3600)
 RUN_MODES = ("canary", "full")
 CAP_CURRENCIES = ("minerals", "gas")
 MAX_PURPOSE_LENGTH = 500
@@ -41,6 +62,12 @@ UUID_PATTERN = re.compile(r"[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-F
 AUTHORIZATION_FIELDS = frozenset({
     "version", "owner", "purpose", "accounts", "actions", "not_before", "expires", "caps", "modes",
 })
+OPTIONAL_AUTHORIZATION_FIELDS = frozenset({"legacy_run_skipped", "battles", "market"})
+BATTLE_ACTION_ID = "run_pvp_battle"
+# SPEC-09 market actions the catalog does not hold yet; valid only next to a market section.
+MARKET_ACTION_IDS = frozenset({"sell_item", "purchase_item"})
+BATTLE_FIELDS = ("max_per_window", "window_hours")
+MARKET_FIELDS = ("item_design_ids", "max_value_per_trade", "max_value_per_window", "window_hours")
 
 
 class AuthorizationError(ValueError):
@@ -88,6 +115,103 @@ def _unique_strings(value: Any, name: str) -> tuple[str, ...]:
     return tuple(value)
 
 
+def _positive_int(value: Any, name: str, maximum: Optional[int] = None) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1 or (maximum is not None and value > maximum):
+        bound = f" of at most {maximum}" if maximum is not None else ""
+        raise AuthorizationError(f"{name} must be a positive integer{bound}")
+    return value
+
+
+def _section(value: Any, name: str, fields: tuple[str, ...]) -> Mapping[str, Any]:
+    if not isinstance(value, Mapping):
+        raise AuthorizationError(f"{name} must be an object with {', '.join(fields)}")
+    if "starbux" in value:
+        raise AuthorizationError(f"{name}: starbux is never authorizable")
+    unknown = set(value) - set(fields)
+    if unknown:
+        raise AuthorizationError(f"{name} has unknown fields: {', '.join(sorted(map(str, unknown)))}")
+    missing = [item for item in fields if item not in value]
+    if missing:
+        raise AuthorizationError(f"{name} is missing: {', '.join(missing)}")
+    return value
+
+
+@dataclass(frozen=True)
+class BattleLimits:
+    """At most ``max_per_window`` battles per account in any rolling ``window_hours`` window (S08-R2)."""
+
+    max_per_window: int
+    window_hours: int
+
+    @property
+    def window(self) -> timedelta:
+        return timedelta(hours=self.window_hours)
+
+    def to_dict(self) -> dict:
+        return {"max_per_window": self.max_per_window, "window_hours": self.window_hours}
+
+
+@dataclass(frozen=True)
+class MarketLimits:
+    """The items that may be traded and the value caps per trade and per rolling window (S09-R4)."""
+
+    item_design_ids: tuple[int, ...]
+    max_value_per_trade: int
+    max_value_per_window: int
+    window_hours: int
+
+    @property
+    def window(self) -> timedelta:
+        return timedelta(hours=self.window_hours)
+
+    def to_dict(self) -> dict:
+        return {
+            "item_design_ids": list(self.item_design_ids),
+            "max_value_per_trade": self.max_value_per_trade,
+            "max_value_per_window": self.max_value_per_window,
+            "window_hours": self.window_hours,
+        }
+
+
+def _parse_battles(value: Any) -> BattleLimits:
+    section = _section(value, "battles", BATTLE_FIELDS)
+    return BattleLimits(
+        max_per_window=_positive_int(section["max_per_window"], "battles.max_per_window"),
+        window_hours=_positive_int(section["window_hours"], "battles.window_hours", MAX_WINDOW_HOURS),
+    )
+
+
+def _parse_market(value: Any) -> MarketLimits:
+    section = _section(value, "market", MARKET_FIELDS)
+    items = section["item_design_ids"]
+    if not isinstance(items, list) or not items:
+        raise AuthorizationError("market.item_design_ids must be a non-empty list")
+    for item in items:
+        _positive_int(item, "each market.item_design_ids entry")
+    if len(set(items)) != len(items):
+        raise AuthorizationError("market.item_design_ids has duplicate entries")
+    per_trade = _positive_int(section["max_value_per_trade"], "market.max_value_per_trade")
+    per_window = _positive_int(section["max_value_per_window"], "market.max_value_per_window")
+    if per_trade > per_window:
+        raise AuthorizationError("market.max_value_per_trade may not exceed market.max_value_per_window")
+    return MarketLimits(
+        item_design_ids=tuple(items),
+        max_value_per_trade=per_trade,
+        max_value_per_window=per_window,
+        window_hours=_positive_int(section["window_hours"], "market.window_hours", MAX_WINDOW_HOURS),
+    )
+
+
+def _parse_legacy_run_skipped(value: Any) -> tuple[int, ...]:
+    if not isinstance(value, list):
+        raise AuthorizationError("legacy_run_skipped must be a list of PSS_ACCOUNT_N numbers")
+    for number in value:
+        _positive_int(number, "each legacy_run_skipped entry")
+    if len(set(value)) != len(value):
+        raise AuthorizationError("legacy_run_skipped has duplicate entries")
+    return tuple(value)
+
+
 @dataclass(frozen=True)
 class Authorization:
     owner: str
@@ -98,6 +222,9 @@ class Authorization:
     expires: datetime
     caps: Mapping[str, Mapping[str, int]]
     modes: tuple[str, ...]
+    legacy_run_skipped: tuple[int, ...] = ()
+    battles: Optional[BattleLimits] = None
+    market: Optional[MarketLimits] = None
 
     def cap(self, alias: str, currency: str) -> int:
         """The per-period cap for ``alias``; starbux is always 0, whatever the file says."""
@@ -109,7 +236,7 @@ class Authorization:
             raise AuthorizationError("no cap for that account and currency") from None
 
     def to_dict(self) -> dict:
-        return {
+        payload = {
             "version": AUTHORIZATION_VERSION,
             "owner": self.owner,
             "purpose": self.purpose,
@@ -120,6 +247,14 @@ class Authorization:
             "caps": {alias: dict(self.caps[alias]) for alias in sorted(self.caps)},
             "modes": list(self.modes),
         }
+        # Optional sections appear only when set, so a file without them hashes as before.
+        if self.legacy_run_skipped:
+            payload["legacy_run_skipped"] = list(self.legacy_run_skipped)
+        if self.battles is not None:
+            payload["battles"] = self.battles.to_dict()
+        if self.market is not None:
+            payload["market"] = self.market.to_dict()
+        return payload
 
 
 def _parse_caps(value: Any, accounts: tuple[str, ...]) -> dict[str, dict[str, int]]:
@@ -153,7 +288,7 @@ def authorization_from_dict(payload: Mapping[str, Any]) -> Authorization:
     if not isinstance(payload, Mapping):
         raise AuthorizationError("authorization must be a JSON object")
     _scan_for_secrets(payload)
-    unknown = set(payload) - AUTHORIZATION_FIELDS
+    unknown = set(payload) - AUTHORIZATION_FIELDS - OPTIONAL_AUTHORIZATION_FIELDS
     if unknown:
         raise AuthorizationError(f"unknown authorization fields: {', '.join(sorted(map(str, unknown)))}")
     missing = sorted(AUTHORIZATION_FIELDS - set(payload))
@@ -176,8 +311,20 @@ def authorization_from_dict(payload: Mapping[str, Any]) -> Authorization:
         raise AuthorizationError("accounts must be registry aliases, not e-mails or display names")
 
     actions = _unique_strings(payload["actions"], "actions")
-    if not all(action in CATALOG for action in actions):
-        raise AuthorizationError("actions must be action ids from the action catalog")
+    has_market = "market" in payload
+    if not all(action in CATALOG or (has_market and action in MARKET_ACTION_IDS) for action in actions):
+        raise AuthorizationError(
+            "actions must be action ids from the action catalog (sell_item and purchase_item need a market section)")
+    if (BATTLE_ACTION_ID in actions) != ("battles" in payload):
+        raise AuthorizationError("a battles section is required when, and only when, actions include run_pvp_battle")
+    if bool(MARKET_ACTION_IDS & set(actions)) != has_market:
+        raise AuthorizationError(
+            "a market section is required when, and only when, actions include sell_item or purchase_item")
+    battles = _parse_battles(payload["battles"]) if "battles" in payload else None
+    market = _parse_market(payload["market"]) if has_market else None
+    legacy_run_skipped = (
+        _parse_legacy_run_skipped(payload["legacy_run_skipped"]) if "legacy_run_skipped" in payload else ()
+    )
 
     modes = _unique_strings(payload["modes"], "modes")
     if not set(modes) <= set(RUN_MODES):
@@ -194,6 +341,7 @@ def authorization_from_dict(payload: Mapping[str, Any]) -> Authorization:
     return Authorization(
         owner=owner, purpose=purpose, accounts=accounts, actions=actions,
         not_before=not_before, expires=expires, caps=caps, modes=modes,
+        legacy_run_skipped=legacy_run_skipped, battles=battles, market=market,
     )
 
 
@@ -222,17 +370,27 @@ def _label(value: Any, pattern: re.Pattern) -> str:
     return repr(value) if isinstance(value, str) and pattern.match(value) else "<malformed>"
 
 
+def _is_aware(now: Any) -> bool:
+    return isinstance(now, datetime) and now.tzinfo is not None and now.utcoffset() is not None
+
+
 def check_authorization(auth: Authorization, registry: AccountRegistry, now: datetime,
-                        aliases: Iterable[str], action_ids: Iterable[str], mode: str) -> list[str]:
+                        aliases: Iterable[str], action_ids: Iterable[str], mode: str, *,
+                        battle_events: Optional[Iterable[GameplayEvent]] = None) -> list[str]:
     """Why the requested run falls outside ``auth``; an empty list means it is authorized.
 
     Refused: a naive ``now`` or one outside ``[not_before, expires)``; a mode
     the file does not allow; no requested account; an account the file does
     not name, that the registry does not hold, or that the registry disables;
-    and an action the file does not allow.
+    an account whose profile declares ``legacy_run_account`` N when N is not
+    in ``legacy_run_skipped`` (S06-R2); and an action the file does not allow.
+
+    With ``battle_events`` (journal events) and ``run_pvp_battle`` requested
+    and authorized, an account whose battle cap is already full is refused
+    too (S08-R2).
     """
     reasons: list[str] = []
-    if not isinstance(now, datetime) or now.tzinfo is None or now.utcoffset() is None:
+    if not _is_aware(now):
         reasons.append("current time is not timezone-aware; refusing")
     elif now < auth.not_before:
         reasons.append("authorization is not valid yet (before not_before)")
@@ -251,7 +409,141 @@ def check_authorization(auth: Authorization, registry: AccountRegistry, now: dat
             reasons.append(f"account {name} is not in the registry")
         elif not registry.get(alias).enabled:
             reasons.append(f"account {name} is disabled in the registry")
-    for action_id in action_ids:
+        else:
+            legacy = registry.get(alias).legacy_run_account
+            if legacy is not None and legacy not in auth.legacy_run_skipped:
+                reasons.append(
+                    f"account {name} is legacy daily run account {legacy}, and the authorization does not "
+                    f"confirm it is skipped there (legacy_run_skipped)")
+    requested_actions = list(action_ids)
+    for action_id in requested_actions:
         if action_id not in auth.actions:
             reasons.append(f"action {_label(action_id, ACTION_ID_PATTERN)} is not allowed by the authorization")
+    if (battle_events is not None and _is_aware(now)
+            and BATTLE_ACTION_ID in requested_actions and BATTLE_ACTION_ID in auth.actions):
+        events = list(battle_events)
+        for alias in requested:
+            if alias in auth.accounts:
+                refusal = battle_cap_refusal(auth, alias, events, now)
+                if refusal is not None:
+                    reasons.append(refusal)
+    return reasons
+
+
+def _moment(value: Any) -> Optional[datetime]:
+    """A timestamp (datetime or ISO 8601 text) as an aware datetime, or ``None`` when it cannot be read as one."""
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value[:-1] + "+00:00" if value.endswith(("Z", "z")) else value)
+        except ValueError:
+            return None
+    return value if _is_aware(value) else None
+
+
+def battles_in_window(auth: Authorization, alias: str, events: Iterable[GameplayEvent], now: datetime) -> int:
+    """Battles ``alias`` attempted in the rolling battle window ending at ``now``.
+
+    Every attempted, non-dry-run ``run_pvp_battle`` event of ``alias`` counts,
+    whatever its outcome: an uncertain battle still used a slot. An event whose
+    start time cannot be read, or lies after ``now``, counts too (fail closed).
+    """
+    if auth.battles is None:
+        raise AuthorizationError("the authorization has no battles section")
+    since = now - auth.battles.window
+    count = 0
+    for event in events:
+        if (getattr(event, "action_id", None) != BATTLE_ACTION_ID or getattr(event, "account_alias", None) != alias
+                or not getattr(event, "attempted", False) or getattr(event, "dry_run", False)):
+            continue
+        started = _moment(getattr(event, "started_at", None))
+        if started is None or started > since:
+            count += 1
+    return count
+
+
+def battle_cap_refusal(auth: Authorization, alias: str, events: Iterable[GameplayEvent],
+                       now: datetime) -> Optional[str]:
+    """Why ``alias`` may not start one more battle at ``now``, or ``None`` when it fits the cap (S08-R2)."""
+    name = _label(alias, ACCOUNT_ALIAS_PATTERN)
+    if not _is_aware(now):
+        return "current time is not timezone-aware; refusing"
+    if BATTLE_ACTION_ID not in auth.actions or auth.battles is None:
+        return "battles are not allowed by the authorization"
+    if alias not in auth.accounts:
+        return f"account {name} is not authorized"
+    used = battles_in_window(auth, alias, events, now)
+    if used >= auth.battles.max_per_window:
+        return (f"account {name} has used {used} of {auth.battles.max_per_window} battles allowed in "
+                f"{auth.battles.window_hours} hours")
+    return None
+
+
+def battle_fits_cap(auth: Authorization, alias: str, events: Iterable[GameplayEvent], now: datetime) -> bool:
+    """Whether ``alias`` may start one more battle at ``now`` under the authorization's battle cap."""
+    return battle_cap_refusal(auth, alias, events, now) is None
+
+
+@dataclass(frozen=True)
+class TradeRecord:
+    """An earlier trade attempt, for the market window: when, which item, and its value (``None`` = unobserved)."""
+
+    at: datetime
+    item_design_id: int
+    value: Optional[int]
+
+
+def check_trade(auth: Authorization, item_design_id: Any, value: Any, prior_trades: Iterable[TradeRecord], *,
+                now: Optional[datetime] = None, currency: Optional[str] = None) -> list[str]:
+    """Why one trade falls outside the authorization's market section; an empty list means it is inside (S09-R4).
+
+    Call it before any client call. Refused: no market section; a starbux
+    ``currency``; an item not in ``item_design_ids``; a value that is unknown,
+    not a positive integer, or above ``max_value_per_trade``; and prior
+    trades plus this one above ``max_value_per_window``. With ``now``, only
+    prior trades in the rolling window ending at ``now`` count and a ``now``
+    outside the authorization window is refused; without it every prior trade
+    counts. A prior trade with an unobserved value is refused rather than
+    counted as 0, and one with an unreadable time counts as inside the window.
+    """
+    market = auth.market
+    if market is None or not MARKET_ACTION_IDS & set(auth.actions):
+        return ["market trades are not allowed by the authorization"]
+    reasons: list[str] = []
+    if currency == "starbux":
+        reasons.append("starbux trades are never authorizable")
+    since: Optional[datetime] = None
+    if now is not None:
+        if not _is_aware(now):
+            reasons.append("current time is not timezone-aware; refusing")
+        elif now < auth.not_before:
+            reasons.append("authorization is not valid yet (before not_before)")
+        elif now >= auth.expires:
+            reasons.append("authorization has expired")
+        else:
+            since = now - market.window
+    if isinstance(item_design_id, bool) or not isinstance(item_design_id, int):
+        reasons.append("item design id is malformed")
+    elif item_design_id not in market.item_design_ids:
+        reasons.append(f"item {item_design_id} is not in the authorization's item list")
+    if value is None:
+        reasons.append("trade value is unknown; refusing")
+    elif isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        reasons.append("trade value must be a positive integer")
+    elif value > market.max_value_per_trade:
+        reasons.append(f"trade value {value} exceeds max_value_per_trade {market.max_value_per_trade}")
+    else:
+        total = value
+        for trade in prior_trades:
+            at = _moment(getattr(trade, "at", None))
+            if since is not None and at is not None and at <= since:
+                continue
+            prior = getattr(trade, "value", None)
+            if isinstance(prior, bool) or not isinstance(prior, int) or prior < 0:
+                reasons.append("a prior trade in the window has an unknown value; refusing")
+                break
+            total += prior
+        else:
+            if total > market.max_value_per_window:
+                reasons.append(f"trades in the last {market.window_hours} hours would total {total}, above "
+                               f"max_value_per_window {market.max_value_per_window}")
     return reasons

@@ -61,6 +61,28 @@ class ProfileTests(unittest.TestCase):
                 AccountProfile(**entry(**overrides))
 
 
+class LegacyRunAccountTests(unittest.TestCase):
+    # Verifies: S06-R2
+    def test_legacy_run_account_is_an_optional_positive_integer(self):
+        self.assertIsNone(AccountProfile(**entry()).legacy_run_account)
+        profile = AccountProfile(**entry(legacy_run_account=2))
+        self.assertEqual(profile.legacy_run_account, 2)
+        self.assertEqual(profile.to_dict()["legacy_run_account"], 2)
+        again = registry_from_dict({"version": 1, "accounts": [profile.to_dict()]})
+        self.assertEqual(again.get("alpha").legacy_run_account, 2)
+        for value in (0, -1, 1.0, "2", True, [2]):
+            with self.subTest(value=value), self.assertRaises(RegistryError):
+                AccountProfile(**entry(legacy_run_account=value))
+
+    # Verifies: S06-R2
+    def test_two_aliases_cannot_claim_the_same_legacy_account(self):
+        with self.assertRaises(RegistryError) as caught:
+            registry(entry(legacy_run_account=3), entry(alias="bravo", legacy_run_account=3))
+        self.assertIn("legacy_run_account", str(caught.exception))
+        reg = registry(entry(legacy_run_account=3), entry(alias="bravo", legacy_run_account=4), entry(alias="charlie"))
+        self.assertEqual([reg.get(a).legacy_run_account for a in reg.aliases()], [3, 4, None])
+
+
 class RegistryTests(unittest.TestCase):
     def test_lookup_and_enabled(self):
         reg = registry(entry(), entry(alias="bravo", enabled=False, pvp_strategy=None))
