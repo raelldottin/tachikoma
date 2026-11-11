@@ -1,0 +1,45 @@
+{
+  "slice_id": "r6-release-archive-data-files",
+  "status": "done",
+  "summary": "The source archive selected only .py files under sdk/, so the bundled sdk/simulation/scenarios/*.json were missing and sdk.simulation.load_scenario(\"single-account\") failed from a release.  Member selection now goes through release_includes(): root files, sdk/ Python sources, and sdk/ package data from an explicit extension allow-list (currently .json). Paths under tests/, test/ or __pycache__/ are left out. An allowed data file whose path looks private (hidden part, or a word such as secret, token, auth, capture, device, log) is refused rather than shipped or silently dropped, and sdk/ JSON must parse as UTF-8 JSON. Blobs are read before the archive is opened, so a refusal writes nothing. Archives stay byte-reproducible; the manifest and SHA256SUMS are unchanged apart from the larger file count.  Tests cover inclusion, exclusion of tests/docs/captures/untracked kinds, byte reproducibility with fixed tar and gzip metadata, loading a scenario from an extracted archive, the refusal guards, and a check that every tracked file in this repository passes the selection rules. Implemented by the release-engineer specialist subagent in an isolated worktree, independently reviewed by the verifier subagent (APPROVE), and re-validated by the parent.",
+  "files_touched": [
+    "docs/RELEASE.md",
+    "scripts/ci.py",
+    "tests/test_ci.py"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "Include package data files in source release archives",
+      "before": "Roadmap item not implemented",
+      "after": "Include package data files in source release archives (offline)",
+      "proof": [
+        "make syntax-check, make test, scripts/ci.py lint and git diff --check pass on current main",
+        "verifier verdict: APPROVE"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "Offline only; no live game verification."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-11T11:46:28Z"
+}

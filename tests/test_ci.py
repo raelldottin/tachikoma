@@ -382,3 +382,197 @@ class SourceReleaseTests(unittest.TestCase):
         with patch.object(ci, "workflow_documents", return_value={}), patch.object(ci, "check_workflows"):
             with self.assertRaisesRegex(ValueError, "blob policy"):
                 ci.check_repository(self.root)
+
+
+@unittest.skipUnless(shutil.which("git"), "release provenance tests require Git")
+class ReleasePackageDataTests(unittest.TestCase):
+    """Package data under sdk/ ships in the archive; tests, captures and secrets do not."""
+
+    LOADER = (
+        "import json\n"
+        "from pathlib import Path\n"
+        "def load(name):\n"
+        "    path = Path(__file__).resolve().parent / 'scenarios' / f'{name}.json'\n"
+        "    return json.loads(path.read_text(encoding='utf-8'))\n"
+    )
+
+    def setUp(self):
+        self.temporary = TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name) / "source"
+        self.root.mkdir()
+        ci.git(self.root, "init", "-b", "main")
+        ci.git(self.root, "config", "user.name", "CI Test")
+        ci.git(self.root, "config", "user.email", "ci@example.invalid")
+        ci.git(self.root, "config", "commit.gpgsign", "false")
+        ci.git(self.root, "config", "core.autocrlf", "false")
+        ci.git(self.root, "config", "core.hooksPath", str(self.root / "no-hooks"))
+        self.write(
+            {
+                "run.py": "print('synthetic application')\n",
+                "requirements.txt": "requests==2.28.2\n",
+                "LICENSE": "Synthetic fixture license\n",
+                "README.md": "Synthetic fixture readme\n",
+                "sdk/__init__.py": "",
+                "sdk/client.py": "class Client: pass\n",
+                "sdk/simulation/__init__.py": "",
+                "sdk/simulation/loader.py": self.LOADER,
+                "sdk/simulation/scenarios/alpha.json": '{"name": "alpha", "seed": 7}\n',
+                "sdk/simulation/scenarios/beta.json": '{"name": "beta", "seed": 11}\n',
+                "sdk/notes.txt": "PRIVATE_SYNTHETIC_SENTINEL notes\n",
+                "sdk/data.bin": "PRIVATE_SYNTHETIC_SENTINEL binary\n",
+                "sdk/tests/fixture.json": '{"sentinel": "PRIVATE_SYNTHETIC_SENTINEL"}\n',
+                "sdk/tests/test_client.py": "PRIVATE_SYNTHETIC_SENTINEL = 1\n",
+                "tests/test_app.py": "PRIVATE_SYNTHETIC_SENTINEL = 1\n",
+                "tests/fixture.json": '{"sentinel": "PRIVATE_SYNTHETIC_SENTINEL"}\n',
+                "docs/scenario.json": '{"sentinel": "PRIVATE_SYNTHETIC_SENTINEL"}\n',
+                "scripts/tool.py": "PRIVATE_SYNTHETIC_SENTINEL = 1\n",
+                "sdk/.device": "PRIVATE_SYNTHETIC_SENTINEL device\n",
+                "captures/session.json": '{"sentinel": "PRIVATE_SYNTHETIC_SENTINEL"}\n',
+            }
+        )
+        self.release("1.2.3")
+
+    def write(self, files):
+        for name, text in files.items():
+            path = self.root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, encoding="utf-8", newline="\n")
+
+    def release(self, tag):
+        ci.git(self.root, "add", ".")
+        ci.git(self.root, "commit", "-m", f"fixture {tag}")
+        ci.git(self.root, "tag", tag)
+
+    def build(self, tag="1.2.3", output="dist"):
+        return ci.build_release(self.root, tag, Path(self.temporary.name) / output, "main")
+
+    def archive_path(self, tag="1.2.3", output="dist"):
+        return Path(self.temporary.name) / output / f"tachikoma-{tag}.tar.gz"
+
+    def test_sdk_json_ships_and_excluded_kinds_stay_out(self):
+        manifest = self.build()
+        with tarfile.open(self.archive_path()) as archive:
+            names = archive.getnames()
+            contents = b"".join(archive.extractfile(name).read() for name in names)
+        prefix = "tachikoma-1.2.3/"
+        self.assertEqual(
+            names,
+            [
+                prefix + "LICENSE",
+                prefix + "README.md",
+                prefix + "requirements.txt",
+                prefix + "run.py",
+                prefix + "sdk/__init__.py",
+                prefix + "sdk/client.py",
+                prefix + "sdk/simulation/__init__.py",
+                prefix + "sdk/simulation/loader.py",
+                prefix + "sdk/simulation/scenarios/alpha.json",
+                prefix + "sdk/simulation/scenarios/beta.json",
+            ],
+        )
+        self.assertEqual(manifest["files"], len(names))
+        self.assertNotIn(b"PRIVATE_SYNTHETIC_SENTINEL", contents)
+
+    def test_archive_with_package_data_is_byte_reproducible(self):
+        self.build(output="first")
+        self.build(output="second")
+        first, second = Path(self.temporary.name) / "first", Path(self.temporary.name) / "second"
+        for name in ("tachikoma-1.2.3.tar.gz", "release-manifest.json", "SHA256SUMS"):
+            self.assertEqual((first / name).read_bytes(), (second / name).read_bytes(), name)
+        raw = self.archive_path(output="first").read_bytes()
+        self.assertEqual(raw[4:8], b"\0\0\0\0", "gzip header must not carry a timestamp")
+        epoch = int(ci.git(self.root, "show", "-s", "--format=%ct", "HEAD"))
+        with tarfile.open(self.archive_path(output="first")) as archive:
+            for info in archive.getmembers():
+                with self.subTest(member=info.name):
+                    self.assertTrue(info.isfile())
+                    self.assertEqual((info.mtime, info.uid, info.gid, info.uname, info.gname), (epoch, 0, 0, "", ""))
+                    self.assertEqual(info.mode, 0o644)
+
+    def test_scenario_loads_from_the_extracted_archive(self):
+        self.build()
+        extracted = Path(self.temporary.name) / "extracted"
+        with tarfile.open(self.archive_path()) as archive:
+            if hasattr(tarfile, "data_filter"):
+                archive.extractall(extracted, filter="data")
+            else:  # Python builds without extraction filters; members are regular files only.
+                archive.extractall(extracted)
+        program = (
+            "import sys\n"
+            "sys.path.insert(0, sys.argv[1])\n"
+            "from sdk.simulation.loader import load\n"
+            "print(load('alpha')['seed'], load('beta')['seed'])\n"
+        )
+        result = subprocess.run(
+            [sys.executable, "-I", "-c", program, str(extracted / "tachikoma-1.2.3")],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "7 11")
+
+    def test_private_looking_package_data_refuses_the_release(self):
+        names = (
+            "sdk/secrets.json",
+            "sdk/config/auth.json",
+            "sdk/captures/alpha.json",
+            "sdk/simulation/run_log.json",
+            "sdk/device-token.json",
+            "sdk/.profiles/alpha.json",
+            "sdk/Session.json",
+        )
+        for index, name in enumerate(names, start=4):
+            with self.subTest(name=name):
+                tag = f"1.2.{index}"
+                self.write({name: '{"value": "synthetic"}\n'})
+                self.release(tag)
+                with self.assertRaisesRegex(ValueError, "looks like a secret, log or capture"):
+                    self.build(tag, output=f"refused-{index}")
+                self.assertFalse((Path(self.temporary.name) / f"refused-{index}").exists())
+                ci.git(self.root, "rm", "-q", name)
+                ci.git(self.root, "commit", "-q", "-m", f"remove {name}")
+
+    def test_invalid_json_package_data_refuses_the_release(self):
+        self.write({"sdk/simulation/scenarios/broken.json": "{not json\n"})
+        self.release("1.2.4")
+        with self.assertRaisesRegex(ValueError, "not valid UTF-8 JSON"):
+            self.build("1.2.4", output="broken")
+        self.assertFalse((Path(self.temporary.name) / "broken").exists())
+
+    def test_member_selection_allow_list(self):
+        for path, expected in (
+            ("run.py", True),
+            ("sdk/client.py", True),
+            ("sdk/device.py", True),
+            ("sdk/simulation/scenarios/two-accounts.json", True),
+            ("sdk/actions/catalog.json", True),
+            ("sdk/notes.md", False),
+            ("sdk/image.png", False),
+            ("sdk/.device", False),
+            ("sdk/tests/fixture.json", False),
+            ("sdk/tests/test_client.py", False),
+            ("sdk/__pycache__/client.cpython-313.pyc", False),
+            ("tests/test_ci.py", False),
+            ("docs/RELEASE.md", False),
+            ("captures/session.json", False),
+            ("scripts/ci.py", False),
+        ):
+            with self.subTest(path=path):
+                self.assertIs(ci.release_includes(path), expected)
+
+
+@unittest.skipUnless(shutil.which("git") and (ci.ROOT / ".git").exists(), "requires the tachikoma Git checkout")
+class RepositoryReleaseSelectionTests(unittest.TestCase):
+    def test_tracked_scenarios_are_selected_and_no_tracked_sdk_file_is_refused(self):
+        tracked = [os.fsdecode(name) for name in ci.git(ci.ROOT, "ls-files", "-z").split(b"\0") if name]
+        selected = {path for path in tracked if ci.release_includes(path)}
+        scenarios = {path for path in tracked if PurePosixPath(path).match("sdk/simulation/scenarios/*.json")}
+        self.assertTrue(scenarios, "the bundled simulation scenarios must be tracked")
+        self.assertLessEqual(scenarios, selected)
+        self.assertIn("sdk/simulation/game.py", selected)
+        self.assertFalse({path for path in selected if path.startswith(("tests/", "docs/", "automation/"))})
+        for path in sorted(path for path in selected if path.startswith("sdk/") and path.endswith(".json")):
+            with self.subTest(path=path):
+                json.loads((ci.ROOT / path).read_text(encoding="utf-8"))

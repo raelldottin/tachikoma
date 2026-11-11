@@ -27,6 +27,16 @@ WORKFLOWS = (
 )
 MAX_BLOB_BYTES = 1024 * 1024
 RELEASE_ROOT_FILES = ("run.py", "requirements.txt", "LICENSE", "README.md")
+# Non-Python files under sdk/ that the code reads at run time. Anything else under sdk/ is left out.
+RELEASE_SDK_DATA_SUFFIXES = (".json",)
+RELEASE_EXCLUDED_DIRS = frozenset({"tests", "test", "__pycache__"})
+# Package data whose path contains one of these words is refused, not silently shipped or dropped.
+RELEASE_PRIVATE_WORDS = frozenset(
+    """
+    secret secrets password passwords passwd token tokens credential credentials cookie cookies session sessions
+    auth capture captures device devices profile profiles dump dumps har pcap log logs env
+    """.split()
+)
 VERSION_RE = re.compile(r"v?((?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))\Z")
 
 
@@ -174,6 +184,23 @@ def release_identity(repo: Path, tag: str, main_ref: str) -> tuple[str, str, int
     return match[1], commit, epoch
 
 
+def release_includes(path: str) -> bool:
+    """Select a tracked path for the source archive, refusing sdk/ data that looks private."""
+    pure = PurePosixPath(path)
+    if path in RELEASE_ROOT_FILES:
+        return True
+    if pure.parts[0] != "sdk" or RELEASE_EXCLUDED_DIRS.intersection(pure.parts[:-1]):
+        return False
+    if pure.suffix == ".py":
+        return True
+    if pure.suffix not in RELEASE_SDK_DATA_SUFFIXES:
+        return False
+    words = set(re.split(r"[^a-z0-9]+", path.lower()))
+    if words & RELEASE_PRIVATE_WORDS or any(part.startswith(".") for part in pure.parts):
+        raise ValueError(f"release refuses package data that looks like a secret, log or capture: {path}")
+    return True
+
+
 def build_release(repo: Path, tag: str, output: Path, main_ref: str = "origin/main") -> dict:
     """Build from Git objects, never from dirty files, logs or local credentials."""
     version, commit, epoch = release_identity(repo, tag, main_ref)
@@ -186,14 +213,19 @@ def build_release(repo: Path, tag: str, output: Path, main_ref: str = "origin/ma
         mode, kind, object_id = meta.split()
         path = os.fsdecode(name)
         pure = PurePosixPath(path)
-        included = path in RELEASE_ROOT_FILES or (pure.parts[0] == "sdk" and pure.suffix == ".py")
-        if not included:
+        if not release_includes(path):
             continue
         if kind != b"blob" or mode not in (b"100644", b"100755"):
             raise ValueError(f"release source must be a regular file: {path}")
         if pure.is_absolute() or ".." in pure.parts:
             raise ValueError("unsafe archive member")
-        members.append((path, mode, object_id))
+        contents = git(repo, "cat-file", "blob", object_id.decode())
+        if pure.parts[0] == "sdk" and pure.suffix == ".json":
+            try:
+                json.loads(contents.decode("utf-8"))
+            except ValueError:
+                raise ValueError(f"release package data is not valid UTF-8 JSON: {path}") from None
+        members.append((path, mode, contents))
     names = {path for path, _, _ in members}
     if not set(RELEASE_ROOT_FILES) <= names or "sdk/client.py" not in names:
         raise ValueError("release is missing required application source files")
@@ -202,8 +234,7 @@ def build_release(repo: Path, tag: str, output: Path, main_ref: str = "origin/ma
     with archive.open("wb") as stream:
         with gzip.GzipFile(filename="", fileobj=stream, mode="wb", mtime=0) as compressed:
             with tarfile.open(fileobj=compressed, mode="w", format=tarfile.PAX_FORMAT) as package:
-                for path, mode, object_id in sorted(members):
-                    contents = git(repo, "cat-file", "blob", object_id.decode())
+                for path, mode, contents in sorted(members):
                     info = tarfile.TarInfo(f"tachikoma-{version}/{path}")
                     info.size, info.mtime = len(contents), epoch
                     info.mode = 0o755 if mode == b"100755" else 0o644
