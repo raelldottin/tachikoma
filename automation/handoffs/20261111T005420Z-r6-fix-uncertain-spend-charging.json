@@ -1,0 +1,52 @@
+{
+  "slice_id": "r6-fix-uncertain-spend-charging",
+  "status": "done",
+  "summary": "ActionRunner.run accepts expected_cost (normalised to minerals/gas/starbux; non-positive and unknown kinds dropped) and records <kind>_uncertain for attempted events whose delta is unobserved (after-snapshot failure, foreign after-snapshot, or a None delta); dry runs, skips and calls without expected cost are unchanged. DailyScheduler passes request.expected_cost. New charged_spend helper in sdk/fleet/audit.py, used by spent_in_period and the budget-exceeded rule, charges observed spend and uncertain spend only where the delta is missing. Progression and PvP reports still read observed deltas only (tested). 11 tests in tests/test_uncertain_spend.py; 9 fail on the old code (the 2 that pass are intended guards). Implemented by a subagent in a worktree; re-validated by the parent.",
+  "files_touched": [
+    "sdk/execution/runner.py",
+    "sdk/scheduler/daily.py",
+    "sdk/fleet/orchestrator.py",
+    "sdk/fleet/audit.py",
+    "tests/test_uncertain_spend.py",
+    "docs/baseline/fleet-accounts.md",
+    "docs/baseline/fleet-audit.md"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "Uncertain spend charging",
+      "before": "Spend from attempts whose effect was not observed was never charged to budgets",
+      "after": "The planned cost of an attempt with an unobserved effect is charged to the account's budget and the audit, separately from observed spend",
+      "proof": [
+        "reviewer repro: spent_in_period now returns {'minerals': 300} after an unobserved 300-mineral upgrade",
+        "9 of 11 new tests fail on the previous code; all pass now",
+        "make test passes",
+        "scripts/ci.py lint: no new findings"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "Charging planned cost can over-count when an uncertain attempt actually spent nothing; this is deliberately conservative.",
+    "docs/baseline/action-runner.md does not yet describe expected_cost; the docs slice updates it."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-11T00:54:28Z"
+}

@@ -15,6 +15,13 @@ action's evidence says this call cannot account for (``outcome_supported``
 is ``False``) is also ``unknown``, never ``verified``. A non-idempotent
 action whose previous attempt is still uncertain is refused until an
 operator reconciles it.
+
+An attempt's journaled ``cost`` holds the signed observed resource deltas
+(``<kind>_delta``, ``None`` when unobserved). When the caller passes the
+planned ``expected_cost`` and a resource's delta was not observed (including
+when the ``after`` snapshot failed), the planned amount is also journaled as
+``<kind>_uncertain``: an amount that may have been spent, kept apart from
+observed spend so budgets can charge it without reports counting it.
 """
 
 from __future__ import annotations
@@ -48,6 +55,10 @@ CALL_ARGUMENTS: dict[str, Callable[[Mapping[str, Any]], tuple]] = {
 }
 
 
+# Planned-cost kinds (policy requests use "mineral") -> journal resource names.
+COST_KINDS = {"mineral": "minerals", "minerals": "minerals", "gas": "gas", "starbux": "starbux"}
+
+
 class UncertainPriorAttemptError(RuntimeError):
     """Raised when a non-idempotent action's last attempt is still uncertain."""
 
@@ -69,6 +80,30 @@ def _response_ok(result: Any) -> Optional[bool]:
     """Client methods return True/False, None, or other values. Only a
     boolean is treated as a definite response; anything else is ambiguous."""
     return result if isinstance(result, bool) else None
+
+
+def planned_cost(expected_cost: Optional[Mapping[str, Any]]) -> dict[str, int]:
+    """Normalise a planned cost to journal resource names with positive amounts.
+
+    Unknown kinds and non-positive or non-numeric amounts are dropped; no
+    budget exists for them, so there is nothing to charge.
+    """
+    planned: dict[str, int] = {}
+    for kind, amount in (expected_cost or {}).items():
+        name = COST_KINDS.get(str(kind).lower())
+        if name is None or isinstance(amount, bool) or not isinstance(amount, (int, float)) or amount <= 0:
+            continue
+        planned[name] = planned.get(name, 0) + int(amount)
+    return planned
+
+
+def with_uncertain_cost(cost: Mapping[str, Any], planned: Mapping[str, int]) -> dict:
+    """Add ``<kind>_uncertain`` for each planned resource whose delta was not observed."""
+    result = dict(cost)
+    for kind, amount in planned.items():
+        if result.get(f"{kind}_delta") is None:
+            result[f"{kind}_uncertain"] = amount
+    return result
 
 
 def _params_key(params: Mapping[str, Any]) -> tuple:
@@ -134,9 +169,11 @@ class ActionRunner:
         *,
         dry_run: bool = False,
         allow_after_uncertain: bool = False,
+        expected_cost: Optional[Mapping[str, Any]] = None,
     ) -> RunResult:
         spec = get_spec(action_id)
         params = dict(params or {})
+        planned = planned_cost(expected_cost)
         started = self.clock()
 
         try:
@@ -187,12 +224,13 @@ class ActionRunner:
         except AccountMismatchError as error:
             self._record(spec, started, params, outcome="unknown", reason=str(error), attempted=True,
                          response_ok=response_ok, error_class="AccountMismatchError",
-                         evidence=evidence(ReconciliationStatus.UNKNOWN))
+                         cost=with_uncertain_cost({}, planned), evidence=evidence(ReconciliationStatus.UNKNOWN))
             raise
         except Exception as error:
             return self._record(spec, started, params, outcome="unknown",
                                 reason="after-snapshot failed; effect cannot be reconciled", attempted=True,
                                 response_ok=response_ok, error_class=error_class or type(error).__name__,
+                                cost=with_uncertain_cost({}, planned),
                                 evidence=evidence(ReconciliationStatus.UNKNOWN))
 
         result = reconcile(spec, before, after, params, response_ok=response_ok)
@@ -212,8 +250,10 @@ class ActionRunner:
             prefix = f"call raised {error_class}; " if error_class else ""
             outcome, reason = ReconciliationStatus.UNKNOWN, f"{prefix}{reason}; but {support}"
             observed = evidence(outcome, delta)
-        # Signed observed resource deltas; negative values are spend. None = unobserved.
-        cost = {"minerals_delta": delta.minerals, "gas_delta": delta.gas, "starbux_delta": delta.starbux}
+        # Signed observed resource deltas; negative values are spend. None = unobserved,
+        # in which case the planned amount (if any) is kept apart as possibly spent.
+        cost = with_uncertain_cost(
+            {"minerals_delta": delta.minerals, "gas_delta": delta.gas, "starbux_delta": delta.starbux}, planned)
         return self._record(spec, started, params, outcome=outcome.value, reason=reason, attempted=True,
                             response_ok=response_ok, error_class=error_class, cost=cost,
                             evidence=observed)

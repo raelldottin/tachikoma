@@ -985,7 +985,7 @@
     {
       "slice_id": "r6-fix-uncertain-spend-charging",
       "title": "Charge expected cost of uncertain attempts against budgets",
-      "status": "queued",
+      "status": "done",
       "priority": 345,
       "domain": "safety",
       "allowed_paths": [
