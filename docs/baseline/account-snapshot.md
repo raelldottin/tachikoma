@@ -54,3 +54,45 @@ These attribute names come from existing client code and mocked tests. Whether t
 - **Format.** `game_identity_fingerprint(user_id, salt)` returns `gid1-` plus the first 32 hex characters (128 bits) of HMAC-SHA256 keyed with `salt`, over a fixed domain prefix and the canonical decimal id. The id must be a positive decimal integer; `None`, `0`, an empty or non-numeric id raises `SnapshotInputError`. The salt must be at least 16 bytes. Error text never repeats the id or the salt.
 - **Provider salt.** `ClientSnapshotProvider(client, alias, identity_salt=...)` fingerprints `client.user.id`, the id `Client` stores at login and uses for `getShipByUserId`. Computing it makes no extra call. Without a salt, or when the id is unknown, `game_identity` is `None`. A salt shorter than 16 bytes fails when the provider is built. The caller supplies the salt and must keep it secret: game ids are small integers, so anyone holding the salt could confirm a guessed id.
 - **Raw id.** The raw id is read inside the provider only. It is never stored on the provider or the snapshot, and never written to snapshot dicts, journals or error text.
+
+## Baseline files
+
+`sdk/state/baseline.py` stores one snapshot as a sanitized JSON file, the per-ship baseline of [SPEC-04](../specs/SPEC-04-account-baselines.md). It makes no network calls. The command that takes the snapshots and the summary table are separate slices.
+
+- **Write.** `write_baseline(snapshot, directory, game_version)` writes `<alias>-<YYYYMMDDTHHMMSSZ>.json` (UTC, to the second) and returns the path. `game_version` is the version the observation was made on; SPEC-04 says it must come from the server's latest-version setting. `None` means it was not observed.
+- **No overwrite.** The file is created exclusively. If a file with that name already exists, whoever wrote it, `BaselineExistsError` is raised and the file is left untouched. Two snapshots of one alias in the same UTC second count as the same time.
+- **Load.** `load_baseline(path)` returns an `AccountSnapshot` equal to the one written, so `diff_snapshots(load_baseline(path), later)` works. `load_baseline_file(path)` also returns the recorded `game_version`. Loading is strict: an unknown or missing key, a wrong type, a time not in UTC, or a section whose data disagrees with its completeness raises `BaselineError`.
+- **Sanitized.** Nothing is written or loaded if the text fails the secret scan below. The error names the rule that matched, never the value. The snapshot whitelist already leaves out e-mail, tokens, device keys, the raw user id and the player's name. `game_identity` is kept, because it is a keyed fingerprint; a raw user id there is refused.
+
+### Format (version 1)
+
+Keys are sorted and indented by two spaces, so the same snapshot always produces the same bytes.
+
+| Key | Value |
+| --- | --- |
+| `format`, `format_version` | `"tachikoma-account-baseline"`, `1` |
+| `account_alias` | The lowercase alias; one account per file |
+| `observed_at` | ISO 8601 time in UTC (`+00:00`), with microseconds when present |
+| `game_version` | Game version of the observation, or `null` |
+| `client_version` | The snapshot's own `game_version` (the client's), or `null` |
+| `game_identity` | `gid1-` fingerprint, or `null` |
+| `source` | Where the snapshot came from |
+| `hull_level`, `trophies` | Integer, or `null` when not observed |
+| `resources` | `{"minerals", "gas", "starbux"}`, each an integer or `null` |
+| `rooms` | List of `{"room_id", "design_id", "status"}`, or `null` when the section is missing |
+| `research` | List of `{"design_id", "state"}`, or `null` |
+| `crew` | List of `{"character_id", "design_id", "name", "level", "fatigue", "room_id", "training_observed", "training_design_id", "training_end"}`, or `null` |
+| `inventory` | List of `{"item_design_id", "quantity"}`, or `null` |
+| `completeness` | Every section (`profile`, `ship`, `resources`, `crew`, `rooms`, `research`, `inventory`) mapped to `complete`, `partial` or `missing` |
+| `notes` | Builder notes, such as skipped records |
+
+A list section is `null` exactly when its completeness is `missing`. An observed section with no records is `[]`. Values inside a record are `null` when unparseable, never `0`. A room's level is not a separate field: the room design id identifies it. `crew.name` is the crew member's name, not the player's.
+
+### Secret scan
+
+`scan_baseline_directory(directory)` scans every file under a directory, such as `docs/experiments/baselines/`, and returns findings (path, line, rule) without the matched text. A test runs it over `docs/experiments/baselines/`. The rules are those SPEC-03 (S03-R2) sets for sanitized captures, implemented here in `scan_text`:
+
+- any line that `sdk.redaction.redact_secrets` would change (tokens, JWTs, long base64 strings, device keys, e-mail addresses, passwords);
+- a numeric id in a field named `Id` or ending in `UserId`, as an XML attribute (`UserId="…"`) or a JSON key (`"user_id": …`). Gameplay ids such as `room_id` or `@RoomDesignId` do not match, and an id of `0` does not count.
+
+A `.json` file is also decoded and each string scanned, because JSON escaping would otherwise hide a pattern such as `"DeviceKey":"…"` inside a value. A file that is not UTF-8 text is reported rather than skipped.
