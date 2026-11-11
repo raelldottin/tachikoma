@@ -543,7 +543,7 @@
     {
       "slice_id": "r4-marketplace-listing-reads",
       "title": "Typed marketplace listings from ListActiveMarketplaceMessages (AUTO-008)",
-      "status": "queued",
+      "status": "done",
       "priority": 220,
       "domain": "economy",
       "allowed_paths": [
