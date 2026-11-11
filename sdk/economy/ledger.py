@@ -2,11 +2,17 @@
 
 ``build_ledger`` walks an ordered series of snapshots of one account. Each
 consecutive pair becomes one ``LedgerEntry`` with the observed minerals,
-gas, starbux and per-item quantity changes. An entry is attributed to a
-journaled action only when the snapshot interval lies inside that action's
-window, or the action's window lies inside the interval, and exactly one
-attempted action qualifies. Otherwise it is ``unattributed`` (no candidate)
-or ``ambiguous`` (several candidates).
+gas, starbux and per-item quantity changes. An attempted action is a
+candidate for an entry when the snapshot interval lies inside the action's
+window, the action's window lies inside the interval, or the action started
+inside the interval and outlasted it. The last case is dropped when another
+snapshot falls after the interval inside the action's window: that is the
+runner's own before/after pair, so the interval's end snapshot is the
+action's before-snapshot and the change predates its call. An action that
+started before the interval's start snapshot and ends inside the interval
+is never a candidate (the runner takes its before-snapshot after the event
+starts). With exactly one candidate the entry is attributed; otherwise it is
+``unattributed`` (no candidate) or ``ambiguous`` (several candidates).
 
 Unobserved values stay ``None``, never zero. Snapshots of another account
 raise ``AccountMismatchError``; events of other accounts are ignored.
@@ -95,6 +101,17 @@ def _contained(inner_start: datetime, inner_end: datetime, outer_start: datetime
     return outer_start <= inner_start and inner_end <= outer_end
 
 
+def _candidate(start: datetime, end: datetime, event_start: datetime, event_end: datetime,
+               observed: Sequence[datetime]) -> bool:
+    if _contained(start, end, event_start, event_end) or _contained(event_start, event_end, start, end):
+        return True
+    if not start <= event_start < end:
+        return False
+    # Started inside the interval and outlasted it. If a later snapshot falls inside the event's window, the
+    # interval's end snapshot is the event's own before-snapshot and this change happened before its call.
+    return not any(end < moment <= event_end for moment in observed)
+
+
 def build_ledger(
     account_alias: str, snapshots: Sequence[AccountSnapshot], events: Iterable[GameplayEvent] = ()
 ) -> Ledger:
@@ -111,13 +128,14 @@ def build_ledger(
         if event.account_alias == account_alias and event.attempted
     ]
 
+    observed = [snapshot.observed_at for snapshot in snapshots]
     entries = []
     for before, after in zip(snapshots, snapshots[1:]):
         delta = diff_snapshots(before, after)
         start, end = before.observed_at, after.observed_at
         candidates = [
             event for (s, f, event) in windows
-            if _contained(start, end, s, f) or _contained(s, f, start, end)
+            if _candidate(start, end, s, f, observed)
         ]
         if len(candidates) == 1:
             attribution, action_id, attempt_id = ATTRIBUTED, candidates[0].action_id, candidates[0].attempt_id

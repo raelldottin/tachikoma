@@ -15,7 +15,15 @@
 
 ## Attribution
 
-An entry belongs to an attempted action when the snapshot interval lies inside the action's journal window (the runner's own before/after snapshots), or the action's window lies inside the interval. With exactly one such action the entry is `attributed`; with several it is `ambiguous`; with none it is `unattributed`. A partial overlap does not count: the runner takes its before snapshot after the event starts, so a change observed before that snapshot cannot be the action's effect.
+An attempted action is a candidate for an entry when:
+
+- the snapshot interval lies inside the action's journal window (the runner's own before/after snapshots), or
+- the action's window lies inside the interval, or
+- the action started inside the interval (at or after its start snapshot, before its end snapshot) and ran past its end, and no later snapshot falls inside the action's window.
+
+With exactly one candidate the entry is `attributed`; with several it is `ambiguous`; with none it is `unattributed`.
+
+An action that started before the interval's start snapshot and ends inside the interval is not a candidate: the runner takes its before snapshot after the event starts, so a change observed before that snapshot cannot be the action's effect. For the same reason, an action that started inside the interval is dropped when the series also holds a later snapshot inside its window. That is the runner's own before/after pair, so the interval's end snapshot is the action's before snapshot, and the gap between two runs stays `unattributed`. Without such a pair the end snapshot may have been taken after the call, so the action stays a candidate, and a change during it is never attributed to a different action alone.
 
 Skipped events and events of other accounts are ignored. A snapshot of another account raises `AccountMismatchError`, and snapshots out of observation order raise `SnapshotInputError`.
 

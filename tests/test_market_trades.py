@@ -14,6 +14,7 @@ from sdk.economy import (
     TradeInputError,
     reconcile_trade,
 )
+from sdk.economy.trades import default_max_fee
 
 T0 = datetime(2027, 2, 10, 8, 0, tzinfo=timezone.utc)
 
@@ -89,6 +90,49 @@ class SellTests(unittest.TestCase):
                         ListingGone(at(30), "9001")]
         self.assertEqual(reconcile_trade(SELL, observations).state, "unknown")
 
+    def test_proceeds_before_the_listing_is_gone_do_not_count(self):
+        # Regression: an expired listing whose item return is not yet observed, plus a resource collection in
+        # the trade currency while the listing was open, read as a sale.
+        request = SellRequest(at=at(0), item_design_id="77", quantity=1, currency="gas", price=1000)
+        listing = MarketListing("Thing", "gas", 1000, sale_id="111")
+        observations = [InventoryChange(at(0.1), "77", -1), seen(0.2, listing), CurrencyChange(at(5), "gas", 40),
+                        ListingGone(at(48 * 60), "111")]
+        result = reconcile_trade(request, observations)
+        self.assertEqual((result.state, result.proceeds, result.fees), ("unknown", None, None))
+        self.assertIn("no proceeds", result.reason)
+
+    def test_proceeds_outside_the_fee_bound_are_unknown(self):
+        def sold(proceeds, **kwargs):
+            observations = [InventoryChange(at(1), "77", -1), seen(2), ListingGone(at(30), "9001"),
+                            CurrencyChange(at(31), "starbux", proceeds)]
+            return reconcile_trade(SELL, observations, **kwargs)
+
+        self.assertEqual(default_max_fee(50), 13)
+        self.assertEqual(sold(37).state, "completed")
+        too_low = sold(36)
+        self.assertEqual((too_low.state, too_low.proceeds), ("unknown", None))
+        self.assertIn("outside the expected proceeds 37..50", too_low.reason)
+        self.assertEqual(sold(45, max_fee=4).state, "unknown")
+        self.assertEqual(sold(46, max_fee=4).state, "completed")
+
+    def test_several_matching_listings_are_ambiguous(self):
+        other = MarketListing("Laser Cannon", "starbux", 50, sale_id="9002", item_design_id="77", quantity=1)
+        result = reconcile_trade(SELL, [seen(1), seen(2, other), ListingGone(at(30), "9001")])
+        self.assertEqual((result.state, result.sale_id), ("requested", None))
+        self.assertIn("ambiguous listing", result.reason)
+
+    def test_listings_open_before_the_request_do_not_match(self):
+        older = MarketListing("Laser Cannon", "starbux", 50, sale_id="8000", item_design_id="77", quantity=1)
+        result = reconcile_trade(SELL, [seen(-10, older), seen(1, older), seen(2)])
+        self.assertEqual((result.state, result.sale_id), ("listed", "9001"))
+        only_older = reconcile_trade(SELL, [seen(-10, older), seen(1, older)])
+        self.assertEqual(only_older.state, "requested")
+        self.assertIn("before the request", only_older.reason)
+
+    def test_listing_for_another_quantity_does_not_match(self):
+        bundle = MarketListing("Laser Cannon", "starbux", 50, sale_id="9003", item_design_id="77", quantity=3)
+        self.assertEqual(reconcile_trade(SELL, [seen(1, bundle)]).state, "requested")
+
 
 class BuyTests(unittest.TestCase):
     BUY = BuyRequest(at=at(0), sale_id="9001", item_design_id="77", quantity=1, currency="starbux", price=50)
@@ -101,6 +145,32 @@ class BuyTests(unittest.TestCase):
         self.assertEqual((done.state, done.cost, done.fees, done.sale_id), ("completed", 52, 2, "9001"))
         short = reconcile_trade(self.BUY, [CurrencyChange(at(1), "starbux", -30), InventoryChange(at(2), "77", 1)])
         self.assertEqual(short.state, "unknown")
+
+    def test_unrelated_spend_and_arrival_are_not_a_purchase(self):
+        # Regression: an item from a daily reward plus an unrelated 500 starbux spend read as a purchase.
+        request = BuyRequest(at=at(0), sale_id="s9", item_design_id="77", quantity=1, currency="starbux", price=10)
+        result = reconcile_trade(request, [InventoryChange(at(60), "77", 1), CurrencyChange(at(120), "starbux", -500)])
+        self.assertEqual((result.state, result.cost, result.fees), ("unknown", None, None))
+        self.assertIn("expected 10..13", result.reason)
+
+    def test_payment_bound_and_exact_quantity(self):
+        def bought(cost, arrived=1, **kwargs):
+            observations = [CurrencyChange(at(1), "starbux", -cost), InventoryChange(at(2), "77", arrived)]
+            return reconcile_trade(self.BUY, observations, **kwargs)
+
+        self.assertEqual((bought(63).state, bought(63).fees), ("completed", 13))
+        self.assertEqual(bought(64).state, "unknown")
+        self.assertEqual(bought(52, max_fee=0).state, "unknown")
+        self.assertEqual(bought(50, max_fee=0).state, "completed")
+        self.assertEqual(bought(50, arrived=2).state, "unknown")
+
+    def test_target_listing_still_open_contradicts_the_purchase(self):
+        observations = [CurrencyChange(at(1), "starbux", -50), InventoryChange(at(2), "77", 1),
+                        ListingSeen(at(3), MarketListing("Laser Cannon", "starbux", 50, sale_id="9001"))]
+        self.assertEqual(reconcile_trade(self.BUY, observations).state, "unknown")
+        gone = reconcile_trade(self.BUY, observations[:2] + [ListingGone(at(3), "9001")])
+        self.assertEqual(gone.state, "completed")
+        self.assertIn("listing 9001 gone", gone.evidence)
 
 
 class ValidationTests(unittest.TestCase):
@@ -117,6 +187,9 @@ class ValidationTests(unittest.TestCase):
                 reconcile_trade(request)
         with self.assertRaises(TradeInputError):
             reconcile_trade(SELL, [CurrencyChange(datetime(2027, 2, 10, 9), "starbux", 5)])
+        for max_fee in (-1, True, 2.5):
+            with self.subTest(max_fee=max_fee), self.assertRaises(TradeInputError):
+                reconcile_trade(SELL, max_fee=max_fee)
 
 
 if __name__ == "__main__":
