@@ -1476,7 +1476,7 @@
     {
       "slice_id": "spec05-execute-command",
       "title": "SPEC-05: authorized live execute command (built and tested offline)",
-      "status": "queued",
+      "status": "done",
       "priority": 392,
       "domain": "safety",
       "allowed_paths": [
