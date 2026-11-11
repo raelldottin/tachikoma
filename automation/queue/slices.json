@@ -1646,7 +1646,7 @@
     {
       "slice_id": "spec-status-verified-offline",
       "title": "Mark specs verified offline and record what waits on the owner",
-      "status": "queued",
+      "status": "done",
       "priority": 398,
       "domain": "docs",
       "allowed_paths": [
