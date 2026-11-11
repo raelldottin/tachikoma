@@ -1255,6 +1255,28 @@
         "make test",
         "git diff --check"
       ]
+    },
+    {
+      "slice_id": "bazel-migration-roadmap-docs",
+      "title": "Bazel migration roadmap (researched, planned and QA-reviewed)",
+      "status": "queued",
+      "priority": 381,
+      "domain": "docs",
+      "allowed_paths": [
+        "docs/BAZEL_MIGRATION_ROADMAP.md",
+        "docs/BAZEL_MIGRATION_DESIGN_NOTES.md",
+        "docs/bazel-migration-queue-entries.json"
+      ],
+      "depends_on": [
+        "r5-fleet-dry-run-command"
+      ],
+      "max_files_changed": 3,
+      "notes": "Add the Bazel migration roadmap produced by a ten-role subagent team (five researchers, an architect, a security reviewer, two QA reviewers and a QA-loop editor) after four QA rounds that ended with all reviewers approving. Documentation only: the queue entries file holds proposed slices, which a later queue PR adds once the owner answers the roadmap's questions. No build files change.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
     }
   ]
 }
