@@ -13,10 +13,11 @@ today's behaviour rather than against an invented strategy.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Iterable, Mapping, Optional, Protocol
 
 from sdk.actions import check_preconditions, get_spec
+from sdk.pvp.config import crew_level_cap
 from sdk.state import AccountSnapshot, Completeness
 
 
@@ -37,6 +38,13 @@ class ResearchDesign:
     name: str = ""
     gas_cost: Optional[int] = None  # None when @GasCost is missing or unparseable
     starbux_cost: Optional[int] = 0  # a missing @StarbuxCost is 0; None when unparseable
+
+
+@dataclass(frozen=True)
+class HullDesign:
+    design_id: str
+    level: Optional[int] = None  # @ShipLevel; None when missing or unparseable
+    mineral_cost: Optional[int] = None  # @MineralCost; None when missing or unparseable
 
 
 _COST = re.compile(r"\d+")
@@ -64,12 +72,15 @@ def _price(price: Any) -> tuple[Optional[str], Optional[int]]:
 class DesignData:
     rooms: tuple[RoomDesign, ...] = ()
     research: tuple[ResearchDesign, ...] = ()
+    # Hull (ShipDesign) levels and mineral prices. Only hull-reserve-v1 reads them; empty by default.
+    hulls: tuple[HullDesign, ...] = ()
 
     @classmethod
     def from_records(
-        cls, room_designs: Iterable[Mapping[str, Any]] = (), research_designs: Iterable[Mapping[str, Any]] = ()
+        cls, room_designs: Iterable[Mapping[str, Any]] = (), research_designs: Iterable[Mapping[str, Any]] = (),
+        ship_designs: Iterable[Mapping[str, Any]] = (),
     ) -> "DesignData":
-        """Parse ``RoomDesign`` and ``ResearchDesign`` records as the client receives them."""
+        """Parse ``RoomDesign``, ``ResearchDesign`` and ``ShipDesign`` records as the client receives them."""
         rooms = []
         for record in room_designs:
             kind, amount = _price(record.get("@PriceString"))
@@ -95,7 +106,15 @@ class DesignData:
             )
             for record in research_designs
         ]
-        return cls(rooms=tuple(rooms), research=tuple(research))
+        hulls = [
+            HullDesign(
+                design_id=str(record.get("@ShipDesignId")),
+                level=_cost(record.get("@ShipLevel")),
+                mineral_cost=_cost(record.get("@MineralCost")),
+            )
+            for record in ship_designs
+        ]
+        return cls(rooms=tuple(rooms), research=tuple(research), hulls=tuple(hulls))
 
 
 @dataclass(frozen=True)
@@ -270,7 +289,102 @@ class BaselineV1:
         )
 
 
-POLICIES: dict[str, ProgressionPolicy] = {BaselineV1.name: BaselineV1()}
+@dataclass(frozen=True)
+class HullHold:
+    """The mineral reserve hull-reserve-v1 holds for the next hull upgrade."""
+
+    next_level: int
+    mineral_cost: int
+
+
+def hull_hold(snapshot: AccountSnapshot, design: DesignData) -> tuple[Optional[HullHold], str]:
+    """Decide whether ``snapshot`` is near its next hull upgrade, and what that upgrade costs.
+
+    Near means every observed crew member has reached the current hull's crew
+    level cap (``sdk.pvp.config.crew_level_cap``: hull level x 4, at most 40)
+    and the next hull raises that cap. That is the crew criterion of
+    ``sdk.pvp.scoring.hull_upgrade_readiness``; its other inputs (room max
+    levels, native AI rules) are not in an ``AccountSnapshot``. Returns the
+    hold, or ``None`` and why it isn't applied. Nothing unobserved is guessed.
+    """
+    level = snapshot.hull_level
+    if level is None:
+        return None, "hull level not observed"
+    if level < 1:
+        return None, f"hull level {level} is not a valid hull level"
+    crew_state = snapshot.section("crew")
+    if crew_state is not Completeness.COMPLETE:
+        return None, f"crew section is {crew_state.value}, so crew levels are not fully observed"
+    if not snapshot.crew:
+        return None, "no crew observed"
+    if any(member.level is None for member in snapshot.crew):
+        return None, "a crew member's level is not observed"
+    nxt = level + 1
+    cap, next_cap = crew_level_cap(level), crew_level_cap(nxt)
+    if next_cap <= cap:
+        return None, f"the hull {nxt} upgrade does not raise the crew level cap ({cap})"
+    below = sum(1 for member in snapshot.crew if member.level < cap)
+    if below:
+        return None, (f"not near the hull {nxt} upgrade: {below} of {len(snapshot.crew)} crew below "
+                      f"the hull {level} crew level cap ({cap})")
+    candidates = [hull for hull in design.hulls if hull.level == nxt]
+    if not candidates:
+        return None, f"no hull design for level {nxt} in the design data, so its cost is unknown"
+    costs = {hull.mineral_cost for hull in candidates}
+    if None in costs:
+        return None, f"hull {nxt} cost unknown: a level {nxt} hull design has no parseable @MineralCost"
+    if len(costs) > 1:
+        listed = ", ".join(str(cost) for cost in sorted(cost for cost in costs if cost is not None))
+        return None, (f"hull {nxt} cost is ambiguous ({listed} mineral); "
+                      "the snapshot does not say which hull design the ship upgrades to")
+    cost = next(iter(costs))
+    assert cost is not None
+    return HullHold(nxt, cost), f"near the hull {nxt} upgrade: every crew member is at the crew level cap ({cap})"
+
+
+class HullReserveV1:
+    """baseline-v1 with a mineral reserve held toward the next hull upgrade.
+
+    Hypothesis (unproven): once every crew member is at the current hull's
+    level cap, crew progress waits on the hull, so minerals are better saved
+    for it than spent on room upgrades that would delay it. When ``hull_hold``
+    finds the ship near its next hull upgrade, the mineral reserve is raised to
+    that hull's mineral cost, and room upgrades the hold displaces are rejected
+    with that reason. Otherwise the plan is baseline-v1's, plus a
+    ``hull_reserve`` rejection saying why the hold was not applied.
+    """
+
+    name = "hull-reserve-v1"
+
+    def __init__(self) -> None:
+        self._baseline = BaselineV1()
+
+    def plan(self, snapshot: AccountSnapshot, design: DesignData, config: PolicyConfig) -> Plan:
+        hold, why = hull_hold(snapshot, design)
+        if hold is not None and hold.mineral_cost <= config.mineral_reserve:
+            why = (f"the configured mineral reserve ({config.mineral_reserve}) already covers "
+                   f"the hull {hold.next_level} cost ({hold.mineral_cost} mineral)")
+            hold = None
+        if hold is None:
+            base = self._baseline.plan(snapshot, design, config)
+            note = Rejection("hull_reserve", f"not applied, planned as baseline-v1: {why}")
+            return replace(base, policy=self.name, rejected=base.rejected + (note,))
+
+        held = self._baseline.plan(snapshot, design, replace(config, mineral_reserve=hold.mineral_cost))
+        # Rooms baseline-v1 would upgrade (before max_requests) but the hold refuses were displaced by it.
+        unheld = self._baseline.plan(snapshot, design, replace(config, max_requests=None))
+        displaced = {f"upgrade_room {request.params['room_id']}"
+                     for request in unheld.requests if request.action_id == "upgrade_room"}
+        held_note = (f"held for the hull {hold.next_level} upgrade: mineral reserve raised from "
+                     f"{config.mineral_reserve} to its {hold.mineral_cost} mineral cost")
+        rejected = tuple(
+            Rejection(item.candidate, f"{item.reason} ({held_note})") if item.candidate in displaced else item
+            for item in held.rejected
+        )
+        return replace(held, policy=self.name, rejected=rejected)
+
+
+POLICIES: dict[str, ProgressionPolicy] = {BaselineV1.name: BaselineV1(), HullReserveV1.name: HullReserveV1()}
 
 
 def get_policy(name: str) -> ProgressionPolicy:
