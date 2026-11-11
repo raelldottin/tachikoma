@@ -1,0 +1,48 @@
+{
+  "slice_id": "bazel-migration-roadmap-docs",
+  "status": "done",
+  "summary": "Added docs/BAZEL_MIGRATION_ROADMAP.md (execution core: goal, non-goals, success criteria, owner action A-0, pinned stack Bazel 9.3.x/Bzlmod/rules_python 2.4.6/aspect_rules_lint, phases B0-B9 with fully expanded slice blocks, verification and owner questions), docs/BAZEL_MIGRATION_DESIGN_NOTES.md (rationale, decisions log, risk register, evidence, QA traceability) and docs/bazel-migration-queue-entries.json (29 proposed slices). Research, planning and four QA rounds by ten specialist subagents; final round APPROVE from security, accuracy and feasibility. Validated: links resolve, git diff --check, scripts/ci.py repository, and the queue entries pass schema, supervisor integrity, harness tests and run_next --dry-run in a scratch clone. make test was run in a scratch clone (945 OK) to avoid the documented ./.device overwrite hazard.",
+  "files_touched": [
+    "docs/BAZEL_MIGRATION_ROADMAP.md",
+    "docs/BAZEL_MIGRATION_DESIGN_NOTES.md",
+    "docs/bazel-migration-queue-entries.json"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "Bazel migration roadmap",
+      "before": "No plan for moving the build to Bazel",
+      "after": "A researched, QA-approved, slice-by-slice migration plan with validated proposed queue entries",
+      "proof": [
+        "three QA reviewers APPROVE after four rounds",
+        "git diff --check and scripts/ci.py repository pass",
+        "make test (scratch clone): 945 tests OK (1 skipped)",
+        "queue entries validate against the schema and supervisor in a scratch clone"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "No Bazel snippet has been parsed by a real Bazel yet; the owner-run spike (b1-spike-findings) is the first real run.",
+    "B0 cannot be queued until the owner answers Q-1a, Q-5 and Q-14 and does the A-0 .device check."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-11T16:18:45Z"
+}
