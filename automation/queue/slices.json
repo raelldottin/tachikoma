@@ -840,7 +840,7 @@
     {
       "slice_id": "r6-release-and-limitations",
       "title": "Release instructions, known limitations and roadmap status (R6 docs)",
-      "status": "queued",
+      "status": "done",
       "priority": 350,
       "domain": "docs",
       "allowed_paths": [

@@ -22,9 +22,6 @@
 
 ## Scope
 
-The runner takes the client and snapshot provider by injection, and tests use a fake client with no network traffic. It is not wired into `run.py` yet. Still to come:
+The runner takes the client and snapshot provider by injection, and tests use a fake client with no network traffic. The [daily scheduler](daily-scheduler.md) and the [fleet orchestrator](fleet-accounts.md#orchestration) drive it; `run.py --progression-dry-run` reaches it in dry-run mode only.
 
-- a snapshot provider that builds `AccountSnapshot` from live `Client` reads;
-- a targeted room-upgrade call (`Client.upgradeRooms` upgrades every eligible room);
-- training state in snapshots, so `add_training` can be verified;
-- a scheduler that runs a daily sequence through the runner (R2 / AUTO-004).
+`run(action_id, params, expected_cost=...)` accepts the plan's expected cost. When an attempted action's resource delta is not observed (for example, the after-snapshot failed), the planned amount is recorded as `<kind>_uncertain` in the event's cost, next to the observed `<kind>_delta` values. Budgets and the [isolation audit](fleet-audit.md) charge it; reports of observed resources do not.
