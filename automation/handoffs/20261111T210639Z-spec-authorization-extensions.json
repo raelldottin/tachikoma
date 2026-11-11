@@ -1,0 +1,46 @@
+{
+  "slice_id": "spec-authorization-extensions",
+  "status": "done",
+  "summary": "Live trials need three more owner-set bounds before any execute run touches a real account, and all of them belong in the dated authorization file:  - S06-R2: an AccountProfile may declare legacy_run_account N (the   PSS_ACCOUNT_N the legacy daily run uses). check_authorization refuses that   account unless the authorization lists N in legacy_run_skipped, so a trial   account cannot be driven by both the legacy run and --fleet-execute. The   registry refuses two aliases claiming the same legacy number. - S08-R2: run_pvp_battle in actions now requires a battles section   {max_per_window, window_hours}. battle_cap_refusal / battle_fits_cap count   attempted, non-dry-run battle journal events of the alias in the rolling   window (uncertain outcomes and unreadable times count, fail closed).   check_authorization consults the cap only when given battle_events, a new   keyword argument, so existing callers are unchanged. - S09-R4: sell_item / purchase_item (not in the catalog yet) are accepted in   actions only together with a market section {item_design_ids,   max_value_per_trade, max_value_per_window, window_hours}. check_trade   refuses items off the list, unknown or over-cap values, window totals over   the cap, prior trades with unobserved values, and starbux trades.  All sections are optional and the version stays 1: files without them load and hash exactly as before. Starbux remains never authorizable. Implemented by the authorization builder specialist subagent in an isolated worktree, independently reviewed by the verifier subagent (APPROVE-WITH-NITS; battle-cap wiring completed in the execute slice), and re-validated by the parent.",
+  "files_touched": [
+    "sdk/fleet/accounts.py",
+    "sdk/fleet/authorization.py",
+    "tests/test_fleet_accounts.py",
+    "tests/test_fleet_authorization.py"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "SPEC-06/08/09: legacy-run fencing, battle cap and market caps in the authorization",
+      "before": "Roadmap item not implemented",
+      "after": "SPEC-06/08/09: legacy-run fencing, battle cap and market caps in the authorization (offline)",
+      "proof": [
+        "make syntax-check, make test, scripts/ci.py lint and git diff --check pass on current main",
+        "verifier verdict: APPROVE-WITH-NITS; battle-cap wiring completed in the execute slice"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "Offline only; no live game verification."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-11T21:06:55Z"
+}
