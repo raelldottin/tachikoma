@@ -1,0 +1,50 @@
+{
+  "slice_id": "r6-fix-battle-outcome-evidence",
+  "status": "done",
+  "summary": "catalog: OUTCOME_SUPPORTING_STEP = finalised; battle evidence gains outcome_supported (+ reason), and the tier stops at the furthest step reached. runner: generic downgrade of VERIFIED to UNKNOWN when evidence reports outcome_supported false (other actions unaffected), with the evidence rebuilt. battles_from_events: win/loss also requires error_class None; start times normalised to UTC before schedule lookup. Regression tests in tests/test_battle_results_from_journal.py fail on the old code (5 failures, 2 errors) and pass now. Implemented by a subagent in a worktree; re-validated by the parent.",
+  "files_touched": [
+    "sdk/actions/catalog.py",
+    "sdk/execution/runner.py",
+    "sdk/reports/battles.py",
+    "tests/test_battle_results_from_journal.py",
+    "docs/baseline/action-catalog.md",
+    "docs/baseline/pvp-battle-results.md"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "Battle outcome evidence",
+      "before": "A failed battle call plus an unrelated trophy change was journaled verified and reported as a win; non-UTC journal times crashed the battle report",
+      "after": "Only a finalised battle with an observed trophy change is verified; other trophy changes leave the outcome unknown, and any timezone-aware journal time works",
+      "proof": [
+        "reviewer repro now journals unknown with tier request-sent and reports unknown",
+        "regression tests fail on the previous code and pass now",
+        "make test passes",
+        "scripts/ci.py lint: no new findings"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "A trophy change from a defense during a finalised attack is still attributed to the attack; separating them needs a verified battle-history read."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-11T00:45:18Z"
+}
