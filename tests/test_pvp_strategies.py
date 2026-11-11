@@ -1,9 +1,11 @@
-"""Tests for sdk.pvp.strategies: versioned strategies and experiment windows. Offline."""
+"""Tests for sdk.pvp.strategies: versioned strategies, experiment windows and adoption log. Offline."""
 
 import json
+import tempfile
 import unittest
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from sdk.pvp import (
     CANDIDATE_STRATEGIES,
@@ -17,6 +19,7 @@ from sdk.pvp import (
     candidate_registry,
     strategy_index,
 )
+from sdk.pvp.strategies import AdoptionLog, AdoptionMethod, StrategyAdoption, TrialRecord
 from tests.synthetic_fixtures import SYNTHETIC_ACCESS_TOKEN, SYNTHETIC_EMAIL
 
 T0 = datetime(2027, 1, 4, 0, 0, tzinfo=timezone.utc)
@@ -148,6 +151,236 @@ class ExperimentScheduleTests(unittest.TestCase):
     def test_lookup_requires_utc(self):
         with self.assertRaises(PvpInputError):
             self.schedule.active_strategy("alpha", datetime(2027, 1, 5))
+
+
+FOCUS = CANDIDATE_STRATEGIES[0]
+REACTOR = CANDIDATE_STRATEGIES[1]
+HOUR = timedelta(hours=1)
+
+
+def adoption(alias="alpha", chosen=FOCUS, at=T0 + HOUR, method=AdoptionMethod.BY_HAND.value, **overrides):
+    base = dict(
+        account_alias=alias,
+        strategy_id=chosen.strategy_id,
+        strategy_version=chosen.version,
+        config_version=chosen.config_version,
+        adopted_at=at,
+        method=method,
+    )
+    base.update(overrides)
+    return StrategyAdoption(**base)
+
+
+class StrategyAdoptionTests(unittest.TestCase):
+    # Verifies: S08-R1
+    def test_validation_fails_closed(self):
+        bad = [
+            dict(alias=SYNTHETIC_EMAIL),
+            dict(strategy_id="Bad Id"),
+            dict(strategy_version=0),
+            dict(strategy_version=True),
+            dict(config_version="not-a-hash"),
+            dict(at=datetime(2027, 1, 4, 1)),
+            dict(at=(T0 + HOUR).astimezone(timezone(timedelta(hours=-5)))),
+            dict(method="bot"),
+            dict(method="automatic"),
+        ]
+        for overrides in bad:
+            with self.subTest(overrides=overrides), self.assertRaises(PvpInputError):
+                adoption(**overrides)
+
+    # Verifies: S08-R1
+    def test_secret_shaped_note_is_refused(self):
+        self.assertEqual(adoption(note="set in the ship AI screen").note, "set in the ship AI screen")
+        for note in (f"accessToken={SYNTHETIC_ACCESS_TOKEN}", f"owner {SYNTHETIC_EMAIL}"):
+            with self.subTest(note=note), self.assertRaises(PvpInputError):
+                adoption(note=note)
+
+    # Verifies: S08-R1, S08-R7
+    def test_by_hand_timing_is_approximate_and_bot_call_is_not(self):
+        self.assertTrue(adoption(method=AdoptionMethod.BY_HAND.value).approximate_timing)
+        self.assertFalse(adoption(method=AdoptionMethod.BOT_CALL.value).approximate_timing)
+        self.assertEqual(adoption().key, "weapon-focus-fire@v1")
+
+    # Verifies: S08-R1
+    def test_dict_round_trip_uses_utc_z(self):
+        original = adoption(note="by hand after maintenance")
+        payload = json.loads(json.dumps(original.to_dict()))
+        self.assertEqual(payload["adopted_at"], "2027-01-04T01:00:00Z")
+        self.assertEqual(StrategyAdoption.from_dict(payload), original)
+
+    # Verifies: S08-R1
+    def test_from_dict_refuses_secret_keys_missing_and_unknown_fields(self):
+        good = adoption().to_dict()
+        cases = [
+            {**good, "accessToken": SYNTHETIC_ACCESS_TOKEN},
+            {k: v for k, v in good.items() if k != "method"},
+            {**good, "extra": 1},
+            {**good, "adopted_at": "yesterday"},
+            {**good, "adopted_at": "2027-01-04T01:00:00"},
+            {**good, "adopted_at": 1767488400},
+        ]
+        for payload in cases:
+            with self.subTest(payload=payload), self.assertRaises(PvpInputError):
+                StrategyAdoption.from_dict(payload)
+        with self.assertRaises(PvpInputError):
+            StrategyAdoption.from_dict(["not", "a", "mapping"])
+
+
+class AdoptionLogTests(unittest.TestCase):
+    # Verifies: S08-R1
+    def test_out_of_order_and_overlapping_entries_are_refused_per_alias(self):
+        log = AdoptionLog([adoption(at=T0 + HOUR)])
+        with self.assertRaises(PvpInputError):
+            log.add(adoption(at=T0))
+        with self.assertRaises(PvpInputError):
+            log.add(adoption(chosen=REACTOR, at=T0 + HOUR))
+        log.add(adoption(alias="bravo", at=T0))  # other aliases are independent
+        log.add(adoption(chosen=REACTOR, at=T0 + WEEK + HOUR))
+        self.assertEqual(len(log.adoptions_for("alpha")), 2)
+        self.assertEqual(log.aliases(), ("alpha", "bravo"))
+        with self.assertRaises(PvpInputError):
+            log.add("not-an-adoption")
+
+    # Verifies: S08-R1
+    def test_refused_entry_leaves_log_unchanged(self):
+        log = AdoptionLog([adoption(at=T0 + HOUR)])
+        before = log.to_dict()
+        with self.assertRaises(PvpInputError):
+            log.add(adoption(at=T0))
+        self.assertEqual(log.to_dict(), before)
+
+    # Verifies: S08-R1
+    def test_latest_at_includes_the_adoption_instant(self):
+        log = AdoptionLog([adoption(at=T0 + HOUR), adoption(chosen=REACTOR, at=T0 + 2 * HOUR)])
+        self.assertIsNone(log.latest_at("alpha", T0 + HOUR - timedelta(seconds=1)))
+        self.assertEqual(log.latest_at("alpha", T0 + HOUR).strategy_id, FOCUS.strategy_id)
+        self.assertEqual(log.latest_at("alpha", T0 + 2 * HOUR).strategy_id, REACTOR.strategy_id)
+        self.assertIsNone(log.latest_at("charlie", T0 + WEEK))
+        with self.assertRaises(PvpInputError):
+            log.latest_at("alpha", datetime(2027, 1, 5))
+
+    # Verifies: S08-R1
+    def test_adoptions_in_window(self):
+        log = AdoptionLog([adoption(at=T0 - HOUR), adoption(at=T0 + HOUR), adoption(at=T0 + WEEK)])
+        window = ExperimentWindow("alpha", FOCUS.strategy_id, FOCUS.version, T0, T0 + WEEK)
+        self.assertEqual([a.adopted_at for a in log.adoptions_in(window)], [T0 + HOUR])
+
+    # Verifies: S08-R1
+    def test_json_file_round_trip(self):
+        log = AdoptionLog([
+            adoption(at=T0 + HOUR, method=AdoptionMethod.BOT_CALL.value),
+            adoption(alias="bravo", chosen=REACTOR, at=T0 + HOUR, note="set by hand"),
+        ])
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "applications.json"
+            log.save(path)
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            loaded = AdoptionLog.load(path)
+        self.assertEqual(payload["schema_version"], 1)
+        self.assertEqual(len(payload["adoptions"]), 2)
+        self.assertEqual(loaded.all(), log.all())
+
+    # Verifies: S08-R1
+    def test_loading_refuses_bad_files(self):
+        good = adoption().to_dict()
+        later = adoption(at=T0 + 2 * HOUR).to_dict()
+        cases = [
+            "not json",
+            json.dumps([good]),
+            json.dumps({"schema_version": 2, "adoptions": [good]}),
+            json.dumps({"schema_version": 1, "adoptions": {"a": good}}),
+            json.dumps({"schema_version": 1, "adoptions": [later, good]}),
+            json.dumps({"schema_version": 1, "adoptions": [good, good]}),
+        ]
+        for text in cases:
+            with self.subTest(text=text[:40]), self.assertRaises(PvpInputError):
+                AdoptionLog.from_json(text)
+
+
+class TrialRecordTests(unittest.TestCase):
+    def setUp(self):
+        self.schedule = ExperimentSchedule(candidate_registry(), [
+            ExperimentWindow("alpha", FOCUS.strategy_id, 1, T0, T0 + WEEK),
+            ExperimentWindow("alpha", REACTOR.strategy_id, 1, T0 + WEEK, T0 + 2 * WEEK),
+            ExperimentWindow("bravo", REACTOR.strategy_id, 1, T0, T0 + WEEK),
+        ])
+
+    def record(self, *adoptions):
+        return TrialRecord(self.schedule, AdoptionLog(adoptions))
+
+    # Verifies: S08-R1
+    def test_battles_are_attributed_only_after_an_adoption_inside_the_window(self):
+        trial = self.record(
+            adoption(at=T0 + HOUR, method=AdoptionMethod.BOT_CALL.value),
+            adoption(chosen=REACTOR, at=T0 + WEEK + 3 * HOUR),
+        )
+        cases = [
+            (T0 - HOUR, None),  # before any window
+            (T0, None),  # window open, nothing adopted yet
+            (T0 + HOUR, FOCUS),  # at the adoption instant
+            (T0 + 3 * HOUR, FOCUS),
+            (T0 + WEEK, None),  # next window, its strategy not yet adopted
+            (T0 + WEEK + 2 * HOUR, None),
+            (T0 + WEEK + 3 * HOUR, REACTOR),
+            (T0 + 2 * WEEK, None),  # after every window
+        ]
+        for at, expected in cases:
+            with self.subTest(at=at):
+                self.assertEqual(trial.strategy_in_force("alpha", at), expected)
+
+    # Verifies: S08-R1
+    def test_adoption_before_the_window_does_not_carry_in(self):
+        trial = self.record(adoption(at=T0 - HOUR))
+        self.assertIsNone(trial.strategy_in_force("alpha", T0 + HOUR))
+
+    # Verifies: S08-R1
+    def test_adopting_a_different_strategy_inside_the_window_ends_attribution(self):
+        trial = self.record(adoption(at=T0 + HOUR), adoption(chosen=REACTOR, at=T0 + 2 * HOUR))
+        self.assertEqual(trial.strategy_in_force("alpha", T0 + HOUR), FOCUS)
+        self.assertIsNone(trial.strategy_in_force("alpha", T0 + 2 * HOUR))
+
+    # Verifies: S08-R1
+    def test_accounts_never_mix(self):
+        trial = self.record(adoption(alias="bravo", chosen=REACTOR, at=T0 + HOUR))
+        self.assertEqual(trial.strategy_in_force("bravo", T0 + 2 * HOUR), REACTOR)
+        self.assertIsNone(trial.strategy_in_force("alpha", T0 + 2 * HOUR))
+        self.assertIsNone(trial.strategy_in_force("charlie", T0 + 2 * HOUR))
+
+    # Verifies: S08-R1
+    def test_unregistered_or_mismatched_adoptions_are_refused(self):
+        with self.assertRaises(PvpInputError):
+            self.record(adoption(strategy_version=9))
+        with self.assertRaises(PvpInputError):
+            self.record(adoption(config_version=REACTOR.config_version))
+
+    # Verifies: S08-R1, S08-R7
+    def test_attribution_reports_method_and_approximate_timing(self):
+        trial = self.record(
+            adoption(at=T0 + HOUR, method=AdoptionMethod.BY_HAND.value, note="set in game"),
+            adoption(alias="bravo", chosen=REACTOR, at=T0 + HOUR, method=AdoptionMethod.BOT_CALL.value),
+        )
+        by_hand = trial.attribution_at("alpha", T0 + 2 * HOUR)
+        self.assertEqual(by_hand.method, "by-hand")
+        self.assertTrue(by_hand.approximate_timing)
+        self.assertEqual(by_hand.window.strategy_id, FOCUS.strategy_id)
+        self.assertEqual(by_hand.adoption.note, "set in game")
+        bot = trial.attribution_at("bravo", T0 + 2 * HOUR)
+        self.assertEqual(bot.method, "bot-call")
+        self.assertFalse(bot.approximate_timing)
+        self.assertIsNone(trial.attribution_at("alpha", T0))
+        self.assertTrue(trial.has_approximate_timing())
+
+    # Verifies: S08-R7
+    def test_bot_call_only_trial_is_not_approximate(self):
+        trial = self.record(adoption(at=T0 + HOUR, method=AdoptionMethod.BOT_CALL.value))
+        self.assertFalse(trial.has_approximate_timing())
+
+    # Verifies: S08-R1
+    def test_lookup_requires_utc(self):
+        trial = self.record(adoption())
+        with self.assertRaises(PvpInputError):
+            trial.strategy_in_force("alpha", datetime(2027, 1, 4, 2))
 
 
 if __name__ == "__main__":

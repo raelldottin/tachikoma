@@ -1,0 +1,45 @@
+{
+  "slice_id": "spec08-application-log",
+  "status": "done",
+  "summary": "SPEC-08 R1 and R7. An experiment window only says which strategy was planned; nothing recorded whether, when or how that strategy was actually put on the ship. Battles inside a window were therefore credited to a strategy that might not yet have been in force.  Add StrategyAdoption (alias, strategy key and config_version, UTC adopted_at, method bot-call or by-hand, optional note refused when secret-shaped) and AdoptionLog, a per-alias strictly time-ordered log that refuses out-of-order or same-instant entries and loads from / saves to a local JSON file. TrialRecord joins the schedule and the log: strategy_in_force(alias, at) returns a strategy only when the latest adoption at or before `at` is of the window's strategy version and was made inside that window. By-hand adoptions mark the attribution's timing as approximate so reports can say so (R7).  Names avoid \"apply\" to keep sdk/pvp's no-mutation identifier rule. Implemented by the SPEC-08 builder specialist subagent in an isolated worktree, independently reviewed by the verifier subagent (tests cite its requirement ids; parent re-validated in a scratch clone), and re-validated by the parent.",
+  "files_touched": [
+    "docs/baseline/pvp-strategies.md",
+    "sdk/pvp/strategies.py",
+    "tests/test_pvp_strategies.py"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "SPEC-08: strategy application log",
+      "before": "Roadmap item not implemented",
+      "after": "SPEC-08: strategy application log (offline)",
+      "proof": [
+        "make syntax-check, make test, scripts/ci.py lint and git diff --check pass on current main",
+        "verifier verdict: tests cite its requirement ids; parent re-validated in a scratch clone"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "Offline only; no live game verification."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-11T20:07:02Z"
+}
