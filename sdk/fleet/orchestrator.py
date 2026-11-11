@@ -12,7 +12,8 @@ the registry, one account at a time. Isolation rules:
   still runs. Only the fleet stop file stops the whole fleet.
 
 Budgets are enforced by planning within them: the spend already journaled
-in the current period is subtracted from the account's budget, and what
+in the current period (observed spend, plus the planned cost of attempts
+whose effect was not observed) is subtracted from the account's budget, and what
 remains is passed to the policy as its mineral and gas spend caps. The
 policy applies those caps to whichever snapshot it plans from, so balance
 growth between the orchestrator's first snapshot and the scheduler's planning
@@ -32,6 +33,7 @@ from typing import Any, Callable, Optional
 
 from sdk.execution import ActionRunner
 from sdk.fleet.accounts import AccountProfile, AccountRegistry
+from sdk.fleet.audit import charged_spend
 from sdk.journal import GameplayJournal
 from sdk.policy import DesignData, PolicyConfig, get_policy
 from sdk.redaction import redact_secrets
@@ -81,17 +83,20 @@ def _utc_now() -> datetime:
 
 
 def spent_in_period(journal: GameplayJournal, alias: str, since: datetime) -> dict:
-    """Observed spend (negative cost deltas) by ``alias`` since ``since``."""
+    """Spend charged to ``alias`` since ``since``.
+
+    Observed spend (negative cost deltas), plus the planned amount
+    (``<kind>_uncertain``) of attempts whose delta was not observed, so an
+    uncertain attempt never leaves its cost spendable again.
+    """
     spent: dict = {}
     for event in journal.read():
         if event.account_alias != alias or not event.attempted:
             continue
         if datetime.fromisoformat(event.finished_at) < since:
             continue
-        for kind in RESOURCE_KINDS:
-            value = (event.cost or {}).get(f"{kind}_delta")
-            if value is not None and value < 0:
-                spent[kind] = spent.get(kind, 0) - value
+        for kind, (amount, _uncertain) in charged_spend(event.cost).items():
+            spent[kind] = spent.get(kind, 0) + amount
     return spent
 
 

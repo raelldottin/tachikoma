@@ -117,7 +117,10 @@ class DailyScheduler:
                 skipped.append(SkippedRequest(request, "already verified or uncertain within this period"))
                 continue
             try:
-                result = self.runner.run(request.action_id, request.params, dry_run=not execute)
+                # The planned cost lets the runner journal it as possibly spent when
+                # the effect cannot be observed, so budgets still charge it.
+                result = self.runner.run(request.action_id, request.params, dry_run=not execute,
+                                         expected_cost=request.expected_cost)
             except (UncertainPriorAttemptError, AccountMismatchError) as error:
                 stop_reason = f"runner refused {request.action_id}: {error}"
                 break
