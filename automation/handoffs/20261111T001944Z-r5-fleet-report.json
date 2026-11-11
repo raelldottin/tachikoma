@@ -1,0 +1,47 @@
+{
+  "slice_id": "r5-fleet-report",
+  "status": "done",
+  "summary": "Added sdk/reports/fleet.py: Throughput, AccountFleetRow, FleetReport and compute_fleet_report (own events only per account; rates None without attempts; elapsed and actions per hour; status and mode from FleetRun; incidents from AuditReport; time saved = manual minus operator minutes only when both supplied, fleet total None when none) with JSON and Markdown output. 5 tests in tests/test_fleet_report.py. Documented in docs/baseline/fleet-report.md.",
+  "files_touched": [
+    "sdk/reports/fleet.py",
+    "tests/test_fleet_report.py",
+    "docs/baseline/fleet-report.md"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "R5 fleet report",
+      "before": "No fleet-wide throughput, failure, isolation or time-saved metric",
+      "after": "A fleet report gives per-account and fleet metrics with explicit mode, incidents and operator-supplied time saved",
+      "proof": [
+        "tests.test_fleet_report: 5 tests OK",
+        "make test: 663 tests OK (1 skipped)",
+        "scripts/ci.py lint: no new findings",
+        "run.py --help exits 0"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "Time saved depends entirely on operator-supplied minutes; nothing measures them automatically."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-11T00:20:54Z"
+}

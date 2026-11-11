@@ -724,7 +724,7 @@
     {
       "slice_id": "r5-fleet-report",
       "title": "Fleet throughput, failure and isolation report (R5 exit metrics)",
-      "status": "queued",
+      "status": "done",
       "priority": 300,
       "domain": "observability",
       "allowed_paths": [
