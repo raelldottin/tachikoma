@@ -1,0 +1,49 @@
+{
+  "slice_id": "r6-release-and-limitations",
+  "status": "done",
+  "summary": "Added docs/RELEASE.md (tag-as-version, CI required gates, release.yml flow to a draft release, archive contents including the missing simulation scenarios, manual steps, and the separate legacy daily-run workflow) and docs/baseline/known-limitations.md (blocked live trials table; state, actions/battles, economy, fleet, experiments/simulation and operations gaps, updated for the #132-#136 fixes). PRODUCT_ROADMAP.md: Updated date, an unnumbered Implementation status section (R0-R6 tables with PRs #91-#136), and stale GOAL-PVP-001, first-slices and next-milestone statements corrected. capability-inventory.md and action-runner.md stale lines fixed. Drafted by a read-only subagent; assembled, updated and link-checked by the parent. Documentation only.",
+  "files_touched": [
+    "docs/RELEASE.md",
+    "docs/baseline/known-limitations.md",
+    "docs/PRODUCT_ROADMAP.md",
+    "docs/baseline/capability-inventory.md",
+    "docs/baseline/action-runner.md"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "R6 documentation",
+      "before": "No release instructions, no consolidated limitations, and a roadmap that did not record what merged",
+      "after": "Release procedure, known limitations and per-release implementation status are documented with PR evidence",
+      "proof": [
+        "all relative links in the changed docs resolve",
+        "make test: 734 tests OK (1 skipped)",
+        "scripts/ci.py lint: no new findings",
+        "git diff --check clean"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "The roadmap's credential-rotation statement was left unchanged because rotation is not recorded in the repo; the owner should confirm it."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-11T00:57:16Z"
+}
