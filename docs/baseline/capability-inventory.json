@@ -954,6 +954,42 @@
       "tests": [
         "tests/test_progression_dry_run.py"
       ]
+    },
+    {
+      "flag": "--report",
+      "pillar": "platform",
+      "kind": "read-only",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_offline_reports.py"
+      ]
+    },
+    {
+      "flag": "--journal",
+      "pillar": "platform",
+      "kind": "read-only",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_offline_reports.py"
+      ]
+    },
+    {
+      "flag": "--registry",
+      "pillar": "E",
+      "kind": "read-only",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_offline_reports.py"
+      ]
+    },
+    {
+      "flag": "--report-format",
+      "pillar": "platform",
+      "kind": "read-only",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_offline_reports.py"
+      ]
     }
   ]
 }
