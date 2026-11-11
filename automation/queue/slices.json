@@ -1233,7 +1233,7 @@
     {
       "slice_id": "r5-fleet-dry-run-command",
       "title": "Wire the fleet stack into run.py as a dry-run command",
-      "status": "queued",
+      "status": "done",
       "priority": 380,
       "domain": "integration",
       "allowed_paths": [
