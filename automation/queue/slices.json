@@ -1454,7 +1454,7 @@
     {
       "slice_id": "spec08-application-log",
       "title": "SPEC-08: strategy application log",
-      "status": "queued",
+      "status": "done",
       "priority": 377,
       "domain": "pvp",
       "allowed_paths": [
