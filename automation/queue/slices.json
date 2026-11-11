@@ -1064,7 +1064,7 @@
       ],
       "max_files_changed": 8,
       "notes": "Safety lane. Isolation checks compare alias labels only, so a factory that loads the wrong credentials passes them. Record a non-secret, salted fingerprint of the logged-in game user id in snapshots (never the raw id or any credential), let AccountProfile declare the expected fingerprint, and have the orchestrator refuse an account whose observed fingerprint differs before any call. Unknown fingerprint = refuse when the profile declares one. Integrates with the concurrent orchestrator: identity claims are checked and claimed under a lock, decided on the coordinating thread in alias order, and an account whose observed fingerprint equals another profile's declared fingerprint is refused.",
-      "status": "queued",
+      "status": "done",
       "depends_on": [
         "r5-concurrent-orchestration",
         "r6-release-and-limitations"

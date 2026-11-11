@@ -5,10 +5,16 @@ already parsed with ``xmltodict``. The builder is pure: it performs no
 network traffic, copies only whitelisted gameplay fields, and never invents a
 value. A section that was not supplied is ``MISSING``; a section with records
 that could not be parsed is ``PARTIAL``.
+
+A snapshot may also carry ``game_identity``: a keyed, truncated fingerprint of
+the logged-in game user id (see ``game_identity_fingerprint``). The raw id is
+never stored in a snapshot.
 """
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -19,6 +25,10 @@ from sdk.redaction import redact_secrets
 
 ACCOUNT_ALIAS_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 SECTIONS = ("profile", "ship", "resources", "crew", "rooms", "research", "inventory")
+GAME_IDENTITY_PATTERN = re.compile(r"^gid1-[0-9a-f]{32}$")
+GAME_USER_ID_PATTERN = re.compile(r"^[0-9]{1,20}$")
+MIN_IDENTITY_SALT_BYTES = 16
+_GAME_IDENTITY_DOMAIN = b"tachikoma/game-identity/v1\x00"
 
 
 class SnapshotInputError(ValueError):
@@ -27,6 +37,42 @@ class SnapshotInputError(ValueError):
 
 class AccountMismatchError(ValueError):
     """Raised when two snapshots from different accounts are compared."""
+
+
+def identity_salt_key(salt: Any) -> bytes:
+    key = salt.encode("utf-8") if isinstance(salt, str) else salt
+    if not isinstance(key, (bytes, bytearray)) or len(key) < MIN_IDENTITY_SALT_BYTES:
+        raise SnapshotInputError(f"identity salt must be at least {MIN_IDENTITY_SALT_BYTES} bytes")
+    return bytes(key)
+
+
+def game_identity_fingerprint(user_id: Any, salt: Any) -> str:
+    """Return ``gid1-`` plus 32 hex characters of HMAC-SHA256(salt, user id).
+
+    Game user ids are small integers, so an unkeyed hash could be reversed by
+    trying every id. The caller supplies ``salt`` (at least 16 bytes) and must
+    keep it secret, like a credential. Without the salt, the fingerprint cannot
+    be linked back to a user id. The same salt must be used for the whole
+    fleet, so equal fingerprints mean the same game account.
+
+    An unknown (missing, ``0`` or non-numeric) id raises ``SnapshotInputError``.
+    The error text never repeats the id or the salt.
+    """
+    key = identity_salt_key(salt)
+    text = "" if user_id is None or isinstance(user_id, bool) else str(user_id).strip()
+    if not GAME_USER_ID_PATTERN.match(text) or int(text) == 0:
+        raise SnapshotInputError("game user id is unknown or malformed")
+    message = _GAME_IDENTITY_DOMAIN + str(int(text)).encode("ascii")
+    return "gid1-" + hmac.new(key, message, hashlib.sha256).hexdigest()[:32]
+
+
+def check_game_identity(value: Any, label: str = "game_identity") -> Optional[str]:
+    """Return ``value`` if it is ``None`` or a well-formed fingerprint, else raise."""
+    if value is None:
+        return None
+    if not isinstance(value, str) or not GAME_IDENTITY_PATTERN.match(value):
+        raise SnapshotInputError(f"{label} must be a gid1- fingerprint, never a raw user id")
+    return value
 
 
 class Completeness(str, Enum):
@@ -101,6 +147,8 @@ class AccountSnapshot:
     inventory: tuple[InventoryItem, ...]
     completeness: Mapping[str, Completeness] = field(default_factory=dict)
     notes: tuple[str, ...] = ()
+    # Fingerprint of the logged-in game user id; None when not observed.
+    game_identity: Optional[str] = None
 
     def section(self, name: str) -> Completeness:
         return self.completeness.get(name, Completeness.MISSING)
@@ -119,6 +167,7 @@ class AccountSnapshot:
         """Return a JSON-serialisable view, suitable for journaling."""
         return {
             "account_alias": self.account_alias,
+            "game_identity": self.game_identity,
             "observed_at": self.observed_at.isoformat(),
             "source": self.source,
             "game_version": self.game_version,
@@ -209,6 +258,7 @@ def build_snapshot(
     rooms: Any = None,
     research: Any = None,
     inventory: Any = None,
+    game_identity: Optional[str] = None,
 ) -> AccountSnapshot:
     """Build a snapshot from already-parsed client responses.
 
@@ -217,6 +267,8 @@ def build_snapshot(
     ``Research``, character and item records. ``resources`` takes
     ``minerals``, ``gas`` and ``starbux`` keys. Fields outside the whitelist,
     including account e-mail, tokens and device keys, are never copied.
+    ``game_identity`` must be a ``gid1-`` fingerprint or ``None``; a raw user
+    id is refused.
     """
     if not ACCOUNT_ALIAS_PATTERN.match(account_alias or ""):
         raise SnapshotInputError("account_alias must be a lowercase alias, not an e-mail or display name")
@@ -225,6 +277,7 @@ def build_snapshot(
     source = _clean_text(source, "source") or ""
     if not source:
         raise SnapshotInputError("source is required")
+    game_identity = check_game_identity(game_identity)
 
     builder = _Builder()
 
@@ -313,6 +366,7 @@ def build_snapshot(
         inventory=inventory_records,
         completeness=dict(builder.completeness),
         notes=tuple(builder.notes),
+        game_identity=game_identity,
     )
 
 
