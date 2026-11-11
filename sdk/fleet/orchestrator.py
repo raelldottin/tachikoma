@@ -21,10 +21,16 @@ snapshot never adds spendable budget. Starbux spending is never allowed in a
 fleet run, because the policy cannot cap a starbux amount to a budget.
 
 Dry run is the default.
+
+Per account the steps are: factory, journal claim, first snapshot, snapshot
+claim (``FleetClaims``), then the budgeted scheduler run (``_run_scheduler``).
+``sdk.fleet.concurrent.ConcurrentFleetOrchestrator`` runs the same steps on a
+bounded worker pool.
 """
 
 from __future__ import annotations
 
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -129,6 +135,47 @@ def budgeted_policy_config(profile: AccountProfile, spent: dict,
     return config, remaining
 
 
+def error_reason(error: BaseException) -> str:
+    """An account error as recorded in its ``AccountRun``, with secret-shaped text redacted."""
+    return f"{type(error).__name__}: {redact_secrets(str(error))}"
+
+
+class FleetClaims:
+    """What each account has claimed in one fleet run, decided before it makes any game call.
+
+    ``claim_journal``: a journal path is owned by the first account to present
+    it; any other account presenting the same resolved path is refused.
+
+    ``claim_snapshot``: the account's first snapshot must belong to the
+    account. This is the hook for claims that depend on the first snapshot
+    (such as the game identity behind an alias); a subclass returned by
+    ``FleetOrchestrator._new_claims`` can extend it.
+
+    Both orchestrators call these in alias order, so the first alias wins a
+    contested claim. Claims are lock-guarded so concurrent callers always see
+    one consistent owner.
+    """
+
+    def __init__(self) -> None:
+        self._journal_owners: dict[Path, str] = {}
+        self._lock = threading.Lock()
+
+    def claim_journal(self, alias: str, journal: GameplayJournal) -> Optional[str]:
+        """Claim ``journal`` for ``alias``; return a refusal reason if another account owns it."""
+        path = Path(journal.path).resolve()
+        with self._lock:
+            owner = self._journal_owners.setdefault(path, alias)
+        if owner != alias:
+            return f"journal {path.name} is already used by {owner}"
+        return None
+
+    def claim_snapshot(self, alias: str, snapshot: AccountSnapshot) -> Optional[str]:
+        """Check ``alias``'s first snapshot; return a refusal reason if the account may not proceed."""
+        if snapshot.account_alias != alias:
+            return f"snapshot belongs to {snapshot.account_alias!r}"
+        return None
+
+
 class FleetOrchestrator:
     def __init__(
         self,
@@ -152,23 +199,18 @@ class FleetOrchestrator:
     def _stop_requested(self) -> bool:
         return self.stop_file is not None and self.stop_file.exists()
 
-    def _run_account(self, profile: AccountProfile, execute: bool, journals: dict) -> AccountRun:
-        started = self.timer()
+    def _finish(self, profile: AccountProfile, started: float, status: str, reason: Optional[str],
+                **fields) -> AccountRun:
+        return AccountRun(profile.alias, status, reason, elapsed_seconds=round(self.timer() - started, 3), **fields)
 
-        def finish(status: str, reason: Optional[str], **fields) -> AccountRun:
-            return AccountRun(profile.alias, status, reason, elapsed_seconds=round(self.timer() - started, 3), **fields)
+    def _new_claims(self) -> FleetClaims:
+        """The claim table for one run; override to add claims."""
+        return FleetClaims()
 
+    def _run_scheduler(self, profile: AccountProfile, context: AccountContext, execute: bool,
+                       started: float) -> AccountRun:
+        """Plan within the budget and run the scheduler for an account whose claims all succeeded."""
         try:
-            context = self.factory(profile)
-            journal_path = Path(context.journal.path).resolve()
-            owner = journals.get(journal_path)
-            if owner is not None and owner != profile.alias:
-                return finish("error", f"journal {journal_path.name} is already used by {owner}")
-            journals[journal_path] = profile.alias
-
-            snapshot = context.snapshot_provider()
-            if snapshot.account_alias != profile.alias:
-                return finish("error", f"snapshot belongs to {snapshot.account_alias!r}")
             spent = spent_in_period(context.journal, profile.alias, self.clock() - self.period)
             policy_config, remaining = budgeted_policy_config(profile, spent, self.base_policy_config)
 
@@ -181,19 +223,32 @@ class FleetOrchestrator:
             )
             report = scheduler.run(execute=execute)
         except Exception as error:  # one account's failure must not stop the others
-            return finish("error", f"{type(error).__name__}: {redact_secrets(str(error))}")
+            return self._finish(profile, started, "error", error_reason(error))
 
         attempted = sum(1 for result in report.results if result.attempted)
         verified = sum(1 for result in report.results if result.outcome == "verified")
-        return finish(
-            "completed" if report.completed else "stopped", report.stop_reason,
+        return self._finish(
+            profile, started, "completed" if report.completed else "stopped", report.stop_reason,
             attempted=attempted, verified=verified, planned=len(report.plan.requests),
             spent_this_period=spent, budget_remaining=remaining,
         )
 
+    def _run_account(self, profile: AccountProfile, execute: bool, claims: FleetClaims) -> AccountRun:
+        started = self.timer()
+        try:
+            context = self.factory(profile)
+            refusal = claims.claim_journal(profile.alias, context.journal)
+            if refusal is None:
+                refusal = claims.claim_snapshot(profile.alias, context.snapshot_provider())
+        except Exception as error:  # one account's failure must not stop the others
+            return self._finish(profile, started, "error", error_reason(error))
+        if refusal is not None:
+            return self._finish(profile, started, "error", refusal)
+        return self._run_scheduler(profile, context, execute, started)
+
     def run(self, *, execute: bool = False) -> FleetRun:
         started_at = self.clock()
-        journals: dict = {}
+        claims = self._new_claims()
         runs: list[AccountRun] = []
         stop_reason: Optional[str] = None
         for alias in self.registry.aliases():
@@ -205,7 +260,7 @@ class FleetOrchestrator:
                 stop_reason = stop_reason or f"fleet stop file present: {self.stop_file}"
                 runs.append(AccountRun(alias, "not-run", stop_reason))
                 continue
-            runs.append(self._run_account(profile, execute, journals))
+            runs.append(self._run_account(profile, execute, claims))
         return FleetRun(
             mode=MODE_SEQUENTIAL,
             dry_run=not execute,

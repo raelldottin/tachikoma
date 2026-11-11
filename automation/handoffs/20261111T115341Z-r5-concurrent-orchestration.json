@@ -1,0 +1,46 @@
+{
+  "slice_id": "r5-concurrent-orchestration",
+  "status": "done",
+  "summary": "Fleet runs were strictly one account at a time, so total wall time grew with the number of accounts. ConcurrentFleetOrchestrator runs accounts on a bounded thread pool (max_workers, default 4) and records mode \"concurrent\", while reusing the sequential orchestrator's per-account code so budgets, the starbux rule, max_actions and dry run by default cannot drift between modes.  Each account is a factory task followed by a scheduler task, never both at once. Journal ownership is claimed on the coordinating thread in alias order, through a new lock-guarded JournalClaims table that the sequential orchestrator now shares. A shared journal therefore always goes to the first alias, whatever order the factories finish in, and the refused account makes no call. Worker exceptions are contained and redacted per account. The fleet stop file is checked before each factory call and before each scheduler start, and once it is seen it stays in force. Results come back in alias order.  orchestrator.py is only refactored: _run_account is split into the journal claim and _run_context, and error_reason is shared. Sequential behaviour is unchanged. Tests use barriers and events rather than sleeps, and prove real overlap. A control run showed the barrier test breaks under the sequential orchestrator. Implemented by the architect specialist subagent in an isolated worktree, independently reviewed by the verifier subagent (APPROVE-WITH-NITS; idle-session and stop-reason fixes plus identity hook in fcdf83f), and re-validated by the parent.",
+  "files_touched": [
+    "docs/baseline/fleet-accounts.md",
+    "sdk/fleet/concurrent.py",
+    "sdk/fleet/orchestrator.py",
+    "tests/test_fleet_concurrent.py"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "Concurrent fleet orchestration mode with the same isolation guarantees",
+      "before": "Roadmap item not implemented",
+      "after": "Concurrent fleet orchestration mode with the same isolation guarantees (offline)",
+      "proof": [
+        "make syntax-check, make test, scripts/ci.py lint and git diff --check pass on current main",
+        "verifier verdict: APPROVE-WITH-NITS; idle-session and stop-reason fixes plus identity hook in fcdf83f"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "Offline only; no live game verification."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-11T11:53:55Z"
+}

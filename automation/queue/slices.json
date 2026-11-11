@@ -1041,7 +1041,7 @@
       ],
       "max_files_changed": 5,
       "notes": "Architect lane. Add a concurrent mode (bounded worker pool, one worker per account at a time) that reuses the sequential orchestrator's per-account logic, records mode 'concurrent', and keeps every guarantee: per-account factories, journal ownership, failure containment, fleet stop file, budgets, dry run by default. Results must be deterministic in order (alias order) regardless of completion order. Prefer a new module; keep orchestrator.py edits minimal.",
-      "status": "queued",
+      "status": "done",
       "depends_on": [
         "r6-release-and-limitations"
       ],
