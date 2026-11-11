@@ -20,7 +20,7 @@ DESIGN = DesignData.from_records(
         {"@ResearchDesignId": "500", "@RootResearchDesignId": "500", "@GasCost": "100"},
         {"@ResearchDesignId": "501", "@RootResearchDesignId": "500", "@GasCost": "200"},
         {"@ResearchDesignId": "510", "@RootResearchDesignId": "510", "@GasCost": "50"},
-        {"@ResearchDesignId": "520", "@RootResearchDesignId": "520", "@StarbuxCost": "10"},
+        {"@ResearchDesignId": "520", "@RootResearchDesignId": "520", "@GasCost": "0", "@StarbuxCost": "10"},
     ],
 )
 ROOMS = [
@@ -86,6 +86,59 @@ class BaselineV1Tests(unittest.TestCase):
         self.assertNotIn(("upgrade_room", {"room_id": "r2", "upgrade_room_design_id": "201"}), ids(result))
         self.assertEqual(reasons(result)["upgrade_room r2"], "needs 900 gas, 250 available above reserve")
         self.assertEqual(result.requests[0].expected_cost, {"gas": 200})
+
+    def test_spend_caps_limit_cumulative_planned_spend(self):
+        # Balances are ample (1000 minerals, 2000 gas); only the caps bind.
+        result = plan(max_mineral_spend=299, max_gas_spend=250)
+        self.assertEqual(reasons(result)["upgrade_room r1"], "needs 300 mineral, 299 left under the mineral spend cap")
+        # Research 501 (200) and 510 (50) use the whole gas cap, so the 900-gas shield is refused.
+        self.assertIn(("add_research", {"research_design_id": "510"}), ids(result))
+        self.assertEqual(reasons(result)["upgrade_room r2"], "needs 900 gas, 0 left under the gas spend cap")
+
+    def test_spend_cap_applies_to_the_planning_snapshot_whatever_its_balance(self):
+        rich = snap(resources={"minerals": "100000", "gas": "100000", "starbux": "5"})
+        result = plan(rich, max_mineral_spend=50)
+        self.assertNotIn(("upgrade_room", {"room_id": "r1", "upgrade_room_design_id": "101"}), ids(result))
+        self.assertIn("50 left under the mineral spend cap", reasons(result)["upgrade_room r1"])
+
+    def test_no_caps_by_default(self):
+        self.assertEqual(plan(), plan(max_mineral_spend=None, max_gas_spend=None))
+
+    def test_missing_or_unparseable_room_price_is_cost_unknown(self):
+        for price in (None, "", "mineral:1,500", "mineral", "mineral:", ":300", "mineral:-5", "gas:1_000"):
+            with self.subTest(price=price):
+                record = {"@RoomDesignId": "101", "@UpgradeFromRoomDesignId": "100"}
+                if price is not None:
+                    record["@PriceString"] = price
+                design = DesignData.from_records(room_designs=[{"@RoomDesignId": "100"}, record])
+                result = get_policy("baseline-v1").plan(snap(), design, PolicyConfig())
+                self.assertNotIn("upgrade_room", [request.action_id for request in result.requests])
+                self.assertEqual(reasons(result)["upgrade_room r1"],
+                                 "cost unknown: room design 101 has no parseable @PriceString")
+
+    def test_missing_or_unparseable_research_gas_cost_is_cost_unknown(self):
+        for gas in (None, "", "1,500", "abc"):
+            with self.subTest(gas=gas):
+                record = {"@ResearchDesignId": "600", "@RootResearchDesignId": "600"}
+                if gas is not None:
+                    record["@GasCost"] = gas
+                design = DesignData.from_records(research_designs=[record])
+                result = get_policy("baseline-v1").plan(snap(research=[]), design, PolicyConfig())
+                self.assertEqual(ids(result), [("collect_daily_reward", {})])
+                self.assertEqual(reasons(result)["add_research 600"],
+                                 "cost unknown: research 600 has no parseable @GasCost")
+
+    def test_missing_starbux_cost_is_zero_but_unparseable_is_unknown(self):
+        missing = DesignData.from_records(research_designs=[
+            {"@ResearchDesignId": "600", "@RootResearchDesignId": "600", "@GasCost": "10"}])
+        self.assertIn(("add_research", {"research_design_id": "600"}),
+                      ids(get_policy("baseline-v1").plan(snap(research=[]), missing, PolicyConfig())))
+        garbled = DesignData.from_records(research_designs=[
+            {"@ResearchDesignId": "600", "@RootResearchDesignId": "600", "@GasCost": "10", "@StarbuxCost": "1,000"}])
+        result = get_policy("baseline-v1").plan(snap(research=[]), garbled, PolicyConfig(allow_starbux_spend=True))
+        self.assertNotIn(("add_research", {"research_design_id": "600"}), ids(result))
+        self.assertEqual(reasons(result)["add_research 600"],
+                         "cost unknown: research 600 has an unparseable @StarbuxCost")
 
     def test_starbux_spend_is_opt_in(self):
         self.assertIn("starbux spend not allowed", reasons(plan())["add_research 520"])

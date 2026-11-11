@@ -14,6 +14,8 @@ Rules applied to every candidate:
 
 - The action's catalog preconditions must hold on the snapshot. A section that wasn't observed yields no action, only a rejection.
 - Costs (`mineral:N` or `gas:N`) are checked against the observed balance minus `mineral_reserve` / `gas_reserve`, and deducted cumulatively across the plan. An unobserved balance blocks priced actions.
+- `max_mineral_spend` / `max_gas_spend` (default `None`, no cap) cap the total planned spend of each resource. They're applied to the snapshot the plan is made from, so each candidate must fit both `balance - reserve` and `cap - already planned`. The [fleet orchestrator](fleet-accounts.md#orchestration) passes remaining budgets here.
+- An unknown cost is never treated as free. A candidate is rejected with `cost unknown: ...` when a room upgrade has no `@PriceString` or one that isn't `kind:N` with a whole non-negative `N` (for example `mineral:1,500`), when research has no parseable `@GasCost`, or when research has an `@StarbuxCost` that doesn't parse. A *missing* `@StarbuxCost` counts as 0: gas-priced research carries no starbux price, and `Client.upgradeResearches` reads it the same way.
 - `max_requests` truncates the plan, and the dropped requests are listed as rejections.
 
 ## Differences from run.py
