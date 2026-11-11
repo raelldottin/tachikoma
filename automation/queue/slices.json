@@ -1323,7 +1323,7 @@
     {
       "slice_id": "spec01-traceability-check",
       "title": "SPEC-01: spec traceability check",
-      "status": "in_progress",
+      "status": "queued",
       "priority": 384,
       "domain": "process",
       "allowed_paths": [
