@@ -1032,7 +1032,7 @@
     {
       "slice_id": "r5-concurrent-orchestration",
       "title": "Concurrent fleet orchestration mode with the same isolation guarantees",
-      "priority": 380,
+      "priority": 377,
       "domain": "fleet",
       "allowed_paths": [
         "sdk/fleet/",
@@ -1054,7 +1054,7 @@
     {
       "slice_id": "r5-game-identity-check",
       "title": "Verify game account identity, not just aliases",
-      "priority": 390,
+      "priority": 378,
       "domain": "safety",
       "allowed_paths": [
         "sdk/state/",
@@ -1062,10 +1062,11 @@
         "tests/",
         "docs/baseline/"
       ],
-      "max_files_changed": 6,
-      "notes": "Safety lane. Isolation checks compare alias labels only, so a factory that loads the wrong credentials passes them. Record a non-secret, salted fingerprint of the logged-in game user id in snapshots (never the raw id or any credential), let AccountProfile declare the expected fingerprint, and have the orchestrator refuse an account whose observed fingerprint differs before any call. Unknown fingerprint = refuse when the profile declares one.",
+      "max_files_changed": 8,
+      "notes": "Safety lane. Isolation checks compare alias labels only, so a factory that loads the wrong credentials passes them. Record a non-secret, salted fingerprint of the logged-in game user id in snapshots (never the raw id or any credential), let AccountProfile declare the expected fingerprint, and have the orchestrator refuse an account whose observed fingerprint differs before any call. Unknown fingerprint = refuse when the profile declares one. Integrates with the concurrent orchestrator: identity claims are checked and claimed under a lock, decided on the coordinating thread in alias order, and an account whose observed fingerprint equals another profile's declared fingerprint is refused.",
       "status": "queued",
       "depends_on": [
+        "r5-concurrent-orchestration",
         "r6-release-and-limitations"
       ],
       "required_validations": [
@@ -1077,7 +1078,7 @@
     {
       "slice_id": "r6-release-archive-data-files",
       "title": "Include package data files in source release archives",
-      "priority": 400,
+      "priority": 371,
       "domain": "release",
       "allowed_paths": [
         "scripts/ci.py",
@@ -1099,7 +1100,7 @@
     {
       "slice_id": "r6-patch-aware-compatibility",
       "title": "Versioned game-rule and endpoint evidence ledger (AUTO-015)",
-      "priority": 410,
+      "priority": 374,
       "domain": "protocol",
       "allowed_paths": [
         "sdk/compat/",
@@ -1121,7 +1122,7 @@
     {
       "slice_id": "r6-local-dashboard",
       "title": "Local static HTML dashboard from journals (AUTO-012)",
-      "priority": 420,
+      "priority": 375,
       "domain": "operator",
       "allowed_paths": [
         "sdk/reports/",
@@ -1146,7 +1147,7 @@
     {
       "slice_id": "r6-alert-rules",
       "title": "Alert rules over journals and reports (AUTO-012)",
-      "priority": 430,
+      "priority": 372,
       "domain": "observability",
       "allowed_paths": [
         "sdk/reports/",
@@ -1168,7 +1169,7 @@
     {
       "slice_id": "r2-hull-upgrade-timing-policy",
       "title": "Hull-upgrade timing as a testable policy variant",
-      "priority": 440,
+      "priority": 373,
       "domain": "policy",
       "allowed_paths": [
         "sdk/policy/",
@@ -1190,7 +1191,7 @@
     {
       "slice_id": "r6-failure-injection-scenarios",
       "title": "Failure-injection simulation scenarios (AUTO-014)",
-      "priority": 450,
+      "priority": 376,
       "domain": "testing",
       "allowed_paths": [
         "sdk/simulation/",
