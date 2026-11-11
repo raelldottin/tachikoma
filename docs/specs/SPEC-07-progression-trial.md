@@ -1,6 +1,6 @@
 # SPEC-07: Live progression trial, manual vs `baseline-v1`
 
-**Status:** Approved
+**Status:** Verified offline
 **Approval:** owner, 2026-11-11, through the session goal "complete the plan in docs/specs/". This approves building and testing the spec offline; owner questions take their safe defaults. It does not open any live gate (G1–G5), so live acceptance criteria stay pending.
 **Release:** R2 exit (study A)
 **Owner gate:** G2
@@ -72,6 +72,8 @@
 | S07-Q2 | Commit raw journals, or only the report? | exit report | Only the report and summary tables |
 
 ## Evidence
+
+**Offline verification:** every MUST with an offline acceptance criterion is covered by a test that cites it (checked by `scripts/spec_trace.py`). Implemented in #167.
 
 Pending.
 

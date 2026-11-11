@@ -812,7 +812,7 @@ class RunRecordTests(FleetExecuteTestCase):
         code, _, _ = self.execute()
         self.assertEqual(len(self.records()), 2)  # a second run never replaces the first record
 
-    # Verifies: S05-R8
+    # Verifies: S05-R8, S10-R1
     def test_a_profile_without_a_fingerprint_or_a_missing_salt_is_refused(self):
         self.write_registry(bravo={"expected_game_identity": None})
         self.dry_run()
@@ -825,6 +825,17 @@ class RunRecordTests(FleetExecuteTestCase):
         code, out, err = self.execute(env={**CREDENTIALS, SALT_ENV: "short-salt"})
         self.assert_refused_before_login(code, err, "identity salt must be at least")
         self.assertNotIn("short-salt", out + err)
+
+    # Verifies: S06-R2, S10-R1
+    def test_a_legacy_run_account_must_be_confirmed_skipped_before_execute(self):
+        self.write_registry(alpha={"legacy_run_account": 1})
+        self.dry_run()
+        code, _, err = self.execute()
+        self.assert_refused_before_login(code, err, "is legacy daily run account 1")
+        self.write_authorization(legacy_run_skipped=[1])
+        code, _, err = self.execute()
+        self.assertNotIn("refused before any login", err)
+        self.assertNotIn("legacy daily run account", err)
 
     # Verifies: S05-R8
     def test_the_salt_is_required_by_the_function_too(self):

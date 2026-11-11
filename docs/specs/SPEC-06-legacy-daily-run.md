@@ -1,6 +1,7 @@
 # SPEC-06: Fence the legacy daily run away from trial accounts
 
 **Status:** Approved
+**Blocked:** S06-R1 and R5 need the owner to edit `.github/workflows/daily-run.yml` (gate G2); agents never edit that workflow. S06-R5's policy-coverage test follows the owner's edit. Done offline so far: #169 (the execute-time check, S06-R2).
 **Approval:** owner, 2026-11-11, through the session goal "complete the plan in docs/specs/". This approves building and testing the spec offline; owner questions take their safe defaults. It does not open any live gate (G1–G5), so live acceptance criteria stay pending.
 **Release:** operations (prerequisite for SPEC-07 and SPEC-10)
 **Owner gate:** G2 (the owner edits the workflow)

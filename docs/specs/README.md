@@ -1,6 +1,6 @@
 # Spec-driven plan for completing the roadmap
 
-**Status:** In progress, 2026-11-11. All twelve specs are approved for offline work (gate G0); no live gate is open.
+**Status:** Offline work complete, 2026-11-11. Nine specs are `Verified offline`; SPEC-03, SPEC-06 and SPEC-09 are approved but blocked on owner gates; no live gate (G1–G5) is open, so no spec is `Done` yet.
 **Covers:** everything left in [PRODUCT_ROADMAP.md](../PRODUCT_ROADMAP.md) after #152. The [Bazel migration](../BAZEL_MIGRATION_ROADMAP.md) is a separate track with its own plan.
 
 Every offline slice of R0–R6 is merged. What is left is live work that changes real accounts, reads whose response shapes were never confirmed, and some library pieces that nothing uses yet. Mistakes in that work are hard to undo, so each piece starts as a spec: what must be true, how it will be proven, and what the owner must decide. Code comes after.
@@ -29,20 +29,20 @@ A spec that needs no live evidence goes from stage 6 straight to `Done`.
 
 ## Specs
 
-| Spec | Title | Release | Needs owner gate | Depends on |
-| --- | --- | --- | --- | --- |
-| [SPEC-01](SPEC-01-traceability.md) | Spec traceability check | process | — | — |
-| [SPEC-02](SPEC-02-local-credential-safety.md) | Local test runs never touch real credential files | safety | — | — |
-| [SPEC-03](SPEC-03-verified-profile-reads.md) | Verified trophy, starbux and battle-history reads | R1/R3 | G1 | 01 |
-| [SPEC-04](SPEC-04-account-baselines.md) | Per-ship baselines and game-version provenance | R0 | G1 | 01, 03 |
-| [SPEC-05](SPEC-05-live-execution-gate.md) | Authorized live execution with a canary and kill switch | R2 | G2 for use | 01, 02 |
-| [SPEC-06](SPEC-06-legacy-daily-run.md) | Fence the legacy daily run away from trial accounts | ops | G2 | 05 |
-| [SPEC-07](SPEC-07-progression-trial.md) | Live progression trial, manual vs `baseline-v1` | R2 exit | G2 | 04, 05, 06 |
-| [SPEC-08](SPEC-08-pvp-trial.md) | Live PvP strategy comparison | R3 exit | G3 | 03, 05, 07 |
-| [SPEC-09](SPEC-09-market-trades.md) | Market trade calls and a reconciled live trade | R4 exit | G4 | 03, 05 |
-| [SPEC-10](SPEC-10-fleet-trial.md) | Live fleet trial on two accounts | R5 exit | G5 | 05, 06, 07 |
-| [SPEC-11](SPEC-11-alert-delivery.md) | Scheduled reports and alert delivery | R6 | G2 | 05 |
-| [SPEC-12](SPEC-12-study-report.md) | Automation effectiveness study report | R6 exit | — | 07, 08, 09, 10 |
+| Spec | Title | Release | Needs owner gate | Depends on | Status |
+| --- | --- | --- | --- | --- | --- |
+| [SPEC-01](SPEC-01-traceability.md) | Spec traceability check | process | — | — | Verified offline |
+| [SPEC-02](SPEC-02-local-credential-safety.md) | Local test runs never touch real credential files | safety | — | — | Verified offline |
+| [SPEC-03](SPEC-03-verified-profile-reads.md) | Verified trophy, starbux and battle-history reads | R1/R3 | G1 | 01 | Approved, blocked on G1 |
+| [SPEC-04](SPEC-04-account-baselines.md) | Per-ship baselines and game-version provenance | R0 | G1 | 01, 03 | Verified offline |
+| [SPEC-05](SPEC-05-live-execution-gate.md) | Authorized live execution with a canary and kill switch | R2 | G2 for use | 01, 02 | Verified offline |
+| [SPEC-06](SPEC-06-legacy-daily-run.md) | Fence the legacy daily run away from trial accounts | ops | G2 | 05 | Approved, blocked on G2 |
+| [SPEC-07](SPEC-07-progression-trial.md) | Live progression trial, manual vs `baseline-v1` | R2 exit | G2 | 04, 05, 06 | Verified offline |
+| [SPEC-08](SPEC-08-pvp-trial.md) | Live PvP strategy comparison | R3 exit | G3 | 03, 05, 07 | Verified offline |
+| [SPEC-09](SPEC-09-market-trades.md) | Market trade calls and a reconciled live trade | R4 exit | G4 | 03, 05 | Approved, blocked on G4 |
+| [SPEC-10](SPEC-10-fleet-trial.md) | Live fleet trial on two accounts | R5 exit | G5 | 05, 06, 07 | Verified offline |
+| [SPEC-11](SPEC-11-alert-delivery.md) | Scheduled reports and alert delivery | R6 | G2 | 05 | Verified offline |
+| [SPEC-12](SPEC-12-study-report.md) | Automation effectiveness study report | R6 exit | — | 07, 08, 09, 10 | Verified offline |
 
 ## Owner gates
 
@@ -69,6 +69,15 @@ The roadmap cannot be completed without these decisions. Each is asked once, rec
 | **M5 Study and operations** | 11, 12 | — | Study report; scheduled reports and alerts running |
 
 M0 can start as soon as G0 is given. M1 and the offline build of M2 can then run in parallel. Each live milestone waits for its gate.
+
+## Where it stands
+
+Every offline slice in the plan is merged (#157–#176). What remains needs the owner:
+
+- **G1:** read-only access and sanitized captures, for SPEC-03 and the live baselines in SPEC-04.
+- **G2:** live execution on one test account and the legacy-run change, for the SPEC-05 canary, SPEC-06, SPEC-07 and SPEC-11.
+- **G3, G4, G5:** PvP, market captures, and a second account, for SPEC-08, SPEC-09 and SPEC-10.
+- SPEC-12's written report follows the trials.
 
 ## What "roadmap complete" means
 

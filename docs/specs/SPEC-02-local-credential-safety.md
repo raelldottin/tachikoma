@@ -1,6 +1,6 @@
 # SPEC-02: Local test runs never touch real credential files
 
-**Status:** Approved
+**Status:** Verified offline
 **Approval:** owner, 2026-11-11, through the session goal "complete the plan in docs/specs/". This approves building and testing the spec offline; owner questions take their safe defaults. It does not open any live gate (G1–G5), so live acceptance criteria stay pending.
 **Release:** safety (prerequisite for every live spec)
 **Owner gate:** G0 (approve); owner action A-0 (check the existing `.device`)
@@ -39,7 +39,8 @@ This spec exists to keep secrets out of reach of the test suite. It adds no netw
 | --- | --- | --- | --- |
 | S02-AC1 | R1, R2 | offline | Given sentinel files in a scratch clone's root, when `make test` runs, then both are unchanged |
 | S02-AC2 | R3 | offline | Given a `./.device`, when `python -m unittest tests.test_security` runs from the root, then it exits non-zero before any test |
-| S02-AC3 | R4, R6 | offline | The suite still reports 945 tests and 1 skip |
+| S02-AC3 | R4 | offline | Tests that read repository files pass when the suite runs from a temporary directory |
+| S02-AC4 | R6 | review | The suite reported 945 tests and 1 skip before the change and 952 (945 plus 7 new) and 1 skip after it |
 
 ## Test plan
 
@@ -59,7 +60,9 @@ Extend `tests/test_ci.py` with a sentinel test that runs `run_tests` on one modu
 
 ## Evidence
 
-No live evidence required.
+**Offline verification:** every MUST with an offline acceptance criterion is covered by a test that cites it (checked by `scripts/spec_trace.py`). Implemented in #165.
+
+No live evidence required. S02-AC4 was checked when #165 merged: 945 tests (1 skipped) before, 952 (945 plus 7 new, 1 skipped) after. S02-R5 is documented in the `tests/__init__.py` docstring and the `Makefile`.
 
 ## Open questions and risks
 

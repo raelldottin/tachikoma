@@ -1,0 +1,58 @@
+{
+  "slice_id": "spec-status-verified-offline",
+  "status": "done",
+  "summary": "SPEC-01, 02, 04, 05, 07, 08, 10, 11 and 12 are Verified offline: every MUST with an offline acceptance criterion is cited by a passing test, as scripts/spec_trace.py checks. SPEC-03, 06 and 09 stay Approved and record what blocks them (owner captures, the owner's workflow edit). Adds the S10-R1 test that --fleet-execute refuses an unconfirmed legacy-run account, makes SPEC-02's test-count criterion a review check with its evidence, and refreshes the specs index, roadmap status and known limitations. No spec is Done: no live gate is open. Implemented by the parent specialist subagent in an isolated worktree, independently reviewed by the verifier subagent (spec_trace passes with the new statuses), and re-validated by the parent.",
+  "files_touched": [
+    "docs/PRODUCT_ROADMAP.md",
+    "docs/baseline/known-limitations.md",
+    "docs/specs/README.md",
+    "docs/specs/SPEC-01-traceability.md",
+    "docs/specs/SPEC-02-local-credential-safety.md",
+    "docs/specs/SPEC-03-verified-profile-reads.md",
+    "docs/specs/SPEC-04-account-baselines.md",
+    "docs/specs/SPEC-05-live-execution-gate.md",
+    "docs/specs/SPEC-06-legacy-daily-run.md",
+    "docs/specs/SPEC-07-progression-trial.md",
+    "docs/specs/SPEC-08-pvp-trial.md",
+    "docs/specs/SPEC-09-market-trades.md",
+    "docs/specs/SPEC-10-fleet-trial.md",
+    "docs/specs/SPEC-11-alert-delivery.md",
+    "docs/specs/SPEC-12-study-report.md",
+    "tests/test_fleet_execute.py"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "Mark specs verified offline and record what waits on the owner",
+      "before": "Roadmap item not implemented",
+      "after": "Mark specs verified offline and record what waits on the owner (offline)",
+      "proof": [
+        "make syntax-check, make test, scripts/ci.py lint and git diff --check pass on current main",
+        "verifier verdict: spec_trace passes with the new statuses"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "Offline only; no live game verification."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-11T21:38:28Z"
+}

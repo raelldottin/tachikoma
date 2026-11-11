@@ -1,6 +1,7 @@
 # SPEC-03: Verified trophy, starbux and battle-history reads
 
 **Status:** Approved
+**Blocked:** S03-R1 and R3–R8 need the owner's sanitized captures (gate G1). The parsers and the profile read cannot be written or tested until those captures exist. Done offline so far: #161 (the capture scan, S03-R2).
 **Approval:** owner, 2026-11-11, through the session goal "complete the plan in docs/specs/". This approves building and testing the spec offline; owner questions take their safe defaults. It does not open any live gate (G1–G5), so live acceptance criteria stay pending.
 **Release:** R1 (state) and R3 (PvP evidence)
 **Owner gate:** G1 (read-only access and sanitized captures)

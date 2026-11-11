@@ -1,6 +1,6 @@
 # SPEC-11: Scheduled reports and alert delivery
 
-**Status:** Approved
+**Status:** Verified offline
 **Approval:** owner, 2026-11-11, through the session goal "complete the plan in docs/specs/". This approves building and testing the spec offline; owner questions take their safe defaults. It does not open any live gate (G1–G5), so live acceptance criteria stay pending.
 **Release:** R6 (AUTO-012 completion)
 **Owner gate:** G2 (scheduled execution uses the same authorization model)
@@ -62,6 +62,8 @@ Extend `tests/test_fleet_execute.py`; a fake `smtplib.SMTP` as the existing SMTP
 | S11-Q2 | Should execution be scheduled at all? | R5 | No; the owner runs it by hand |
 
 ## Evidence
+
+**Offline verification:** every MUST with an offline acceptance criterion is covered by a test that cites it (checked by `scripts/spec_trace.py`). Implemented in #173.
 
 Pending.
 
