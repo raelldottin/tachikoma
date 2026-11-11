@@ -228,7 +228,7 @@ Before the roadmap slices, the offline PvP assessment library (GOAL-PVP-001) mer
 | Fault-injection simulation scenarios (AUTO-014) | Merged, offline | #146 |
 | Study report on automation effectiveness | **Blocked** | `r6-study-report`: needs the R2–R5 live trials to have run |
 
-Queue-only changes (#92, #99, #110, #112, #114, #117, #122, #127, #131) are omitted from the tables. Queue changes #138, #139 and #148 are also omitted. The remaining work is planned spec by spec in [docs/specs/](specs/README.md). The nine slices #140–#147 and #149 were built by specialist subagents (analyst, architect, safety, release, protocol, UX, SRE, researcher, test) and reviewed by an independent verifier subagent before merging.
+Queue-only changes (#92, #99, #110, #112, #114, #117, #122, #127, #131) are omitted from the tables. Queue changes #138, #139 and #148 are also omitted. The remaining work is planned spec by spec in [docs/specs/](specs/README.md): every offline slice there is merged (#157–#176), nine specs are verified offline, and the rest wait on owner gates G1–G5. The nine slices #140–#147 and #149 were built by specialist subagents (analyst, architect, safety, release, protocol, UX, SRE, researcher, test) and reviewed by an independent verifier subagent before merging.
 
 ## 5. Prioritized epic backlog
 

@@ -1,6 +1,6 @@
 # SPEC-12: Automation effectiveness study report
 
-**Status:** Approved
+**Status:** Verified offline
 **Approval:** owner, 2026-11-11, through the session goal "complete the plan in docs/specs/". This approves building and testing the spec offline; owner questions take their safe defaults. It does not open any live gate (G1–G5), so live acceptance criteria stay pending.
 **Release:** R6 exit
 **Owner gate:** none of its own; needs the evidence from SPEC-07 to SPEC-10
@@ -58,6 +58,8 @@ Extend `tests/test_trial_report.py`.
 | S12-Q1 | Publish the report in the repository, or keep it private? | `spec12-write-report` | In the repository, without account data |
 
 ## Evidence
+
+**Offline verification:** every MUST with an offline acceptance criterion is covered by a test that cites it (checked by `scripts/spec_trace.py`). Implemented in #176.
 
 Pending.
 

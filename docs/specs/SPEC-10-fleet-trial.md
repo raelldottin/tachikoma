@@ -1,6 +1,6 @@
 # SPEC-10: Live fleet trial on two accounts
 
-**Status:** Approved
+**Status:** Verified offline
 **Approval:** owner, 2026-11-11, through the session goal "complete the plan in docs/specs/". This approves building and testing the spec offline; owner questions take their safe defaults. It does not open any live gate (G1–G5), so live acceptance criteria stay pending.
 **Release:** R5 exit (study D)
 **Owner gate:** G5
@@ -67,6 +67,8 @@ Extend `tests/test_fleet_execute.py` and `tests/test_trial_report.py`; the two-a
 | S10-Q2 | Window schedule for the two modes | trial plan | Alternate weekly for four weeks |
 
 ## Evidence
+
+**Offline verification:** every MUST with an offline acceptance criterion is covered by a test that cites it (checked by `scripts/spec_trace.py`). Implemented in #174, and the citation slice that marked this spec.
 
 Pending.
 

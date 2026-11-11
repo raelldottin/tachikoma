@@ -1,6 +1,6 @@
 # SPEC-01: Spec traceability check
 
-**Status:** Approved
+**Status:** Verified offline
 **Approval:** owner, 2026-11-11, through the session goal "complete the plan in docs/specs/". This approves building and testing the spec offline; owner questions take their safe defaults. It does not open any live gate (G1–G5), so live acceptance criteria stay pending.
 **Release:** process
 **Owner gate:** G0 (approve)
@@ -66,6 +66,8 @@ Read-only; touches no game code, credentials or network.
 | S01-Q1 | Should SHOULD requirements also need a test? | approval | No; only MUST |
 
 ## Evidence
+
+**Offline verification:** every MUST with an offline acceptance criterion is covered by a test that cites it (checked by `scripts/spec_trace.py`). Implemented in #164.
 
 No live evidence required.
 

@@ -1,6 +1,6 @@
 # SPEC-08: Live PvP strategy comparison
 
-**Status:** Approved
+**Status:** Verified offline
 **Approval:** owner, 2026-11-11, through the session goal "complete the plan in docs/specs/". This approves building and testing the spec offline; owner questions take their safe defaults. It does not open any live gate (G1–G5), so live acceptance criteria stay pending.
 **Release:** R3 exit (study C)
 **Owner gate:** G3
@@ -68,6 +68,8 @@ Extend `tests/test_pvp_scorecard.py`, `tests/test_battle_results_from_journal.py
 | S08-Q3 | Battle cap per window | authorization | 10 per day |
 
 ## Evidence
+
+**Offline verification:** every MUST with an offline acceptance criterion is covered by a test that cites it (checked by `scripts/spec_trace.py`). Implemented in #163, #169, #172.
 
 Pending.
 

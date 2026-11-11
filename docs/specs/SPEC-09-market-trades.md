@@ -1,6 +1,7 @@
 # SPEC-09: Market trade calls and a reconciled live trade
 
 **Status:** Approved
+**Blocked:** S09-R1, R2, R3 and R5 need sanitized current captures of `SellItem3` and `Purchase4` (gate G4). The client calls and trade actions cannot be written or tested until those captures exist. Done offline so far: #169 (the market caps, S09-R4).
 **Approval:** owner, 2026-11-11, through the session goal "complete the plan in docs/specs/". This approves building and testing the spec offline; owner questions take their safe defaults. It does not open any live gate (G1–G5), so live acceptance criteria stay pending.
 **Release:** R4 exit
 **Owner gate:** G4
