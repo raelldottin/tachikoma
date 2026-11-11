@@ -1323,7 +1323,7 @@
     {
       "slice_id": "spec01-traceability-check",
       "title": "SPEC-01: spec traceability check",
-      "status": "queued",
+      "status": "in_progress",
       "priority": 384,
       "domain": "process",
       "allowed_paths": [
@@ -1369,7 +1369,7 @@
       "slice_id": "spec03-fixture-scan",
       "title": "SPEC-03: sanitized-capture scan",
       "status": "queued",
-      "priority": 386,
+      "priority": 375,
       "domain": "safety",
       "allowed_paths": [
         "tests/test_profile_reads.py",
@@ -1412,7 +1412,7 @@
       "slice_id": "spec05-authorization",
       "title": "SPEC-05: live execution authorization file",
       "status": "queued",
-      "priority": 388,
+      "priority": 376,
       "domain": "safety",
       "allowed_paths": [
         "sdk/fleet/authorization.py",
@@ -1455,7 +1455,7 @@
       "slice_id": "spec08-application-log",
       "title": "SPEC-08: strategy application log",
       "status": "queued",
-      "priority": 390,
+      "priority": 377,
       "domain": "pvp",
       "allowed_paths": [
         "sdk/pvp/strategies.py",
