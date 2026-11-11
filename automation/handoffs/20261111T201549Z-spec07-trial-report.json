@@ -1,0 +1,44 @@
+{
+  "slice_id": "spec07-trial-report",
+  "status": "done",
+  "summary": "The R2 exit needs a manual-vs-baseline-v1 report built the same way for both arms, and nothing assembled one. scripts/trial_report.py turns a trial plan, per-arm snapshot series, the automated arm's journal, operator minutes per account-day and the intervention log into a JSON and Markdown exit report.  Growth velocity (room design changes plus research completions per account-day) comes only from diff_snapshots, so the manual arm, which is not journaled, is measured exactly like the automated one (R4). Days whose rooms or research were not observed, that are not one day long, or that the log excludes give no value rather than 0. Per arm the report gives the sample size, growth with a 95% interval, snapshot-ledger and journal resources per hour, verified success, the failure ledger and operator minutes, plus the decide() result, game version, interventions and limitations (R7). Unobserved values are None next to their n.  The first day a plan threshold (failure rate or counts), any automated starbux spend, any event of another account, or an abort-arm intervention is crossed marks the trial stopped early; the report says so and shows decide() for reference only (R8). Starbux and cross-account stops always apply. Inputs and the report refuse secret-shaped text. Implemented by the SPEC-07 builder specialist subagent in an isolated worktree, independently reviewed by the verifier subagent (tests cite its requirement ids; parent re-validated in a scratch clone), and re-validated by the parent.",
+  "files_touched": [
+    "scripts/trial_report.py",
+    "tests/test_trial_report.py"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "SPEC-07: trial report builder",
+      "before": "Roadmap item not implemented",
+      "after": "SPEC-07: trial report builder (offline)",
+      "proof": [
+        "make syntax-check, make test, scripts/ci.py lint and git diff --check pass on current main",
+        "verifier verdict: tests cite its requirement ids; parent re-validated in a scratch clone"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "Offline only; no live game verification."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-11T20:16:05Z"
+}
