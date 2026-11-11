@@ -1,7 +1,7 @@
 # Known limitations
 
 
-**As of:** 2026-11-11, `main` after #136.
+**As of:** 2026-11-11, `main` after #149.
 
 This page collects the gaps recorded in the baseline docs in one place. Every R0–R6 module on `main` has been tested only offline, with mocked game traffic or the simulated game. No roadmap module has been run against a live account, and no live result has been recorded. Each item links to the doc that describes it in full.
 
@@ -54,9 +54,9 @@ Until these run, no exit criterion that needs live evidence is met. Account grow
 
 ## Fleet
 
-- **Sequential only.** The orchestrator runs accounts one at a time. Concurrent operation is not implemented, so sequential and concurrent runs cannot be compared yet. [fleet-accounts.md](fleet-accounts.md#orchestration)
+- **Concurrent mode is library-only.** `ConcurrentFleetOrchestrator` runs accounts in parallel with the sequential guarantees, but `run.py` does not start it. A slow login delays every later account's first snapshot, because claims are decided in alias order. [fleet-accounts.md](fleet-accounts.md#orchestration)
 - **No live account wiring.** The registry names a credentials secret, but only the simulation supplies an account context. Nothing in `run.py` starts a fleet run. [fleet-accounts.md](fleet-accounts.md#orchestration)
-- **Isolation checks compare aliases, not game identity.** Snapshots are stamped with the alias the provider was given, and profiles carry no game user id. A factory that loads the wrong credentials would pass every alias check. [fleet-accounts.md](fleet-accounts.md#orchestration)
+- **The game identity check is inactive by default.** Snapshots can carry a salted fingerprint of the logged-in user and profiles can declare the expected one, but nothing in `run.py` supplies a salt yet, so only alias checks apply. An account that declares no fingerprint and logs in as an undeclared game account is not caught. [fleet-accounts.md](fleet-accounts.md)
 - **Uncertain attempts are charged at planned cost.** When an attempt's effect is not observed, its planned cost counts against the budget (`<kind>_uncertain`), which can over-count if nothing was spent. [fleet-accounts.md](fleet-accounts.md#orchestration)
 - **No starbux spending.** A fleet run never allows starbux spend, because the policy cannot cap a starbux amount. [fleet-accounts.md](fleet-accounts.md#orchestration)
 - **Time saved needs operator input.** `time_saved_minutes` is reported only when the operator supplies both manual and operator minutes for an account. None have been supplied. [fleet-report.md](fleet-report.md)
@@ -68,13 +68,16 @@ Until these run, no exit criterion that needs live evidence is met. Account grow
 - **Simple statistics.** Proportions use a 95% Wilson interval and means a 95% Student-t interval, and a zero-width interval never decides. Both assume independent samples; serially correlated daily figures make intervals too narrow. [experiment-loop.md](experiment-loop.md#samples)
 - **The simulated game is not the real game.** `SimulatedGame` models six catalog methods with seeded random amounts. Training always fails. Simulation shows that code paths work together, not how the game responds. [simulation.md](simulation.md#simulated-game)
 - **Trophies exist only in simulation.** Battle outcomes are observable in scenarios but not against the live client. [simulation.md](simulation.md#simulated-game)
-- **Scenarios are not in release archives.** The source archive includes only `.py` files under `sdk/`, so `sdk/simulation/scenarios/*.json` is left out. [RELEASE.md](../RELEASE.md#what-the-archive-contains)
+- **The hull-reserve variant rarely applies.** `hull-reserve-v1` needs hull design costs that nothing passes to the planner yet, and every owned crew member at the level cap, so it falls back to `baseline-v1`. Its `@MineralCost` field name is unverified. [progression-policy.md](progression-policy.md)
+- **Faults are simulated, not observed.** The fault-injection scenarios show the safety rules hold against the simulated game; they do not show how often each fault happens live. [simulation.md](simulation.md)
 
 ## Operations
 
 - **No live execute path.** The scheduler is reachable from `run.py` only through `--progression-dry-run`, which logs in, makes read-only calls and journals dry-run events. There is no live-execute flag. [daily-scheduler.md](daily-scheduler.md#scope)
 - **Reports are offline only.** `run.py --report` builds progression, PvP and fleet reports from journal files without logging in. Nothing produces them from a live run yet. In that mode fleet events are grouped by alias, so the audit's `foreign-event` rule cannot fire. [README](../../README.md#offline-reports)
-- **No dashboard or alerts.** The roadmap's R6 lists dashboards and alerts. No code for either exists. [../PRODUCT_ROADMAP.md](../PRODUCT_ROADMAP.md#r6--adaptive-optimization-and-release)
+- **Dashboard and alerts are offline.** `run.py --report dashboard --output PATH` writes a static HTML page from journal files, and `sdk/reports/alerts.py` evaluates alert rules, but nothing sends alerts or runs them on a schedule. [alerts.md](alerts.md)
+- **The compatibility ledger flags everything against 1.0.** No entry has strong evidence on the current game version; most have no recorded version at all. [compatibility-ledger.md](compatibility-ledger.md)
+- **The study has no data.** The study design and sample-size planning exist, but no manual baseline, test account or window has been supplied. [study-design.md](../experiments/study-design.md)
 - **The legacy daily run is separate.** `daily-run.yml` runs the legacy `run.py` sequence with `--run-battle` three times a day for the accounts in repository secrets. Its actions do not go through the runner, are not reconciled and are not journaled. [daily-run.yml](../../.github/workflows/daily-run.yml)
 - **The only live claim is old and unversioned.** The battle chain (`CreateBattle9`, `AcceptBattle5`, `FinaliseBattle15`) is `live-claimed` from README notes, with no recorded game version. [capability-inventory.md](capability-inventory.md#r3-pvp-automation-engine)
 - **Windows CI is partial.** Windows runs a portable smoke subset, not the full suite. [workflows README](../../.github/workflows/README.md#validation-coverage-and-dependencies)
