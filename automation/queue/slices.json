@@ -1156,7 +1156,7 @@
       ],
       "max_files_changed": 4,
       "notes": "SRE lane. Add sdk/reports/alerts.py: declarative thresholds (failure rate, uncertain rate, contradicted actions, isolation incidents, budget exceeded, no verified action in a period) evaluated over journals and the audit, returning alerts with severity, account and evidence. Library only (no notification transport). Sample size guards: no alert from rates with too few attempts.",
-      "status": "queued",
+      "status": "done",
       "depends_on": [
         "r6-release-and-limitations"
       ],
