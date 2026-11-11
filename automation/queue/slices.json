@@ -772,7 +772,7 @@
     {
       "slice_id": "r6-policy-experiment-loop",
       "title": "Policy evaluation loop with recorded, versioned decisions (AUTO-011)",
-      "status": "queued",
+      "status": "done",
       "priority": 320,
       "domain": "experiment",
       "allowed_paths": [
