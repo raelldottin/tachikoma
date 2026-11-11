@@ -654,6 +654,120 @@
         "make test",
         "git diff --check"
       ]
+    },
+    {
+      "slice_id": "r5-account-registry",
+      "title": "Account registry with objectives, budgets and strategy assignment (AUTO-009)",
+      "status": "queued",
+      "priority": 270,
+      "domain": "fleet",
+      "allowed_paths": [
+        "sdk/fleet/",
+        "tests/",
+        "docs/baseline/"
+      ],
+      "depends_on": [
+        "r4-economy-experiment-report"
+      ],
+      "max_files_changed": 5,
+      "notes": "R5 start. Add sdk/fleet/accounts.py: an AccountProfile per alias (objective label, progression policy id, optional PvP strategy key, per-period resource spend budgets, max actions, enabled flag, and the NAME of the secret that holds its credentials, never a secret value). Load a registry from JSON with fail-closed validation: aliases follow the snapshot alias rule, aliases are unique, e-mail addresses and secret-shaped values are refused anywhere in the file. Pure and offline; synthetic files in temporary directories.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
+    },
+    {
+      "slice_id": "r5-fleet-orchestrator",
+      "title": "Sequential fleet orchestration with per-account isolation and budgets",
+      "status": "queued",
+      "priority": 280,
+      "domain": "fleet",
+      "allowed_paths": [
+        "sdk/fleet/",
+        "tests/",
+        "docs/baseline/"
+      ],
+      "depends_on": [
+        "r5-account-registry"
+      ],
+      "max_files_changed": 5,
+      "notes": "Add sdk/fleet/orchestrator.py: run the daily scheduler for each enabled account in turn, using injected per-account factories for the client, snapshot provider and journal, so no account ever receives another account's client, snapshots or journal. Enforce each account's spend budget by planning within it, stop one account on a safety stop without stopping the others, honour a fleet-wide stop file, and default to dry-run. Record per-account outcomes, elapsed time and the mode (sequential). Fakes only.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
+    },
+    {
+      "slice_id": "r5-isolation-audit",
+      "title": "Audit journals and snapshots for cross-account mix-ups",
+      "status": "queued",
+      "priority": 290,
+      "domain": "safety",
+      "allowed_paths": [
+        "sdk/fleet/",
+        "tests/",
+        "docs/baseline/"
+      ],
+      "depends_on": [
+        "r5-fleet-orchestrator"
+      ],
+      "max_files_changed": 5,
+      "notes": "Add sdk/fleet/audit.py: given the registry and each account's journal, report incidents: events whose alias is not the journal's owner, aliases not in the registry, attempt ids reused across accounts, overlapping mutating attempts on one account, and spend above the account's budget for a period. Each incident names the account, event and rule. An empty report states how many events and accounts were checked.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
+    },
+    {
+      "slice_id": "r5-fleet-report",
+      "title": "Fleet throughput, failure and isolation report (R5 exit metrics)",
+      "status": "queued",
+      "priority": 300,
+      "domain": "observability",
+      "allowed_paths": [
+        "sdk/fleet/",
+        "sdk/reports/",
+        "tests/",
+        "docs/baseline/"
+      ],
+      "depends_on": [
+        "r5-isolation-audit"
+      ],
+      "max_files_changed": 5,
+      "notes": "Add a fleet report: per account and fleet-wide, verified actions, attempted actions, failure and uncertain rates, actions per elapsed hour, isolation incidents from the audit, and the orchestration mode, so sequential and future concurrent runs compare on the same fields. Operator time saved is reported only when the operator supplies manual baseline minutes per account; otherwise it is None. JSON and Markdown output.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
+    },
+    {
+      "slice_id": "r5-live-fleet-trial",
+      "title": "Run the fleet orchestrator on two owned test accounts",
+      "status": "blocked",
+      "priority": 310,
+      "domain": "experiment",
+      "allowed_paths": [
+        "run.py",
+        "sdk/fleet/",
+        "docs/experiments/",
+        "tests/"
+      ],
+      "depends_on": [
+        "r5-fleet-report",
+        "r2-live-progression-trial"
+      ],
+      "max_files_changed": 6,
+      "entry_condition": "Owner authorization required: name at least two owned test accounts with credentials provisioned through the existing secret flow (never committed), supply each account's manual routine minutes, and authorize live fleet runs. Live execution against real accounts is not authorized yet.",
+      "notes": "R5 exit trial. Wire the orchestrator into run.py behind an explicit flag, run it on the authorized accounts, and record the fleet report and isolation audit in docs/experiments/. Unit tests stay mocked.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
     }
   ]
 }
