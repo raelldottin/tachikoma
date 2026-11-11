@@ -1,0 +1,48 @@
+{
+  "slice_id": "r6-local-dashboard",
+  "status": "done",
+  "summary": "Operators had four separate offline reports (progression, PvP, fleet, audit) printed as markdown or JSON. `run.py --report dashboard --output PATH` renders all of them into one self-contained HTML page: summary tiles, per-account progression, the PvP scorecard, the fleet table, audit incidents and the failure ledger, with sample sizes beside every rate and n/a for unobserved numbers (incidents are n/a when no registry was given, because the audit did not run).  The page has no scripts, external assets or network references and declares a Content-Security-Policy of default-src 'none'; every value is HTML-escaped after redaction, so journal text can never become markup. It carries no generation time, so the same journals give identical bytes. The file is written atomically (temp file in the same directory, fsync, rename), never over one of the input journals. Like the other offline reports it is handled before any SMTP setup, Device/Client construction, credential prompt or login. Implemented by the UX specialist subagent in an isolated worktree, independently reviewed by the verifier subagent (APPROVE-WITH-NITS; registry-overwrite guard added), and re-validated by the parent.",
+  "files_touched": [
+    "README.md",
+    "README.template",
+    "docs/baseline/capability-inventory.json",
+    "run.py",
+    "sdk/reports/dashboard.py",
+    "tests/test_dashboard_report.py"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "Local static HTML dashboard from journals (AUTO-012)",
+      "before": "Roadmap item not implemented",
+      "after": "Local static HTML dashboard from journals (AUTO-012) (offline)",
+      "proof": [
+        "make syntax-check, make test, scripts/ci.py lint and git diff --check pass on current main",
+        "verifier verdict: APPROVE-WITH-NITS; registry-overwrite guard added"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "Offline only; no live game verification."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-11T11:51:39Z"
+}
