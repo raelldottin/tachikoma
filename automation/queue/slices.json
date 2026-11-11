@@ -940,7 +940,7 @@
     {
       "slice_id": "r6-fix-economy-attribution",
       "title": "Tighten trade completion and ledger attribution",
-      "status": "queued",
+      "status": "done",
       "priority": 343,
       "domain": "economy",
       "allowed_paths": [

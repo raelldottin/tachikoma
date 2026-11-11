@@ -1,0 +1,51 @@
+{
+  "slice_id": "r6-fix-economy-attribution",
+  "status": "done",
+  "summary": "trades.py: max_fee keyword with default_max_fee(price) = ceil(25%); buy completes only with exactly the requested quantity and payment within [price, price+max_fee], and a still-open targeted listing makes it unknown; sell proceeds must arrive at/after ListingGone within [price-max_fee, price]; sale ids seen before the request never match, listing quantity must match when given, and several matching sale ids give requested with an ambiguity reason. ledger.py: actions starting inside an interval and overlapping its end are candidates (ambiguous with others), except when a later snapshot falls inside their window (the runner's own pair), keeping inter-run gaps unattributed; a two-run runner round trip confirms. Regression tests fail on the old code. Implemented by a subagent in a worktree; re-validated by the parent.",
+  "files_touched": [
+    "sdk/economy/trades.py",
+    "sdk/economy/ledger.py",
+    "tests/test_market_trades.py",
+    "tests/test_economy_ledger.py",
+    "docs/baseline/economy-trades.md",
+    "docs/baseline/economy-ledger.md"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "Trade completion and ledger attribution",
+      "before": "Trades completed from unrelated item and currency movements; ledger changes could be credited to the wrong action",
+      "after": "Trades complete only with bounded, correctly timed movements and an unambiguous listing; end-overlapping actions make attribution ambiguous",
+      "proof": [
+        "reviewer repro now gives ambiguous / unknown / unknown",
+        "regression tests fail on the previous code and pass now",
+        "make test passes",
+        "scripts/ci.py lint: no new findings"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "A real sale whose proceeds arrive before the ListingGone poll now reconciles as unknown (stricter by design).",
+    "The 25% default fee bound is an assumption; the game's actual market fee is unverified."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-11T00:46:35Z"
+}

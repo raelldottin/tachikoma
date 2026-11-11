@@ -42,10 +42,27 @@ class LedgerTests(unittest.TestCase):
         self.assertEqual(ledger.entries[0].action_id, "upgrade_room")
 
     def test_partial_overlap_and_gaps_are_unattributed(self):
-        # The next action starts before its own before-snapshot: the gap is not its effect.
-        ledger = build_ledger("alpha", [snap(0), snap(10, minerals="130")], [event(9, 20)])
-        self.assertEqual(ledger.entries[0].attribution, "unattributed")
+        # The next action starts before its own before-snapshot (10) and has its after-snapshot (15) in the
+        # series: the gap [0, 10] is not its effect.
+        ledger = build_ledger("alpha", [snap(0), snap(10, minerals="130"), snap(15, minerals="130")],
+                              [event(9, 20)])
+        self.assertEqual([e.attribution for e in ledger.entries], ["unattributed", "attributed"])
         self.assertEqual(ledger.unattributed().gained, {"minerals": 30})
+        # An action that started before the interval's start snapshot and ends inside it is not a candidate.
+        ledger = build_ledger("alpha", [snap(0), snap(10, minerals="130")], [event(-5, 3)])
+        self.assertEqual(ledger.entries[0].attribution, "unattributed")
+
+    def test_action_started_inside_and_overlapping_the_end_is_a_candidate(self):
+        # Regression: an action that started inside the interval and ran past its end was ignored, so the
+        # change was attributed to the only other action.
+        ledger = build_ledger("alpha", [snap(0, minerals="1000"), snap(10, minerals="700")],
+                              [event(2, 4, "collect_daily_reward"), event(8, 12, "upgrade_room")])
+        [entry] = ledger.entries
+        self.assertEqual((entry.attribution, entry.action_id, len(entry.candidates)), ("ambiguous", None, 2))
+        self.assertEqual(ledger.by_action(), {})
+        alone = build_ledger("alpha", [snap(0, minerals="1000"), snap(10, minerals="700")],
+                             [event(8, 12, "upgrade_room")])
+        self.assertEqual((alone.entries[0].attribution, alone.entries[0].action_id), ("attributed", "upgrade_room"))
 
     def test_several_candidates_are_ambiguous(self):
         ledger = build_ledger("alpha", [snap(0), snap(60, minerals="90")],
@@ -110,6 +127,37 @@ class RunnerLedgerTests(unittest.TestCase):
             ActionRunner("alpha", Client(), provider, journal, clock=lambda: next(ticks)).run("collect_all_resources")
             ledger = build_ledger("alpha", observed, journal.read())
         self.assertEqual(ledger.by_action()["collect_all_resources"].gained, {"minerals": 75})
+
+    def test_consecutive_runs_attribute_each_run_and_leave_the_gap_unattributed(self):
+        state = {"minerals": "100"}
+
+        class Client:
+            def collectAllResources(self):
+                state["minerals"] = str(int(state["minerals"]) + 75)
+                return True
+
+        ticks = iter(at(n / 60) for n in range(1000))
+        observed = []
+
+        def provider():
+            snapshot = build_snapshot("alpha", next(ticks), "synthetic",
+                                      resources={"minerals": state["minerals"], "gas": "50", "starbux": None})
+            observed.append(snapshot)
+            return snapshot
+
+        with tempfile.TemporaryDirectory() as tmp:
+            journal = GameplayJournal(Path(tmp) / "events.jsonl")
+            runner = ActionRunner("alpha", Client(), provider, journal, clock=lambda: next(ticks))
+            runner.run("collect_all_resources")
+            state["minerals"] = str(int(state["minerals"]) + 5)  # outside any action
+            runner.run("collect_all_resources")
+            events = journal.read()
+            ledger = build_ledger("alpha", observed, events)
+        self.assertEqual([e.attribution for e in ledger.entries], ["attributed", "unattributed", "attributed"])
+        self.assertEqual([e.attempt_id for e in ledger.entries if e.attempt_id],
+                         [events[0].attempt_id, events[1].attempt_id])
+        self.assertEqual(ledger.by_action()["collect_all_resources"].gained, {"minerals": 150})
+        self.assertEqual(ledger.unattributed().gained, {"minerals": 5})
 
 
 if __name__ == "__main__":
