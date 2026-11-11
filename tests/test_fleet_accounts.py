@@ -40,6 +40,11 @@ class ProfileTests(unittest.TestCase):
         self.assertEqual(profile.budget("starbux"), 0)
         self.assertIsNone(profile.budget("minerals"))
 
+    def test_missing_starbux_budget_means_zero(self):
+        profile = AccountProfile(**entry(budgets={"minerals": 10}))
+        self.assertEqual(profile.budget("starbux"), 0)
+        self.assertEqual(profile.budget("minerals"), 10)
+
     def test_invalid_fields_fail_closed(self):
         bad = [
             dict(alias=SYNTHETIC_EMAIL), dict(alias="Has Caps"),

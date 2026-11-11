@@ -1,0 +1,51 @@
+{
+  "slice_id": "r5-fleet-orchestrator",
+  "status": "done",
+  "summary": "Added sdk/fleet/orchestrator.py: AccountContext, FleetOrchestrator (sequential, alias order, dry-run default, per-account runner with the account's own alias, foreign-snapshot and shared-journal refusal before any call, per-account error containment with redacted reasons, fleet stop file, max_actions), spent_in_period and budgeted_policy_config (reserves raised to balance minus remaining budget; starbux spend never allowed), FleetRun/AccountRun records. Fixed AccountProfile so an omitted starbux budget is 0, with a regression test that fails on the previous registry. 11 orchestrator tests plus the registry regression test. Orchestration documented in docs/baseline/fleet-accounts.md.",
+  "files_touched": [
+    "sdk/fleet/orchestrator.py",
+    "sdk/fleet/accounts.py",
+    "tests/test_fleet_orchestrator.py",
+    "tests/test_fleet_accounts.py",
+    "docs/baseline/fleet-accounts.md"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "Fleet orchestration (R5)",
+      "before": "Accounts ran one per process with no isolation checks or budgets, and an omitted starbux budget meant unlimited",
+      "after": "Accounts run sequentially with enforced isolation, contained failures, a fleet stop, budget-bounded plans and no starbux spend",
+      "proof": [
+        "tests.test_fleet_orchestrator: 11 tests OK",
+        "tests.test_fleet_accounts: 9 tests OK; the starbux regression test fails on the previous registry",
+        "make test: 651 tests OK (1 skipped)",
+        "scripts/ci.py lint: no new findings",
+        "run.py --help exits 0"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "Budget enforcement relies on journaled cost deltas; spend made outside the journal (manual play) is not counted.",
+    "The orchestrator is not wired into run.py; that is part of the blocked live fleet trial."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-11T00:15:57Z"
+}
