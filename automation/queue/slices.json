@@ -1344,7 +1344,7 @@
     {
       "slice_id": "spec02-credential-safety",
       "title": "SPEC-02: test runs never touch real credential files",
-      "status": "queued",
+      "status": "done",
       "priority": 385,
       "domain": "safety",
       "allowed_paths": [

@@ -8,12 +8,14 @@ import gzip
 import hashlib
 import io
 import json
+import logging
 import os
 from pathlib import Path, PurePosixPath
 import re
 import subprocess
 import sys
 import tarfile
+from tempfile import TemporaryDirectory
 import unittest
 
 
@@ -249,6 +251,16 @@ def build_release(repo: Path, tag: str, output: Path, main_ref: str = "origin/ma
     return manifest
 
 
+def close_root_log_files_under(directory: Path) -> None:
+    """Close and detach root-logger file handlers whose file lies inside ``directory``."""
+    directory = Path(os.path.realpath(directory))
+    for handler in list(logging.root.handlers):
+        if isinstance(handler, logging.FileHandler):
+            if Path(os.path.realpath(handler.baseFilename)).is_relative_to(directory):
+                logging.root.removeHandler(handler)
+                handler.close()
+
+
 def run_tests(names: list[str]) -> int:
     """Run mocked tests and fail even when a forbidden network error is swallowed."""
     attempts = []
@@ -261,12 +273,23 @@ def run_tests(names: list[str]) -> int:
     # Audit hooks cannot be removed; this command deliberately owns its interpreter.
     sys.addaudithook(forbid_network)
     sys.path.insert(0, str(ROOT))
-    suite = (
-        unittest.defaultTestLoader.loadTestsFromNames(names)
-        if names
-        else unittest.defaultTestLoader.discover(str(ROOT / "tests"), pattern="test_*.py")
-    )
-    result = unittest.TextTestRunner().run(suite)
+    # Tests that construct Device() or import run.py write ./.device and ./tachikoma.log. Running them in a
+    # fresh, empty working directory keeps them away from the real credential files in the repository root.
+    previous_cwd = os.getcwd()
+    with TemporaryDirectory(prefix="tachikoma-test-", ignore_cleanup_errors=True) as scratch:
+        os.chdir(scratch)
+        try:
+            suite = (
+                unittest.defaultTestLoader.loadTestsFromNames(names)
+                if names
+                else unittest.defaultTestLoader.discover(str(ROOT / "tests"), pattern="test_*.py")
+            )
+            result = unittest.TextTestRunner().run(suite)
+        finally:
+            # Leave the directory and close log files opened in it (run.py logs to ./tachikoma.log) before it is
+            # removed: Windows cannot delete the working directory or an open file.
+            os.chdir(previous_cwd)
+            close_root_log_files_under(Path(scratch))
     if attempts:
         print(f"CI rejected {len(attempts)} unmocked network connection attempt(s).", file=sys.stderr)
     return 0 if result.wasSuccessful() and not attempts else 1

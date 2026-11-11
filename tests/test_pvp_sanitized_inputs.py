@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import pathlib
 import unittest
 
 from sdk.pvp.models import (
@@ -20,6 +21,8 @@ from sdk.pvp.models import (
 from sdk.ship_layout import parse_rooms, analyze_layout
 
 FIXTURE_DIR = os.path.join(os.path.dirname(__file__), "fixtures", "pvp_sanitized")
+# Located from this file, not the working directory, so the test runs from any cwd.
+REPO_ROOT = pathlib.Path(os.path.dirname(os.path.abspath(__file__))).parent
 
 
 def _load(name):
@@ -108,13 +111,13 @@ class TestPvpSanitizedInputs(unittest.TestCase):
                          role=BattleRole.ATTACKER.value,
                          trophy_before=10, trophy_after=12, trophy_delta=5)
 
+    # Verifies: S02-R4
     def test_no_network_imports_in_pure_modules(self):
         import ast
-        import pathlib
         pure = ["sdk/ship_layout.py", "sdk/game_formulas.py",
                 "sdk/crew_leveling.py", "sdk/redaction.py"]
         for rel in pure:
-            src = pathlib.Path(rel).read_text()
+            src = (REPO_ROOT / rel).read_text()
             tree = ast.parse(src)
             imports = []
             for node in ast.walk(tree):

@@ -6,6 +6,7 @@ from contextlib import redirect_stderr, redirect_stdout
 import hashlib
 import io
 import json
+import logging
 import os
 from pathlib import Path, PurePosixPath, PureWindowsPath
 import shutil
@@ -17,6 +18,7 @@ import unittest
 from unittest.mock import patch
 
 from scripts import ci
+from tests.synthetic_fixtures import SYNTHETIC_ACCESS_TOKEN, SYNTHETIC_DEVICE_KEY_IOS
 
 try:
     import yaml
@@ -576,3 +578,174 @@ class RepositoryReleaseSelectionTests(unittest.TestCase):
         for path in sorted(path for path in selected if path.startswith("sdk/") and path.endswith(".json")):
             with self.subTest(path=path):
                 json.loads((ci.ROOT / path).read_text(encoding="utf-8"))
+
+
+SENTINEL_PROBE = """
+import os
+import unittest
+
+import run
+from sdk.device import Device
+
+
+class SentinelProbe(unittest.TestCase):
+    def test_writes_device_and_log_in_the_working_directory(self):
+        Device(language="en")
+        run.logging.getLogger().info("sentinel probe")
+        self.assertTrue(os.path.isfile(".device"))
+        self.assertTrue(os.path.isfile("tachikoma.log"))
+"""
+SENTINEL_MTIME_NS = 1_600_000_000_000_000_000
+# The Makefile recipes use mktemp, trap and a POSIX shell; Windows runs only scripts/ci.py test.
+REQUIRES_POSIX_MAKE = unittest.skipUnless(
+    os.name == "posix" and shutil.which("make"), "requires make and a POSIX shell"
+)
+
+
+class CredentialFileSafetyTests(unittest.TestCase):
+    """Runs the test entry points in a scratch copy of the repository whose root holds sentinel credential files."""
+
+    def setUp(self):
+        directory = TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name).resolve() / "repo"
+        self.temp = Path(directory.name).resolve() / "tmp"
+        self.temp.mkdir()
+        shutil.copytree(ci.ROOT / "sdk", self.root / "sdk", ignore=shutil.ignore_patterns("__pycache__"))
+        (self.root / "scripts").mkdir()
+        (self.root / "tests").mkdir()
+        for name in ("run.py", "Makefile", "scripts/ci.py", "tests/__init__.py"):
+            shutil.copy2(ci.ROOT / name, self.root / name)
+        # The probe writes ./.device and ./tachikoma.log in its working directory, as the real device and
+        # run.py tests do. Its name matches both `make test` (test_*.py) and `make test-security` (test_security*.py).
+        (self.root / "tests" / "test_security_sentinel_probe.py").write_text(SENTINEL_PROBE, encoding="utf-8")
+        self.sentinels = {
+            ".device": f"Android|{SYNTHETIC_DEVICE_KEY_IOS}|sentinel-refresh|en|{SYNTHETIC_ACCESS_TOKEN}|1".encode(),
+            "tachikoma.log": b"sentinel log line\n",
+        }
+        for name, content in self.sentinels.items():
+            path = self.root / name
+            path.write_bytes(content)
+            os.utime(path, ns=(SENTINEL_MTIME_NS, SENTINEL_MTIME_NS))
+        self.env = {
+            key: value
+            for key, value in os.environ.items()
+            if key not in {"PYTHONPATH", "PYTHONSAFEPATH", "MAKEFLAGS", "MFLAGS", "MAKELEVEL"}
+        }
+        # Every temporary directory the commands create lands here, so the test can see that it was removed.
+        self.env.update(PYTHONDONTWRITEBYTECODE="1", TMPDIR=str(self.temp), TEMP=str(self.temp), TMP=str(self.temp))
+
+    def run_in_root(self, command):
+        return subprocess.run(command, cwd=self.root, env=self.env, capture_output=True, text=True, timeout=120)
+
+    def assert_sentinels_untouched(self):
+        for name, content in self.sentinels.items():
+            path = self.root / name
+            self.assertEqual(path.read_bytes(), content, name)
+            self.assertEqual(path.stat().st_mtime_ns, SENTINEL_MTIME_NS, name)
+
+    def assert_probe_ran_and_temp_dir_removed(self, result):
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("Ran 1 test", result.stderr)
+        self.assertEqual(list(self.temp.iterdir()), [], "the temporary working directory must be removed")
+
+    # Verifies: S02-R1, S02-R2
+    def test_ci_test_command_leaves_root_credential_files_untouched(self):
+        for names in ([], ["--names", "tests.test_security_sentinel_probe"]):
+            with self.subTest(names=names):
+                result = self.run_in_root([sys.executable, "scripts/ci.py", "test", *names])
+                self.assert_probe_ran_and_temp_dir_removed(result)
+                self.assert_sentinels_untouched()
+
+    # Verifies: S02-R1
+    def test_run_tests_uses_a_fresh_temporary_directory_and_restores_the_working_directory(self):
+        program = """
+import os
+import unittest
+from unittest.mock import patch
+from scripts import ci
+
+seen = []
+
+class RecordWorkingDirectory(unittest.TestCase):
+    def runTest(self):
+        seen.append(os.getcwd())
+        self.assertEqual(os.listdir("."), [])
+
+with patch.object(unittest.defaultTestLoader, "discover", return_value=unittest.TestSuite([RecordWorkingDirectory()])):
+    code = ci.run_tests([])
+print(repr((code, seen[0], os.getcwd(), os.path.exists(seen[0]))))
+"""
+        result = self.run_in_root([sys.executable, "-c", program])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        code, seen, after, still_exists = ast.literal_eval(result.stdout.strip().splitlines()[-1])
+        self.assertEqual(code, 0)
+        self.assertEqual(Path(after).resolve(), self.root)
+        self.assertEqual(Path(seen).resolve().parent, self.temp)
+        self.assertFalse(still_exists)
+
+    # Verifies: S02-R1
+    def test_log_files_opened_in_the_temporary_directory_are_closed_so_it_can_be_removed(self):
+        inside = logging.FileHandler(self.temp / "tachikoma.log", delay=False)
+        outside = logging.FileHandler(self.root / "outside.log", delay=False)
+        for handler in (inside, outside):
+            logging.root.addHandler(handler)
+        self.addCleanup(outside.close)
+        self.addCleanup(logging.root.removeHandler, outside)
+        self.addCleanup(logging.root.removeHandler, inside)
+        ci.close_root_log_files_under(self.temp)
+        self.assertNotIn(inside, logging.root.handlers)
+        self.assertIsNone(inside.stream)
+        self.assertIn(outside, logging.root.handlers)
+        self.assertIsNotNone(outside.stream)
+
+    # Verifies: S02-R1, S02-R2
+    @REQUIRES_POSIX_MAKE
+    def test_make_test_targets_leave_root_credential_files_untouched(self):
+        for target in ("test", "test-security"):
+            with self.subTest(target=target):
+                result = self.run_in_root(["make", target, f"PYTHON={sys.executable}"])
+                self.assert_probe_ran_and_temp_dir_removed(result)
+                self.assert_sentinels_untouched()
+
+    # Verifies: S02-R1
+    @REQUIRES_POSIX_MAKE
+    def test_make_test_recipes_use_an_absolute_interpreter_and_a_temporary_directory(self):
+        venv_python = self.root / ".venv" / "bin" / "python"
+        cases = [((f"PYTHON={sys.executable}",), sys.executable), (("PYTHON=.venv/bin/python",), str(venv_python))]
+        if shutil.which("python3", path=self.env.get("PATH")):
+            cases.append(((), None))
+        for arguments, expected in cases:
+            for target in ("test", "test-security"):
+                with self.subTest(arguments=arguments, target=target):
+                    result = self.run_in_root(["make", "-n", target, *arguments])
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    recipe = result.stdout
+                    self.assertIn("mktemp -d", recipe)
+                    self.assertIn("trap ", recipe)
+                    self.assertIn(f'-s "{self.root / "tests"}" -t "{self.root}"', recipe)
+                    interpreter = recipe.split('cd "$tmp" && "', 1)[1].split('"', 1)[0]
+                    self.assertTrue(os.path.isabs(interpreter), interpreter)
+                    if expected is not None:
+                        self.assertEqual(interpreter, expected)
+        # With no PYTHON given, an executable .venv interpreter is preferred, by its absolute path.
+        venv_python.parent.mkdir(parents=True)
+        venv_python.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+        venv_python.chmod(0o755)
+        result = self.run_in_root(["make", "-n", "test"])
+        self.assertIn(f'cd "$tmp" && "{venv_python}" -m unittest discover', result.stdout)
+
+    # Verifies: S02-R3
+    def test_repository_root_unittest_run_is_refused_while_device_exists(self):
+        result = self.run_in_root([sys.executable, "-m", "unittest", "tests.test_security_sentinel_probe"])
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("python scripts/ci.py test --names tests.<module>", result.stderr)
+        self.assertNotIn("Ran ", result.stderr)
+        self.assert_sentinels_untouched()
+
+    # Verifies: S02-R3
+    def test_guard_allows_a_repository_root_run_without_device(self):
+        (self.root / ".device").unlink()
+        result = self.run_in_root([sys.executable, "-m", "unittest", "tests.test_security_sentinel_probe"])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Ran 1 test", result.stderr)
