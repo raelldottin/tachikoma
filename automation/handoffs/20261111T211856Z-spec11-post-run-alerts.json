@@ -1,0 +1,48 @@
+{
+  "slice_id": "spec11-post-run-alerts",
+  "status": "done",
+  "summary": "The alert rules and the dashboard existed only as offline tools, so nothing told the operator what a live execute run had done. Every --fleet-execute run now ends, after all accounts have finished, by evaluating the default alert rules over the registered journals and the isolation audit, recording them in the run record, and writing the dashboard to --dashboard-out (default <journal dir>/dashboard.html). A critical alert makes the exit code 1 only at that point, so a scheduler sees it without the alert stopping the fleet. A post-run failure is recorded in post_run_errors and also exits 1; the run record is always written.  --fleet-execute now accepts the existing SMTP flags (the dry run still refuses them): with all three it sends exactly one summary e-mail of the alerts by severity through send_email, the transport extracted from the log delivery, after the record is written. Subject and body, the recorded alert text and the printed alert sections pass through the fleet scrubber. Without the flags nothing is sent; incomplete flags or an unreadable or empty password file refuse the run before any login. Implemented by the SPEC-11 builder specialist subagent in an isolated worktree, independently reviewed by the verifier subagent (tests cite S11-R1..R4; parent re-validated in a scratch clone), and re-validated by the parent.",
+  "files_touched": [
+    "README.md",
+    "README.template",
+    "docs/baseline/alerts.md",
+    "docs/baseline/capability-inventory.json",
+    "run.py",
+    "tests/test_post_run_alerts.py"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "SPEC-11: alerts and dashboard after every execute run",
+      "before": "Roadmap item not implemented",
+      "after": "SPEC-11: alerts and dashboard after every execute run (offline)",
+      "proof": [
+        "make syntax-check, make test, scripts/ci.py lint and git diff --check pass on current main",
+        "verifier verdict: tests cite S11-R1..R4; parent re-validated in a scratch clone"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "Offline only; no live game verification."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-11T21:19:12Z"
+}

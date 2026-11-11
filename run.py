@@ -57,11 +57,22 @@ def email_logfile(filename, client, email=None, password=None, recipient=None):
     # Use a copy of the log capture to avoid closing the global buffer
     log_content = log_capture_string.getvalue()
     subject = f"Pixel Starships Automation Log: {client.user.name if hasattr(client, 'user') else ''}"
+    if send_email(email, password, recipient, subject, log_content):
+        logging.info("Log file emailed successfully")
+        return True
+    return False
+
+
+def send_email(email, password, recipient, subject, body):
+    """Send one plain-text message through the SMTP server the log delivery uses.
+
+    Returns ``True`` once the server accepted it, ``False`` after logging why it failed.
+    """
     message = EmailMessage()
     message["from"] = email
     message["to"] = recipient
     message["subject"] = subject
-    message.set_content(log_content)
+    message.set_content(body)
 
     try:
         # Add timeout to prevent hanging
@@ -71,7 +82,6 @@ def email_logfile(filename, client, email=None, password=None, recipient=None):
         session.login(email, password)
         session.send_message(message)
         session.quit()
-        logging.info("Log file emailed successfully")
     except smtplib.SMTPAuthenticationError as e:
         logging.error(f"SMTP authentication failed: {e}")
         return False
@@ -272,23 +282,120 @@ def _fleet_accounts_section(fleet_run, factory, journals, scrub_reason):
     return lines
 
 
-def _fleet_report_sections(registry, journals, fleet_run, now):
-    """The fleet report and alerts sections, with the isolation audit applied."""
-    from sdk.fleet.audit import audit_fleet
+def _fleet_report_sections(registry, journals, fleet_run, now, evaluated=None):
+    """The fleet report and alerts sections, with the isolation audit applied.
+
+    ``evaluated`` is an ``(audit, alerts)`` pair already computed for these journals; without it
+    both are computed here at ``now``.
+    """
     from sdk.reports import alerts as alert_report
     from sdk.reports import fleet as fleet_report
 
-    audit = audit_fleet(registry, journals)
+    audit, alerts = evaluated or _evaluate_fleet_alerts(registry, journals, now)
     report = fleet_report.compute_fleet_report(journals, fleet_run=fleet_run, audit=audit)
-    alerts = alert_report.evaluate_alerts(journals, now=now, audit=audit)
     return ["", "## Fleet report", "", fleet_report.to_markdown(report).rstrip("\n"),
             "", "## Alerts", "", alert_report.to_markdown(alerts).rstrip("\n")]
+
+
+def _evaluate_fleet_alerts(registry, journals, now):
+    """The isolation audit of ``journals`` (owner alias -> events) and the default alert rules over both."""
+    from sdk.fleet.audit import audit_fleet
+    from sdk.reports.alerts import evaluate_alerts
+
+    audit = audit_fleet(registry, journals)
+    return audit, evaluate_alerts(journals, now=now, audit=audit)
+
+
+def _alerts_record(alerts, scrub_text):
+    """The run record's ``alerts`` entry: every field of the report, free text scrubbed (S11-R1, S11-R4)."""
+    from dataclasses import asdict
+
+    record = asdict(alerts)
+    record["by_severity"] = alerts.by_severity()
+    for alert in record["alerts"]:
+        alert["message"] = scrub_text(alert["message"])
+        alert["evidence"]["details"] = [scrub_text(detail) for detail in alert["evidence"]["details"]]
+    return record
+
+
+def _alert_summary(mode, fleet_run, alerts, record_path, dashboard_path, post_run_error):
+    """Subject and body of the one summary e-mail of a --fleet-execute run (S11-R3), not yet scrubbed."""
+    from sdk.reports.alerts import SEVERITIES
+
+    if alerts is None:
+        subject = f"Tachikoma fleet execute ({mode}): alerts not evaluated"
+    else:
+        counts = alerts.by_severity()
+        subject = f"Tachikoma fleet execute ({mode}): " + ", ".join(f"{counts[s]} {s}" for s in SEVERITIES)
+    lines = [
+        f"Fleet execute ({mode}, {fleet_run.mode}) from {fleet_run.started_at} to {fleet_run.finished_at}.",
+        "Accounts: " + ", ".join(f"{run.alias} {run.status}" for run in fleet_run.accounts) + ".",
+    ]
+    if fleet_run.stop_reason:
+        lines.append(f"Fleet stopped: {fleet_run.stop_reason}")
+    # File names only: the scrubber takes a long path for a token, and the operator knows the directories.
+    lines += [f"Run record: {record_path.name}", f"Dashboard: {dashboard_path.name if dashboard_path else 'not written'}",
+              ""]
+    if alerts is None:
+        lines.append(f"Alerts were not evaluated: {post_run_error}")
+    else:
+        lines.append(f"Alerts at {alerts.evaluated_at} ({alerts.accounts_checked} accounts, "
+                     f"{alerts.events_checked} events checked):")
+        for severity in SEVERITIES:
+            matching = [alert for alert in alerts.alerts if alert.severity == severity]
+            lines += ["", f"{severity.capitalize()} ({len(matching)})"]
+            lines += [f"- {alert.account_alias} / {alert.rule_id}: {alert.message}" for alert in matching] or ["- none"]
+        if alerts.rules_not_evaluated:
+            lines += ["", "Not evaluated: " + ", ".join(alerts.rules_not_evaluated)]
+    return subject, "\n".join(lines) + "\n"
 
 
 FLEET_STOP_FILE = "STOP"  # <journal dir>/STOP halts --fleet-execute between actions and accounts
 RUN_RECORD_DIR = "runs"  # <journal dir>/runs/<UTC time>.json: one record per --fleet-execute run
 RUN_RECORD_VERSION = 1
 EXECUTE_MODES = ("canary", "full")
+DASHBOARD_DEFAULT = "dashboard.html"  # <journal dir>/dashboard.html: written after each --fleet-execute run
+
+
+def _dashboard_path_problems(path, explicit, protected):
+    """Why ``path`` cannot take the post-run dashboard: a missing directory, or a file it would replace."""
+    if path.is_dir():
+        return [f"dashboard path is a directory: {path}"]
+    if explicit and not path.parent.is_dir():
+        return [f"dashboard directory not found: {path.parent}"]
+    resolved = path.resolve()
+    if any(resolved == Path(other).resolve() for other in protected):
+        return [f"dashboard path would overwrite a journal, the registry, the authorization or the stop file: {path}"]
+    return []
+
+
+def _read_smtp_settings(smtp_email, smtp_password_file, recipient):
+    """``(password, problem)`` for the summary e-mail: all three settings or none, as the log delivery needs.
+
+    With none, ``(None, None)``: nothing is sent. The problem never repeats the password.
+    """
+    given = [value for value in (smtp_email, smtp_password_file, recipient) if value is not None]
+    if not given:
+        return None, None
+    if len(given) < 3:
+        return None, "incomplete SMTP configuration: --smtp-email, --smtp-password-file and --recipient go together"
+    try:
+        password = Path(smtp_password_file).read_text().strip()
+    except (OSError, UnicodeDecodeError) as error:
+        return None, f"cannot read the SMTP password file: {getattr(error, 'strerror', None) or type(error).__name__}"
+    if not password:
+        return None, "the SMTP password file is empty"
+    return password, None
+
+
+def _write_fleet_dashboard(registry, journals, path):
+    """Write the offline dashboard (``run.py --report dashboard``) of ``journals`` to ``path`` atomically."""
+    from sdk.reports import dashboard
+
+    events = [event for alias in sorted(journals) for event in journals[alias]]
+    board = dashboard.build_dashboard(events, registry=registry,
+                                      journal_names=[f"{alias}.log" for alias in sorted(journals)])
+    return dashboard.write_dashboard(dashboard.render_html(board), path)
 
 
 def _write_run_record(directory, started_at, record):
@@ -316,7 +423,8 @@ def _write_run_record(directory, started_at, record):
 
 def run_fleet_execute(registry_path, authorization_path, mode=None, journal_dir=None, concurrent=None,
                       identity_salt_env=None, plan_only=False, out=None, environ=None, client_cls=None,
-                      device_cls=None, clock=None, halt_share=None):
+                      device_cls=None, clock=None, halt_share=None, dashboard_out=None, smtp_email=None,
+                      smtp_password_file=None, recipient=None):
     """Execute every enabled registry account's plan under an owner-written authorization (SPEC-05).
 
     This is the only code path that calls a fleet orchestrator's
@@ -326,17 +434,26 @@ def run_fleet_execute(registry_path, authorization_path, mode=None, journal_dir=
     identity salt is unset or too short, an enabled profile declares no
     ``expected_game_identity``, an enabled account has no completed
     ``--fleet-dry-run`` of the same registry and policy within 24 hours, the
-    fleet stop file ``<journal dir>/STOP`` exists, or the run record directory
-    cannot be created. ``plan_only`` prints what the run would do from the
-    dry-run plans and returns 0 without logging in.
+    fleet stop file ``<journal dir>/STOP`` exists, the dashboard path is
+    unusable, the SMTP settings are incomplete or the SMTP password file is
+    unreadable or empty, or the run record directory cannot be created.
+    ``plan_only`` prints what the run would do from the dry-run plans and
+    returns 0 without logging in, writing a dashboard or sending e-mail.
 
     Otherwise each account runs under ``sdk.fleet.factory.ExecutionGate``:
     ``canary`` mode (the default) executes at most one action per account,
     the first authorized safe-to-retry action of its plan; ``full`` executes
-    the authorized part of the plan. Starbux is never spent. The command
-    prints the accounts table, the reconciliation, the fleet report and the
-    alerts, writes a run record under ``<journal dir>/runs/``, and returns 0
-    when every enabled account completed, otherwise 1.
+    the authorized part of the plan. Starbux is never spent. Once every
+    account has finished (SPEC-11), the alerts are evaluated over the
+    journals and the isolation audit, the dashboard is written to
+    ``dashboard_out`` (default ``<journal dir>/dashboard.html``), and both go
+    into the run record under ``<journal dir>/runs/``. With all three SMTP
+    settings, one scrubbed summary e-mail of the alerts is sent after the
+    record is written; without them nothing is sent. The command prints the
+    accounts table, the reconciliation, the fleet report and the alerts, and
+    returns 0 when every enabled account completed, the fleet did not stop,
+    the alerts and dashboard were produced and no critical alert fired,
+    otherwise 1.
     """
     from datetime import datetime, timezone
 
@@ -423,6 +540,12 @@ def run_fleet_execute(registry_path, authorization_path, mode=None, journal_dir=
     stop_file = journal_dir / FLEET_STOP_FILE
     if stop_file.exists():
         reasons.append(f"fleet stop file present: {stop_file}")
+    dashboard_path = Path(dashboard_out) if dashboard_out else journal_dir / DASHBOARD_DEFAULT
+    reasons += _dashboard_path_problems(dashboard_path, dashboard_out is not None, [
+        *(journal_dir / f"{alias}.log" for alias in registry.aliases()), registry_path, authorization_path, stop_file])
+    smtp_password, smtp_problem = _read_smtp_settings(smtp_email, smtp_password_file, recipient)
+    if smtp_problem:
+        reasons.append(smtp_problem)
     if reasons:
         return refuse(reasons)
 
@@ -510,6 +633,25 @@ def run_fleet_execute(registry_path, authorization_path, mode=None, journal_dir=
             "rejected": [{"candidate": rejection.candidate, "reason": scrub_text(rejection.reason)}
                          for rejection in (report.plan.rejected if report else ())],
         })
+
+    # SPEC-11: every account has finished. Evaluate the alerts over the journals and the audit and
+    # write the dashboard beside the journals; a failure here is recorded, never a lost run record.
+    journals = _read_fleet_journals(registry, factory)
+    evaluated, dashboard_written, post_run_errors = None, False, []
+    if journals is None:
+        post_run_errors.append("a journal could not be read, so no alert was evaluated and no dashboard written")
+    else:
+        try:
+            evaluated = _evaluate_fleet_alerts(registry, journals, clock())
+        except Exception as error:
+            post_run_errors.append(scrub_text(f"alerts not evaluated: {type(error).__name__}: {error}"))
+        try:
+            _write_fleet_dashboard(registry, journals, dashboard_path)
+            dashboard_written = True
+        except Exception as error:
+            post_run_errors.append(scrub_text(f"dashboard not written: {type(error).__name__}: {error}"))
+    alerts = evaluated[1] if evaluated else None
+    critical = alerts.by_severity()["critical"] if alerts else 0
     record = {
         "version": RUN_RECORD_VERSION,
         "kind": "fleet-execute",
@@ -527,10 +669,23 @@ def run_fleet_execute(registry_path, authorization_path, mode=None, journal_dir=
         "halt_share": halt_share,
         "stop_reason": scrub_text(fleet_run.stop_reason),
         "accounts": record_accounts,
+        # SPEC-11 (S11-R1): the post-run alerts (None when not evaluated) and the dashboard written.
+        "alerts": _alerts_record(alerts, scrub_text) if alerts else None,
+        "dashboard": str(dashboard_path) if dashboard_written else None,
+        "post_run_errors": post_run_errors,
     }
     record_path = _write_run_record(runs_dir, fleet_run.started_at, record)
 
-    journals = _read_fleet_journals(registry, factory)
+    # S11-R3: one summary e-mail, only with all three SMTP settings, scrubbed like every other output.
+    delivery = "disabled (no SMTP settings)"
+    if smtp_password is not None:
+        scrubber.add_secrets([smtp_email, smtp_password, recipient])
+        subject, body = _alert_summary(mode, fleet_run, alerts, record_path,
+                                       dashboard_path if dashboard_written else None, "; ".join(post_run_errors))
+        with scrubber.installed():
+            sent = send_email(smtp_email, smtp_password, recipient, scrub_text(subject), scrub_text(body))
+        delivery = "sent" if sent else "failed (see the log)"
+
     lines = [
         f"# Fleet execute ({mode}, {fleet_run.mode})",
         "",
@@ -550,11 +705,19 @@ def run_fleet_execute(registry_path, authorization_path, mode=None, journal_dir=
         for result in entry["results"]:
             lines.append(f"| {entry['alias']} | {result['action_id']} | {'yes' if result['attempted'] else 'no'} | "
                          f"{result['outcome']} | {_md_cell(result['reason'])} |")
-    if journals is not None:
-        lines += _fleet_report_sections(registry, journals, fleet_run, clock())
+    if evaluated:  # alert text is scrubbed like the record and the e-mail (S11-R4)
+        lines += [scrub_text(line) for line in _fleet_report_sections(registry, journals, fleet_run, None, evaluated)]
+    lines += ["", "## After the run", "",
+              f"- Dashboard: {dashboard_path if dashboard_written else 'not written'}",
+              f"- Summary e-mail: {delivery}"]
+    lines += [f"- Error: {_md_cell(error)}" for error in post_run_errors]
+    if critical:
+        lines.append(f"- {critical} critical alert{'s' if critical != 1 else ''}: exit code 1")
     out.write("\n".join(lines) + "\n")
     completed = all(run.status in ("completed", "disabled") for run in fleet_run.accounts)
-    return 0 if journals is not None and completed and fleet_run.stop_reason is None else 1
+    # S11-R2: a critical alert fails the run only now, after every account has finished.
+    clean = completed and fleet_run.stop_reason is None and not post_run_errors and not critical
+    return 0 if clean else 1
 
 
 def positive_int(text):
@@ -688,7 +851,7 @@ def main():
         "--smtp-email",
         dest="smtp_email",
         default=None,
-        help="email for SMTP log delivery",
+        help="email for SMTP log delivery (with --fleet-execute: the alert summary e-mail)",
     )
     parser.add_argument(
         "--smtp-password-file",
@@ -787,9 +950,9 @@ def main():
         action="store_true",
         default=False,
         help="execute every enabled --registry account's plan under --authorization (canary by default), "
-        "then print the reconciliation and write a run record; refused before any login without a valid "
-        "authorization, --identity-salt-env, an expected_game_identity per account and a dry run in the "
-        "last 24 hours",
+        "then print the reconciliation, evaluate the alerts, write the dashboard and a run record, and with "
+        "the SMTP flags e-mail one alert summary; refused before any login without a valid authorization, "
+        "--identity-salt-env, an expected_game_identity per account and a dry run in the last 24 hours",
     )
     parser.add_argument(
         "--authorization",
@@ -820,6 +983,14 @@ def main():
         metavar="SHARE",
         help="with --fleet-execute: halt the fleet once more than this share (0 to below 1) of the enabled "
         "accounts stopped (default: 0, so any stopped account halts the rest)",
+    )
+    parser.add_argument(
+        "--dashboard-out",
+        dest="dashboard_out",
+        default=None,
+        metavar="PATH",
+        help=f"with --fleet-execute: HTML dashboard written after the run (default: <journal dir>/"
+        f"{DASHBOARD_DEFAULT}); replaced atomically",
     )
     parser.add_argument(
         "--concurrent",
@@ -853,6 +1024,9 @@ def main():
         ("--progression-dry-run", args.progression_dry_run), ("--run-battle", args.run_battle),
         ("--auth-file", args.auth_file), ("--login-email", args.login_email),
         ("--password-file", args.password_file), ("--device-key", args.device_key),
+    )
+    # --fleet-execute takes the SMTP flags for its one alert summary e-mail (SPEC-11); the dry run does not.
+    smtp_flags = (
         ("--smtp-email", args.smtp_email), ("--smtp-password-file", args.smtp_password_file),
         ("--recipient", args.recipient),
     )
@@ -867,11 +1041,15 @@ def main():
             parser.error("--fleet-execute needs --identity-salt-env NAME: the identity check is mandatory")
         sys.exit(run_fleet_execute(args.registry, args.authorization, args.mode, args.fleet_journal_dir,
                                    args.concurrent, args.identity_salt_env, args.plan_only,
-                                   halt_share=args.halt_share))
+                                   halt_share=args.halt_share, dashboard_out=args.dashboard_out,
+                                   smtp_email=args.smtp_email, smtp_password_file=args.smtp_password_file,
+                                   recipient=args.recipient))
     if args.authorization or args.mode or args.plan_only or args.halt_share is not None:
         parser.error("--authorization, --mode, --plan-only and --halt-share are only used with --fleet-execute")
+    if args.dashboard_out:
+        parser.error("--dashboard-out is only used with --fleet-execute")
     if args.fleet_dry_run:
-        conflicting = [flag for flag, value in single_account_flags if value]
+        conflicting = [flag for flag, value in (*single_account_flags, *smtp_flags) if value]
         if conflicting:
             parser.error(f"--fleet-dry-run cannot be combined with {', '.join(conflicting)}")
         if not args.registry:
