@@ -1213,7 +1213,7 @@
     {
       "slice_id": "r6-status-refresh-specialists",
       "title": "Refresh roadmap status and known limitations after the specialist slices",
-      "status": "queued",
+      "status": "done",
       "priority": 379,
       "domain": "docs",
       "allowed_paths": [

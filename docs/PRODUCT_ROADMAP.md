@@ -140,7 +140,7 @@ Implement a policy evaluation loop: baseline, new hypothesis, instrumented actio
 
 **Exit:** repeatable full-gameplay scenarios, clean releases, regression tests, documented known limitations, and a study report quantifying when automation helped, failed or was more expensive than manual play.
 
-## Implementation status (as of 2026-11-11)
+## Implementation status (as of 2026-11-11, after #149)
 
 This section records what has merged to `main` and what is still open. Every merged item was built and tested offline, with mocked game traffic or the simulated game. None has been run against a live account. The live trial for each release is blocked because the owner has not authorized live runs, so **no exit criterion that needs live evidence is met for any release**.
 
@@ -154,7 +154,7 @@ Before the roadmap slices, the offline PvP assessment library (GOAL-PVP-001) mer
 | --- | --- | --- |
 | Capability inventory against the roadmap (AUTO-001) | Merged, offline | #93, [capability inventory](baseline/capability-inventory.md) |
 | Per-ship baselines, observed game version, test-account dataset | Not started | Needs live reads of owned accounts |
-| Manual-vs-automation study design (AUTO-010) | Not started | No slice queued |
+| Manual-vs-automation study design (AUTO-010) | Merged, offline; no baseline data yet | #140, [study design](experiments/study-design.md) |
 
 ### R1 — Reliable game state and execution
 
@@ -164,7 +164,7 @@ Before the roadmap slices, the offline PvP assessment library (GOAL-PVP-001) mer
 | Action catalog with postcondition reconciliation (AUTO-003) | Merged, offline | #95 |
 | Append-only, redacted event journal | Merged, offline | #96 |
 | Reconciled, journaled action runner | Merged, offline | #97 |
-| Operational dashboard | Not started | No slice queued |
+| Operational dashboard | Merged, offline (static HTML from journals) | #145 |
 | Live verification of scheduled, attributed operations | Blocked | Covered by `r2-live-progression-trial` |
 
 ### R2 — Automated growth engine
@@ -175,6 +175,7 @@ Before the roadmap slices, the offline PvP assessment library (GOAL-PVP-001) mer
 | Crew training state in snapshots | Merged, offline | #101 |
 | Targeted `Client.upgradeRoom` | Merged, offline | #102 |
 | Versioned progression policy `baseline-v1` (AUTO-005) | Merged, offline | #103 |
+| Hull-upgrade timing variant `hull-reserve-v1` | Merged, offline; falls back to `baseline-v1` until hull designs are supplied | #143 |
 | Daily scheduler with safety stops (AUTO-004) | Merged, offline | #104 |
 | `run.py --progression-dry-run` | Merged; read-only, no live execute flag | #105 |
 | Progression and reliability metrics report | Merged, offline | #106 |
@@ -208,7 +209,8 @@ Before the roadmap slices, the offline PvP assessment library (GOAL-PVP-001) mer
 | Sequential fleet orchestrator with per-account isolation | Merged, offline | #124 |
 | Isolation and overspend audit | Merged, offline | #125 |
 | Fleet throughput, failure and isolation report | Merged, offline | #126 |
-| Concurrent operation | Not started | Orchestrator is sequential only |
+| Concurrent operation | Merged, offline; not wired into `run.py` | #147 |
+| Game account identity check (fingerprint of the logged-in user) | Merged, offline; inactive until a factory supplies a salt | #149 |
 | Live fleet run on two accounts | **Blocked** | `r5-live-fleet-trial`: needs two named accounts with provisioned credentials, manual routine minutes and owner authorization |
 
 ### R6 — Adaptive optimization and release
@@ -220,10 +222,13 @@ Before the roadmap slices, the offline PvP assessment library (GOAL-PVP-001) mer
 | Offline report command (`run.py --report`) | Merged, offline | #130 |
 | Fixes for an independent review of R3–R6 (budgets, battle evidence, trades, ledger, experiment intervals, simulation) | Merged, offline | #132–#136, queued by #131 |
 | Release instructions, known limitations, this status | Merged, docs | `r6-release-and-limitations`, [release instructions](RELEASE.md) |
-| Dashboards and alerts (AUTO-012) | Not started | No slice queued |
+| Dashboards and alerts (AUTO-012) | Merged, offline: static dashboard and alert rules; no notification transport | #145, #142 |
+| Patch-aware compatibility ledger (AUTO-015) | Merged, offline: 31 entries, all flagged against 1.0 | #144 |
+| Release archives include package data (scenario JSON) | Merged | #141 |
+| Fault-injection simulation scenarios (AUTO-014) | Merged, offline | #146 |
 | Study report on automation effectiveness | **Blocked** | `r6-study-report`: needs the R2–R5 live trials to have run |
 
-Queue-only changes (#92, #99, #110, #112, #114, #117, #122, #127, #131) are omitted from the tables. Patch-aware compatibility (AUTO-015) has no slice queued.
+Queue-only changes (#92, #99, #110, #112, #114, #117, #122, #127, #131) are omitted from the tables. Queue changes #138, #139 and #148 are also omitted. The nine slices #140–#147 and #149 were built by specialist subagents (analyst, architect, safety, release, protocol, UX, SRE, researcher, test) and reviewed by an independent verifier subagent before merging.
 
 ## 5. Prioritized epic backlog
 
