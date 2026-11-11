@@ -8,6 +8,13 @@ The registry never holds a credential value.
 ``load_registry`` reads a JSON file and fails closed: unknown fields,
 duplicate aliases, e-mail addresses, secret-shaped values and secret-named
 keys anywhere in the file are refused with ``RegistryError``.
+
+A profile may declare ``expected_game_identity``, the ``gid1-`` fingerprint of
+the game user id its credentials must log in as. Alias checks alone cannot
+catch a factory that loads the wrong credentials, because the alias is a label
+the caller stamps on every snapshot. ``game_identity_refusal`` compares the
+observed fingerprint with the declared one, and ``pin_game_identity`` keeps
+every later snapshot of the run on the same game account.
 """
 
 from __future__ import annotations
@@ -16,12 +23,17 @@ import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Optional
+from typing import Any, Callable, Iterable, Mapping, Optional
 
 from sdk.policy import POLICIES
 from sdk.pvp.models import FORBIDDEN_SECRET_KEYS
 from sdk.redaction import redact_secrets
-from sdk.state.snapshot import ACCOUNT_ALIAS_PATTERN
+from sdk.state.snapshot import (
+    ACCOUNT_ALIAS_PATTERN,
+    GAME_IDENTITY_PATTERN,
+    AccountMismatchError,
+    AccountSnapshot,
+)
 
 REGISTRY_VERSION = 1
 SECRET_NAME_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]{0,127}$")
@@ -29,6 +41,7 @@ STRATEGY_KEY_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}@v[1-9][0-9]*$")
 BUDGET_CURRENCIES = ("minerals", "gas", "starbux")
 PROFILE_FIELDS = frozenset({
     "alias", "objective", "policy_id", "pvp_strategy", "budgets", "max_actions", "enabled", "credentials_secret",
+    "expected_game_identity",
 })
 FORBIDDEN_KEYS = frozenset(FORBIDDEN_SECRET_KEYS | {"email", "e-mail", "authstring", "auth_string"})
 
@@ -60,6 +73,7 @@ class AccountProfile:
     budgets: Mapping[str, int] = field(default_factory=lambda: {"starbux": 0})
     max_actions: int = 20
     enabled: bool = True
+    expected_game_identity: Optional[str] = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.alias, str) or not ACCOUNT_ALIAS_PATTERN.match(self.alias):
@@ -88,6 +102,13 @@ class AccountProfile:
             raise RegistryError(f"{self.alias}: max_actions must be a positive integer")
         if not isinstance(self.enabled, bool):
             raise RegistryError(f"{self.alias}: enabled must be true or false")
+        if self.expected_game_identity is not None and (
+            not isinstance(self.expected_game_identity, str)
+            or not GAME_IDENTITY_PATTERN.match(self.expected_game_identity)
+        ):
+            raise RegistryError(
+                f"{self.alias}: expected_game_identity must be a gid1- fingerprint, never a raw user id"
+            )
         _scan_for_secrets({"objective": self.objective}, self.alias)
 
     def budget(self, currency: str) -> Optional[int]:
@@ -104,7 +125,56 @@ class AccountProfile:
             "max_actions": self.max_actions,
             "enabled": self.enabled,
             "credentials_secret": self.credentials_secret,
+            "expected_game_identity": self.expected_game_identity,
         }
+
+
+def game_identity_refusal(alias: str, expected: Optional[str], observed: Optional[str],
+                          seen: Mapping[str, str], declared: Optional[Mapping[str, str]] = None) -> Optional[str]:
+    """Why ``alias`` must not run with the ``observed`` game identity, or ``None``.
+
+    ``expected`` is the alias's own ``expected_game_identity``. ``declared``
+    maps every fingerprint the registry declares to the alias declaring it,
+    and ``seen`` maps fingerprints already accepted in this fleet run to their
+    alias. Refused: a malformed fingerprint; an expected identity that is
+    unknown or different; an identity the registry declares for another
+    account (even when this account declares none); and an identity another
+    account already used in this run.
+    """
+    if observed is not None and (not isinstance(observed, str) or not GAME_IDENTITY_PATTERN.match(observed)):
+        return "observed game identity is malformed; refusing before any call"
+    if expected is not None and observed is None:
+        return "game identity is unknown but the registry declares one; refusing before any call"
+    if expected is not None and observed != expected:
+        return "logged-in game account does not match expected_game_identity; refusing before any call"
+    if observed is None:
+        return None
+    owner = (declared or {}).get(observed)
+    if owner is not None and owner != alias:
+        return f"logged-in game account is declared for {owner!r} in the registry; refusing before any call"
+    owner = seen.get(observed)
+    if owner is not None and owner != alias:
+        return f"game identity already observed for {owner!r} in this fleet run; refusing before any call"
+    return None
+
+
+def pin_game_identity(provider: Callable[[], AccountSnapshot],
+                      expected: Optional[str]) -> Callable[[], AccountSnapshot]:
+    """Wrap ``provider`` so a snapshot of any other game identity raises ``AccountMismatchError``.
+
+    ``expected`` ``None`` (identity unknown at the first snapshot) is pinned
+    too: a later snapshot with a known identity raises, because an account
+    that becomes known only after its claims were decided was never checked
+    against the registry or the other accounts.
+    """
+
+    def pinned() -> AccountSnapshot:
+        snapshot = provider()
+        if getattr(snapshot, "game_identity", None) != expected:
+            raise AccountMismatchError("snapshot game identity changed during the run")
+        return snapshot
+
+    return pinned
 
 
 class AccountRegistry:
@@ -114,6 +184,13 @@ class AccountRegistry:
             if profile.alias in self._profiles:
                 raise RegistryError(f"duplicate alias {profile.alias!r}")
             self._profiles[profile.alias] = profile
+        declared: dict[str, str] = {}
+        for profile in self._profiles.values():
+            identity = profile.expected_game_identity
+            if identity is not None and declared.setdefault(identity, profile.alias) != profile.alias:
+                raise RegistryError(
+                    f"{profile.alias}: expected_game_identity is already declared by {declared[identity]!r}")
+        self._declared_identities = declared
 
     def __contains__(self, alias: str) -> bool:
         return alias in self._profiles
@@ -129,6 +206,10 @@ class AccountRegistry:
 
     def aliases(self) -> tuple[str, ...]:
         return tuple(sorted(self._profiles))
+
+    def declared_identities(self) -> dict[str, str]:
+        """Each declared ``expected_game_identity``, enabled or not, mapped to its alias."""
+        return dict(self._declared_identities)
 
     def enabled(self) -> tuple[AccountProfile, ...]:
         return tuple(self._profiles[alias] for alias in self.aliases() if self._profiles[alias].enabled)

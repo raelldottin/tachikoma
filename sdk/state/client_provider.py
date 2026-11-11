@@ -8,6 +8,12 @@ calls a method that changes the account. A read that raises, returns
 Values the client only holds from login, such as starbux credits and
 trophies, are deliberately not reported. They could be hours old and would
 make reconciliation report "no change" when the value is simply unknown.
+
+Game identity: when the caller passes ``identity_salt``, each snapshot carries
+``game_identity``, an HMAC fingerprint of ``client.user.id`` (the id the
+client logged in as and reads its ship with). The raw id is read only inside
+``_game_identity`` and is never stored, returned or put in error text. No salt,
+or an unknown id, leaves ``game_identity`` as ``None``.
 """
 
 from __future__ import annotations
@@ -15,7 +21,14 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Callable, Optional
 
-from sdk.state.snapshot import ACCOUNT_ALIAS_PATTERN, AccountSnapshot, SnapshotInputError, build_snapshot
+from sdk.state.snapshot import (
+    ACCOUNT_ALIAS_PATTERN,
+    AccountSnapshot,
+    SnapshotInputError,
+    build_snapshot,
+    game_identity_fingerprint,
+    identity_salt_key,
+)
 
 READ_METHODS = ("getShipByUserId", "listAllCharactersOfUser", "listItemsOfAShip")
 
@@ -90,9 +103,12 @@ class ClientSnapshotProvider:
         game_version: Optional[str] = None,
         source: str = "client-reads",
         clock: Callable[[], datetime] = _utc_now,
+        identity_salt: Optional[bytes | str] = None,
     ) -> None:
         if not ACCOUNT_ALIAS_PATTERN.match(account_alias or ""):
             raise SnapshotInputError("account_alias must be a lowercase alias, not an e-mail or display name")
+        # Validated now so a short salt fails at construction, not as a silent None.
+        self._identity_key = None if identity_salt is None else identity_salt_key(identity_salt)
         self.client = client
         self.account_alias = account_alias
         self.game_version = game_version
@@ -108,6 +124,15 @@ class ClientSnapshotProvider:
         if ok is False:
             return None
         return getattr(self.client, attribute, None)
+
+    def _game_identity(self) -> Optional[str]:
+        if self._identity_key is None:
+            return None
+        user_id = getattr(getattr(self.client, "user", None), "id", None)
+        try:
+            return game_identity_fingerprint(user_id, self._identity_key)
+        except SnapshotInputError:  # unknown id: identity stays unobserved
+            return None
 
     def __call__(self) -> AccountSnapshot:
         failed = []
@@ -155,4 +180,5 @@ class ClientSnapshotProvider:
             rooms=rooms,
             research=research,
             inventory=items,
+            game_identity=self._game_identity(),
         )

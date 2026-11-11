@@ -1,0 +1,50 @@
+{
+  "slice_id": "r5-game-identity-check",
+  "status": "done",
+  "summary": "Isolation checks compared alias labels only. ClientSnapshotProvider stamps the alias it was given, so a factory that loaded the wrong credentials passed every check and the fleet would act on the wrong game account.  Snapshots now carry an optional game_identity: gid1- plus 128 bits of HMAC-SHA256 over the client's logged-in user id, keyed with a caller-supplied salt of at least 16 bytes. Game ids are small integers, so the key is what makes the fingerprint non-reversible; the raw id is read only inside the provider and never reaches snapshots, journals, run reasons or error text. build_snapshot accepts only None or a well-formed fingerprint, and snapshots without one still work (None means unknown).  AccountProfile gains an optional, format-validated expected_game_identity registry field; two profiles may not declare the same one. The checks live in FleetClaims.claim_snapshot, which both the sequential and the concurrent orchestrator call on the coordinating thread in alias order before any scheduler call. An account is refused when its declared identity is unknown or different, when its observed identity is the one the registry declares for another account (even if it declares none itself), or when another account was already accepted with that identity in the run. The accepted identity pins every later snapshot of the account, so a mid-run account switch stops the scheduler, and AccountRun reports it for enrolment.  The declared-for-another-account rule fixes a hole found in review: an account declaring nothing but loaded with another account's credentials was accepted first, made real calls on that game account, and then the rightful owner was refused as the duplicate. Implemented by the safety specialist subagent in an isolated worktree, independently reviewed by the verifier subagent (CHANGES-REQUIRED, then APPROVE-WITH-NITS on re-review; both findings fixed (68335db, 2f517be)), and re-validated by the parent.",
+  "files_touched": [
+    "docs/baseline/account-snapshot.md",
+    "docs/baseline/fleet-accounts.md",
+    "sdk/fleet/accounts.py",
+    "sdk/fleet/concurrent.py",
+    "sdk/fleet/orchestrator.py",
+    "sdk/state/client_provider.py",
+    "sdk/state/snapshot.py",
+    "tests/test_game_identity.py"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "Verify game account identity, not just aliases",
+      "before": "Roadmap item not implemented",
+      "after": "Verify game account identity, not just aliases (offline)",
+      "proof": [
+        "make syntax-check, make test, scripts/ci.py lint and git diff --check pass on current main",
+        "verifier verdict: CHANGES-REQUIRED, then APPROVE-WITH-NITS on re-review; both findings fixed (68335db, 2f517be)"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "Offline only; no live game verification."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-11T12:04:39Z"
+}
