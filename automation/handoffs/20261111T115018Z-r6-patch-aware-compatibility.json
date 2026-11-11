@@ -1,0 +1,47 @@
+{
+  "slice_id": "r6-patch-aware-compatibility",
+  "status": "done",
+  "summary": "The repository relies on battle endpoints, a marketplace path, game rules and formulas whose evidence ranges from official patch notes to an unreconciled operator capture analysis, and almost none of it records the game version it was observed on. Nothing tied that evidence to a version, so a new patch could not show what might have broken.  sdk/compat/ adds a ledger of 31 entries (endpoint, rule or formula), each with evidence records carrying an evidence class, the game version observed (None when the source records none), a date and a repository or already-cited source. Entries come only from facts already in the repository; where sources disagree on strength the weaker class is kept. check_compatibility(target) reports entries never observed on the target or newer, entries resting only on weak evidence, entries with no recorded version, and whether the declared client version is behind the target.  Tests cover version parsing, classification, that every live-claimed capability-inventory method has an entry, that DECLARED_CLIENT_VERSION matches sdk/client.py, that code references and sources resolve, and that the check is offline. Documented in docs/baseline/compatibility-ledger.md. Implemented by the protocol specialist subagent in an isolated worktree, independently reviewed by the verifier subagent (APPROVE-WITH-NITS; nit fixed in 0a8e90d), and re-validated by the parent.",
+  "files_touched": [
+    "docs/baseline/compatibility-ledger.md",
+    "sdk/compat/__init__.py",
+    "sdk/compat/entries.py",
+    "sdk/compat/ledger.py",
+    "tests/test_compat_ledger.py"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "Versioned game-rule and endpoint evidence ledger (AUTO-015)",
+      "before": "Roadmap item not implemented",
+      "after": "Versioned game-rule and endpoint evidence ledger (AUTO-015) (offline)",
+      "proof": [
+        "make syntax-check, make test, scripts/ci.py lint and git diff --check pass on current main",
+        "verifier verdict: APPROVE-WITH-NITS; nit fixed in 0a8e90d"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "Offline only; no live game verification."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-11T11:50:32Z"
+}

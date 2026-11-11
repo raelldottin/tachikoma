@@ -1109,7 +1109,7 @@
       ],
       "max_files_changed": 5,
       "notes": "Protocol lane. Add sdk/compat/: a ledger of game rules and endpoints, each with an evidence class (official release, announcement, community, static analysis, dynamically demonstrated), the game version it was observed on, and its source. Ship entries for the battle chain, marketplace path and formulas the repo relies on, using only facts already recorded in the repository. A check reports entries whose evidence predates a given game version or that rely only on weak evidence. Offline.",
-      "status": "queued",
+      "status": "done",
       "depends_on": [
         "r6-release-and-limitations"
       ],
