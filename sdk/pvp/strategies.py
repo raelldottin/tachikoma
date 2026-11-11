@@ -9,7 +9,15 @@ each UTC window. Windows are half-open (``start <= t < end``) and may not
 overlap for the same alias, so every battle maps to exactly one strategy or
 to none.
 
-Pure and offline: nothing here talks to the game.
+An ``AdoptionLog`` records when each strategy version was put on an account's
+ship and how: by a bot call identified from captures, or by the owner by hand
+(SPEC-08 R1). A ``TrialRecord`` joins the schedule and the log: a battle has a
+strategy only when a recorded adoption of the window's strategy, made inside
+that window, precedes it. By-hand adoptions mark the attribution as
+approximate in time (SPEC-08 R7).
+
+Pure and offline: nothing here talks to the game. The log is read from and
+written to a local JSON file only.
 """
 
 from __future__ import annotations
@@ -19,14 +27,18 @@ import json
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Dict, Iterable, List, Mapping, Optional, Tuple
+from enum import Enum
+from pathlib import Path
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple, Union
 
 from sdk.redaction import redact_secrets
 from sdk.state.snapshot import ACCOUNT_ALIAS_PATTERN
 
-from .models import BattleStrategy, EvidenceTier, NativeAIRule, PvpInputError
+from .models import BattleStrategy, EvidenceTier, NativeAIRule, PvpInputError, reject_secret_keys
 
 STRATEGY_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
+CONFIG_VERSION_PATTERN = re.compile(r"^[0-9a-f]{16}$")
+ADOPTION_LOG_SCHEMA_VERSION = 1
 
 
 def _require_utc(value: datetime, name: str) -> None:
@@ -188,6 +200,240 @@ class ExperimentSchedule:
     def active_strategy(self, account_alias: str, at: datetime) -> Optional[PvpStrategy]:
         window = self.window_at(account_alias, at)
         return self.registry.get(window.strategy_id, window.strategy_version) if window else None
+
+
+class AdoptionMethod(str, Enum):
+    """How a strategy version reached the ship (SPEC-08 R1, R7)."""
+
+    BOT_CALL = "bot-call"  # a game call identified from captures
+    BY_HAND = "by-hand"  # the owner set it in the game and noted the time
+
+
+def _parse_utc(value: Any, name: str) -> datetime:
+    if not isinstance(value, str):
+        raise PvpInputError(f"{name} must be an ISO-8601 UTC timestamp")
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise PvpInputError(f"{name} must be an ISO-8601 UTC timestamp") from exc
+    _require_utc(parsed, name)
+    return parsed
+
+
+def _format_utc(value: datetime) -> str:
+    return value.isoformat().replace("+00:00", "Z")
+
+
+@dataclass(frozen=True)
+class StrategyAdoption:
+    """One recorded adoption of a strategy version on one account's ship."""
+
+    account_alias: str
+    strategy_id: str
+    strategy_version: int
+    config_version: str
+    adopted_at: datetime
+    method: str
+    note: str = ""
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.account_alias, str) or not ACCOUNT_ALIAS_PATTERN.match(self.account_alias):
+            raise PvpInputError("adoption.account_alias must be a lowercase alias, not an e-mail or display name")
+        if not isinstance(self.strategy_id, str) or not STRATEGY_ID_PATTERN.match(self.strategy_id):
+            raise PvpInputError("adoption.strategy_id must be a lowercase slug")
+        version = self.strategy_version
+        if not isinstance(version, int) or isinstance(version, bool) or version < 1:
+            raise PvpInputError("adoption.strategy_version must be an integer >= 1")
+        if not isinstance(self.config_version, str) or not CONFIG_VERSION_PATTERN.match(self.config_version):
+            raise PvpInputError("adoption.config_version must be 16 lowercase hex characters")
+        _require_utc(self.adopted_at, "adoption.adopted_at")
+        if self.method not in {m.value for m in AdoptionMethod}:
+            raise PvpInputError("adoption.method must be 'bot-call' or 'by-hand'")
+        if not isinstance(self.note, str) or redact_secrets(self.note) != self.note:
+            raise PvpInputError("adoption.note must be plain text without secret material")
+
+    @property
+    def key(self) -> str:
+        return f"{self.strategy_id}@v{self.strategy_version}"
+
+    @property
+    def approximate_timing(self) -> bool:
+        """A by-hand adoption time is the owner's note, not an observed call (SPEC-08 R7)."""
+        return self.method == AdoptionMethod.BY_HAND.value
+
+    def to_dict(self) -> Dict[str, object]:
+        return {
+            "account_alias": self.account_alias,
+            "strategy_id": self.strategy_id,
+            "strategy_version": self.strategy_version,
+            "config_version": self.config_version,
+            "adopted_at": _format_utc(self.adopted_at),
+            "method": self.method,
+            "note": self.note,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "StrategyAdoption":
+        if not isinstance(payload, Mapping):
+            raise PvpInputError("adoption entries must be JSON objects")
+        reject_secret_keys(payload)
+        required = ("account_alias", "strategy_id", "strategy_version", "config_version", "adopted_at", "method")
+        missing = [name for name in required if name not in payload]
+        if missing:
+            raise PvpInputError(f"adoption entry is missing {', '.join(missing)}")
+        unknown = sorted(set(payload) - set(required) - {"note"})
+        if unknown:
+            raise PvpInputError(f"adoption entry has unknown fields {', '.join(unknown)}")
+        return cls(
+            account_alias=payload["account_alias"],
+            strategy_id=payload["strategy_id"],
+            strategy_version=payload["strategy_version"],
+            config_version=payload["config_version"],
+            adopted_at=_parse_utc(payload["adopted_at"], "adoption.adopted_at"),
+            method=payload["method"],
+            note=payload.get("note", ""),
+        )
+
+
+class AdoptionLog:
+    """Strategy adoptions per account alias, strictly in time order (SPEC-08 R1).
+
+    Entries for one alias must arrive in increasing ``adopted_at`` order; an
+    entry earlier than the alias's last one is refused as out of order, and one
+    at the same instant is refused as overlapping. Aliases are independent.
+    """
+
+    def __init__(self, adoptions: Iterable[StrategyAdoption] = ()) -> None:
+        self._by_alias: Dict[str, List[StrategyAdoption]] = {}
+        for adoption in adoptions:
+            self.add(adoption)
+
+    def add(self, adoption: StrategyAdoption) -> None:
+        if not isinstance(adoption, StrategyAdoption):
+            raise PvpInputError("adoption log entries must be StrategyAdoption values")
+        entries = self._by_alias.get(adoption.account_alias, [])
+        if entries:
+            last = entries[-1].adopted_at
+            if adoption.adopted_at < last:
+                raise PvpInputError(f"adoption for {adoption.account_alias} is out of order")
+            if adoption.adopted_at == last:
+                raise PvpInputError(f"adoption for {adoption.account_alias} overlaps an existing adoption")
+        self._by_alias[adoption.account_alias] = entries + [adoption]
+
+    def aliases(self) -> Tuple[str, ...]:
+        return tuple(sorted(self._by_alias))
+
+    def adoptions_for(self, account_alias: str) -> Tuple[StrategyAdoption, ...]:
+        return tuple(self._by_alias.get(account_alias, ()))
+
+    def all(self) -> Tuple[StrategyAdoption, ...]:
+        return tuple(a for alias in self.aliases() for a in self._by_alias[alias])
+
+    def latest_at(self, account_alias: str, at: datetime) -> Optional[StrategyAdoption]:
+        """The last adoption for ``account_alias`` at or before ``at``, or ``None``."""
+        _require_utc(at, "at")
+        found = None
+        for adoption in self._by_alias.get(account_alias, ()):
+            if adoption.adopted_at > at:
+                break
+            found = adoption
+        return found
+
+    def adoptions_in(self, window: ExperimentWindow) -> Tuple[StrategyAdoption, ...]:
+        """Adoptions for the window's alias whose time falls inside the window."""
+        return tuple(a for a in self.adoptions_for(window.account_alias) if window.contains(a.adopted_at))
+
+    def to_dict(self) -> Dict[str, object]:
+        return {"schema_version": ADOPTION_LOG_SCHEMA_VERSION, "adoptions": [a.to_dict() for a in self.all()]}
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "AdoptionLog":
+        if not isinstance(payload, Mapping):
+            raise PvpInputError("adoption log must be a JSON object")
+        if payload.get("schema_version") != ADOPTION_LOG_SCHEMA_VERSION:
+            raise PvpInputError(f"adoption log schema_version must be {ADOPTION_LOG_SCHEMA_VERSION}")
+        entries = payload.get("adoptions")
+        if not isinstance(entries, list):
+            raise PvpInputError("adoption log 'adoptions' must be a list")
+        return cls(StrategyAdoption.from_dict(entry) for entry in entries)
+
+    def to_json(self) -> str:
+        return json.dumps(self.to_dict(), indent=2, sort_keys=True) + "\n"
+
+    @classmethod
+    def from_json(cls, text: str) -> "AdoptionLog":
+        try:
+            payload = json.loads(text)
+        except ValueError as exc:
+            raise PvpInputError("adoption log is not valid JSON") from exc
+        return cls.from_dict(payload)
+
+    @classmethod
+    def load(cls, path: Union[str, Path]) -> "AdoptionLog":
+        return cls.from_json(Path(path).read_text(encoding="utf-8"))
+
+    def save(self, path: Union[str, Path]) -> None:
+        Path(path).write_text(self.to_json(), encoding="utf-8")
+
+
+@dataclass(frozen=True)
+class StrategyAttribution:
+    """Why a battle at a given time is credited to a strategy."""
+
+    strategy: PvpStrategy
+    window: ExperimentWindow
+    adoption: StrategyAdoption
+
+    @property
+    def method(self) -> str:
+        return self.adoption.method
+
+    @property
+    def approximate_timing(self) -> bool:
+        return self.adoption.approximate_timing
+
+
+class TrialRecord:
+    """Experiment windows joined with the adoption log (SPEC-08 R1, R7).
+
+    A battle at ``at`` is attributed to a strategy only when ``at`` falls inside
+    a window and the alias's latest adoption at or before ``at`` is of that
+    window's strategy version and was made inside the window. Battles before
+    the first adoption in a window, after a different strategy was adopted, or
+    outside every window have no strategy.
+    """
+
+    def __init__(self, schedule: ExperimentSchedule, log: AdoptionLog) -> None:
+        for adoption in log.all():
+            registered = schedule.registry.get(adoption.strategy_id, adoption.strategy_version)
+            if registered is None:
+                raise PvpInputError(f"adoption of {adoption.key} names an unregistered strategy")
+            if registered.config_version != adoption.config_version:
+                raise PvpInputError(f"adoption of {adoption.key} does not match the registered config_version")
+        self.schedule = schedule
+        self.log = log
+
+    def attribution_at(self, account_alias: str, at: datetime) -> Optional[StrategyAttribution]:
+        window = self.schedule.window_at(account_alias, at)
+        if window is None:
+            return None
+        adoption = self.log.latest_at(account_alias, at)
+        if adoption is None or not window.contains(adoption.adopted_at):
+            return None
+        if (adoption.strategy_id, adoption.strategy_version) != (window.strategy_id, window.strategy_version):
+            return None
+        strategy = self.schedule.registry.get(window.strategy_id, window.strategy_version)
+        if strategy is None or strategy.config_version != adoption.config_version:
+            return None
+        return StrategyAttribution(strategy=strategy, window=window, adoption=adoption)
+
+    def strategy_in_force(self, account_alias: str, at: datetime) -> Optional[PvpStrategy]:
+        attribution = self.attribution_at(account_alias, at)
+        return attribution.strategy if attribution else None
+
+    def has_approximate_timing(self) -> bool:
+        """True when any recorded adoption was by hand, so a report must say timing is approximate."""
+        return any(a.approximate_timing for a in self.log.all())
 
 
 # Candidate strategies for the first R3 comparison. They are hypotheses to test,
