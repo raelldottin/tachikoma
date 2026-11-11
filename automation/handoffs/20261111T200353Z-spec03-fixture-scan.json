@@ -1,0 +1,44 @@
+{
+  "slice_id": "spec03-fixture-scan",
+  "status": "done",
+  "summary": "Implements S03-R2 of SPEC-03. Parsers for the profile, ranking and battle history reads will be built on owner-supplied captures, so a capture that still holds a token, e-mail or user id must fail CI before it can land.  tests/test_profile_reads.py scans every file under tests/fixtures/live_sanitized/ recursively and fails on any value that a sdk/redaction.py pattern would redact (an exact redaction marker is allowed, since it redacts to itself), a number in a field named Id or ending in UserId (XML attribute or element, JSON key, query parameter, with or without @), an e-mail address, and token-like strings (UUIDs, 32+ hex, non-empty values in token/secret/password/checksum/devicekey fields). Findings name the file, line and kind, never the value. Planted secrets in temporary trees prove each class is detected and that clean sanitized files pass; the real directory passes.  tests/fixtures/live_sanitized/README.md tells the owner how to sanitize and record a capture (date, game version, steps applied, reviewer) and what must never appear. No parsers are added; they need the captures (S03-R1). Implemented by the SPEC-03 builder specialist subagent in an isolated worktree, independently reviewed by the verifier subagent (tests cite its requirement ids; parent re-validated in a scratch clone), and re-validated by the parent.",
+  "files_touched": [
+    "tests/fixtures/live_sanitized/README.md",
+    "tests/test_profile_reads.py"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "SPEC-03: sanitized-capture scan",
+      "before": "Roadmap item not implemented",
+      "after": "SPEC-03: sanitized-capture scan (offline)",
+      "proof": [
+        "make syntax-check, make test, scripts/ci.py lint and git diff --check pass on current main",
+        "verifier verdict: tests cite its requirement ids; parent re-validated in a scratch clone"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "Offline only; no live game verification."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-11T20:04:08Z"
+}
