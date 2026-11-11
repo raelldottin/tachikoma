@@ -12,10 +12,12 @@ the registry, one account at a time. Isolation rules:
   still runs. Only the fleet stop file stops the whole fleet.
 
 Budgets are enforced by planning within them: the spend already journaled
-in the current period is subtracted from the account's budget, and the
-policy's mineral and gas reserves are raised so the plan cannot spend more
-than what remains. Starbux spending is never allowed in a fleet run, because
-the policy cannot cap a starbux amount to a budget.
+in the current period is subtracted from the account's budget, and what
+remains is passed to the policy as its mineral and gas spend caps. The
+policy applies those caps to whichever snapshot it plans from, so balance
+growth between the orchestrator's first snapshot and the scheduler's planning
+snapshot never adds spendable budget. Starbux spending is never allowed in a
+fleet run, because the policy cannot cap a starbux amount to a budget.
 
 Dry run is the default.
 """
@@ -93,25 +95,31 @@ def spent_in_period(journal: GameplayJournal, alias: str, since: datetime) -> di
     return spent
 
 
-def budgeted_policy_config(profile: AccountProfile, snapshot: AccountSnapshot, spent: dict,
+def budgeted_policy_config(profile: AccountProfile, spent: dict,
                            base: PolicyConfig = PolicyConfig()) -> tuple[PolicyConfig, dict]:
-    """Raise reserves so planned spend stays within what remains of each budget."""
+    """Cap planned mineral and gas spend at what remains of each budget.
+
+    The caps are absolute amounts, not reserves derived from a balance, so they
+    hold whichever snapshot the scheduler plans from.
+    """
     remaining = {}
     for kind in RESOURCE_KINDS:
         limit = profile.budget(kind)
         if limit is not None:
             remaining[kind] = max(limit - spent.get(kind, 0), 0)
 
-    def reserve(kind: str, balance: Optional[int], current: int) -> int:
-        if kind not in remaining or balance is None:
-            return current  # an unobserved balance is already rejected by the policy
-        return max(current, balance - remaining[kind])
+    def cap(kind: str, current: Optional[int]) -> Optional[int]:
+        if kind not in remaining:
+            return current
+        return remaining[kind] if current is None else min(current, remaining[kind])
 
     config = PolicyConfig(
-        mineral_reserve=reserve("minerals", snapshot.resources.minerals, base.mineral_reserve),
-        gas_reserve=reserve("gas", snapshot.resources.gas, base.gas_reserve),
+        mineral_reserve=base.mineral_reserve,
+        gas_reserve=base.gas_reserve,
         allow_starbux_spend=False,  # the policy cannot cap starbux spend to a budget
         max_requests=min(profile.max_actions, base.max_requests or profile.max_actions),
+        max_mineral_spend=cap("minerals", base.max_mineral_spend),
+        max_gas_spend=cap("gas", base.max_gas_spend),
     )
     return config, remaining
 
@@ -157,7 +165,7 @@ class FleetOrchestrator:
             if snapshot.account_alias != profile.alias:
                 return finish("error", f"snapshot belongs to {snapshot.account_alias!r}")
             spent = spent_in_period(context.journal, profile.alias, self.clock() - self.period)
-            policy_config, remaining = budgeted_policy_config(profile, snapshot, spent, self.base_policy_config)
+            policy_config, remaining = budgeted_policy_config(profile, spent, self.base_policy_config)
 
             runner = ActionRunner(profile.alias, context.client, context.snapshot_provider, context.journal,
                                   clock=self.clock)

@@ -1,0 +1,51 @@
+{
+  "slice_id": "r6-fix-budget-spend-caps",
+  "status": "done",
+  "summary": "Added max_mineral_spend/max_gas_spend to PolicyConfig, applied in the policy's budget tracker against its planning snapshot (cumulative across planned candidates); budgeted_policy_config now passes remaining budgets as caps instead of reserves computed from another snapshot. Costs parse strictly (_cost/_price); missing or unparseable room prices and research gas costs are None and rejected as 'cost unknown'; missing @StarbuxCost is 0, unparseable is unknown. Regression tests (cap behaviour, the reviewer's balance-growth scenario, 8 price and 4 gas-cost variants, starbux rule) fail on the old code. One fixture that relied on the defect (research 520 without @GasCost) now declares @GasCost 0. Implemented by a subagent in a worktree; re-validated by the parent including the reviewer's repro.",
+  "files_touched": [
+    "sdk/policy/progression.py",
+    "sdk/fleet/orchestrator.py",
+    "tests/test_progression_policy.py",
+    "tests/test_fleet_orchestrator.py",
+    "docs/baseline/progression-policy.md",
+    "docs/baseline/fleet-accounts.md"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "Fleet budget enforcement",
+      "before": "Budgets could be exceeded by balance growth between snapshots, and unknown costs were treated as free",
+      "after": "Spend caps bind the plan to the remaining budget on the planning snapshot, and candidates with unknown costs are rejected",
+      "proof": [
+        "reviewer repro: budget 50 now plans no upgrade and the audit is clean",
+        "regression tests fail on the previous code (6 failures, 12 errors) and pass now",
+        "make test: 696 tests OK (1 skipped)",
+        "scripts/ci.py lint: no new findings",
+        "simulation scenarios complete with clean audits"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "Uncertain attempts are still not charged to budgets; fixed by the queued r6-fix-uncertain-spend-charging slice."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-11T00:43:33Z"
+}

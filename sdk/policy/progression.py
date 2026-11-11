@@ -12,6 +12,7 @@ today's behaviour rather than against an invented strategy.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping, Optional, Protocol
 
@@ -24,8 +25,9 @@ class RoomDesign:
     design_id: str
     name: str = ""
     upgrade_from: Optional[str] = None
-    cost_kind: Optional[str] = None  # "mineral", "gas" or None when unpriced
-    cost_amount: int = 0
+    # Both None when the price is unknown: no @PriceString, or one that doesn't parse.
+    cost_kind: Optional[str] = None
+    cost_amount: Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -33,15 +35,29 @@ class ResearchDesign:
     design_id: str
     root_id: Optional[str] = None
     name: str = ""
-    gas_cost: int = 0
-    starbux_cost: int = 0
+    gas_cost: Optional[int] = None  # None when @GasCost is missing or unparseable
+    starbux_cost: Optional[int] = 0  # a missing @StarbuxCost is 0; None when unparseable
 
 
-def _int(value: Any) -> int:
-    try:
-        return int(str(value).strip())
-    except (TypeError, ValueError):
-        return 0
+_COST = re.compile(r"\d+")
+
+
+def _cost(value: Any) -> Optional[int]:
+    """A non-negative whole-number cost, or None when ``value`` is missing or unparseable."""
+    if value is None:
+        return None
+    text = str(value).strip()
+    return int(text) if _COST.fullmatch(text) else None
+
+
+def _price(price: Any) -> tuple[Optional[str], Optional[int]]:
+    """Split a ``kind:amount`` @PriceString; ``(None, None)`` when it is missing or unparseable."""
+    kind, separator, amount = str(price or "").partition(":")
+    kind = kind.strip()
+    parsed = _cost(amount)
+    if not kind or not separator or parsed is None:
+        return None, None
+    return kind, parsed
 
 
 @dataclass(frozen=True)
@@ -56,16 +72,15 @@ class DesignData:
         """Parse ``RoomDesign`` and ``ResearchDesign`` records as the client receives them."""
         rooms = []
         for record in room_designs:
-            price = str(record.get("@PriceString") or "")
-            kind, _, amount = price.partition(":")
+            kind, amount = _price(record.get("@PriceString"))
             rooms.append(
                 RoomDesign(
                     design_id=str(record.get("@RoomDesignId")),
                     name=str(record.get("@RoomName") or ""),
                     upgrade_from=(str(record["@UpgradeFromRoomDesignId"])
                                   if record.get("@UpgradeFromRoomDesignId") not in (None, "", "0") else None),
-                    cost_kind=kind or None,
-                    cost_amount=_int(amount),
+                    cost_kind=kind,
+                    cost_amount=amount,
                 )
             )
         research = [
@@ -73,8 +88,10 @@ class DesignData:
                 design_id=str(record.get("@ResearchDesignId")),
                 root_id=str(record["@RootResearchDesignId"]) if record.get("@RootResearchDesignId") else None,
                 name=str(record.get("@ResearchName") or ""),
-                gas_cost=_int(record.get("@GasCost", 0)),
-                starbux_cost=_int(record.get("@StarbuxCost", 0)),
+                gas_cost=_cost(record.get("@GasCost")),
+                # Gas-priced research carries no starbux price, so a missing @StarbuxCost is 0,
+                # as Client.upgradeResearches reads it. A present but unparseable one is unknown.
+                starbux_cost=_cost(record.get("@StarbuxCost", 0)),
             )
             for record in research_designs
         ]
@@ -87,6 +104,9 @@ class PolicyConfig:
     gas_reserve: int = 0
     allow_starbux_spend: bool = False
     max_requests: Optional[int] = None
+    # Caps on total planned spend, applied to the snapshot the plan is made from. None is no cap.
+    max_mineral_spend: Optional[int] = None
+    max_gas_spend: Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -119,7 +139,7 @@ class ProgressionPolicy(Protocol):
 
 
 class _Budget:
-    """Tracks resources still available after planned spend and reserves."""
+    """Tracks resources still available after planned spend, reserves and spend caps."""
 
     def __init__(self, snapshot: AccountSnapshot, config: PolicyConfig) -> None:
         resources = snapshot.resources
@@ -127,6 +147,7 @@ class _Budget:
             "mineral": None if resources.minerals is None else resources.minerals - config.mineral_reserve,
             "gas": None if resources.gas is None else resources.gas - config.gas_reserve,
         }
+        self.cap_left = {"mineral": config.max_mineral_spend, "gas": config.max_gas_spend}
 
     def check(self, kind: Optional[str], amount: int) -> Optional[str]:
         if not kind or amount <= 0:
@@ -138,11 +159,16 @@ class _Budget:
             return f"{kind} balance not observed"
         if amount > remaining:
             return f"needs {amount} {kind}, {max(remaining, 0)} available above reserve"
+        cap_left = self.cap_left[kind]
+        if cap_left is not None and amount > cap_left:
+            return f"needs {amount} {kind}, {max(cap_left, 0)} left under the {kind} spend cap"
         return None
 
     def spend(self, kind: Optional[str], amount: int) -> None:
         if kind in self.available and self.available[kind] is not None and amount > 0:
             self.available[kind] -= amount
+            if self.cap_left[kind] is not None:
+                self.cap_left[kind] -= amount
 
 
 class BaselineV1:
@@ -158,10 +184,13 @@ class BaselineV1:
         budget = _Budget(snapshot, config)
 
         def admit(action_id: str, params: Mapping[str, Any], reason: str, label: str,
-                  cost_kind: Optional[str] = None, cost_amount: int = 0) -> bool:
+                  cost_kind: Optional[str] = None, cost_amount: int = 0, unknown_cost: Optional[str] = None) -> bool:
             failures = check_preconditions(get_spec(action_id), snapshot, params)
             if failures:
                 rejected.append(Rejection(label, "; ".join(failures)))
+                return False
+            if unknown_cost:
+                rejected.append(Rejection(label, f"cost unknown: {unknown_cost}"))
                 return False
             problem = budget.check(cost_kind, cost_amount)
             if problem:
@@ -191,11 +220,17 @@ class BaselineV1:
                 if item.root_id in seen_roots:
                     continue
                 seen_roots.add(item.root_id)
+                if item.starbux_cost is None:
+                    rejected.append(Rejection(label, f"cost unknown: research {item.design_id} has an "
+                                                     "unparseable @StarbuxCost"))
+                    continue
                 if item.starbux_cost > 0 and not config.allow_starbux_spend:
                     rejected.append(Rejection(label, f"costs {item.starbux_cost} starbux; starbux spend not allowed"))
                     continue
                 admit("add_research", {"research_design_id": item.design_id},
-                      f"next research in line {item.root_id}", label, "gas", item.gas_cost)
+                      f"next research in line {item.root_id}", label, "gas", item.gas_cost or 0,
+                      unknown_cost=(f"research {item.design_id} has no parseable @GasCost"
+                                    if item.gas_cost is None else None))
 
         # 2. Room upgrades, each followed by a collection.
         if snapshot.section("rooms") is Completeness.MISSING:
@@ -208,8 +243,11 @@ class BaselineV1:
                     continue
                 label = f"upgrade_room {room.room_id}"
                 params = {"room_id": room.room_id, "upgrade_room_design_id": target.design_id}
+                unknown = target.cost_kind is None or target.cost_amount is None
                 if admit("upgrade_room", params, f"upgrade to {target.name or target.design_id}", label,
-                         target.cost_kind, target.cost_amount):
+                         target.cost_kind, target.cost_amount or 0,
+                         unknown_cost=(f"room design {target.design_id} has no parseable @PriceString"
+                                       if unknown else None)):
                     admit("collect_all_resources", {}, "collect after a room upgrade, as upgradeRooms does",
                           "collect_all_resources")
 
