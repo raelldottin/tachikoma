@@ -1200,7 +1200,7 @@
       ],
       "max_files_changed": 6,
       "notes": "Test lane. Extend the simulated game with seeded, scenario-configured faults: read failures, calls that raise after taking effect, ambiguous responses, concurrent spend by the player, and a wrong-account snapshot. Ship scenarios that exercise them and regression tests that assert the safety outcomes (unknown not verified, retry blocked, uncertain spend charged, foreign snapshot refused, contradicted stops the account) with deterministic reports.",
-      "status": "queued",
+      "status": "done",
       "depends_on": [
         "r6-release-and-limitations"
       ],
