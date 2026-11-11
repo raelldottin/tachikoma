@@ -10,7 +10,9 @@ The runner owns the evidence loop for a single account:
 5. observe an ``after`` snapshot, reconcile, and journal the outcome.
 
 Exceptions, timeouts and ambiguous responses are journaled as ``unknown``
-(uncertain) unless the effect was actually observed. A non-idempotent
+(uncertain) unless the effect was actually observed. An observed effect the
+action's evidence says this call cannot account for (``outcome_supported``
+is ``False``) is also ``unknown``, never ``verified``. A non-idempotent
 action whose previous attempt is still uncertain is refused until an
 operator reconciles it.
 """
@@ -202,8 +204,16 @@ class ActionRunner:
                 outcome, reason = ReconciliationStatus.UNKNOWN, f"ambiguous response; {reason}"
 
         delta = diff_snapshots(before, after)
+        observed = evidence(outcome, delta)
+        # An observed effect that nothing in this call can account for (for
+        # example a trophy change when no battle step was reached) is not verified.
+        if outcome is ReconciliationStatus.VERIFIED and observed.get("outcome_supported") is False:
+            support = observed.get("outcome_support_reason") or "the call's evidence does not support the effect"
+            prefix = f"call raised {error_class}; " if error_class else ""
+            outcome, reason = ReconciliationStatus.UNKNOWN, f"{prefix}{reason}; but {support}"
+            observed = evidence(outcome, delta)
         # Signed observed resource deltas; negative values are spend. None = unobserved.
         cost = {"minerals_delta": delta.minerals, "gas_delta": delta.gas, "starbux_delta": delta.starbux}
         return self._record(spec, started, params, outcome=outcome.value, reason=reason, attempted=True,
                             response_ok=response_ok, error_class=error_class, cost=cost,
-                            evidence=evidence(outcome, delta))
+                            evidence=observed)
