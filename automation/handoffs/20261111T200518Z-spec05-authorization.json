@@ -1,0 +1,45 @@
+{
+  "slice_id": "spec05-authorization",
+  "status": "done",
+  "summary": "SPEC-05 S05-R2 requires a dated, scoped, owner-written authorization before any execute run. This adds sdk/fleet/authorization.py, the loading half of S05-R1, with no execute path: load_authorization / authorization_from_dict return a frozen Authorization and fail closed on unknown or missing fields, an e-mail or UUID-shaped owner, bad aliases, non-catalog actions, a non-UTC or over-14-day window, non-integer or missing per-account mineral/gas caps, any starbux cap, unknown modes, and secret-named keys or secret-shaped values anywhere (the registry's scan). check_authorization lists every reason a requested run falls outside it, and authorization_hash gives run records a canonical sha256. The file format is documented in fleet-accounts.md. Implemented by the SPEC-05 builder specialist subagent in an isolated worktree, independently reviewed by the verifier subagent (tests cite its requirement ids; parent re-validated in a scratch clone), and re-validated by the parent.",
+  "files_touched": [
+    "docs/baseline/fleet-accounts.md",
+    "sdk/fleet/authorization.py",
+    "tests/test_fleet_authorization.py"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "SPEC-05: live execution authorization file",
+      "before": "Roadmap item not implemented",
+      "after": "SPEC-05: live execution authorization file (offline)",
+      "proof": [
+        "make syntax-check, make test, scripts/ci.py lint and git diff --check pass on current main",
+        "verifier verdict: tests cite its requirement ids; parent re-validated in a scratch clone"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "Offline only; no live game verification."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-11T20:05:34Z"
+}
