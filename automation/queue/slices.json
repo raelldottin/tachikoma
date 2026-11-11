@@ -1642,6 +1642,30 @@
         "make test",
         "git diff --check"
       ]
+    },
+    {
+      "slice_id": "spec-status-verified-offline",
+      "title": "Mark specs verified offline and record what waits on the owner",
+      "status": "queued",
+      "priority": 398,
+      "domain": "docs",
+      "allowed_paths": [
+        "docs/specs/",
+        "tests/test_fleet_execute.py",
+        "docs/baseline/known-limitations.md",
+        "docs/PRODUCT_ROADMAP.md"
+      ],
+      "depends_on": [
+        "spec12-study-aggregate",
+        "spec04-baseline-command"
+      ],
+      "max_files_changed": 17,
+      "notes": "Set SPEC-01, 02, 04, 05, 07, 08, 10, 11 and 12 to Verified offline (spec_trace passes), record SPEC-03, 06 and 09 as blocked on owner gates G1, G2 and G4, add the S10-R1 legacy-fencing test through --fleet-execute, make SPEC-02's test-count criterion a review check with its evidence, and refresh the specs index, roadmap status and known limitations.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
     }
   ]
 }
