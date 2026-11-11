@@ -1,0 +1,45 @@
+{
+  "slice_id": "r6-status-refresh-specialists",
+  "status": "done",
+  "summary": "PRODUCT_ROADMAP.md: status heading dated after #149; AUTO-010, operational dashboard, concurrent operation, dashboards and alerts (AUTO-012) rows now merged with PRs; new rows for the identity check, compatibility ledger (AUTO-015), release package data, fault injection and hull-reserve-v1; note that specialist subagents built and a verifier subagent reviewed them. known-limitations.md: replaced the sequential-only, alias-only isolation, missing scenarios, and no-dashboard items with what is now true and still unwired; added items for the hull-reserve fallback, simulated faults, the compatibility ledger against 1.0, and the study without data. Links checked. Documentation only.",
+  "files_touched": [
+    "docs/PRODUCT_ROADMAP.md",
+    "docs/baseline/known-limitations.md"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "Roadmap status documentation",
+      "before": "The roadmap and limitations listed AUTO-010, AUTO-012, AUTO-015 and concurrent operation as not started",
+      "after": "They record the merged specialist slices with PR numbers and what is still unwired or blocked",
+      "proof": [
+        "all relative links resolve",
+        "make test: 917 tests OK (1 skipped)",
+        "git diff --check clean"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "Live exit criteria remain unmet; documentation only."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-11T12:06:33Z"
+}
