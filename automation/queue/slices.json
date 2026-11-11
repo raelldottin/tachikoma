@@ -916,7 +916,7 @@
     {
       "slice_id": "r6-fix-battle-outcome-evidence",
       "title": "Never verify a battle outcome without a battle step; tolerate non-UTC journal times",
-      "status": "queued",
+      "status": "done",
       "priority": 342,
       "domain": "safety",
       "allowed_paths": [

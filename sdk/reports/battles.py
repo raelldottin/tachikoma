@@ -8,10 +8,11 @@ change was observed at all).
 Rules:
 
 - The outcome is ``win`` or ``loss`` only when the event reconciled as
-  ``verified`` with evidence tier ``outcome-observed`` and a non-zero
-  observed trophy change. Everything else is ``unknown``.
+  ``verified`` with evidence tier ``outcome-observed``, a non-zero observed
+  trophy change, and no error from the call. Everything else is ``unknown``.
 - The strategy comes from the experiment window active when the battle
-  started. A battle outside every window has no strategy.
+  started (the start time is normalised to UTC first). A battle outside
+  every window has no strategy.
 - Skipped and dry-run events are not battles.
 - Opponent cohorts are labelled only from recorded opponent facts. Nothing
   records them yet, so they are ``unknown``.
@@ -20,7 +21,7 @@ Rules:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Iterable, List, Mapping, Optional
 
 from sdk.journal import GameplayEvent
@@ -77,8 +78,15 @@ class JournalBattle:
         return self.result.outcome != BattleOutcome.UNKNOWN.value
 
 
+def _utc(value: str) -> datetime:
+    """Journal times are timezone-aware but not always UTC; schedules require UTC."""
+    moment = datetime.fromisoformat(value)
+    return moment.astimezone(timezone.utc) if moment.tzinfo is not None else moment
+
+
 def _outcome(event: GameplayEvent, tier: str, trophy_delta: Optional[int]) -> str:
-    if event.outcome != "verified" or tier != "outcome-observed" or not trophy_delta:
+    if (event.outcome != "verified" or event.error_class is not None or tier != "outcome-observed"
+            or not trophy_delta):
         return BattleOutcome.UNKNOWN.value
     return BattleOutcome.WIN.value if trophy_delta > 0 else BattleOutcome.LOSS.value
 
@@ -97,7 +105,7 @@ def battles_from_events(
 
         strategy = None
         if schedule is not None:
-            strategy = schedule.active_strategy(event.account_alias, datetime.fromisoformat(event.started_at))
+            strategy = schedule.active_strategy(event.account_alias, _utc(event.started_at))
 
         opponent_hull = _int_or_none(evidence.get("opponent_hull_level"))
         opponent_trophies = _int_or_none(evidence.get("opponent_trophies"))

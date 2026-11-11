@@ -36,9 +36,13 @@
 | `battle-created` | `CreateBattle9` returned a parsed response during this call |
 | `battle-accepted` | `AcceptBattle5` returned a parsed response during this call |
 | `finalised` | `FinaliseBattle15` returned a parsed response during this call |
-| `outcome-observed` | The reconciled outcome is `verified`: a trophy change was observed |
+| `outcome-observed` | The call reached `finalised` and the reconciled outcome is `verified`: a trophy change was observed |
 
-A step counts only if its parsed response object was replaced during the call, so a response left over from an earlier battle is not evidence. `battle_id` is recorded only when a battle was created in this call and is not the flow's dummy `0`. `client_reported_outcome_trusted` is always `false`: `FinaliseBattle15` sends an outcome type chosen by the client, so a finalise response is never evidence of a win. `runBattleEndToEnd` itself, and the `run.py` battle step, are unchanged.
+A step counts only if its parsed response object was replaced during the call, so a response left over from an earlier battle is not evidence. `battle_id` is recorded only when a battle was created in this call and is not the flow's dummy `0`. `client_reported_outcome_trusted` is always `false`: `FinaliseBattle15` sends an outcome type chosen by the client, so a finalise response is never evidence of a win.
+
+A trophy change counts as this call's battle outcome only if the call reached `finalised`. Without `FinaliseBattle15` no attack result was reported, so the change came from elsewhere, for example a defense while the flow failed before `CreateBattle9`. The evidence then records `outcome_supported: false` with an `outcome_support_reason`, the tier stays at the furthest battle step reached (`request-sent` if none), and the runner journals the outcome as `unknown` rather than `verified`, explaining why in the reason. Like any `unknown` attempt, it blocks a retry until reconciled. The runner applies this downgrade to any action whose evidence reports `outcome_supported: false`; only `run_pvp_battle` produces evidence today. `trophies_delta` still records the observed change.
+
+`runBattleEndToEnd` itself, and the `run.py` battle step, are unchanged.
 
 `tests/test_action_catalog.py` checks that every catalog method is listed as `mutating` in the [capability inventory](capability-inventory.json), and covers each outcome for each action.
 

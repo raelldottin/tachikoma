@@ -44,6 +44,9 @@ Postcondition = Callable[[SnapshotDelta, AccountSnapshot, AccountSnapshot, Param
 EvidenceProbe = Callable[[Any], Mapping[str, Any]]
 # Turns the before/after probes, the reconciled status and the snapshot delta
 # (None when the after-snapshot could not be observed) into journal evidence.
+# Evidence may carry "outcome_supported": False (with "outcome_support_reason")
+# when an observed effect is not backed by anything this call did; the runner
+# then journals a verified outcome as unknown.
 EvidenceBuilder = Callable[
     [Mapping[str, Any], Mapping[str, Any], ReconciliationStatus, Optional[SnapshotDelta]], Mapping[str, Any]
 ]
@@ -197,13 +200,18 @@ def _battle_outcome_observed(delta, before, after, params):
 # Battle evidence tiers, weakest first. A tier says how far the battle provably
 # got. Only "outcome-observed" rests on game state; the others rest on the
 # server accepting a request. FinaliseBattle15 carries an outcome type chosen by
-# the client, so its response is never evidence of a win.
+# the client, so its response is never evidence of a win. A trophy change is
+# attributed to this call's battle only if the call reached FinaliseBattle15:
+# without it no attack result was reported, so the change came from elsewhere
+# (for example a defense) and "outcome-observed" is not reached.
 BATTLE_EVIDENCE_TIERS = ("request-sent", "battle-created", "battle-accepted", "finalised", "outcome-observed")
 _BATTLE_RESULT_ATTRIBUTES = {
     "battle-created": "createBattle9Result",
     "battle-accepted": "acceptBattle5Result",
     "finalised": "finaliseBattle15Result",
 }
+# The battle step a trophy change must be backed by, in this call, to count as its outcome.
+OUTCOME_SUPPORTING_STEP = "finalised"
 
 
 def _battle_probe(client: Any) -> Mapping[str, Any]:
@@ -217,19 +225,26 @@ def _battle_evidence(before: Mapping[str, Any], after: Mapping[str, Any], status
     # A step happened during this call only if its parsed response object was replaced.
     reached = {tier: after.get(tier) is not None and after.get(tier) is not before.get(tier)
                for tier in _BATTLE_RESULT_ATTRIBUTES}
-    reached["outcome-observed"] = status is ReconciliationStatus.VERIFIED
+    outcome_supported = bool(reached[OUTCOME_SUPPORTING_STEP])
+    reached["outcome-observed"] = status is ReconciliationStatus.VERIFIED and outcome_supported
     tier = "request-sent"
     for name in BATTLE_EVIDENCE_TIERS[1:]:
         if reached.get(name):
             tier = name
     battle_id = after.get("battle_id") if reached["battle-created"] else None
-    return {
+    evidence = {
         "evidence_tier": tier,
         "steps": {name: bool(reached.get(name)) for name in BATTLE_EVIDENCE_TIERS[1:]},
         "battle_id": str(battle_id) if battle_id not in (None, "", "0") else None,
         "client_reported_outcome_trusted": False,
         "trophies_delta": delta.trophies if delta is not None else None,
+        "outcome_supported": outcome_supported,
     }
+    if not outcome_supported:
+        evidence["outcome_support_reason"] = (
+            f"this call did not reach {OUTCOME_SUPPORTING_STEP}, so a trophy change is not this battle's outcome"
+        )
+    return evidence
 
 
 CATALOG: dict[str, ActionSpec] = {
