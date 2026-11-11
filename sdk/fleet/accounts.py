@@ -15,6 +15,11 @@ catch a factory that loads the wrong credentials, because the alias is a label
 the caller stamps on every snapshot. ``game_identity_refusal`` compares the
 observed fingerprint with the declared one, and ``pin_game_identity`` keeps
 every later snapshot of the run on the same game account.
+
+A profile may also declare ``legacy_run_account``, the number N of the
+``PSS_ACCOUNT_N`` secret the legacy daily run (``daily-run.yml``) uses for the
+same ship (SPEC-06). An execute run refuses such an account unless the
+authorization confirms N is skipped by the legacy run (S06-R2).
 """
 
 from __future__ import annotations
@@ -41,7 +46,7 @@ STRATEGY_KEY_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}@v[1-9][0-9]*$")
 BUDGET_CURRENCIES = ("minerals", "gas", "starbux")
 PROFILE_FIELDS = frozenset({
     "alias", "objective", "policy_id", "pvp_strategy", "budgets", "max_actions", "enabled", "credentials_secret",
-    "expected_game_identity",
+    "expected_game_identity", "legacy_run_account",
 })
 FORBIDDEN_KEYS = frozenset(FORBIDDEN_SECRET_KEYS | {"email", "e-mail", "authstring", "auth_string"})
 
@@ -74,6 +79,7 @@ class AccountProfile:
     max_actions: int = 20
     enabled: bool = True
     expected_game_identity: Optional[str] = None
+    legacy_run_account: Optional[int] = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.alias, str) or not ACCOUNT_ALIAS_PATTERN.match(self.alias):
@@ -109,6 +115,12 @@ class AccountProfile:
             raise RegistryError(
                 f"{self.alias}: expected_game_identity must be a gid1- fingerprint, never a raw user id"
             )
+        if self.legacy_run_account is not None and (
+            isinstance(self.legacy_run_account, bool)
+            or not isinstance(self.legacy_run_account, int)
+            or self.legacy_run_account < 1
+        ):
+            raise RegistryError(f"{self.alias}: legacy_run_account must be a positive integer (the N of PSS_ACCOUNT_N)")
         _scan_for_secrets({"objective": self.objective}, self.alias)
 
     def budget(self, currency: str) -> Optional[int]:
@@ -126,6 +138,7 @@ class AccountProfile:
             "enabled": self.enabled,
             "credentials_secret": self.credentials_secret,
             "expected_game_identity": self.expected_game_identity,
+            "legacy_run_account": self.legacy_run_account,
         }
 
 
@@ -191,6 +204,12 @@ class AccountRegistry:
                 raise RegistryError(
                     f"{profile.alias}: expected_game_identity is already declared by {declared[identity]!r}")
         self._declared_identities = declared
+        legacy: dict[int, str] = {}
+        for profile in self._profiles.values():
+            number = profile.legacy_run_account
+            if number is not None and legacy.setdefault(number, profile.alias) != profile.alias:
+                raise RegistryError(
+                    f"{profile.alias}: legacy_run_account {number} is already declared by {legacy[number]!r}")
 
     def __contains__(self, alias: str) -> bool:
         return alias in self._profiles
