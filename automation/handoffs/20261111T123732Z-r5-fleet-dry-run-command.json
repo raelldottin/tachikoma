@@ -1,0 +1,49 @@
+{
+  "slice_id": "r5-fleet-dry-run-command",
+  "status": "done",
+  "summary": "The fleet orchestrators, snapshot provider, audit, fleet report and alerts existed only as library code. Operators had no way to dry-run a registry of accounts. This adds `run.py --fleet-dry-run --registry PATH` with optional `--concurrent N`, `--fleet-journal-dir DIR` and `--identity-salt-env NAME`.  sdk/fleet/factory.py builds each account's context from the environment. A profile's credentials_secret names either <NAME> (an auth string, the --auth-file format) or <NAME>_EMAIL/<NAME>_PASSWORD (the --login-email flow and the daily workflow's PSS_ACCOUNT_<n>_* secrets). Login reuses Client.login. Credential values never reach output, journals or error text: exceptions are re-raised with the account's values replaced and secret-shaped text redacted. Each account gets a device that never touches the shared ./.device file, and its own HTTP session instead of the class-level one. Room, research and hull designs come from read-only calls (listAllDesigns4 for ShipDesign; hulls stay empty and are noted when it fails).  The command only ever calls run(execute=False). It writes one <alias>.log journal per account, then prints an accounts table, the fleet report and the alerts with the isolation audit. It exits 2 on registry, salt or journal-dir errors, otherwise 0. Tests use fake clients with sockets patched to raise. Implemented by the integration specialist subagent in an isolated worktree, independently reviewed by the verifier subagent (CHANGES-REQUIRED, then APPROVE-WITH-NITS; credential/id leaks and nits fixed in 328bcc5 and 1e8481d), and re-validated by the parent.",
+  "files_touched": [
+    "README.md",
+    "README.template",
+    "docs/baseline/capability-inventory.json",
+    "docs/baseline/fleet-accounts.md",
+    "run.py",
+    "sdk/fleet/factory.py",
+    "tests/test_fleet_dry_run.py"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "Wire the fleet stack into run.py as a dry-run command",
+      "before": "Roadmap item not implemented",
+      "after": "Wire the fleet stack into run.py as a dry-run command (offline)",
+      "proof": [
+        "make syntax-check, make test, scripts/ci.py lint and git diff --check pass on current main",
+        "verifier verdict: CHANGES-REQUIRED, then APPROVE-WITH-NITS; credential/id leaks and nits fixed in 328bcc5 and 1e8481d"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "Offline only; no live game verification."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-11T12:37:45Z"
+}
