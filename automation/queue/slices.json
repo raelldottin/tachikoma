@@ -1411,7 +1411,7 @@
     {
       "slice_id": "spec05-authorization",
       "title": "SPEC-05: live execution authorization file",
-      "status": "queued",
+      "status": "done",
       "priority": 376,
       "domain": "safety",
       "allowed_paths": [

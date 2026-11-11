@@ -89,6 +89,51 @@ Error messages name the location but never repeat the offending value. `AccountR
 
 After the run, the command reads every registered alias's journal, runs `audit_fleet`, and prints the accounts table, `sdk/reports/fleet` Markdown and `sdk/reports/alerts` Markdown with that audit.
 
+## Live execution authorization
+
+`sdk/fleet/authorization.py` reads the owner-written file that [SPEC-05](../specs/SPEC-05-live-execution-gate.md) requires before any execute run (S05-R2). It names who authorized the run, which registry accounts and catalog actions it covers, when it is valid and how much each account may spend. It holds no credential, and this module has no execute path: it only loads and checks the file.
+
+```json
+{
+  "version": 1,
+  "owner": "owner",
+  "purpose": "canary on the authorized test account",
+  "accounts": ["alpha"],
+  "actions": ["collect_all_resources", "collect_daily_reward"],
+  "not_before": "2026-11-12T00:00:00Z",
+  "expires": "2026-11-19T00:00:00Z",
+  "caps": {"alpha": {"minerals": 0, "gas": 0}},
+  "modes": ["canary"]
+}
+```
+
+Every field is required.
+
+| Field | Rule |
+| --- | --- |
+| `version` | `1` |
+| `owner` | A short label of at most 64 letters, digits, spaces, `.`, `_` or `-`, starting with a letter or digit. Never an e-mail address, and never UUID-shaped. |
+| `purpose` | Free text, non-empty, at most 500 characters |
+| `accounts` | A non-empty list of distinct registry aliases ([snapshot alias rule](account-snapshot.md)) |
+| `actions` | A non-empty list of distinct action ids from `sdk.actions.CATALOG` |
+| `not_before`, `expires` | ISO 8601 times in UTC (`Z` or `+00:00`). `expires` is later than `not_before` and at most 14 days after it. The window is `not_before` inclusive to `expires` exclusive. |
+| `caps` | One entry per listed account, each with non-negative integer `minerals` and `gas` caps per period. A `starbux` cap is refused: starbux spending is never authorizable, and `Authorization.cap(alias, "starbux")` is always 0. |
+| `modes` | A non-empty list of distinct run modes from `canary` and `full` |
+
+`load_authorization(path)` and `authorization_from_dict(payload)` return a frozen `Authorization` and fail closed with `AuthorizationError` on an unreadable or non-JSON file, a wrong version, unknown or missing fields, any rule above, a secret-named key anywhere in the file, or any value that `redact_secrets` would change. As in the registry, error text names the field but never repeats the offending value.
+
+`check_authorization(auth, registry, now, aliases, action_ids, mode)` returns the list of reasons a requested run falls outside the authorization; an empty list means it is inside. It reports every reason, not only the first:
+
+- `now` is naive, before `not_before`, or at or after `expires`;
+- `mode` is not in `modes`;
+- no account is requested;
+- an account is not in `accounts`, not in the registry, or disabled in the registry;
+- an action is not in `actions`.
+
+A malformed alias, action id or mode is shown as `<malformed>`, never repeated.
+
+`authorization_hash(auth)` is `sha256:` followed by the hex SHA-256 of the authorization's canonical JSON (`to_dict()` with sorted keys, no spaces, ASCII, and times written with `Z`). Key order and an equivalent UTC spelling do not change it, so a run record can name the exact authorization it ran under.
+
 ## Game identity
 
 `AccountSnapshot.game_identity` is an optional fingerprint of the game user id the client is logged in as; the [account snapshot](account-snapshot.md#game-identity) page describes the field, `game_identity_fingerprint` and the provider's `identity_salt`.
