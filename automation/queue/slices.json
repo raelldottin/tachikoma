@@ -1547,6 +1547,101 @@
         "make test",
         "git diff --check"
       ]
+    },
+    {
+      "slice_id": "spec11-post-run-alerts",
+      "title": "SPEC-11: alerts and dashboard after every execute run",
+      "status": "queued",
+      "priority": 394,
+      "domain": "observability",
+      "allowed_paths": [
+        "run.py",
+        "tests/test_post_run_alerts.py",
+        "README.template",
+        "README.md",
+        "docs/baseline/alerts.md",
+        "docs/baseline/capability-inventory.json"
+      ],
+      "depends_on": [
+        "spec05-execute-command"
+      ],
+      "max_files_changed": 6,
+      "notes": "Implements S11-R1-R4. See docs/specs/SPEC-11-alert-delivery.md. --fleet-execute ends by evaluating alerts on its journals and audit, writing them to the run record and a dashboard next to the journals; a critical alert makes a non-zero exit after all accounts ran; optional scrubbed SMTP summary through the existing SMTP flags, off by default. Fakes only.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
+    },
+    {
+      "slice_id": "spec10-fleet-report",
+      "title": "SPEC-10: fleet trial report",
+      "status": "queued",
+      "priority": 395,
+      "domain": "observability",
+      "allowed_paths": [
+        "scripts/trial_report.py",
+        "tests/test_trial_report_fleet.py"
+      ],
+      "depends_on": [
+        "spec08-pvp-report",
+        "spec05-execute-command"
+      ],
+      "max_files_changed": 2,
+      "notes": "Implements S10-R3-R6 (and tests S10-R1 through the execute refusals). See docs/specs/SPEC-10-fleet-trial.md. trial_report.py --fleet: audit after every run (incident stops the trial), per-account and fleet metrics, mode comparison (sequential vs concurrent) with sample sizes and decide(), operator minutes, alerts.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
+    },
+    {
+      "slice_id": "spec04-baseline-command",
+      "title": "SPEC-04: read-only baseline command",
+      "status": "queued",
+      "priority": 396,
+      "domain": "state",
+      "allowed_paths": [
+        "run.py",
+        "sdk/fleet/factory.py",
+        "tests/test_baseline_command.py",
+        "README.template",
+        "README.md",
+        "docs/baseline/capability-inventory.json",
+        "docs/baseline/account-snapshot.md"
+      ],
+      "depends_on": [
+        "spec11-post-run-alerts",
+        "spec04-baseline-format"
+      ],
+      "max_files_changed": 7,
+      "notes": "Implements S04-R1, R3, R6. See docs/specs/SPEC-04-account-baselines.md. run.py --baseline --registry --output: per enabled account one read-only snapshot written with sdk.state.baseline.write_baseline, game version from the server's latest-version setting, Markdown summary table; no execute path; reuse the fleet factory and scrubbing.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
+    },
+    {
+      "slice_id": "spec12-study-aggregate",
+      "title": "SPEC-12: study report aggregate",
+      "status": "queued",
+      "priority": 397,
+      "domain": "observability",
+      "allowed_paths": [
+        "scripts/trial_report.py",
+        "tests/test_trial_report_study.py"
+      ],
+      "depends_on": [
+        "spec10-fleet-report"
+      ],
+      "max_files_changed": 2,
+      "notes": "Implements S12-R1, R4, R6. See docs/specs/SPEC-12-study-report.md. trial_report.py --study aggregates per-trial outputs (progression, pvp, market, fleet) with every field and marks studies short of their minimum sample inconclusive.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
     }
   ]
 }
