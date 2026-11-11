@@ -566,7 +566,7 @@
     {
       "slice_id": "r4-economy-ledger",
       "title": "Per-account currency and item ledger from snapshots and the journal",
-      "status": "queued",
+      "status": "done",
       "priority": 230,
       "domain": "economy",
       "allowed_paths": [

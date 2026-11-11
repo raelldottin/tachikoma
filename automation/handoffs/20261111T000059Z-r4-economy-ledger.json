@@ -1,0 +1,48 @@
+{
+  "slice_id": "r4-economy-ledger",
+  "status": "done",
+  "summary": "Added sdk/economy/ledger.py: LedgerEntry, FlowTotals, Ledger and build_ledger (containment-based attribution to exactly one attempted event, otherwise ambiguous or unattributed; partial overlaps do not count; None for unobserved currency and inventory; refuses foreign or out-of-order snapshots; ignores skipped and foreign events), with totals by action, unattributed and ambiguous. Exported from sdk.economy. 9 tests in tests/test_economy_ledger.py including a runner round trip. Documented in docs/baseline/economy-ledger.md.",
+  "files_touched": [
+    "sdk/economy/ledger.py",
+    "sdk/economy/__init__.py",
+    "tests/test_economy_ledger.py",
+    "docs/baseline/economy-ledger.md"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "Economy ledger (R4)",
+      "before": "Resource and item changes were only visible per action as cost deltas, with no account-level ledger or unattributed flows",
+      "after": "A per-account ledger records every observed currency and item change and attributes it to an action, or marks it unattributed or ambiguous",
+      "proof": [
+        "tests.test_economy_ledger: 9 tests OK",
+        "make test: 613 tests OK (1 skipped)",
+        "scripts/ci.py lint: no new findings",
+        "run.py --help exits 0"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "Attribution relies on journal timestamps and snapshot observation times coming from consistent clocks."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-11T00:02:13Z"
+}
