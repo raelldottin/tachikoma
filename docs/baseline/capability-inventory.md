@@ -1,6 +1,6 @@
 # Capability inventory (R0 / AUTO-001)
 
-**As of:** 2026-11-10, `main` after the offline PvP library (#91).
+**As of:** 2026-11-10, `main` after the offline PvP library (#91). The JSON is kept current by the drift test; the summary counts below were not recomputed for #92–#136.
 **Machine-readable source:** [capability-inventory.json](capability-inventory.json)
 **Drift guard:** `tests/test_capability_inventory.py` fails when a public `sdk.client.Client` method or `run.py` flag is missing from the JSON, or when a cited test no longer mentions the capability.
 
@@ -52,7 +52,7 @@ The offline PvP assessment library in `sdk/pvp/` (pillar C) is pure analysis cod
 ### R4 to R6
 
 - Pillar D has market reads (`listActiveMarketplaceMessages`) under mocked tests, but no listing, purchase or sale reconciliation (`SellItem3` and `Purchase4` are not implemented as `Client` methods).
-- Pillars E and F have no code. Every `run.py` invocation handles a single account.
+- Pillars E and F now have offline code (`sdk/fleet/`, `sdk/experiments/`) but no `Client` methods. Every live `run.py` invocation still handles a single account.
 
 ## Updating this inventory
 

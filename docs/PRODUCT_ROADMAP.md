@@ -1,7 +1,7 @@
 # Tachikoma Product Roadmap — Full Gameplay Automation Research
 
 **Roadmap version:** 2.0
-**Updated:** 2026-11-03
+**Updated:** 2026-11-11 (see Implementation status)
 **Horizon:** November 2026–June 2027, then continuous experimentation
 **Status:** Proposed work and research plan; release completion must be established from GitHub and verified evidence
 **Repository:** [raelldottin/tachikoma](https://github.com/raelldottin/tachikoma)
@@ -43,7 +43,7 @@ The public default branch was reviewed while drafting this roadmap. Code exists,
 | CI and autonomous development | `.github/workflows/`, `automation/`, `AGENTS.md` | Preserve reproducibility, add full-gameplay integration test coverage |
 | Historical research and captures | Repo documentation and prior Hermes discussions | Reconcile against tracked branches before treating as implemented |
 
-Prior Hermes Task D–J/J-M and GOAL-PVP-001 results have been discussed, but **their completion and integration into main were not verified**. GOAL-PVP-001's verifier was previously blocked by a Hermes managed-worker issue. Inspect its handoffs and commits before recreating or claiming those capabilities.
+Prior Hermes Task D–J/J-M and GOAL-PVP-001 results have been discussed, but **their completion and integration into main were not verified**. GOAL-PVP-001 has since merged as #91. Inspect its handoffs and commits before recreating or claiming those capabilities.
 
 An earlier operator assessment reported exposed game credentials in public history. Credential rotation, token invalidation and history cleanup status are still to be confirmed by the maintainer. New test sessions should use secure current authentication, not known-exposed material.
 
@@ -140,6 +140,91 @@ Implement a policy evaluation loop: baseline, new hypothesis, instrumented actio
 
 **Exit:** repeatable full-gameplay scenarios, clean releases, regression tests, documented known limitations, and a study report quantifying when automation helped, failed or was more expensive than manual play.
 
+## Implementation status (as of 2026-11-11)
+
+This section records what has merged to `main` and what is still open. Every merged item was built and tested offline, with mocked game traffic or the simulated game. None has been run against a live account. The live trial for each release is blocked because the owner has not authorized live runs, so **no exit criterion that needs live evidence is met for any release**.
+
+Slice definitions and entry conditions are in [automation/queue/slices.json](../automation/queue/slices.json). Consolidated gaps are in [known limitations](baseline/known-limitations.md).
+
+Before the roadmap slices, the offline PvP assessment library (GOAL-PVP-001) merged as #91.
+
+### R0 — Baseline and experimental design
+
+| Item | Status | Evidence |
+| --- | --- | --- |
+| Capability inventory against the roadmap (AUTO-001) | Merged, offline | #93, [capability inventory](baseline/capability-inventory.md) |
+| Per-ship baselines, observed game version, test-account dataset | Not started | Needs live reads of owned accounts |
+| Manual-vs-automation study design (AUTO-010) | Not started | No slice queued |
+
+### R1 — Reliable game state and execution
+
+| Item | Status | Evidence |
+| --- | --- | --- |
+| Typed, account-scoped snapshot (AUTO-002) | Merged, offline | #94 |
+| Action catalog with postcondition reconciliation (AUTO-003) | Merged, offline | #95 |
+| Append-only, redacted event journal | Merged, offline | #96 |
+| Reconciled, journaled action runner | Merged, offline | #97 |
+| Operational dashboard | Not started | No slice queued |
+| Live verification of scheduled, attributed operations | Blocked | Covered by `r2-live-progression-trial` |
+
+### R2 — Automated growth engine
+
+| Item | Status | Evidence |
+| --- | --- | --- |
+| Snapshot provider from read-only `Client` calls | Merged, offline | #100, fix #108 |
+| Crew training state in snapshots | Merged, offline | #101 |
+| Targeted `Client.upgradeRoom` | Merged, offline | #102 |
+| Versioned progression policy `baseline-v1` (AUTO-005) | Merged, offline | #103 |
+| Daily scheduler with safety stops (AUTO-004) | Merged, offline | #104 |
+| `run.py --progression-dry-run` | Merged; read-only, no live execute flag | #105 |
+| Progression and reliability metrics report | Merged, offline | #106 |
+| Live progression trial against a manual baseline | **Blocked** | `r2-live-progression-trial`: needs owner authorization, a manual routine and a comparison window |
+
+### R3 — PvP automation engine
+
+| Item | Status | Evidence |
+| --- | --- | --- |
+| Versioned strategy registry and experiment windows (AUTO-006) | Merged, offline | #111 |
+| `run_pvp_battle` with evidence tiers (AUTO-007) | Merged, offline | #113 |
+| Battle results from the journal | Merged, offline | #115 |
+| Offense/defense scorecards and strategy comparison | Merged, offline | #116 |
+| Live comparison of two strategies | **Blocked** | `r3-live-pvp-trial`: needs owner authorization, two chosen strategies and windows. Live outcomes also stay `unknown` until a trophy read is verified. |
+
+### R4 — Marketplace and economy optimization
+
+| Item | Status | Evidence |
+| --- | --- | --- |
+| Typed marketplace listings (AUTO-008) | Merged, offline | #118 |
+| Per-account currency and item ledger | Merged, offline | #119 |
+| Trade lifecycle reconciliation | Merged, offline | #120 |
+| Market return and resource-allocation report | Merged, offline | #121 |
+| `SellItem3` / `Purchase4` and a live reconciled trade | **Blocked** | `r4-live-market-trial`: needs sanitized current captures, owner authorization and a defined experiment |
+
+### R5 — Multi-account orchestration
+
+| Item | Status | Evidence |
+| --- | --- | --- |
+| Account registry with objectives and budgets (AUTO-009) | Merged, offline | #123 |
+| Sequential fleet orchestrator with per-account isolation | Merged, offline | #124 |
+| Isolation and overspend audit | Merged, offline | #125 |
+| Fleet throughput, failure and isolation report | Merged, offline | #126 |
+| Concurrent operation | Not started | Orchestrator is sequential only |
+| Live fleet run on two accounts | **Blocked** | `r5-live-fleet-trial`: needs two named accounts with provisioned credentials, manual routine minutes and owner authorization |
+
+### R6 — Adaptive optimization and release
+
+| Item | Status | Evidence |
+| --- | --- | --- |
+| Policy evaluation loop with logged decisions (AUTO-011) | Merged, offline | #128 |
+| Deterministic offline scenario harness (AUTO-014) | Merged, offline | #129 |
+| Offline report command (`run.py --report`) | Merged, offline | #130 |
+| Fixes for an independent review of R3–R6 (budgets, battle evidence, trades, ledger, experiment intervals, simulation) | Merged, offline | #132–#136, queued by #131 |
+| Release instructions, known limitations, this status | Merged, docs | `r6-release-and-limitations`, [release instructions](RELEASE.md) |
+| Dashboards and alerts (AUTO-012) | Not started | No slice queued |
+| Study report on automation effectiveness | **Blocked** | `r6-study-report`: needs the R2–R5 live trials to have run |
+
+Queue-only changes (#92, #99, #110, #112, #114, #117, #122, #127, #131) are omitted from the tables. Patch-aware compatibility (AUTO-015) has no slice queued.
+
 ## 5. Prioritized epic backlog
 
 These IDs are planning references, not claims that existing GitHub issues have been created.
@@ -162,7 +247,7 @@ These IDs are planning references, not claims that existing GitHub issues have b
 | **AUTO-014** | P0 | Comprehensive test and reliability harness | Verifier, architect / across releases |
 | **AUTO-015** | P1 | Patch-aware rules and compatibility verification | Researcher, protocol / across releases |
 
-**First three implementation slices:** (1) validate the current system and account baselines; (2) prove reliable account-specific state and action reconciliation; (3) connect a daily progression policy to the execution and measurement loop. Do not rebuild existing functionality without auditing it.
+**First three implementation slices:** (1) validate the current system and account baselines; (2) prove reliable account-specific state and action reconciliation; (3) connect a daily progression policy to the execution and measurement loop. Do not rebuild existing functionality without auditing it. (All three now have offline implementations; account baselines and live reconciliation remain open. See Implementation status.)
 
 ## 6. Experimental design
 
@@ -254,7 +339,7 @@ Engineering safeguards support reproducibility and protect the test accounts; th
 | --- | --- |
 | Reported SavySoda full-automation approval | Preserve actual grant privately and use its terms as factual research context; do not invent limits |
 | Publicly exposed credentials reported previously | Verify rotation/revocation and clean test credentials; don't reuse compromised values |
-| GOAL-PVP-001 verifier/merge status uncertain | Reconcile the local task evidence against main before duplicating implementation |
+| GOAL-PVP-001 verifier/merge status (resolved: merged as #91) | Build on `sdk/pvp/` rather than duplicating it |
 | Patch-dependent mechanics and old formulas | Maintain version/patch evidence and regression tests |
 | PvP matching and sample-selection bias | Normalize by opponent cohort and report uncertainty |
 | Long-running activity and failure loops | Build event journal, reconciliation, fault recovery and an operator stop |
@@ -268,6 +353,8 @@ Engineering safeguards support reproducibility and protect the test accounts; th
 Hermes owner lanes: `tachikoma-researcher` researches balance and strategic hypotheses; `tachikoma-protocol` reconciles observed client operations; `tachikoma-analyst` models progression and experiments; `tachikoma-architect` integrates execution and decision layers; `tachikoma-safety` audits account state, credential handling and experiment reliability; `tachikoma-verifier` challenges results; `tachikoma` synthesizes.
 
 ## 13. Next milestone
+
+**Status (2026-11-11):** the offline foundation below has merged; the next milestone is owner authorization for `r2-live-progression-trial`, which needs a named test account, a manual routine and a comparison window.
 
 **AUTO-001 + AUTO-002 + AUTO-003:** establish validated multi-account state, current code capability map and one verified gameplay action flow. From that foundation, implement the first reproducible autonomous daily progression sequence with actual progress metrics, then proceed to PvP strategy tests and the economic experiments.
 
