@@ -1,0 +1,61 @@
+{
+  "slice_id": "spec-driven-plan-docs",
+  "status": "done",
+  "summary": "Added docs/specs/README.md (process, rules, spec index, owner gates G0-G5, milestones M0-M5, definition of roadmap completion, queue integration), docs/specs/TEMPLATE.md and SPEC-01..12 (84 requirements; every MUST is proved by at least one acceptance criterion, checked by script; all relative links resolve). Corrected four stale lines in docs/baseline/known-limitations.md (fleet dry run, concurrent mode, identity salt, hull designs now passed by --fleet-dry-run) and linked the PRODUCT_ROADMAP implementation status to docs/specs. Documentation only; make test was run in a scratch clone (945 OK) because a repo-root run rewrites ./.device.",
+  "files_touched": [
+    "docs/PRODUCT_ROADMAP.md",
+    "docs/baseline/known-limitations.md",
+    "docs/specs/README.md",
+    "docs/specs/SPEC-01-traceability.md",
+    "docs/specs/SPEC-02-local-credential-safety.md",
+    "docs/specs/SPEC-03-verified-profile-reads.md",
+    "docs/specs/SPEC-04-account-baselines.md",
+    "docs/specs/SPEC-05-live-execution-gate.md",
+    "docs/specs/SPEC-06-legacy-daily-run.md",
+    "docs/specs/SPEC-07-progression-trial.md",
+    "docs/specs/SPEC-08-pvp-trial.md",
+    "docs/specs/SPEC-09-market-trades.md",
+    "docs/specs/SPEC-10-fleet-trial.md",
+    "docs/specs/SPEC-11-alert-delivery.md",
+    "docs/specs/SPEC-12-study-report.md",
+    "docs/specs/TEMPLATE.md"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "Spec-driven completion plan",
+      "before": "Remaining roadmap work had blocked queue slices but no specification, acceptance criteria or owner-gate plan",
+      "after": "Each remaining capability has a spec with requirement ids, acceptance criteria, slices and owner decisions",
+      "proof": [
+        "every MUST requirement is covered by an acceptance criterion (scripted check)",
+        "all relative links resolve",
+        "git diff --check and scripts/ci.py repository pass",
+        "make test (scratch clone): 945 tests OK (1 skipped)"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "All specs are Draft; none is approved by the owner yet.",
+    "The SPEC-01 traceability check is specified but not implemented."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-11T19:38:48Z"
+}

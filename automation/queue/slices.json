@@ -1281,7 +1281,7 @@
     {
       "slice_id": "spec-driven-plan-docs",
       "title": "Spec-driven plan for completing the roadmap",
-      "status": "queued",
+      "status": "done",
       "priority": 382,
       "domain": "docs",
       "allowed_paths": [
