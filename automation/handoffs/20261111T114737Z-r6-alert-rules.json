@@ -1,0 +1,45 @@
+{
+  "slice_id": "r6-alert-rules",
+  "status": "done",
+  "summary": "Operators had per-account journals, the fleet report and the isolation audit, but nothing that decided when a run needs attention. Add sdk/reports/alerts.py with declarative AlertRule definitions and defaults for failure rate, uncertain rate, contradicted actions, isolation incidents (one alert per account and audit rule, including audit rules added later), budget-exceeded, and attempts without any verified action in the window.  Rate rules cannot fire below min_attempts attempts in the window (default 5, cannot be disabled), so a single timeout never reads as a 100% failure rate. Only an account's own events count, and audit rules are reported as not evaluated rather than clean when no audit is supplied. Alerts are ordered by severity, account, rule and audit rule so output is deterministic; JSON and Markdown renderers are provided. Sending alerts is deliberately out of scope. Implemented by the SRE specialist subagent in an isolated worktree, independently reviewed by the verifier subagent (APPROVE), and re-validated by the parent.",
+  "files_touched": [
+    "docs/baseline/alerts.md",
+    "sdk/reports/alerts.py",
+    "tests/test_alerts.py"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "Alert rules over journals and reports (AUTO-012)",
+      "before": "Roadmap item not implemented",
+      "after": "Alert rules over journals and reports (AUTO-012) (offline)",
+      "proof": [
+        "make syntax-check, make test, scripts/ci.py lint and git diff --check pass on current main",
+        "verifier verdict: APPROVE"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "Offline only; no live game verification."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-11T11:47:50Z"
+}
