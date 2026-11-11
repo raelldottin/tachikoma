@@ -1299,6 +1299,179 @@
         "make test",
         "git diff --check"
       ]
+    },
+    {
+      "slice_id": "spec-approvals-docs",
+      "title": "Record owner approval of the specs and amend SPEC-01",
+      "status": "queued",
+      "priority": 383,
+      "domain": "docs",
+      "allowed_paths": [
+        "docs/specs/"
+      ],
+      "depends_on": [
+        "spec-driven-plan-docs"
+      ],
+      "max_files_changed": 14,
+      "notes": "Mark SPEC-01..12 Approved for offline work (owner approval through the session goal; live gates G1-G5 stay closed), amend SPEC-01 so Approved specs never fail the check and live-only MUSTs need evidence instead of tests (S01-R3, R5, R9, AC6), and move SPEC-02's work into slice spec02-credential-safety. Docs only.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
+    },
+    {
+      "slice_id": "spec01-traceability-check",
+      "title": "SPEC-01: spec traceability check",
+      "status": "queued",
+      "priority": 384,
+      "domain": "process",
+      "allowed_paths": [
+        "scripts/spec_trace.py",
+        "tests/test_spec_traceability.py"
+      ],
+      "depends_on": [
+        "spec-approvals-docs"
+      ],
+      "max_files_changed": 3,
+      "notes": "Implements S01-R1..R9. See docs/specs/SPEC-01-traceability.md. Read-only parser of docs/specs/SPEC-*.md and of `# Verifies:` comments under tests/ and automation/tests/; check() returns errors; --report prints coverage. Tests with synthetic spec trees in temporary directories plus the real repo.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
+    },
+    {
+      "slice_id": "spec02-credential-safety",
+      "title": "SPEC-02: test runs never touch real credential files",
+      "status": "queued",
+      "priority": 385,
+      "domain": "safety",
+      "allowed_paths": [
+        "Makefile",
+        "scripts/ci.py",
+        "tests/__init__.py",
+        "tests/test_ci.py",
+        "tests/test_pvp_sanitized_inputs.py"
+      ],
+      "depends_on": [
+        "spec-approvals-docs"
+      ],
+      "max_files_changed": 6,
+      "notes": "Implements S02-R1..R6. See docs/specs/SPEC-02-local-credential-safety.md. run_tests runs in a fresh temporary working directory; Makefile test recipes use an absolute interpreter; tests/__init__.py refuses a repo-root unittest run when ./.device exists; sentinel-file regression test. Never run tests from the repo root.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
+    },
+    {
+      "slice_id": "spec03-fixture-scan",
+      "title": "SPEC-03: sanitized-capture scan",
+      "status": "queued",
+      "priority": 386,
+      "domain": "safety",
+      "allowed_paths": [
+        "tests/test_profile_reads.py",
+        "tests/fixtures/live_sanitized/README.md"
+      ],
+      "depends_on": [
+        "spec-approvals-docs"
+      ],
+      "max_files_changed": 3,
+      "notes": "Implements S03-R2. See docs/specs/SPEC-03-verified-profile-reads.md. Scan tests/fixtures/live_sanitized/ (README documents how captures are sanitized and recorded) and fail on any redaction-pattern match or numeric id in a UserId/Id field; tested with planted secrets in temp trees.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
+    },
+    {
+      "slice_id": "spec04-baseline-format",
+      "title": "SPEC-04: baseline file format",
+      "status": "queued",
+      "priority": 387,
+      "domain": "state",
+      "allowed_paths": [
+        "sdk/state/baseline.py",
+        "tests/test_account_baselines.py",
+        "docs/baseline/account-snapshot.md"
+      ],
+      "depends_on": [
+        "spec-approvals-docs"
+      ],
+      "max_files_changed": 4,
+      "notes": "Implements S04-R2, R4, R5, R7 (the format; the command is a later slice). See docs/specs/SPEC-04-account-baselines.md.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
+    },
+    {
+      "slice_id": "spec05-authorization",
+      "title": "SPEC-05: live execution authorization file",
+      "status": "queued",
+      "priority": 388,
+      "domain": "safety",
+      "allowed_paths": [
+        "sdk/fleet/authorization.py",
+        "tests/test_fleet_authorization.py",
+        "docs/baseline/fleet-accounts.md"
+      ],
+      "depends_on": [
+        "spec-approvals-docs"
+      ],
+      "max_files_changed": 4,
+      "notes": "Implements S05-R2 (and the loading half of R1). See docs/specs/SPEC-05-live-execution-gate.md. Load and check a dated, scoped authorization; no execute path in this slice.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
+    },
+    {
+      "slice_id": "spec07-trial-report",
+      "title": "SPEC-07: trial report builder",
+      "status": "queued",
+      "priority": 389,
+      "domain": "observability",
+      "allowed_paths": [
+        "scripts/trial_report.py",
+        "tests/test_trial_report.py"
+      ],
+      "depends_on": [
+        "spec-approvals-docs"
+      ],
+      "max_files_changed": 3,
+      "notes": "Implements S07-R4, R7, R8. See docs/specs/SPEC-07-progression-trial.md. Build the progression trial exit report from snapshots, journals, operator minutes and an intervention log; synthetic data only.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
+    },
+    {
+      "slice_id": "spec08-application-log",
+      "title": "SPEC-08: strategy application log",
+      "status": "queued",
+      "priority": 390,
+      "domain": "pvp",
+      "allowed_paths": [
+        "sdk/pvp/strategies.py",
+        "tests/test_pvp_strategies.py",
+        "docs/baseline/pvp-strategies.md"
+      ],
+      "depends_on": [
+        "spec-approvals-docs"
+      ],
+      "max_files_changed": 4,
+      "notes": "Implements S08-R1, R7. See docs/specs/SPEC-08-pvp-trial.md. Record how and when a strategy version was applied (bot call or by hand); attribute battles only inside a recorded application.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
     }
   ]
 }
