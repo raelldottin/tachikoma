@@ -1,0 +1,124 @@
+{
+  "name": "faults-contradicted-and-foreign",
+  "seed": 29,
+  "start": "2027-06-01T06:00:00+00:00",
+  "days": 2,
+  "execute": true,
+  "design": {
+    "room_designs": [
+      {
+        "@RoomDesignId": "100",
+        "@RoomName": "Engine"
+      },
+      {
+        "@RoomDesignId": "101",
+        "@UpgradeFromRoomDesignId": "100",
+        "@PriceString": "mineral:300"
+      },
+      {
+        "@RoomDesignId": "102",
+        "@UpgradeFromRoomDesignId": "101",
+        "@PriceString": "mineral:600"
+      },
+      {
+        "@RoomDesignId": "200",
+        "@RoomName": "Shield"
+      },
+      {
+        "@RoomDesignId": "201",
+        "@UpgradeFromRoomDesignId": "200",
+        "@PriceString": "mineral:400"
+      }
+    ],
+    "research_designs": [
+      {
+        "@ResearchDesignId": "510",
+        "@RootResearchDesignId": "510",
+        "@GasCost": "50"
+      },
+      {
+        "@ResearchDesignId": "520",
+        "@RootResearchDesignId": "520",
+        "@GasCost": "120"
+      }
+    ]
+  },
+  "registry": {
+    "version": 1,
+    "accounts": [
+      {
+        "alias": "alpha",
+        "objective": "grow",
+        "policy_id": "baseline-v1",
+        "credentials_secret": "ALPHA_AUTH",
+        "budgets": {
+          "minerals": 800,
+          "gas": 500,
+          "starbux": 0
+        },
+        "max_actions": 10
+      },
+      {
+        "alias": "bravo",
+        "objective": "grow",
+        "policy_id": "baseline-v1",
+        "credentials_secret": "BRAVO_AUTH",
+        "budgets": {
+          "minerals": 800,
+          "gas": 500,
+          "starbux": 0
+        },
+        "max_actions": 10
+      }
+    ]
+  },
+  "accounts": {
+    "alpha": {
+      "minerals": 900,
+      "gas": 300,
+      "starbux": 5,
+      "trophies": 1200,
+      "rooms": [
+        {
+          "@RoomId": "r1",
+          "@RoomDesignId": "100",
+          "@RoomStatus": "Normal"
+        }
+      ],
+      "research": [],
+      "faults": [
+        {
+          "kind": "foreign-snapshot",
+          "method": "snapshot",
+          "day": 0,
+          "call": 1,
+          "alias": "bravo"
+        }
+      ]
+    },
+    "bravo": {
+      "minerals": 2000,
+      "gas": 1000,
+      "starbux": 2,
+      "trophies": 900,
+      "rooms": [
+        {
+          "@RoomId": "r1",
+          "@RoomDesignId": "100",
+          "@RoomStatus": "Normal"
+        }
+      ],
+      "research": [],
+      "faults": [
+        {
+          "kind": "concurrent-spend",
+          "method": "collectAllResources",
+          "day": 0,
+          "call": 1,
+          "minerals": 500,
+          "gas": 200
+        }
+      ]
+    }
+  }
+}
