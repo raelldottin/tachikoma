@@ -1551,7 +1551,7 @@
     {
       "slice_id": "spec11-post-run-alerts",
       "title": "SPEC-11: alerts and dashboard after every execute run",
-      "status": "queued",
+      "status": "done",
       "priority": 394,
       "domain": "observability",
       "allowed_paths": [
