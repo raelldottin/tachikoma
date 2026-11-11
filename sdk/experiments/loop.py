@@ -8,9 +8,16 @@ turns measured samples into one of four decisions:
   95% interval lies wholly on the better side of the baseline's;
 - ``reject``: same, but the candidate is wholly worse;
 - ``keep-running``: the window is still open and the evidence is not yet
-  conclusive (too few samples, or overlapping intervals);
+  conclusive (too few samples, a zero-width interval, or overlapping
+  intervals);
 - ``insufficient-evidence``: the window has closed without a conclusive
   result.
+
+Mean intervals use the Student-t critical value for ``n - 1`` degrees of
+freedom, not the normal 1.96, so small samples get honestly wide intervals.
+A zero-width interval (every measurement identical, or a Wilson interval
+that collapses when rounded to 4 places) says nothing about spread, so it
+never supports ``adopt`` or ``reject``.
 
 A decision never changes any account. ``DecisionLog`` appends decisions to a
 JSONL file so every rollout choice is recorded with its evidence; acting on a
@@ -34,9 +41,40 @@ Z_95 = 1.959964
 ADOPT, REJECT, KEEP_RUNNING, INSUFFICIENT = "adopt", "reject", "keep-running", "insufficient-evidence"
 ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_.@-]{0,99}$")
 
+# Upper 0.975 quantile of Student's t for 1..30 degrees of freedom (the two-sided 95% critical value). The
+# values agree with standard tables (for example NIST/SEMATECH e-Handbook of Statistical Methods, 1.3.6.7.2,
+# to its three decimals); the six-decimal figures were checked to within 5e-7 by numerically integrating
+# the t density.
+_T_975 = (
+    12.706205, 4.302653, 3.182446, 2.776445, 2.570582, 2.446912, 2.364624, 2.306004, 2.262157, 2.228139,
+    2.200985, 2.178813, 2.160369, 2.144787, 2.131450, 2.119905, 2.109816, 2.100922, 2.093024, 2.085963,
+    2.079614, 2.073873, 2.068658, 2.063899, 2.059539, 2.055529, 2.051831, 2.048407, 2.045230, 2.042272,
+)
+_Z_975 = 1.959963985
+
 
 class ExperimentError(ValueError):
     """Raised for an invalid experiment, sample or log line."""
+
+
+def t_quantile_975(df: int) -> float:
+    """Two-sided 95% Student-t critical value for ``df`` degrees of freedom.
+
+    Uses the table above for ``df <= 30``. Beyond that it uses the
+    Cornish-Fisher expansion of the t quantile in powers of ``1/df``
+    (Abramowitz and Stegun, Handbook of Mathematical Functions, 26.7.5),
+    which is within 1e-7 of the exact value from ``df = 30`` upward.
+    """
+    if isinstance(df, bool) or not isinstance(df, int) or df < 1:
+        raise ExperimentError("degrees of freedom must be a positive integer")
+    if df <= len(_T_975):
+        return _T_975[df - 1]
+    z = _Z_975
+    g1 = (z ** 3 + z) / 4
+    g2 = (5 * z ** 5 + 16 * z ** 3 + 3 * z) / 96
+    g3 = (3 * z ** 7 + 19 * z ** 5 + 17 * z ** 3 - 15 * z) / 384
+    g4 = (79 * z ** 9 + 776 * z ** 7 + 1482 * z ** 5 - 1920 * z ** 3 - 945 * z) / 92160
+    return z + g1 / df + g2 / df ** 2 + g3 / df ** 3 + g4 / df ** 4
 
 
 def _require_utc(value: datetime, name: str) -> None:
@@ -125,12 +163,19 @@ class MeanSample:
     def estimate(self) -> Optional[float]:
         return round(sum(self.values) / self.n, 4) if self.n else None
 
+    def zero_variance(self) -> bool:
+        """Every measurement is identical (checked exactly, not via float variance)."""
+        return self.n > 0 and min(self.values) == max(self.values)
+
     def interval(self) -> Optional[tuple[float, float]]:
+        """95% Student-t interval for the mean, with ``n - 1`` degrees of freedom."""
         if self.n < 2:
             return None
         mean = sum(self.values) / self.n
+        if self.zero_variance():
+            return round(mean, 4), round(mean, 4)
         variance = sum((v - mean) ** 2 for v in self.values) / (self.n - 1)
-        margin = Z_95 * math.sqrt(variance / self.n)
+        margin = t_quantile_975(self.n - 1) * math.sqrt(variance / self.n)
         return round(mean - margin, 4), round(mean + margin, 4)
 
 
@@ -154,6 +199,17 @@ class Decision:
     candidate_interval: Optional[tuple[float, float]]
 
 
+def _degenerate(sample: Sample, bounds: tuple[float, float]) -> bool:
+    """A zero-width interval carries no evidence about spread, so it can never separate two variants.
+
+    For a mean that is every measurement being identical. A Wilson interval is never zero width for
+    ``n >= 1``, but rounded to 4 places it collapses to (0.0, 0.0) or (1.0, 1.0) once there are about
+    77,000 trials with no (or only) successes; that is treated the same way."""
+    if isinstance(sample, MeanSample) and sample.zero_variance():
+        return True
+    return bounds[1] <= bounds[0]
+
+
 def decide(experiment: Experiment, baseline: Sample, candidate: Sample, now: datetime) -> Decision:
     _require_utc(now, "now")
     if type(baseline) is not type(candidate):
@@ -165,6 +221,13 @@ def decide(experiment: Experiment, baseline: Sample, candidate: Sample, now: dat
         verdict = KEEP_RUNNING if open_window else INSUFFICIENT
         reason = (f"needs {experiment.min_sample} samples per variant; "
                   f"have {baseline.n} for {experiment.baseline} and {candidate.n} for {experiment.candidate}")
+    elif _degenerate(baseline, b_int) or _degenerate(candidate, c_int):
+        verdict = KEEP_RUNNING if open_window else INSUFFICIENT
+        flat = [name for name, sample, bounds in ((experiment.baseline, baseline, b_int),
+                                                  (experiment.candidate, candidate, c_int))
+                if _degenerate(sample, bounds)]
+        reason = (f"zero-width 95% interval for {' and '.join(flat)} (no measured variation); "
+                  "cannot separate the variants")
     else:
         better = c_int[0] > b_int[1] if experiment.higher_is_better else c_int[1] < b_int[0]
         worse = c_int[1] < b_int[0] if experiment.higher_is_better else c_int[0] > b_int[1]
