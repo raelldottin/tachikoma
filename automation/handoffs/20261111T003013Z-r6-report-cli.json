@@ -1,0 +1,50 @@
+{
+  "slice_id": "r6-report-cli",
+  "status": "done",
+  "summary": "Added run_offline_report and four flags (--report, repeatable --journal, --registry, --report-format) to run.py, handled before any Device/Client, prompt, login or network. progression uses compute_progression_metrics; pvp uses battles_from_events + compute_scorecard; fleet groups events by account alias and adds audit_fleet with a registry. Missing/malformed journal or invalid registry exits 2; flag misuse is an argparse error. README.template then README.md gained an Offline reports section; the inventory lists the new flags. 9 tests in tests/test_offline_reports.py patch Client, Device, getpass and sockets to raise. Implemented by a subagent and re-validated by the parent.",
+  "files_touched": [
+    "run.py",
+    "README.template",
+    "README.md",
+    "docs/baseline/capability-inventory.json",
+    "tests/test_offline_reports.py"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "Offline report command",
+      "before": "Reports were library calls only; no command produced them from journal files",
+      "after": "run.py --report prints progression, PvP or fleet reports from journals without logging in or touching the network",
+      "proof": [
+        "tests.test_offline_reports: 9 tests OK",
+        "make test: 689 tests OK (1 skipped)",
+        "scripts/ci.py lint: no new findings",
+        "run.py --report fleet with synthetic journals and registry exits 0"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "Fleet events are grouped by alias, so the audit's foreign-event rule cannot fire in report mode (documented).",
+    "docs/baseline/capability-inventory.md summary counts are stale; the release docs slice should refresh them."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-11T00:34:32Z"
+}

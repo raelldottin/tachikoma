@@ -137,6 +137,66 @@ def run_progression_dry_run(client, account_alias, journal_path):
     return 0
 
 
+REPORT_KINDS = ("progression", "pvp", "fleet")
+REPORT_FORMATS = ("markdown", "json")
+
+
+def run_offline_report(kind, journal_paths, registry_path=None, report_format="markdown", out=None):
+    """Print a report built from local journal files. Needs no login.
+
+    Never constructs a Device or Client and makes no network call. For the
+    fleet report, events are grouped by their own ``account_alias`` across all
+    given journals; the registry is only read for the fleet report. Returns a process exit code: 0 on success, 2 when a journal
+    or registry is missing or invalid.
+    """
+    from sdk.fleet.accounts import RegistryError, load_registry
+    from sdk.journal import JournalError, read_events
+
+    out = out or sys.stdout
+    events = []
+    try:
+        for journal_path in journal_paths:
+            path = Path(journal_path)
+            if not path.is_file():
+                print(f"error: journal not found: {journal_path}", file=sys.stderr)
+                return 2
+            events.extend(read_events(path))
+        registry = None
+        if registry_path is not None and kind == "fleet":
+            if not Path(registry_path).is_file():
+                print(f"error: registry not found: {registry_path}", file=sys.stderr)
+                return 2
+            registry = load_registry(registry_path)
+    except (JournalError, RegistryError) as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 2
+
+    if kind == "progression":
+        from sdk.reports import progression
+
+        metrics = progression.compute_progression_metrics(events)
+        text = progression.to_json(metrics) if report_format == "json" else progression.to_markdown(metrics)
+    elif kind == "pvp":
+        from sdk.reports import pvp
+        from sdk.reports.battles import battles_from_events
+
+        rows = pvp.compute_scorecard(battles_from_events(events))
+        text = pvp.to_json(rows) if report_format == "json" else pvp.to_markdown(rows)
+    else:
+        from sdk.fleet.audit import audit_fleet
+        from sdk.reports import fleet
+
+        journals = {}
+        for event in events:
+            journals.setdefault(event.account_alias, []).append(event)
+        audit = audit_fleet(registry, journals) if registry is not None else None
+        report = fleet.compute_fleet_report(journals, audit=audit)
+        text = fleet.to_json(report) if report_format == "json" else fleet.to_markdown(report)
+
+    out.write(text if text.endswith("\n") else text + "\n")
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Automate trivial tasks in Pixel Starships Mobile Starategy Sci-Fi MMORPG"
@@ -209,7 +269,45 @@ def main():
         default=PROGRESSION_JOURNAL_DEFAULT,
         help=f"progression journal path (default: {PROGRESSION_JOURNAL_DEFAULT})",
     )
+    parser.add_argument(
+        "--report",
+        dest="report",
+        choices=REPORT_KINDS,
+        default=None,
+        help="print an offline report from --journal files and exit; never logs in or touches the network",
+    )
+    parser.add_argument(
+        "--journal",
+        dest="journals",
+        action="append",
+        default=[],
+        metavar="PATH",
+        help="journal file to read for --report (repeatable)",
+    )
+    parser.add_argument(
+        "--registry",
+        dest="registry",
+        default=None,
+        metavar="PATH",
+        help="account registry JSON for --report fleet; adds the isolation audit",
+    )
+    parser.add_argument(
+        "--report-format",
+        dest="report_format",
+        choices=REPORT_FORMATS,
+        default="markdown",
+        help="output format for --report (default: markdown)",
+    )
     args = parser.parse_args()
+
+    # Offline reports read local journals only: handled before any SMTP setup,
+    # Device/Client construction, credential prompt, login or network access.
+    if args.report:
+        if not args.journals:
+            parser.error("--report needs at least one --journal PATH")
+        sys.exit(run_offline_report(args.report, args.journals, args.registry, args.report_format))
+    if args.journals or args.registry:
+        parser.error("--journal and --registry are only used with --report")
 
     # Validate SMTP configuration before Device/Client creation or network activity
     smtp_email = args.smtp_email
