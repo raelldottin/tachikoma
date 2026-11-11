@@ -8,6 +8,11 @@ the registry, one account at a time. Isolation rules:
   runner with the account's own alias, so a snapshot of another account is
   refused by the runner and scheduler.
 - Two accounts may not share a journal file.
+- Game identity (``FleetClaims.claim_snapshot``): the first snapshot's
+  ``game_identity`` fingerprint must match the profile's
+  ``expected_game_identity`` when one is declared, must not be the identity
+  the registry declares for another account, and must not be one another
+  account already used in this run. Later snapshots must keep it.
 - A failure or safety stop in one account is recorded and the next account
   still runs. Only the fleet stop file stops the whole fleet.
 
@@ -38,7 +43,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from sdk.execution import ActionRunner
-from sdk.fleet.accounts import AccountProfile, AccountRegistry
+from sdk.fleet.accounts import AccountProfile, AccountRegistry, game_identity_refusal, pin_game_identity
 from sdk.fleet.audit import charged_spend
 from sdk.journal import GameplayJournal
 from sdk.policy import DesignData, PolicyConfig, get_policy
@@ -72,6 +77,7 @@ class AccountRun:
     elapsed_seconds: float = 0.0
     spent_this_period: dict = field(default_factory=dict)
     budget_remaining: dict = field(default_factory=dict)
+    game_identity: Optional[str] = None  # accepted fingerprint, never the raw user id
 
 
 @dataclass(frozen=True)
@@ -147,17 +153,26 @@ class FleetClaims:
     it; any other account presenting the same resolved path is refused.
 
     ``claim_snapshot``: the account's first snapshot must belong to the
-    account. This is the hook for claims that depend on the first snapshot
-    (such as the game identity behind an alias); a subclass returned by
-    ``FleetOrchestrator._new_claims`` can extend it.
+    account, and its ``game_identity`` must pass ``game_identity_refusal``:
+    it matches the profile's declared identity, it is not the identity the
+    registry declares for another account, and no other account was accepted
+    with it in this run. An accepted identity is recorded, and
+    ``pinned_provider`` keeps the account's later snapshots on it; an
+    identity that was unknown (``None``) stays unknown. Without a
+    ``registry`` only the in-run duplicate check applies. A subclass returned
+    by ``FleetOrchestrator._new_claims`` can extend these claims.
 
     Both orchestrators call these in alias order, so the first alias wins a
     contested claim. Claims are lock-guarded so concurrent callers always see
     one consistent owner.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, registry: Optional[AccountRegistry] = None) -> None:
         self._journal_owners: dict[Path, str] = {}
+        self._registry = registry
+        self._declared = registry.declared_identities() if registry is not None else {}
+        self._identity_owners: dict[str, str] = {}
+        self._identities: dict[str, Optional[str]] = {}
         self._lock = threading.Lock()
 
     def claim_journal(self, alias: str, journal: GameplayJournal) -> Optional[str]:
@@ -173,7 +188,26 @@ class FleetClaims:
         """Check ``alias``'s first snapshot; return a refusal reason if the account may not proceed."""
         if snapshot.account_alias != alias:
             return f"snapshot belongs to {snapshot.account_alias!r}"
-        return None
+        expected = None
+        if self._registry is not None and alias in self._registry:
+            expected = self._registry.get(alias).expected_game_identity
+        observed = getattr(snapshot, "game_identity", None)
+        with self._lock:
+            refusal = game_identity_refusal(alias, expected, observed, self._identity_owners, self._declared)
+            if refusal is None:
+                self._identities[alias] = observed
+                if observed is not None:
+                    self._identity_owners[observed] = alias
+        return refusal
+
+    def identity(self, alias: str) -> Optional[str]:
+        """The game identity accepted for ``alias`` in this run, or ``None``."""
+        with self._lock:
+            return self._identities.get(alias)
+
+    def pinned_provider(self, alias: str, provider: Callable[[], AccountSnapshot]) -> Callable[[], AccountSnapshot]:
+        """``provider``, refusing any later snapshot whose identity differs from the accepted one."""
+        return pin_game_identity(provider, self.identity(alias))
 
 
 class FleetOrchestrator:
@@ -205,17 +239,23 @@ class FleetOrchestrator:
 
     def _new_claims(self) -> FleetClaims:
         """The claim table for one run; override to add claims."""
-        return FleetClaims()
+        return FleetClaims(self.registry)
 
     def _run_scheduler(self, profile: AccountProfile, context: AccountContext, execute: bool,
-                       started: float) -> AccountRun:
-        """Plan within the budget and run the scheduler for an account whose claims all succeeded."""
+                       started: float, claims: Optional[FleetClaims] = None) -> AccountRun:
+        """Plan within the budget and run the scheduler for an account whose claims all succeeded.
+
+        With ``claims``, every snapshot the runner and scheduler take is pinned
+        to the game identity accepted for the account.
+        """
+        identity = claims.identity(profile.alias) if claims is not None else None
         try:
             spent = spent_in_period(context.journal, profile.alias, self.clock() - self.period)
             policy_config, remaining = budgeted_policy_config(profile, spent, self.base_policy_config)
 
-            runner = ActionRunner(profile.alias, context.client, context.snapshot_provider, context.journal,
-                                  clock=self.clock)
+            provider = (claims.pinned_provider(profile.alias, context.snapshot_provider) if claims is not None
+                        else context.snapshot_provider)
+            runner = ActionRunner(profile.alias, context.client, provider, context.journal, clock=self.clock)
             scheduler = DailyScheduler(
                 runner, get_policy(profile.policy_id), context.design, policy_config,
                 SchedulerConfig(max_actions=profile.max_actions, period=self.period, stop_file=self.stop_file),
@@ -230,7 +270,7 @@ class FleetOrchestrator:
         return self._finish(
             profile, started, "completed" if report.completed else "stopped", report.stop_reason,
             attempted=attempted, verified=verified, planned=len(report.plan.requests),
-            spent_this_period=spent, budget_remaining=remaining,
+            spent_this_period=spent, budget_remaining=remaining, game_identity=identity,
         )
 
     def _run_account(self, profile: AccountProfile, execute: bool, claims: FleetClaims) -> AccountRun:
@@ -244,7 +284,7 @@ class FleetOrchestrator:
             return self._finish(profile, started, "error", error_reason(error))
         if refusal is not None:
             return self._finish(profile, started, "error", refusal)
-        return self._run_scheduler(profile, context, execute, started)
+        return self._run_scheduler(profile, context, execute, started, claims)
 
     def run(self, *, execute: bool = False) -> FleetRun:
         started_at = self.clock()

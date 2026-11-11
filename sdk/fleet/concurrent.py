@@ -129,7 +129,7 @@ class ConcurrentFleetOrchestrator(FleetOrchestrator):
             return lambda: setattr(account, "snapshot", snapshot)
 
         def schedule_step(account: _Account) -> Callable[[], None]:
-            run = self._run_scheduler(account.profile, account.context, execute, account.started)
+            run = self._run_scheduler(account.profile, account.context, execute, account.started, claims)
             return lambda: setattr(account, "result", run)
 
         ready: list[tuple[int, int, Callable]] = []  # (alias index, sequence, step)

@@ -4,7 +4,7 @@
 
 ## Contract
 
-- **Identity.** Every snapshot carries an `account_alias`, a lowercase label such as `alpha` (`^[a-z0-9][a-z0-9_-]{0,63}$`). E-mail addresses and display names are refused. `diff_snapshots` raises `AccountMismatchError` for two different aliases, so one account's state can never be credited to another.
+- **Identity.** Every snapshot carries an `account_alias`, a lowercase label such as `alpha` (`^[a-z0-9][a-z0-9_-]{0,63}$`). E-mail addresses and display names are refused. `diff_snapshots` raises `AccountMismatchError` for two different aliases, so one account's state can never be credited to another. A snapshot may also carry a [game identity](#game-identity) fingerprint of the logged-in game account.
 - **Provenance.** `observed_at` must be timezone-aware. `source` names where the data came from, and `game_version` records the client version when known.
 - **Completeness.** Each section (`profile`, `ship`, `resources`, `crew`, `rooms`, `research`, `inventory`) is `complete`, `partial` or `missing`:
   - a section that was not supplied is `missing`, and its values are `None` or empty;
@@ -32,6 +32,7 @@
 | `research` | `Research/@ResearchDesignId`, `@ResearchState` |
 | `inventory` | `@ItemDesignId`, `@Quantity` |
 | `resources` | `minerals`, `gas`, `starbux`, supplied by the caller from `Client` totals |
+| `game_identity` | Keyed fingerprint of `client.user.id`, computed by the live provider; never the raw id |
 
 These attribute names come from existing client code and mocked tests. Whether they match the current live server has not been checked.
 
@@ -44,3 +45,12 @@ These attribute names come from existing client code and mocked tests. Whether t
 - Minerals and gas come only from inventory items whose `@ItemType`/`@Type` names them, with exactly one match each. Unlike `collectAllResources`, there is no fallback to item position.
 - Starbux and trophies are not reported, so the `profile` section stays `missing`. The client only holds those values from login, and reporting them would mislabel stale data with the current observation time.
 - A copied value that looks like a secret still raises `SnapshotInputError`. Refusing outright is deliberate.
+
+## Game identity
+
+`AccountSnapshot.game_identity` is an optional fingerprint of the game user id the client is logged in as. The alias is only a label the caller stamps on the snapshot, so the fingerprint is what lets the [fleet orchestrator](fleet-accounts.md#game-identity) tell whether the credentials logged in to the intended game account.
+
+- **Field.** `None` means unknown. Snapshots built without it, including every snapshot from before it existed, have `None` and still work. `to_dict()` includes `game_identity`. `build_snapshot(..., game_identity=...)` accepts only `None` or a well-formed fingerprint, so a raw user id is refused with `SnapshotInputError`.
+- **Format.** `game_identity_fingerprint(user_id, salt)` returns `gid1-` plus the first 32 hex characters (128 bits) of HMAC-SHA256 keyed with `salt`, over a fixed domain prefix and the canonical decimal id. The id must be a positive decimal integer; `None`, `0`, an empty or non-numeric id raises `SnapshotInputError`. The salt must be at least 16 bytes. Error text never repeats the id or the salt.
+- **Provider salt.** `ClientSnapshotProvider(client, alias, identity_salt=...)` fingerprints `client.user.id`, the id `Client` stores at login and uses for `getShipByUserId`. Computing it makes no extra call. Without a salt, or when the id is unknown, `game_identity` is `None`. A salt shorter than 16 bytes fails when the provider is built. The caller supplies the salt and must keep it secret: game ids are small integers, so anyone holding the salt could confirm a guessed id.
+- **Raw id.** The raw id is read inside the provider only. It is never stored on the provider or the snapshot, and never written to snapshot dicts, journals or error text.
