@@ -1472,6 +1472,81 @@
         "make test",
         "git diff --check"
       ]
+    },
+    {
+      "slice_id": "spec05-execute-command",
+      "title": "SPEC-05: authorized live execute command (built and tested offline)",
+      "status": "queued",
+      "priority": 392,
+      "domain": "safety",
+      "allowed_paths": [
+        "run.py",
+        "sdk/fleet/factory.py",
+        "tests/test_fleet_execute.py",
+        "README.template",
+        "README.md",
+        "docs/baseline/capability-inventory.json",
+        "docs/baseline/fleet-accounts.md"
+      ],
+      "depends_on": [
+        "spec-authorization-extensions",
+        "spec01-traceability-check",
+        "spec02-credential-safety",
+        "spec05-authorization"
+      ],
+      "max_files_changed": 8,
+      "notes": "Implements S05-R1, R3-R10 (R2 landed in #162). See docs/specs/SPEC-05-live-execution-gate.md. run.py --fleet-execute --registry --authorization --mode canary|full, the only path calling run(execute=True); refuses before any login without a valid authorization (sdk.fleet.authorization.check_authorization); fresh dry run required; canary; stop conditions; no starbux; mandatory identity; run record; reuse --fleet-dry-run scrubbing. Fakes only; never run against a real account.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
+    },
+    {
+      "slice_id": "spec-authorization-extensions",
+      "title": "SPEC-06/08/09: legacy-run fencing, battle cap and market caps in the authorization",
+      "status": "queued",
+      "priority": 391,
+      "domain": "safety",
+      "allowed_paths": [
+        "sdk/fleet/accounts.py",
+        "sdk/fleet/authorization.py",
+        "tests/test_fleet_authorization.py",
+        "tests/test_fleet_accounts.py"
+      ],
+      "depends_on": [
+        "spec05-authorization"
+      ],
+      "max_files_changed": 4,
+      "notes": "Implements S06-R2, S08-R2, S09-R4. See SPEC-06, SPEC-08, SPEC-09. AccountProfile.legacy_run_account (optional int); authorization fields legacy_run_skipped, battle cap per window, market item design ids and per-trade/per-window value caps; check_authorization refuses accordingly.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
+    },
+    {
+      "slice_id": "spec08-pvp-report",
+      "title": "SPEC-08: PvP trial report",
+      "status": "queued",
+      "priority": 393,
+      "domain": "observability",
+      "allowed_paths": [
+        "scripts/trial_report.py",
+        "sdk/reports/pvp.py",
+        "tests/test_trial_report_pvp.py"
+      ],
+      "depends_on": [
+        "spec07-trial-report",
+        "spec08-application-log"
+      ],
+      "max_files_changed": 3,
+      "notes": "Implements S08-R3-R6. See docs/specs/SPEC-08-pvp-trial.md. Extend scripts/trial_report.py with --pvp: known vs unknown outcomes (S03-R5 rule), stratified compare_strategies with the study minimum sample, insufficient-evidence on short samples, defense results from battle history separately, adoption-log attribution (sdk.pvp.strategies TrialRecord), report fields.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
     }
   ]
 }
