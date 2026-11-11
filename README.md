@@ -86,6 +86,23 @@ python run.py --fleet-dry-run --registry fleet.json --concurrent 2 --identity-sa
 - Hull designs come from the read-only `listAllDesigns4` call. The game server has deprecated it, so hull designs usually stay empty (only `hull-reserve-v1` reads them), and the accounts table says so.
 - A missing or invalid registry, an unset or too short salt, or a journal directory that cannot be created prints an error and exits with code 2. Otherwise the command exits with 0, even when some accounts ended with `error`. `--fleet-dry-run` refuses the single-account login, SMTP, battle, progression and report flags.
 
+### Account baselines
+
+`--baseline` records the starting state of every enabled account in an account registry ([SPEC-04](docs/specs/SPEC-04-account-baselines.md)): it logs each account in as `--fleet-dry-run` does, takes one snapshot with the snapshot provider's three read-only calls, writes one baseline file per alias, prints a summary, and exits. It reads no design data, plans nothing and has no execute path: nothing in any account changes.
+
+```bash
+python run.py --baseline --registry fleet.json --output baselines/
+python run.py --baseline --registry fleet.json --output baselines/ --concurrent 2 \
+  --identity-salt-env TACHIKOMA_FLEET_SALT --baseline-summary docs/experiments/baselines/README.md
+```
+
+- **Files.** Each account's snapshot is written to `--output DIR` as `<alias>-<UTC time>.json` in the [baseline format](docs/baseline/account-snapshot.md#baseline-files); unobserved values are `null`. A file that already exists for the same alias and UTC second is never overwritten: that account ends with `error` and the file is left as it was. Baseline files are kept private by default (SPEC-04, S04-Q2); only the summary table is meant to be committed.
+- **Game version.** `game_version` is the version in the server's latest-version setting, the `GetLatestVersion3` reply that login already reads, never the `ClientVersion` this build declares. Which attribute of that setting carries the version has not been checked against the live server; when none of the expected ones is present, `game_version` is `null`.
+- **Accounts never mix.** With `--identity-salt-env NAME`, each file carries the game identity fingerprint, and an account whose fingerprint differs from its `expected_game_identity` or was already observed for another alias is `refused` and not written.
+- **Output.** An accounts table (status `written`, `error`, `refused` or `disabled`, the file name, the game version and the reason or notes), then a summary table of every baseline file in `--output`: alias, observation time (UTC), game version, hull bracket (as in the PvP cohorts) and the sections that were not observed. A file there that is not a valid baseline is listed by name with the reason. `--baseline-summary PATH` also writes that table to `PATH`, after the secret scan.
+- **Secrets.** The dry run's scrubbing applies to the log and to every printed reason, and each file passes the baseline secret scan before it is written.
+- A missing or invalid registry, an unset or too short salt, or an output directory that cannot be created prints an error and exits with code 2. Otherwise the exit code is 0 when every enabled account was written, and 1 when any was not. `--concurrent N` works as in the dry run. `--baseline` refuses the other fleet, report, single-account login, battle, progression and SMTP flags, and `--fleet-journal-dir` (it writes no journal).
+
 ### Fleet execute
 
 `--fleet-execute` is the only command that changes an account ([SPEC-05](docs/specs/SPEC-05-live-execution-gate.md)). It runs the plan of every enabled registry account under an owner-written authorization file (format in [docs/baseline/fleet-accounts.md](docs/baseline/fleet-accounts.md#live-execution-authorization)), then prints the reconciliation and writes a run record. Never point it at an account the authorization does not name.
