@@ -13,8 +13,8 @@
 
 ## Rules
 
-- **Outcome.** A battle is `win` or `loss` only if the event reconciled as `verified`, with evidence tier `outcome-observed` and a non-zero observed trophy change. Every other battle is `unknown`, including one where the evidence is inconsistent.
-- **Strategy.** It comes from the experiment window covering the battle's start time. A battle outside every window gets `battle_strategy` `unknown` and no strategy key.
+- **Outcome.** A battle is `win` or `loss` only if the event reconciled as `verified`, with evidence tier `outcome-observed`, a non-zero observed trophy change, and no `error_class`. Every other battle is `unknown`, including one where the evidence is inconsistent or the call raised. A trophy change without a `finalised` step in the same call (see [battle evidence](action-catalog.md#battle-evidence-tiers)) is never journaled as `verified`, so it stays `unknown`.
+- **Strategy.** It comes from the experiment window covering the battle's start time, converted to UTC first, so journal times with any offset work. A battle outside every window gets `battle_strategy` `unknown` and no strategy key.
 - **Not battles.** Skipped events, dry-run events and other actions are ignored.
 - **Battle id.** The evidence `battle_id` when one was created, otherwise `attempt-<attempt id>`.
 - **Cohorts.** Hull brackets are 1-4, 5-7, 8-10, 11-13 and 14-20; trophy brackets are 500 wide. No journaled event records opponent facts yet, so every cohort is `unknown` today.
