@@ -894,6 +894,7 @@
       "kind": "read-only",
       "evidence": "mocked-test",
       "tests": [
+        "tests/test_post_run_alerts.py",
         "tests/test_runtime_guards.py"
       ]
     },
@@ -903,6 +904,7 @@
       "kind": "read-only",
       "evidence": "mocked-test",
       "tests": [
+        "tests/test_post_run_alerts.py",
         "tests/test_runtime_guards.py"
       ]
     },
@@ -910,8 +912,10 @@
       "flag": "--recipient",
       "pillar": "platform",
       "kind": "read-only",
-      "evidence": "untested",
-      "tests": []
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_post_run_alerts.py"
+      ]
     },
     {
       "flag": "--password-file",
@@ -1049,7 +1053,8 @@
       "kind": "mutating",
       "evidence": "mocked-test",
       "tests": [
-        "tests/test_fleet_execute.py"
+        "tests/test_fleet_execute.py",
+        "tests/test_post_run_alerts.py"
       ]
     },
     {
@@ -1086,6 +1091,15 @@
       "evidence": "mocked-test",
       "tests": [
         "tests/test_fleet_execute.py"
+      ]
+    },
+    {
+      "flag": "--dashboard-out",
+      "pillar": "E",
+      "kind": "read-only",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_post_run_alerts.py"
       ]
     }
   ]
