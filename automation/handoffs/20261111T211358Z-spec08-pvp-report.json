@@ -1,0 +1,45 @@
+{
+  "slice_id": "spec08-pvp-report",
+  "status": "done",
+  "summary": "Study C needs an exit report that compares two strategies on attack win rate without ever counting an unverified battle. trial_report.py gains a --pvp mode next to the SPEC-07 progression report (unchanged):  - Battles are credited through TrialRecord.attribution_at (adoption log   plus windows); battles outside a recorded application have no strategy. - An attack outcome is known only when its journal event verified at tier   outcome-observed with no error, or a battle-history attacker record with   its battle id exists (S03-R5). A history record that contradicts a known   journal outcome makes it unknown. Unknown outcomes are counted (R3). - compare_strategies runs with per_arm_min_sample from sdk.experiments.study   when the plan gives an effect size, else the plan's min_sample; it is   stratified by opponent cohort whenever one was observed, and short   samples give insufficient-evidence with no recommendation (R4). - Defenses come only from battle-history defender records and are reported   in their own section; they never drive the recommendation (R5). - The report carries the game version, per-strategy counts, Wilson   intervals, net trophies, resource cost, the verdict and recommendation,   and limitations including approximate timing for by-hand adoptions (R6).  The battle-history input is a documented, provisional JSON list format until the SPEC-03 listPvPBattles2 parser exists. sdk/reports/pvp.py exposes cohort_label and observed_spend so the report reuses the scorecard's logic. Implemented by the SPEC-08 builder specialist subagent in an isolated worktree, independently reviewed by the verifier subagent (APPROVE), and re-validated by the parent.",
+  "files_touched": [
+    "scripts/trial_report.py",
+    "sdk/reports/pvp.py",
+    "tests/test_trial_report_pvp.py"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "SPEC-08: PvP trial report",
+      "before": "Roadmap item not implemented",
+      "after": "SPEC-08: PvP trial report (offline)",
+      "proof": [
+        "make syntax-check, make test, scripts/ci.py lint and git diff --check pass on current main",
+        "verifier verdict: APPROVE"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "Offline only; no live game verification."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-11T21:14:13Z"
+}
