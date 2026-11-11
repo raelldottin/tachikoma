@@ -57,7 +57,7 @@ These attribute names come from existing client code and mocked tests. Whether t
 
 ## Baseline files
 
-`sdk/state/baseline.py` stores one snapshot as a sanitized JSON file, the per-ship baseline of [SPEC-04](../specs/SPEC-04-account-baselines.md). It makes no network calls. The command that takes the snapshots and the summary table are separate slices.
+`sdk/state/baseline.py` stores one snapshot as a sanitized JSON file, the per-ship baseline of [SPEC-04](../specs/SPEC-04-account-baselines.md). It makes no network calls. `run.py --baseline` (below) takes the snapshots and writes the files and the summary table.
 
 - **Write.** `write_baseline(snapshot, directory, game_version)` writes `<alias>-<YYYYMMDDTHHMMSSZ>.json` (UTC, to the second) and returns the path. `game_version` is the version the observation was made on; SPEC-04 says it must come from the server's latest-version setting. `None` means it was not observed.
 - **No overwrite.** The file is created exclusively. If a file with that name already exists, whoever wrote it, `BaselineExistsError` is raised and the file is left untouched. Two snapshots of one alias in the same UTC second count as the same time.
@@ -96,3 +96,12 @@ A list section is `null` exactly when its completeness is `missing`. An observed
 - a numeric id in a field named `Id` or ending in `UserId`, as an XML attribute (`UserId="…"`) or a JSON key (`"user_id": …`). Gameplay ids such as `room_id` or `@RoomDesignId` do not match, and an id of `0` does not count.
 
 A `.json` file is also decoded and each string scanned, because JSON escaping would otherwise hide a pattern such as `"DeviceKey":"…"` inside a value. A file that is not UTF-8 text is reported rather than skipped.
+
+### Baseline command
+
+`run.py --baseline --registry PATH --output DIR` writes one baseline per enabled registry account (SPEC-04, S04-R1, S04-R3, S04-R6). Usage is in the [README](../../README.md#account-baselines).
+
+- **Read-only.** `EnvironmentAccountFactory.open_baseline(profile)` in `sdk/fleet/factory.py` logs the account in with the same credential handling and `LogScrubber` as `--fleet-dry-run`, reads no design data, opens no journal, and calls the provider once: its three read-only calls and nothing else. No orchestrator, policy, scheduler or action runner is built, so there is no execute path. A test fails if any mutating or session method other than `login` is looked up.
+- **Game version.** `server_game_version(client)` reads the `Setting` record of `client.latestVersion`, which `Client.login` fills from `SettingService/GetLatestVersion3`, the same record the design version reads use. It makes no call and returns the first of `@LatestVersion`, `@LatestClientVersion` and `@LatestVersionIOS` that looks like a version (`0.999.60`), else `None`. These attribute names are not verified live. `@MinimumClientVersion` (the oldest version the server accepts) is deliberately not used, and neither is the `ClientVersion` the client declares at login. The command gives the provider no version, so `client_version` is `null`.
+- **Isolation.** Snapshots are claimed in alias order with `FleetClaims`, as in the fleet orchestrators: an identity that differs from the profile's `expected_game_identity`, or was already accepted for another alias in the same run, is refused and nothing is written for that alias.
+- **Summary.** The summary table lists every `.json` file in the output directory that loads as a baseline, ordered by alias and time: alias, observation time, game version, `hull_bracket` of the hull level (`sdk/reports/battles.py`), and the sections whose completeness is `missing`. Files that do not load are listed with the reason, which never repeats a refused value.

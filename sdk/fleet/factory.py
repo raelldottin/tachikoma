@@ -61,6 +61,13 @@ only the first safe-to-retry one), budgets are the tighter of the registry's
 and the authorization's caps with starbux at 0, ``GatedActionRunner`` refuses
 an action outside the authorization or one whose cap would be exceeded, and
 the fleet halts when more than ``halt_share`` of its accounts stopped.
+
+Baselines (SPEC-04, S04-R1 and S04-R3). ``EnvironmentAccountFactory.open_baseline``
+logs one account in the same way, reads no design data, takes one snapshot
+with the provider's read-only calls and returns it with
+``server_game_version``: the version in the server's latest-version setting
+(``GetLatestVersion3``, which ``Client.login`` reads into ``latestVersion``),
+never the client's declared ``ClientVersion``. ``run.py --baseline`` writes it.
 """
 
 from __future__ import annotations
@@ -430,24 +437,45 @@ class EnvironmentAccountFactory:
             raise LoginError("login failed")
         return client
 
-    def __call__(self, profile: AccountProfile) -> AccountContext:
+    def _open(self, profile: AccountProfile, read_designs: bool,
+              clock: Optional[Callable[[], datetime]] = None) -> tuple[Any, ClientSnapshotProvider, Any]:
+        """Log ``profile`` in; return its client, snapshot provider and (if read) design data."""
         credentials = resolve_credentials(profile.credentials_secret, self.environ)
         if self.log_scrubber is not None:
             self.log_scrubber.add_secrets(credentials.values())
         if credentials.email:
             self._note(profile.alias, [EMAIL_FORM_NOTE])
+        design, notes = None, ()
         try:
             client = self._login(credentials)
-            design, notes = read_design_data(client)
+            if read_designs:
+                design, notes = read_design_data(client)
         except LoginError:
             raise
         except Exception as error:  # never let a credential value reach the AccountRun reason
             raise AccountOpenError(
                 f"{type(error).__name__}: {scrub(str(error), credentials.values())}") from None
         self._note(profile.alias, notes)
+        options = {"clock": clock} if clock is not None else {}
         provider = ClientSnapshotProvider(client, profile.alias, source=self.source,
-                                          identity_salt=self._identity_salt)
+                                          identity_salt=self._identity_salt, **options)
+        return client, provider, design
+
+    def __call__(self, profile: AccountProfile) -> AccountContext:
+        client, provider, design = self._open(profile, read_designs=True)
         return AccountContext(client, provider, self._journal(profile), design)
+
+    def open_baseline(self, profile: AccountProfile,
+                      clock: Optional[Callable[[], datetime]] = None) -> "BaselineObservation":
+        """Log ``profile`` in and take one snapshot with read-only calls (SPEC-04, S04-R1).
+
+        Reads no design data and opens no journal. The game version comes from
+        ``server_game_version`` (S04-R3). Errors are raised as for ``__call__``;
+        reads that returned no data are listed in ``failed_reads``.
+        """
+        client, provider, _ = self._open(profile, read_designs=False, clock=clock)
+        snapshot = provider()
+        return BaselineObservation(snapshot, server_game_version(client), provider.failed_reads)
 
     def _journal(self, profile: AccountProfile) -> GameplayJournal:
         path = self.journal_path(profile.alias)
@@ -467,6 +495,47 @@ class EnvironmentAccountFactory:
             journals = dict(self._dry_run_journals)
         for alias, journal in sorted(journals.items()):
             journal.commit(completed=statuses.get(alias) == "completed")
+
+
+# --- Baselines (SPEC-04, S04-R1 and S04-R3) -----------------------------------------------------
+
+# Attributes of the ``GetLatestVersion3`` ``Setting`` record that may name the current game version, in
+# the order they are tried. They are not verified against the live server (SPEC-04 open risk): when none
+# is present the version is unobserved (``None``). ``MinimumClientVersion`` is deliberately not one of
+# them: the oldest version the server accepts is not the version the observation was made on.
+SERVER_VERSION_ATTRIBUTES = ("@LatestVersion", "@LatestClientVersion", "@LatestVersionIOS")
+# A version string such as ``0.999.60``; anything else from the server is not recorded.
+GAME_VERSION_PATTERN = re.compile(r"^[0-9]+(?:\.[0-9]+){1,3}[A-Za-z0-9]{0,4}$")
+
+
+@dataclass(frozen=True)
+class BaselineObservation:
+    """One account's baseline snapshot and the server's game version (``None`` when not observed)."""
+
+    snapshot: AccountSnapshot
+    game_version: Optional[str]
+    failed_reads: tuple[str, ...] = ()
+
+
+def server_game_version(client: Any) -> Optional[str]:
+    """The game version in the server's latest-version setting the client already read, or ``None``.
+
+    ``Client.login`` calls ``getLatestVersion3`` (``SettingService/GetLatestVersion3``, read-only) and
+    stores the parsed reply in ``client.latestVersion``; its ``SettingService/GetLatestSetting/Setting``
+    record is the one ``listRoomDesigns2`` and ``listAllDesigns4`` take their design versions from. The
+    first ``SERVER_VERSION_ATTRIBUTES`` value that looks like a version is returned. This makes no call,
+    and never falls back to the ``ClientVersion`` the client declares at login.
+    """
+    setting = getattr(client, "latestVersion", None)
+    for key in ("SettingService", "GetLatestSetting", "Setting"):
+        setting = setting.get(key) if isinstance(setting, Mapping) else None
+    if not isinstance(setting, Mapping):
+        return None
+    for attribute in SERVER_VERSION_ATTRIBUTES:
+        value = setting.get(attribute)
+        if isinstance(value, str) and GAME_VERSION_PATTERN.match(value.strip()):
+            return value.strip()
+    return None
 
 
 # --- Dry-run plan stamps (SPEC-05, S05-R3) ------------------------------------------------------
