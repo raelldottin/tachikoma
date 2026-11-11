@@ -1625,7 +1625,7 @@
     {
       "slice_id": "spec12-study-aggregate",
       "title": "SPEC-12: study report aggregate",
-      "status": "queued",
+      "status": "done",
       "priority": 397,
       "domain": "observability",
       "allowed_paths": [
