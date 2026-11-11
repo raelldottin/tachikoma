@@ -1259,7 +1259,7 @@
     {
       "slice_id": "bazel-migration-roadmap-docs",
       "title": "Bazel migration roadmap (researched, planned and QA-reviewed)",
-      "status": "queued",
+      "status": "done",
       "priority": 381,
       "domain": "docs",
       "allowed_paths": [

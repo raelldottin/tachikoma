@@ -1,0 +1,777 @@
+[
+  {
+    "slice_id": "b0-make-hermetic-local",
+    "title": "Run local tests from a temporary CWD and make make lint mirror CI",
+    "status": "queued",
+    "priority": 400,
+    "domain": "tests",
+    "allowed_paths": [
+      "Makefile",
+      "tests/test_pvp_sanitized_inputs.py",
+      "tests/test_build_hygiene.py",
+      "docs/workflows/tachikoma-automation.md",
+      ".github/ruff-baseline.json"
+    ],
+    "required_validations": [
+      "make syntax-check",
+      "make test",
+      "make test-security",
+      "make lint",
+      "make automation-check",
+      "git diff --check"
+    ],
+    "depends_on": [
+      "bazel-migration-roadmap-docs"
+    ],
+    "max_files_changed": 6,
+    "notes": "Makefile: PYTHON is \"$(CURDIR)/.venv/bin/python\" when that file is executable, else `command -v python3` (never wrap the fallback in $(abspath)). A Python >= 3.11 guard runs only in test, test-security and lint. test runs `$(PYTHON) \"$(CURDIR)/scripts/ci.py\" test` from `mktemp -d`, removed by `trap` on exit; test-security adds `--names tests.test_security`. lint: ruff version must equal the pin in .github/requirements-ci.txt, then `$(PYTHON) scripts/ci.py lint`, `$(PYTHON) -m ruff format --check scripts/ci.py tests/test_ci.py`, `-uv run --frozen --no-sync ty check --exit-zero run.py sdk tests`. automation-check is unchanged. tests/test_pvp_sanitized_inputs.py:114-117 reads its 4 sdk files relative to os.path.abspath(__file__). New tests/test_build_hygiene.py (checkout-level; never a Bazel target): `make -n -C <root> test` from a temp CWD shows an absolute interpreter, mktemp -d and scripts/ci.py test; `make -n lint` shows scripts/ci.py lint and ruff format --check; the 8 contract targets exist; tests.test_pvp_sanitized_inputs passes from a temp CWD. Fix the stale Python 3.9 and hourly-run.yml notes in docs/workflows/tachikoma-automation.md. Record `uv pip freeze` and `git status` before and after make lint. Until this merges, never run tests from the repo root. Plan: docs/BAZEL_MIGRATION_ROADMAP.md."
+  },
+  {
+    "slice_id": "b0-ci-root-and-runner",
+    "title": "Make scripts/ci.py runfiles-safe and run every suite in a temporary CWD",
+    "status": "queued",
+    "priority": 410,
+    "domain": "tests",
+    "allowed_paths": [
+      "scripts/ci.py",
+      "tests/test_ci.py",
+      "tests/__init__.py",
+      ".github/ruff-baseline.json"
+    ],
+    "required_validations": [
+      "make syntax-check",
+      "make test",
+      "make lint",
+      "git diff --check",
+      "manual V-REL release parity",
+      "manual owner dispatch of postmerge-ci.yml on the branch is green"
+    ],
+    "depends_on": [
+      "b0-make-hermetic-local"
+    ],
+    "max_files_changed": 5,
+    "notes": "scripts/ci.py: ROOT = Path(os.path.abspath(__file__)).parent.parent. run_tests(names, require_tests=False, verbosity=1) changes into a fresh tempfile.TemporaryDirectory(ignore_cleanup_errors=True) before loading tests (unless the CWD is already $TEST_TMPDIR) and restores the CWD in a finally block; with require_tests it fails when 0 tests ran. `ci.py test --verbose` sets verbosity 2. Do not touch release_identity, release_includes, build_release, VERSION_RE or the RELEASE_* constants. tests/test_ci.py:93 passes PYTHONPATH=ci.ROOT (joined with any existing value by os.pathsep) to its child; tests/test_ci.py:107 uses os.path.abspath. tests/__init__.py raises a clear error when the CWD is the repo root and ./.device exists (protects direct `python -m unittest tests.x` runs). Regression tests, portable (no symlinks): ROOT equals the abspath-derived root; require_tests fails on an empty suite and the default does not; --verbose prints test ids; a child with PYTHONSAFEPATH=1 still imports scripts.ci; `ci.py test --names tests.test_battle_flow` (it constructs Device()) started in a directory holding a sentinel .device leaves that file byte-identical with the same mtime. The owner dispatches postmerge-ci.yml on the branch (Windows and Python 3.11). Plan: docs/BAZEL_MIGRATION_ROADMAP.md."
+  },
+  {
+    "slice_id": "b0-bazel-ignore-hygiene",
+    "title": "Ignore Bazel outputs and personal rc files before any Bazel command runs",
+    "status": "queued",
+    "priority": 420,
+    "domain": "build",
+    "allowed_paths": [
+      ".gitignore",
+      "tests/test_build_hygiene.py"
+    ],
+    "required_validations": [
+      "make syntax-check",
+      "make test",
+      "make lint",
+      "git diff --check"
+    ],
+    "depends_on": [
+      "b0-ci-root-and-runner"
+    ],
+    "max_files_changed": 4,
+    "notes": "Add /bazel-* to .gitignore (not .bazelrc.user: personal Bazel flags belong in ~/.bazelrc, so a stray .bazelrc.user stays visible as untracked dirt). Extend tests/test_build_hygiene.py: bazel-bin is ignored; git check-ignore -q succeeds for .device, config.secrets, passwords.txt, .profiles/x, tachikoma.log, x.har and x.pcap; git ls-files contains none of tools/bazel, tools/bazel.*, .bazeliskrc or .bazelrc.user (each would change which binary or flags run). Plan: docs/BAZEL_MIGRATION_ROADMAP.md."
+  },
+  {
+    "slice_id": "b0-test-repo-root-a",
+    "title": "Stop six test modules from resolving __file__ out of the runfiles tree",
+    "status": "queued",
+    "priority": 430,
+    "domain": "tests",
+    "allowed_paths": [
+      "tests/test_action_catalog.py",
+      "tests/test_capability_inventory.py",
+      "tests/test_client_snapshot_provider.py",
+      "tests/test_compat_ledger.py",
+      "tests/test_progression_dry_run.py",
+      "tests/test_fleet_dry_run.py",
+      ".github/ruff-baseline.json"
+    ],
+    "required_validations": [
+      "make syntax-check",
+      "make test",
+      "make lint",
+      "git diff --check"
+    ],
+    "depends_on": [
+      "b0-bazel-ignore-hygiene"
+    ],
+    "max_files_changed": 8,
+    "notes": "In the six modules replace Path(__file__).resolve().parents[1] with Path(os.path.abspath(__file__)).parents[1]. No assertion changes. The regression test is the AST guard added by b0-test-repo-root-b. Plan: docs/BAZEL_MIGRATION_ROADMAP.md."
+  },
+  {
+    "slice_id": "b0-test-repo-root-b",
+    "title": "Fix the last resolve() escapes in tests and add the AST guard",
+    "status": "queued",
+    "priority": 440,
+    "domain": "tests",
+    "allowed_paths": [
+      "tests/test_pvp_safety.py",
+      "tests/test_tui.py",
+      "tests/test_ci.py",
+      ".github/ruff-baseline.json"
+    ],
+    "required_validations": [
+      "make syntax-check",
+      "make test",
+      "make lint",
+      "git diff --check",
+      "manual owner dispatch of postmerge-ci.yml on the branch is green"
+    ],
+    "depends_on": [
+      "b0-test-repo-root-a"
+    ],
+    "max_files_changed": 5,
+    "notes": "Same fix at tests/test_pvp_safety.py:14 and tests/test_tui.py:11; tests/test_pvp_safety.py:160 joins PYTHONPATH with os.pathsep. Add to TestIsolationTests in tests/test_ci.py an AST guard (ast.Call nodes only, so the string literal at test_ci.py:395 passes) that forbids Path(__file__).resolve() and os.path.realpath(__file__) in tests/**/*.py and in an explicit file list that starts as [scripts/ci.py]; a listed file that is missing fails the guard. Record sdk/simulation/game.py:43 in the test as the one known runtime exception. The owner dispatches postmerge-ci.yml on the branch. Plan: docs/BAZEL_MIGRATION_ROADMAP.md."
+  },
+  {
+    "slice_id": "b0-strict-skip-mode",
+    "title": "Turn dependency skips into failures under TACHIKOMA_STRICT_DEPS=1",
+    "status": "queued",
+    "priority": 450,
+    "domain": "tests",
+    "allowed_paths": [
+      "tests/test_ci.py",
+      "tests/test_pvp_safety.py",
+      "tests/test_build_hygiene.py",
+      "tests/test_strict_mode.py",
+      ".github/ruff-baseline.json"
+    ],
+    "required_validations": [
+      "make syntax-check",
+      "make test",
+      "make lint",
+      "git diff --check",
+      "manual owner dispatch of postmerge-ci.yml on the branch is green"
+    ],
+    "depends_on": [
+      "b0-test-repo-root-b"
+    ],
+    "max_files_changed": 6,
+    "notes": "With TACHIKOMA_STRICT_DEPS=1 these fail instead of skipping: missing yaml (test_ci.py:159), missing git binary (test_ci.py:277 and 387), a missing pvp shim (test_pvp_safety.py:36), and missing make or git in tests/test_build_hygiene.py. test_ci.py:566 (RepositoryReleaseSelectionTests) stays a skip when only .git is missing. Unset, behaviour is unchanged. tests/test_strict_mode.py simulates each case with patch. The owner dispatches postmerge-ci.yml on the branch. Plan: docs/BAZEL_MIGRATION_ROADMAP.md."
+  },
+  {
+    "slice_id": "b0-dependency-lock",
+    "title": "Declare runtime and CI dependencies once and lock them with hashes",
+    "status": "blocked",
+    "priority": 460,
+    "domain": "build",
+    "allowed_paths": [
+      "pyproject.toml",
+      "uv.lock",
+      "requirements_lock.txt",
+      "tests/test_dependency_locks.py",
+      "docs/RELEASE.md"
+    ],
+    "required_validations": [
+      "make syntax-check",
+      "make test",
+      "make lint",
+      "git diff --check",
+      "uv lock --check"
+    ],
+    "depends_on": [
+      "b0-strict-skip-mode"
+    ],
+    "max_files_changed": 7,
+    "notes": "pyproject.toml [project]: name \"tachikoma\", version \"0.0.0\" (not the release version), requires-python \">=3.11\", dependencies = the 7 runtime pins of requirements.txt; [dependency-groups] ci = [\"ruff==0.15.5\", \"PyYAML==6.0.3\"]; [tool.uv] required-version = \">=0.13.7,<0.14\"; [tool.ruff] keeps target-version py311; no [build-system]. Run `uv lock`, then `uv export --frozen --group ci --no-emit-project --no-annotate --no-header --format requirements-txt -o requirements_lock.txt`. tests/test_dependency_locks.py (tomllib, offline) asserts: uv.lock has packages and requires-python >=3.11; the only non-registry package is the root tachikoma with source virtual \".\"; every other source is registry https://pypi.org/simple; the lock's name==version set equals the default+ci resolution; per-package sha256 sets equal uv.lock wheel+sdist hashes; every non-comment line is a requirement or a --hash continuation; every package except the allowlist {ratelimit} has a wheel; pyproject runtime pins equal the == pins in requirements.txt. requirements.txt and .github/requirements-ci.txt stay unchanged. Mention the lock files in docs/RELEASE.md. Plan: docs/BAZEL_MIGRATION_ROADMAP.md.",
+    "entry_condition": "On or after 2026-11-17, when uv 0.13.7 (released 2026-11-03) is 14 days old. The owner then sets status to queued in a chore(queue) PR."
+  },
+  {
+    "slice_id": "b1-spike-findings",
+    "title": "Run the Bazel spike and record its answers in the roadmap",
+    "status": "blocked",
+    "priority": 500,
+    "domain": "build",
+    "allowed_paths": [
+      "docs/BAZEL_MIGRATION_ROADMAP.md",
+      "docs/BAZEL_MIGRATION_DESIGN_NOTES.md"
+    ],
+    "required_validations": [
+      "manual owner-run slice: an agent must stop without changes",
+      "make syntax-check",
+      "make test",
+      "make lint",
+      "git diff --check"
+    ],
+    "depends_on": [
+      "b0-dependency-lock"
+    ],
+    "max_files_changed": 3,
+    "notes": "AGENT: do not execute this slice; stop and report. Owner-run. Work in a scratch clone outside the repository, never in a worktree of it. Answer the spike items listed in the roadmap's Spike section and record each answer: facts and evidence in the design notes, any resulting plan change (target .bazelrc, MODULE.bazel, macro) in the roadmap. Item 10 (how the pip hub fetches and builds the ratelimit sdist) is answered from rules_python 2.4.6 source first; any empirical sdist build runs only in a disposable container (docker run --rm, only the scratch clone mounted) or with a throwaway HOME, never in an agent session on the host. Check both docs with git diff --check. If an answer changes a slice, the owner updates that queue entry in a chore(queue) PR. Before merge, run the owner scope check from the roadmap's section 3 and paste its output in the PR body; when marking the slice done, add its handoff file in the same chore(queue) PR. Plan: docs/BAZEL_MIGRATION_ROADMAP.md.",
+    "entry_condition": "Owner answered Q-8 and Q-9 (Bazelisk 1.30.0 installed, `uv python install 3.11` done) and will run this slice personally, because the spike fetches and runs repository rules. Never set to queued: the owner does the work on a branch, merges it, then sets status done in a chore(queue) PR."
+  },
+  {
+    "slice_id": "b1-bazel-bootstrap",
+    "title": "Add the pinned, inert Bazel module and rc files",
+    "status": "blocked",
+    "priority": 510,
+    "domain": "build",
+    "allowed_paths": [
+      ".bazelversion",
+      "MODULE.bazel",
+      "MODULE.bazel.lock",
+      ".bazelrc",
+      ".bazelignore",
+      "BUILD.bazel",
+      "tests/test_build_hygiene.py"
+    ],
+    "required_validations": [
+      "manual owner-run slice: an agent must stop without changes",
+      "make syntax-check",
+      "make test",
+      "make lint",
+      "git diff --check",
+      "bazel build //...",
+      "manual owner rerun of the Bazel validations"
+    ],
+    "depends_on": [
+      "b1-spike-findings"
+    ],
+    "max_files_changed": 8,
+    "notes": "AGENT: do not execute this slice; stop and report. Owner-run. Write .bazelversion (9.3.2), MODULE.bazel (rules_python 2.4.6, bazel_skylib 1.9.2, platforms 1.1.0, Python 3.13 default and 3.11, no pip hub), .bazelrc and .bazelignore as the roadmap's target shapes, and a root BUILD.bazel with the exports and the repo_docs and ci_policy_inputs filegroups (globs with a literal SECRET_PATTERNS exclude list) and, after any load() statements and before the first rule, package(default_visibility = [\"//:__subpackages__\"]). Run `bazel mod deps --config=fetch --lockfile_mode=update`, then the owner fetch (`bazel build --config=fetch --nobuild //...` and the same with `--config=py311`), then the validations; commit MODULE.bazel.lock. .bazelrc has no try-import. Extend tests/test_build_hygiene.py: release_includes rejects every Bazel file; MODULE.bazel.lock <= 1 MiB; no BUILD*/.bzl below a synced directory, automation/tests, docs or .github; the secret-flag scan over .bazelrc, **/BUILD.bazel, **/*.bzl and Makefile; no *_override(, --registry, or http_archive/http_file without integrity; every --config=NAME used in Makefile or .bazelrc has a common:NAME line; both globs carry the excludes; every tracked BUILD.bazel has exactly one such package() call, before its first rule; no //visibility:public in any tracked BUILD or .bzl file; no try-import in .bazelrc. Before merge, run the owner scope check from the roadmap's section 3 and paste its output in the PR body; when marking the slice done, add its handoff file in the same chore(queue) PR. Plan: docs/BAZEL_MIGRATION_ROADMAP.md.",
+    "entry_condition": "On or after 2026-11-19, when Bazel 9.3.2 (released 2026-11-05) is 14 days old (the owner may pick 9.3.1 earlier). Owner-run: it is the first slice that fetches. Never set to queued: the owner does the work on a branch, merges it, then sets status done in a chore(queue) PR."
+  },
+  {
+    "slice_id": "b2-pip-hub",
+    "title": "Add the hashed pip hub for Python 3.11 and 3.13",
+    "status": "blocked",
+    "priority": 600,
+    "domain": "build",
+    "allowed_paths": [
+      "MODULE.bazel",
+      "MODULE.bazel.lock",
+      "BUILD.bazel",
+      "tests/test_dependency_locks.py",
+      "pyproject.toml",
+      "uv.lock",
+      "requirements_lock.txt"
+    ],
+    "required_validations": [
+      "manual owner-run slice: an agent must stop without changes",
+      "make syntax-check",
+      "make test",
+      "make lint",
+      "git diff --check",
+      "bazel build //...",
+      "uv lock --check",
+      "manual owner rerun of the Bazel validations"
+    ],
+    "depends_on": [
+      "b1-bazel-bootstrap"
+    ],
+    "max_files_changed": 8,
+    "notes": "AGENT: do not execute this slice; stop and report. Owner-run. Add pip.parse(hub_name=\"pip_deps\") for 3.11 and 3.13 from //:requirements_lock.txt with the Q-11 mechanism (default option a: a bazel-build dependency group with setuptools and wheel pinned under the 14-day rule, exported with hashes, and extra_pip_args [\"--no-build-isolation\"]). Extend tests/test_dependency_locks.py: the allowlisted sdist's build requirements are hashed. Add a build_test over every package in requirements_lock.txt for both Python versions, so the owner fetch materializes the whole hub. Run `bazel mod deps --config=fetch --lockfile_mode=update`, then the owner fetch (`bazel build --config=fetch --nobuild //...` and the same with `--config=py311`); commit the lockfile. Then, in a fresh shell without network and in a second worktree, confirm `bazel build //...` and `bazel build --config=py311 //...` pass. Only touch pyproject.toml, uv.lock and requirements_lock.txt for option a. Before merge, run the owner scope check from the roadmap's section 3 and paste its output in the PR body; when marking the slice done, add its handoff file in the same chore(queue) PR. Plan: docs/BAZEL_MIGRATION_ROADMAP.md.",
+    "entry_condition": "Q-11 decided from spike item 10 (how the ratelimit sdist is built with hashed build dependencies). Owner-run, because it fetches wheels and may build the sdist. Never set to queued: the owner does the work on a branch, merges it, then sets status done in a chore(queue) PR."
+  },
+  {
+    "slice_id": "b2-libraries",
+    "title": "Add the sdk, run, ci and provisioning libraries",
+    "status": "queued",
+    "priority": 610,
+    "domain": "build",
+    "allowed_paths": [
+      "sdk/BUILD.bazel",
+      "scripts/BUILD.bazel",
+      "BUILD.bazel"
+    ],
+    "required_validations": [
+      "make syntax-check",
+      "make test",
+      "make lint",
+      "git diff --check",
+      "bazel build //...",
+      "manual owner rerun of the Bazel validations"
+    ],
+    "depends_on": [
+      "b2-pip-hub"
+    ],
+    "max_files_changed": 5,
+    "notes": "Add //sdk (one py_library over glob([\"**/*.py\"]) with data simulation/scenarios/*.json and deps requests, urllib3, ratelimit, xmltodict), //:run_lib, //scripts:ci_lib and //scripts:provision_account_secrets_lib (never a py_binary for it), plus a build_test over all libraries. In sdk/BUILD.bazel and scripts/BUILD.bazel, package(default_visibility = [\"//:__subpackages__\"]) follows the load() statements and precedes every rule. Every file load()s its rules. Use only @pip_deps packages the hub already builds; a new external label makes the slice stop for an owner fetch. The owner runs the fetch in the worktree before the agent starts. Plan: docs/BAZEL_MIGRATION_ROADMAP.md."
+  },
+  {
+    "slice_id": "b2-test-main-macro",
+    "title": "Add the audit-hooked test main, the macro and the first test targets",
+    "status": "queued",
+    "priority": 620,
+    "domain": "tests",
+    "allowed_paths": [
+      "tests/defs.bzl",
+      "tests/bazel_main.py",
+      "tests/BUILD.bazel",
+      "tests/test_bazel_main.py",
+      ".github/ruff-baseline.json"
+    ],
+    "required_validations": [
+      "make syntax-check",
+      "make test",
+      "make lint",
+      "git diff --check",
+      "bazel test //tests:all",
+      "manual owner rerun of the Bazel validations"
+    ],
+    "depends_on": [
+      "b2-libraries"
+    ],
+    "max_files_changed": 6,
+    "notes": "tests/defs.bzl: tachikoma_unittest as in the roadmap's Target summary; main and srcs use Label(\"//tests:bazel_main.py\") and the macro fails on main or srcs. tests/bazel_main.py: runfiles root at sys.path[0] (no resolve), chdir to $TEST_TMPDIR (KeyError if absent), import scripts.ci, return ci.run_tests([module], require_tests=True, verbosity=2). tests/BUILD.bazel has, after its load() statements and before any rule, package(default_visibility = [\"//:__subpackages__\"]) and a literal SECRET_PATTERNS list equal to the root one (a BUILD file cannot load another); :support (__init__.py, synthetic_fixtures.py and the 4 imported test modules, data //:repo_docs), :test_sources, :pvp_fixtures, and targets for test_security, test_game_formulas, test_crew_leveling, test_ship_layout, test_ci, test_game_identity and test_bazel_main. tests/test_bazel_main.py runs bazel_main in a subprocess with fake TEST_SRCDIR/TEST_TMPDIR: a swallowed connect exits 1; zero tests exit 1; CWD equals TEST_TMPDIR; no .device appears in the source tree; a missing TEST_TMPDIR fails. Before the agent starts, the owner runs the owner fetch (make bazel-fetch from B3) in the worktree; downloads are disabled by default. Plan: docs/BAZEL_MIGRATION_ROADMAP.md."
+  },
+  {
+    "slice_id": "b2-all-test-targets",
+    "title": "Add a test target for every covered module, with its data",
+    "status": "queued",
+    "priority": 630,
+    "domain": "tests",
+    "allowed_paths": [
+      "tests/BUILD.bazel",
+      "BUILD.bazel",
+      "tests/test_build_hygiene.py"
+    ],
+    "required_validations": [
+      "make syntax-check",
+      "make test",
+      "make lint",
+      "git diff --check",
+      "bazel test //tests:all",
+      "bazel test --config=py311 //tests:all",
+      "manual owner rerun of the Bazel validations"
+    ],
+    "depends_on": [
+      "b2-test-main-macro"
+    ],
+    "max_files_changed": 5,
+    "notes": "Add every remaining target with the data listed in the roadmap's data table; test_ci is size medium; no target for test_live_auth or test_build_hygiene; no test_suite named all. Extend tests/test_build_hygiene.py: every tracked tests/test_*.py except test_live_auth and test_build_hygiene has exactly one tachikoma_unittest line and those two have none; no py_test( outside tests/defs.bzl except sandbox_canary; no requires-network, no-sandbox, local or external tag; tests/defs.bzl still uses Label(\"//tests:bazel_main.py\") as main; the SECRET_PATTERNS lists in the root and tests BUILD files are equal. From this slice on, later slices may only add assertions to tests/test_build_hygiene.py. Before the agent starts, the owner runs the owner fetch (make bazel-fetch from B3) in the worktree; downloads are disabled by default. Plan: docs/BAZEL_MIGRATION_ROADMAP.md."
+  },
+  {
+    "slice_id": "b2-parity-tool",
+    "title": "Add the per-module parity tool and the Linux sandbox canary",
+    "status": "queued",
+    "priority": 640,
+    "domain": "tests",
+    "allowed_paths": [
+      "scripts/bazel_parity.py",
+      "scripts/BUILD.bazel",
+      "tests/test_bazel_parity.py",
+      "tests/sandbox_canary.py",
+      "tests/BUILD.bazel",
+      "tests/test_ci.py",
+      ".github/ruff-baseline.json"
+    ],
+    "required_validations": [
+      "make syntax-check",
+      "make test",
+      "make lint",
+      "git diff --check",
+      "bazel test //tests:all",
+      "manual bazel parity",
+      "manual owner dispatch of postmerge-ci.yml on the branch is green",
+      "manual owner rerun of the Bazel validations"
+    ],
+    "depends_on": [
+      "b2-all-test-targets"
+    ],
+    "max_files_changed": 8,
+    "notes": "scripts/bazel_parity.py (stdlib; run locally with .venv/bin/python, in CI with python): parses `ci.py test --verbose` output and every <testlogs>/tests/*/test.log; normalizes ids (strip a leading `tests.` from Bazel ids; map `setUpClass (<module>.<Class>)` to <module>.<Class>.*); compares ids per module; allowed skips: Bazel test_ci.RepositoryReleaseSelectionTests.*, ci.py test_live_auth.TestLiveAuth.*; excluded modules test_live_auth and test_build_hygiene; expected target set derived from tracked tests/test_*.py; --expect-targets N; relative paths resolved against BUILD_WORKING_DIRECTORY. py_library bazel_parity_lib in scripts/BUILD.bazel. tests/test_bazel_parity.py includes real --verbose output and the swap, count and missing-module cases. tests/sandbox_canary.py + a manual, ci_canary, Linux-only py_test that asserts a -I child sees only the lo interface. Add scripts/bazel_parity.py to the AST guard list in tests/test_ci.py and //scripts:bazel_parity_lib to test_ci's deps. The owner dispatches postmerge-ci.yml. Before the agent starts, the owner runs the owner fetch (make bazel-fetch from B3) in the worktree; downloads are disabled by default. Plan: docs/BAZEL_MIGRATION_ROADMAP.md."
+  },
+  {
+    "slice_id": "b3-make-bazel-targets",
+    "title": "Add Bazel make targets and the validation guide",
+    "status": "queued",
+    "priority": 700,
+    "domain": "docs",
+    "allowed_paths": [
+      "Makefile",
+      "docs/workflows/validation.md",
+      "AGENTS.md",
+      "tests/test_build_hygiene.py"
+    ],
+    "required_validations": [
+      "make syntax-check",
+      "make test",
+      "make lint",
+      "git diff --check",
+      "make automation-check",
+      "bazel test //tests:all",
+      "manual owner rerun of the Bazel validations"
+    ],
+    "depends_on": [
+      "b2-parity-tool"
+    ],
+    "max_files_changed": 6,
+    "notes": "Do not run make bazel-fetch: it re-enables downloads, and the owner runs it once before merge; check it with `make -n bazel-fetch`. Makefile: bazel-build (`bazel build //...`), bazel-test (`bazel test //tests:all`), bazel-fetch (the only target that may download; the owner runs it after each pin bump and in each new worktree): `bazel build --config=fetch --nobuild //...`, the same with `--config=py311`, then `bazel test --config=fetch --nobuild //tests:all` with and without `--config=py311`. It never updates the lockfile. docs/workflows/validation.md, under 2,500 characters, Bazel rules first: validation strings and Bazel equivalents; never run tests from the repo root; never pass PSS_* or other secrets through any Bazel env flag, and `bazel clean --expunge` if one ever was; agents never create or edit any .bazelrc*; personal flags (such as --sandbox_block_path for .device) go in ~/.bazelrc; never run `python -m unittest discover -s tests` or a test file as a script from the repo root; a new test module needs a line in tests/BUILD.bazel; agents never dispatch workflows; the installed Bazelisk version. One-line pointer in AGENTS.md. Hygiene: the three targets exist and only bazel-fetch uses --config=fetch. Before the agent starts, the owner runs the owner fetch (make bazel-fetch from B3) in the worktree; downloads are disabled by default. Plan: docs/BAZEL_MIGRATION_ROADMAP.md."
+  },
+  {
+    "slice_id": "b3-docs-tables",
+    "title": "Add Bazel equivalents to the release guide and fix a stale test count",
+    "status": "queued",
+    "priority": 710,
+    "domain": "docs",
+    "allowed_paths": [
+      "docs/RELEASE.md",
+      "docs/auth-operations.md"
+    ],
+    "required_validations": [
+      "make syntax-check",
+      "make test",
+      "make lint",
+      "git diff --check"
+    ],
+    "depends_on": [
+      "b3-make-bazel-targets"
+    ],
+    "max_files_changed": 3,
+    "notes": "Add a Bazel-equivalents table to the local gate in docs/RELEASE.md, keeping the existing lines. Replace the stale \"40 unit tests\" at docs/auth-operations.md:160. Plan: docs/BAZEL_MIGRATION_ROADMAP.md."
+  },
+  {
+    "slice_id": "b4-bazel-reusable-workflow",
+    "title": "Add the reusable Bazel test workflow under the workflow policy",
+    "status": "blocked",
+    "priority": 800,
+    "domain": "ci",
+    "allowed_paths": [
+      ".github/workflows/bazel-tests.yml",
+      "scripts/ci.py",
+      "tests/test_ci.py",
+      "tests/test_build_hygiene.py",
+      ".github/workflows/README.md"
+    ],
+    "required_validations": [
+      "make syntax-check",
+      "make test",
+      "make lint",
+      "git diff --check",
+      "python scripts/ci.py repository",
+      "bazel test //tests:all",
+      "manual V-REL release parity",
+      "manual owner dispatch of postmerge-ci.yml on the branch is green"
+    ],
+    "depends_on": [
+      "b3-docs-tables"
+    ],
+    "max_files_changed": 6,
+    "notes": "Write .github/workflows/bazel-tests.yml exactly as the roadmap's CI shape (plan job that filters Windows, BAZELISK_HOME under RUNNER_TEMP, BAZELISK_VERIFY_SHA256 by OS and arch, setup-bazel at 104e3eea with bazelisk-version \"\", token \"\", bazelrc `common --repo_contents_cache=`, only the repository cache, cache-save on main pushes, the empty-token check, --config=ci on every bazel command, oracle, query step, Linux canary, parity, restricted upload guarded on TESTLOGS, no restore on tags). In scripts/ci.py only add \"bazel-tests.yml\" to WORKFLOWS. tests/test_ci.py only gains assertions on the workflow file, including the secret-flag deny list applied to it, CFG equal to one of its four allowed values and bazelrc equal to `common --repo_contents_cache=`. tests/test_build_hygiene.py only gains the assertions that need .bazelrc (every --config used in bazel-tests.yml has a common: line; common:ci has --repo_contents_cache=). Update .github/workflows/README.md, including the \"No Rust, Bazel\" sentence. The PR body shows `git diff -U0 origin/main -- scripts/ci.py tests/test_ci.py`. Plan: docs/BAZEL_MIGRATION_ROADMAP.md.",
+    "entry_condition": "Owner reviewed this workflow slice and answered Q-10, Q-12, Q-15, Q-17 and Q-18. Run with --autonomous-limit 1; owner review before merge."
+  },
+  {
+    "slice_id": "b4-postmerge-shadow",
+    "title": "Run the Bazel workflow post-merge as a non-gating shadow",
+    "status": "blocked",
+    "priority": 810,
+    "domain": "ci",
+    "allowed_paths": [
+      ".github/workflows/postmerge-ci.yml",
+      ".github/workflows/README.md",
+      "docs/workflows/bazel-ci-log.md"
+    ],
+    "required_validations": [
+      "make syntax-check",
+      "make test",
+      "make lint",
+      "git diff --check",
+      "python scripts/ci.py repository",
+      "manual owner dispatch of postmerge-ci.yml on the branch is green"
+    ],
+    "depends_on": [
+      "b4-bazel-reusable-workflow"
+    ],
+    "max_files_changed": 4,
+    "notes": "Add a bazel-shadow job to postmerge-ci.yml (uses ./.github/workflows/bazel-tests.yml with OS [\"ubuntu-latest\",\"macos-latest\"] and Python [\"3.11\",\"3.13\"], or the Q-12 subset), not in needs. Document it in the workflows README. Create docs/workflows/bazel-ci-log.md with the shadow-run table (date, SHA, cells, parity, cold-start minutes) and the Bazel-only failure table. The owner's dispatch on the branch is the first real run of bazel-tests.yml; record its result. Plan: docs/BAZEL_MIGRATION_ROADMAP.md.",
+    "entry_condition": "Owner reviewed this workflow slice. Run with --autonomous-limit 1; owner review before merge."
+  },
+  {
+    "slice_id": "b5-automation-bazel-targets",
+    "title": "Add Bazel targets for the automation tests",
+    "status": "blocked",
+    "priority": 900,
+    "domain": "automation",
+    "allowed_paths": [
+      "automation/BUILD.bazel",
+      "tests/defs.bzl",
+      "tests/BUILD.bazel",
+      "automation/tests/test_adapter.py",
+      "tests/test_build_hygiene.py",
+      ".github/ruff-baseline.json"
+    ],
+    "required_validations": [
+      "make syntax-check",
+      "make test",
+      "make lint",
+      "git diff --check",
+      "make automation-check",
+      "bazel test //automation:all"
+    ],
+    "depends_on": [
+      "b2-parity-tool"
+    ],
+    "max_files_changed": 7,
+    "notes": "automation/BUILD.bazel: one py_library over supervisor/policy.py and context/build_context.py, and 3 tests through tachikoma_unittest with new src and module parameters (for example src \"tests/test_harness.py\", module \"automation.tests.test_harness\"; they drive srcs and args, and default to name + \".py\" and \"tests.\" + name; main stays Label(\"//tests:bazel_main.py\"); add exports_files([\"bazel_main.py\"]) to tests/BUILD.bazel), package(default_visibility = [\"//:__subpackages__\"]) after the load() statements, Linux and macOS only, data = schemas, examples, prompts, fixtures, queue/slices.json, supervisor/*.sh. Fix the consumer-owned automation/tests/test_adapter.py:17 resolve() locally. tests/test_build_hygiene.py only gains assertions (allowlist these targets in the py_test check; still no BUILD below synced directories or automation/tests). No root-package label may name an automation/ file. Before the agent starts, the owner runs the owner fetch (make bazel-fetch from B3) in the worktree; downloads are disabled by default. Plan: docs/BAZEL_MIGRATION_ROADMAP.md.",
+    "entry_condition": "The owner merged an inbound repo-automation sync PR from a released tag or 40-hex commit that fixes the resolve() escapes, the build_context git check=True calls and the test_harness skips (Q-6)."
+  },
+  {
+    "slice_id": "b6-blocking-bazel-job",
+    "title": "Gate pull requests on Bazel through the existing tests workflow",
+    "status": "blocked",
+    "priority": 1000,
+    "domain": "ci",
+    "allowed_paths": [
+      ".github/workflows/python-tests.yml",
+      ".github/workflows/blocking-ci.yml",
+      ".github/workflows/postmerge-ci.yml",
+      "tests/test_ci.py",
+      ".github/workflows/README.md",
+      "docs/RELEASE.md",
+      "docs/workflows/bazel-ci-log.md"
+    ],
+    "required_validations": [
+      "make syntax-check",
+      "make test",
+      "make lint",
+      "git diff --check",
+      "python scripts/ci.py repository",
+      "manual owner dispatch of postmerge-ci.yml on the branch is green",
+      "manual owner dispatch of release.yml on the branch shows tests success"
+    ],
+    "depends_on": [
+      "b4-postmerge-shadow"
+    ],
+    "max_files_changed": 8,
+    "notes": "python-tests.yml: boolean input bazel (default false) and a bazel job (if: ${{ inputs.bazel }}, uses ./.github/workflows/bazel-tests.yml, passing the matrix inputs). blocking-ci.yml and postmerge-ci.yml pass bazel: true; postmerge-ci.yml drops bazel-shadow. release.yml is not edited. tests/test_ci.py only gains assertions: python-tests calls bazel-tests only under the input; blocking-ci and postmerge-ci enable it; release.yml passes no bazel input; no continue-on-error. Update the workflows README, docs/RELEASE.md (branch protection is still CI required) and start the B6 window in docs/workflows/bazel-ci-log.md. Plan: docs/BAZEL_MIGRATION_ROADMAP.md.",
+    "entry_condition": "B4 exit evidence recorded in docs/workflows/bazel-ci-log.md and Q-2 (and Q-2b) answered. Run with --autonomous-limit 1; owner review before merge."
+  },
+  {
+    "slice_id": "b7-windows-experimental",
+    "title": "Add an experimental Windows Bazel job post-merge",
+    "status": "blocked",
+    "priority": 1100,
+    "domain": "ci",
+    "allowed_paths": [
+      ".github/workflows/postmerge-ci.yml",
+      ".github/workflows/bazel-tests.yml",
+      "tests/BUILD.bazel",
+      "tests/test_ci.py",
+      ".github/workflows/README.md"
+    ],
+    "required_validations": [
+      "make syntax-check",
+      "make test",
+      "make lint",
+      "git diff --check",
+      "python scripts/ci.py repository",
+      "manual owner dispatch of postmerge-ci.yml on the branch is green"
+    ],
+    "depends_on": [
+      "b6-blocking-bazel-job"
+    ],
+    "max_files_changed": 7,
+    "notes": "bazel-tests.yml gains a boolean include-windows input that the plan job honours. postmerge-ci.yml gains a bazel-windows job outside needs (operating-systems [\"windows-latest\"], include-windows: true). If the dispatched run shows git missing from the strict PATH, add env_inherit = [\"PATH\"] to test_ci only, the one env_inherit the hygiene scan allows. Parity runs with --expect-targets 5. tests/test_ci.py only gains assertions. The owner's dispatch on the branch answers spike item 8. Plan: docs/BAZEL_MIGRATION_ROADMAP.md.",
+    "entry_condition": "B6 exit evidence recorded in docs/workflows/bazel-ci-log.md. Run with --autonomous-limit 1; owner review before merge."
+  },
+  {
+    "slice_id": "b8-make-thin-wrappers",
+    "title": "Let make test use Bazel when explicitly opted in",
+    "status": "blocked",
+    "priority": 1200,
+    "domain": "build",
+    "allowed_paths": [
+      "Makefile",
+      "docs/workflows/validation.md",
+      "tests/test_build_hygiene.py"
+    ],
+    "required_validations": [
+      "make syntax-check",
+      "make test",
+      "make lint",
+      "git diff --check",
+      "make test-security",
+      "manual TACHIKOMA_BAZEL=1 make test"
+    ],
+    "depends_on": [
+      "b6-blocking-bazel-job",
+      "b3-make-bazel-targets"
+    ],
+    "max_files_changed": 5,
+    "notes": "Opt-in only: with TACHIKOMA_BAZEL=1 and bazel on PATH, make test runs `bazel test //tests:all` then `$(PYTHON) \"$(CURDIR)/scripts/ci.py\" test --names tests.test_build_hygiene` from a temp CWD, and make test-security runs `bazel test //tests:test_security`; otherwise the B0 recipe. Update docs/workflows/validation.md. tests/test_build_hygiene.py only gains assertions: both branches exist and `make -n test` without the variable equals the B0 recipe. Plan: docs/BAZEL_MIGRATION_ROADMAP.md.",
+    "entry_condition": "B6 exit evidence recorded, Q-1b answered, and no other slice queued or in_progress."
+  },
+  {
+    "slice_id": "b8-readme-developer-section",
+    "title": "Document developing with Bazel in the README",
+    "status": "blocked",
+    "priority": 1210,
+    "domain": "docs",
+    "allowed_paths": [
+      "README.template",
+      "README.md"
+    ],
+    "required_validations": [
+      "make syntax-check",
+      "make test",
+      "make lint",
+      "git diff --check"
+    ],
+    "depends_on": [
+      "b8-make-thin-wrappers"
+    ],
+    "max_files_changed": 3,
+    "notes": "Add a Developing with Bazel subsection to README.template (install Bazelisk from a package manager or a checksum-verified release; make bazel-fetch; bazel test //tests:all; the pip path stays for people who only run the bot). Then regenerate README.md with .githooks/replace_by_git_vars.py. Template first. Plan: docs/BAZEL_MIGRATION_ROADMAP.md.",
+    "entry_condition": "b8-make-thin-wrappers merged on main."
+  },
+  {
+    "slice_id": "b9-rules-python-bump",
+    "title": "Move to rules_python 2.5.x and evaluate pip.parse(uv_lock=...)",
+    "status": "deferred",
+    "priority": 1300,
+    "domain": "build",
+    "allowed_paths": [
+      "MODULE.bazel",
+      "MODULE.bazel.lock",
+      "requirements_lock.txt",
+      "tests/test_dependency_locks.py",
+      "BUILD.bazel",
+      "docs/RELEASE.md"
+    ],
+    "required_validations": [
+      "manual owner-run slice: an agent must stop without changes",
+      "make syntax-check",
+      "make test",
+      "make lint",
+      "git diff --check",
+      "bazel test //tests:all",
+      "manual bazel parity",
+      "manual owner rerun of the Bazel validations"
+    ],
+    "depends_on": [
+      "b2-parity-tool"
+    ],
+    "max_files_changed": 8,
+    "notes": "AGENT: do not execute this slice; stop and report. Owner-run. Bump rules_python following the pin and bump procedure (`bazel mod deps --config=fetch --lockfile_mode=update`, then the owner fetch (`bazel build --config=fetch --nobuild //...` and the same with `--config=py311`)); evaluate pip.parse(uv_lock=...), which would retire requirements_lock.txt. Before merge, run the owner scope check from the roadmap's section 3 and paste its output in the PR body; when marking the slice done, add its handoff file in the same chore(queue) PR. Plan: docs/BAZEL_MIGRATION_ROADMAP.md.",
+    "entry_condition": "Deferred: the owner chooses this follow-up and sets status to queued in a chore(queue) PR. Owner-run (it fetches). rules_python 2.5.x is in BCR and 14 days old. Never set to queued: the owner does the work on a branch, merges it, then sets status done in a chore(queue) PR."
+  },
+  {
+    "slice_id": "b9-sdk-target-split",
+    "title": "Split leaf libraries out of //sdk",
+    "status": "deferred",
+    "priority": 1310,
+    "domain": "build",
+    "allowed_paths": [
+      "sdk/BUILD.bazel",
+      "tests/BUILD.bazel"
+    ],
+    "required_validations": [
+      "make syntax-check",
+      "make test",
+      "make lint",
+      "git diff --check",
+      "bazel test //tests:all",
+      "manual bazel parity"
+    ],
+    "depends_on": [
+      "b2-parity-tool"
+    ],
+    "max_files_changed": 3,
+    "notes": "Split redaction, crew_leveling, device, security, dotnet, ship_layout and game_formulas into their own libraries without creating a cycle. Before the agent starts, the owner runs the owner fetch (make bazel-fetch from B3) in the worktree; downloads are disabled by default. Plan: docs/BAZEL_MIGRATION_ROADMAP.md.",
+    "entry_condition": "Deferred: the owner chooses this follow-up and sets status to queued in a chore(queue) PR. Measured rebuild time justifies it."
+  },
+  {
+    "slice_id": "b9-test-main-filter-xml",
+    "title": "Support --test_filter and JUnit XML in bazel_main",
+    "status": "deferred",
+    "priority": 1320,
+    "domain": "tests",
+    "allowed_paths": [
+      "tests/bazel_main.py",
+      "tests/test_bazel_main.py"
+    ],
+    "required_validations": [
+      "make syntax-check",
+      "make test",
+      "make lint",
+      "git diff --check",
+      "bazel test //tests:all"
+    ],
+    "depends_on": [
+      "b2-parity-tool"
+    ],
+    "max_files_changed": 3,
+    "notes": "bazel_main honours TESTBRIDGE_TEST_ONLY and writes JUnit XML to XML_OUTPUT_FILE, with tests. Before the agent starts, the owner runs the owner fetch (make bazel-fetch from B3) in the worktree; downloads are disabled by default. Plan: docs/BAZEL_MIGRATION_ROADMAP.md.",
+    "entry_condition": "Deferred: the owner chooses this follow-up and sets status to queued in a chore(queue) PR."
+  },
+  {
+    "slice_id": "b9-retire-pip-legs",
+    "title": "Drop duplicate pip test cells where Bazel blocks",
+    "status": "deferred",
+    "priority": 1330,
+    "domain": "ci",
+    "allowed_paths": [
+      ".github/workflows/python-tests.yml",
+      "tests/test_ci.py",
+      ".github/workflows/README.md"
+    ],
+    "required_validations": [
+      "make syntax-check",
+      "make test",
+      "make lint",
+      "git diff --check",
+      "python scripts/ci.py repository",
+      "manual owner dispatch of postmerge-ci.yml on the branch is green"
+    ],
+    "depends_on": [
+      "b6-blocking-bazel-job"
+    ],
+    "max_files_changed": 4,
+    "notes": "Drop the separate pip ci.py test matrix cells where Bazel blocks; keep the in-job oracle in bazel-tests.yml and one ubuntu/3.13 pip leg as the permanent oracle. tests/test_ci.py only gains assertions. Plan: docs/BAZEL_MIGRATION_ROADMAP.md.",
+    "entry_condition": "Deferred: the owner chooses this follow-up and sets status to queued in a chore(queue) PR. Q-7 answered. Owner review before merge."
+  },
+  {
+    "slice_id": "b9-audit-hook-coverage",
+    "title": "Hook DNS and datagram sends in the test audit hook",
+    "status": "deferred",
+    "priority": 1340,
+    "domain": "tests",
+    "allowed_paths": [
+      "scripts/ci.py",
+      "tests/test_ci.py",
+      ".github/ruff-baseline.json"
+    ],
+    "required_validations": [
+      "make syntax-check",
+      "make test",
+      "make lint",
+      "git diff --check",
+      "manual V-REL release parity",
+      "manual owner dispatch of postmerge-ci.yml on the branch is green"
+    ],
+    "depends_on": [
+      "b0-ci-root-and-runner"
+    ],
+    "max_files_changed": 4,
+    "notes": "Add socket.getaddrinfo, socket.sendto and socket.sendmsg to forbid_network in run_tests, with regression tests. Child processes stay uncovered by the hook. Plan: docs/BAZEL_MIGRATION_ROADMAP.md.",
+    "entry_condition": "Deferred: the owner chooses this follow-up and sets status to queued in a chore(queue) PR."
+  },
+  {
+    "slice_id": "b9-dev-bazel-checksums",
+    "title": "Verify the developer Bazel download with tracked checksums",
+    "status": "deferred",
+    "priority": 1350,
+    "domain": "build",
+    "allowed_paths": [
+      "Makefile",
+      "bazel-checksums.txt",
+      "tests/test_build_hygiene.py"
+    ],
+    "required_validations": [
+      "make syntax-check",
+      "make test",
+      "make lint",
+      "git diff --check"
+    ],
+    "depends_on": [
+      "b3-make-bazel-targets"
+    ],
+    "max_files_changed": 4,
+    "notes": "make bazel-* export BAZELISK_VERIFY_SHA256 from bazel-checksums.txt chosen by `uname -sm` (never under tools/bazel*, which Bazelisk would execute). tests/test_build_hygiene.py only gains assertions. Plan: docs/BAZEL_MIGRATION_ROADMAP.md.",
+    "entry_condition": "Deferred: the owner chooses this follow-up and sets status to queued in a chore(queue) PR."
+  }
+]
