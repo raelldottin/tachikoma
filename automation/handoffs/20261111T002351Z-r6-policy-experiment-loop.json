@@ -1,0 +1,48 @@
+{
+  "slice_id": "r6-policy-experiment-loop",
+  "status": "done",
+  "summary": "Added sdk/experiments with Experiment (validated ids, hypothesis without secret-shaped text, direction, min_sample >= 2, UTC window), ProportionSample (Wilson interval) and MeanSample (normal interval), decide (adopt/reject only with min samples and non-overlapping intervals; keep-running while the window is open; insufficient-evidence after), Decision with full evidence, DecisionLog (append-only fsynced JSONL, secret-checked, read/latest), decide_and_record and samples_from_outcomes. 10 tests in tests/test_experiment_loop.py. Documented in docs/baseline/experiment-loop.md.",
+  "files_touched": [
+    "sdk/experiments/__init__.py",
+    "sdk/experiments/loop.py",
+    "tests/test_experiment_loop.py",
+    "docs/baseline/experiment-loop.md"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "Policy evaluation loop (AUTO-011)",
+      "before": "Policy and strategy changes had no recorded hypothesis, evidence threshold or decision history",
+      "after": "Experiments are decided from evidence with minimum samples and intervals, and every decision is logged without automatic rollout",
+      "proof": [
+        "tests.test_experiment_loop: 10 tests OK",
+        "make test: 673 tests OK (1 skipped)",
+        "scripts/ci.py lint: no new findings",
+        "run.py --help exits 0"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "The normal interval for MeanSample assumes independent measurements; serially correlated daily figures would make it too narrow."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-11T00:25:14Z"
+}
