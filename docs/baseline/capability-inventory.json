@@ -961,7 +961,8 @@
       "kind": "read-only",
       "evidence": "mocked-test",
       "tests": [
-        "tests/test_offline_reports.py"
+        "tests/test_offline_reports.py",
+        "tests/test_dashboard_report.py"
       ]
     },
     {
@@ -989,6 +990,15 @@
       "evidence": "mocked-test",
       "tests": [
         "tests/test_offline_reports.py"
+      ]
+    },
+    {
+      "flag": "--output",
+      "pillar": "platform",
+      "kind": "read-only",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_dashboard_report.py"
       ]
     }
   ]

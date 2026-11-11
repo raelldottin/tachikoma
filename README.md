@@ -67,19 +67,21 @@ There is no live-execute flag yet. Running the planner against a real account is
 
 ### Offline reports
 
-`--report` prints a report from local journal files and exits. It needs no login: it never creates a device or client, prompts for a password, or opens a network connection.
+`--report` prints a report from local journal files and exits (`dashboard` writes an HTML file instead). It needs no login: it never creates a device or client, prompts for a password, or opens a network connection.
 
 ```bash
 python run.py --report progression --journal tachikoma-progression.log
 python run.py --report pvp --journal battles.log --report-format json
 python run.py --report fleet --journal alpha.log --journal bravo.log --registry fleet.json
+python run.py --report dashboard --journal alpha.log --journal bravo.log --registry fleet.json --output dashboard.html
 ```
 
 - `progression`: per-account, per-day verified actions, success rate and failure ledger (see [docs/baseline/progression-metrics.md](docs/baseline/progression-metrics.md)).
 - `pvp`: the battle scorecard. No experiment schedule is applied, so every strategy shows as `none`.
 - `fleet`: throughput per account and for the fleet. Events are grouped by their own `account_alias` across all `--journal` files, so the file an event came from does not matter. With `--registry`, the isolation audit runs too and its incidents are counted. Because events are grouped by alias, the audit's `foreign-event` rule cannot fire here; the other rules apply.
+- `dashboard`: one self-contained HTML page with summary tiles (attempted, verified, success rate, uncertain, incidents), the progression table, the PvP scorecard, the fleet table, the audit incidents and the failure ledger. Rates show their sample size; values that were not observed show as `n/a`, and without `--registry` the incident count is `n/a` because the audit did not run. The page has no scripts, external assets or network references, escapes every value, and follows the system light or dark theme. It holds no generation time, so the same journals give the same file. `--output PATH` is required; the file is replaced atomically (owner-only permissions), its directory must exist, it may not be one of the `--journal` files or the `--registry` file, and the path is printed. `--output` is refused with any other report.
 - `--journal PATH` is repeatable and required. A missing or malformed journal, or an invalid registry, prints an error and exits with code 2. An empty journal prints the report's empty output.
-- `--report-format` is `markdown` (default) or `json`. `--registry` is read only for `fleet`.
+- `--report-format` is `markdown` (default) or `json`. `--registry` is read only for `fleet` and `dashboard`. The dashboard ignores `--report-format`.
 
 ### Battle Flow
 
