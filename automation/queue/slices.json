@@ -1229,6 +1229,32 @@
         "make test",
         "git diff --check"
       ]
+    },
+    {
+      "slice_id": "r5-fleet-dry-run-command",
+      "title": "Wire the fleet stack into run.py as a dry-run command",
+      "status": "queued",
+      "priority": 380,
+      "domain": "integration",
+      "allowed_paths": [
+        "run.py",
+        "sdk/fleet/",
+        "sdk/state/",
+        "README.template",
+        "README.md",
+        "docs/baseline/",
+        "tests/"
+      ],
+      "depends_on": [
+        "r6-status-refresh-specialists"
+      ],
+      "max_files_changed": 7,
+      "notes": "Integration lane. Add `run.py --fleet-dry-run --registry PATH` (optional `--concurrent N`, `--fleet-journal-dir DIR`, `--identity-salt-env NAME`) that builds each enabled account's context through the existing credential secret flow (the registry names the secret; values are read from the environment at run time, never logged or journaled), passes room, research and ship (hull) designs from read-only design calls to the planner, applies the identity salt when its environment variable is set, runs the sequential or concurrent orchestrator in dry-run only (no execute path), and prints the fleet report and alerts. Unit tests mock the client entirely; never run it against a real account. Update README.template first, then README.md, and the capability inventory flags.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
     }
   ]
 }
