@@ -309,7 +309,8 @@
       "kind": "read-only",
       "evidence": "mocked-test",
       "tests": [
-        "tests/test_battle_flow.py"
+        "tests/test_battle_flow.py",
+        "tests/test_fleet_dry_run.py"
       ]
     },
     {
@@ -980,7 +981,8 @@
       "kind": "read-only",
       "evidence": "mocked-test",
       "tests": [
-        "tests/test_offline_reports.py"
+        "tests/test_offline_reports.py",
+        "tests/test_fleet_dry_run.py"
       ]
     },
     {
@@ -999,6 +1001,42 @@
       "evidence": "mocked-test",
       "tests": [
         "tests/test_dashboard_report.py"
+      ]
+    },
+    {
+      "flag": "--fleet-dry-run",
+      "pillar": "E",
+      "kind": "read-only",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_fleet_dry_run.py"
+      ]
+    },
+    {
+      "flag": "--concurrent",
+      "pillar": "E",
+      "kind": "read-only",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_fleet_dry_run.py"
+      ]
+    },
+    {
+      "flag": "--fleet-journal-dir",
+      "pillar": "platform",
+      "kind": "read-only",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_fleet_dry_run.py"
+      ]
+    },
+    {
+      "flag": "--identity-salt-env",
+      "pillar": "E",
+      "kind": "read-only",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_fleet_dry_run.py"
       ]
     }
   ]

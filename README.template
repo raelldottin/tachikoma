@@ -62,6 +62,26 @@ python run.py --login-email you@example.com --progression-dry-run --account-alia
 
 There is no live-execute flag yet. Running the planner against a real account is the blocked roadmap slice `r2-live-progression-trial`.
 
+### Fleet dry run
+
+`--fleet-dry-run` runs the progression dry run for every enabled account in an account registry (see [docs/baseline/fleet-accounts.md](docs/baseline/fleet-accounts.md)), prints one Markdown report, and exits. Each account logs in with its own credentials, reads room, research and hull designs and its snapshots with read-only calls, and journals its plan. There is no execute path: nothing in any account changes.
+
+```bash
+export PSS_ACCOUNT_1_EMAIL=... PSS_ACCOUNT_1_PASSWORD=...   # from your secret store, never a file in the repository
+python run.py --fleet-dry-run --registry fleet.json
+python run.py --fleet-dry-run --registry fleet.json --concurrent 2 --identity-salt-env TACHIKOMA_FLEET_SALT
+```
+
+- **Credentials.** Each profile's `credentials_secret` names environment variables in one of two forms: `<NAME>` holds the authentication string that `--auth-file` takes, or `<NAME>_EMAIL` and `<NAME>_PASSWORD` hold the e-mail and password that `--login-email` and `--password-file` take. With `credentials_secret` `PSS_ACCOUNT_1`, the daily workflow's `PSS_ACCOUNT_1_EMAIL` / `PSS_ACCOUNT_1_PASSWORD` secrets work as they are. An account whose variables are missing, incomplete, or set in both forms ends with `error` and the other accounts still run. The fleet run never reads or writes the `.device` file.
+- **Prefer the auth-string form.** With no stored device, the e-mail form starts from a fresh device key on every run, so each run repeats a guest `DeviceLogin17` session and the `UserEmailPasswordAuthorize4` call, which is derived from static analysis and not verified against the live server. The accounts table notes every account that uses it.
+- **Secrets.** Credential values, raw user ids, e-mail addresses and the salt are kept out of the printed report, the journals and the log. Error text loses the account's credential values (raw and URL-encoded; for an auth string, also each of its key, token and id fields; values under 4 characters only through the field rules), every URL query string, `userId`-style ids, ids and names in dumped payloads, and e-mail addresses. While the fleet runs, a filter on the log handlers applies the same scrubbing to every record, replaces the client's display-name prefix with `[account]`, and drops the client's info and debug lines (login banners carry player names). The filter is removed when the run ends.
+- **Output.** An accounts table (status, planned actions, accepted game identity fingerprint, journal, and the reason or design-data note), then the fleet report and the alerts, as in `--report fleet`, with the isolation audit applied.
+- `--fleet-journal-dir DIR` holds one `<alias>.log` journal per account (default `tachikoma-fleet-journals`, covered by the `*.log` ignore rule). Journals are appended to, so the report and alerts include earlier runs.
+- `--concurrent N` runs up to `N` accounts at once with the concurrent orchestrator. Without it, accounts run one at a time in alias order. Each account has its own HTTP session, but all accounts share the client's HTTP connection pool and its process-wide rate limit (30 `Client.request` calls a minute).
+- `--identity-salt-env NAME` reads the game identity salt from that environment variable, so each account's logged-in game account is fingerprinted and checked against the registry's `expected_game_identity`. The salt is never printed. Without it, fingerprints are unknown and a profile that declares one ends with `error`.
+- Hull designs come from the read-only `listAllDesigns4` call. The game server has deprecated it, so hull designs usually stay empty (only `hull-reserve-v1` reads them), and the accounts table says so.
+- A missing or invalid registry, an unset or too short salt, or a journal directory that cannot be created prints an error and exits with code 2. Otherwise the command exits with 0, even when some accounts ended with `error`. `--fleet-dry-run` refuses the single-account login, SMTP, battle, progression and report flags.
+
 ### Offline reports
 
 `--report` prints a report from local journal files and exits (`dashboard` writes an HTML file instead). It needs no login: it never creates a device or client, prompts for a password, or opens a network connection.

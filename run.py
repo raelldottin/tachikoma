@@ -137,6 +137,136 @@ def run_progression_dry_run(client, account_alias, journal_path):
     return 0
 
 
+# Native checksum settings every game client gets (RebuildAmmo3, UserEmailPasswordAuthorize4).
+CLIENT_CHECKSUM_SETTINGS = {"checksum_key": "5343", "savy_checksum": "Savvy!s0d@"}
+FLEET_JOURNAL_DIR_DEFAULT = "tachikoma-fleet-journals"  # holds <alias>.log files; *.log is gitignored
+
+
+def _md_cell(value):
+    return "n/a" if value is None else str(value).replace("|", "\\|").replace("\n", " ")
+
+
+def run_fleet_dry_run(registry_path, journal_dir=None, concurrent=None, identity_salt_env=None, out=None,
+                      environ=None, client_cls=None, device_cls=None, clock=None):
+    """Dry-run every enabled registry account and print the fleet report and alerts.
+
+    Each account logs in with the credentials its ``credentials_secret`` names
+    in the environment (see ``sdk.fleet.factory``), reads design data and
+    snapshots with read-only calls, and journals its plan to
+    ``<journal_dir>/<alias>.log``. There is no execute path: the orchestrator
+    always runs with ``execute=False``. One account's failure is recorded and
+    the others still run. Returns 0 once the fleet ran, or 2 when the registry,
+    the identity salt or the journal directory is missing or invalid.
+    """
+    from datetime import datetime, timezone
+
+    from sdk.fleet.accounts import RegistryError, load_registry
+    from sdk.fleet.audit import audit_fleet
+    from sdk.fleet.concurrent import ConcurrentFleetOrchestrator
+    from sdk.fleet.factory import EnvironmentAccountFactory, LogScrubber
+    from sdk.fleet.orchestrator import FleetOrchestrator
+    from sdk.journal import JournalError, read_events
+    from sdk.reports import alerts as alert_report
+    from sdk.reports import fleet as fleet_report
+    from sdk.state.snapshot import SnapshotInputError, identity_salt_key
+
+    out = out or sys.stdout
+    environ = os.environ if environ is None else environ
+    clock = clock or (lambda: datetime.now(timezone.utc))
+    journal_dir = Path(journal_dir or FLEET_JOURNAL_DIR_DEFAULT)
+
+    if not Path(registry_path).is_file():
+        print(f"error: registry not found: {registry_path}", file=sys.stderr)
+        return 2
+    try:
+        registry = load_registry(registry_path)
+    except RegistryError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 2
+
+    identity_salt = None
+    if identity_salt_env:
+        identity_salt = environ.get(identity_salt_env) or None
+        if identity_salt is None:
+            print(f"error: identity salt variable {identity_salt_env} is not set", file=sys.stderr)
+            return 2
+        try:
+            identity_salt_key(identity_salt)
+        except SnapshotInputError as error:  # the message never repeats the salt
+            print(f"error: {identity_salt_env}: {error}", file=sys.stderr)
+            return 2
+
+    try:
+        journal_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as error:
+        print(f"error: cannot create fleet journal directory {journal_dir}: {error.strerror}", file=sys.stderr)
+        return 2
+
+    # Credential values, the salt and display names are scrubbed from every log record while the
+    # fleet runs (the client logs request URLs and player names), and from the printed reasons.
+    scrubber = LogScrubber()
+    scrubber.add_secrets([identity_salt])
+    factory_options = {"device_cls": device_cls} if device_cls is not None else {}
+    factory = EnvironmentAccountFactory(
+        journal_dir, client_cls=client_cls or Client, environ=environ,
+        client_settings=CLIENT_CHECKSUM_SETTINGS, identity_salt=identity_salt, log_scrubber=scrubber,
+        **factory_options,
+    )
+    if concurrent is not None:
+        orchestrator = ConcurrentFleetOrchestrator(registry, factory, max_workers=concurrent, clock=clock)
+    else:
+        orchestrator = FleetOrchestrator(registry, factory, clock=clock)
+    with scrubber.installed():
+        fleet_run = orchestrator.run(execute=False)  # dry run only: this command has no execute path
+    assert fleet_run.dry_run
+
+    try:
+        journals = {alias: read_events(factory.journal_path(alias)) for alias in registry.aliases()
+                    if factory.journal_path(alias).is_file()}
+    except JournalError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 2
+    audit = audit_fleet(registry, journals)
+    report = fleet_report.compute_fleet_report(journals, fleet_run=fleet_run, audit=audit)
+    alerts = alert_report.evaluate_alerts(journals, now=clock(), audit=audit)
+    notes = factory.notes()
+
+    lines = [
+        f"# Fleet dry run ({fleet_run.mode})",
+        "",
+        f"Registry: {registry_path} ({len(registry.enabled())} of {len(registry)} accounts enabled). "
+        f"Journals: {journal_dir}. Dry run only: no action was executed.",
+        "",
+        "## Accounts",
+        "",
+        "| Account | Status | Planned | Game identity | Journal | Notes |",
+        "| --- | --- | --- | --- | --- | --- |",
+    ]
+    for run in fleet_run.accounts:
+        journal = factory.journal_path(run.alias).name if run.alias in journals else None
+        # Reasons from later steps carry only redact_secrets; scrub them like the factory's errors.
+        reason = "; ".join(filter(None, [run.reason and scrubber.scrub(run.reason, names=False),
+                                         *notes.get(run.alias, ())])) or None
+        lines.append(f"| {run.alias} | {run.status} | {run.planned} | {_md_cell(run.game_identity)} | "
+                     f"{_md_cell(journal)} | {_md_cell(reason)} |")
+    if fleet_run.stop_reason:
+        lines += ["", f"Fleet stopped: {_md_cell(fleet_run.stop_reason)}"]
+    lines += ["", "## Fleet report", "", fleet_report.to_markdown(report).rstrip("\n"),
+              "", "## Alerts", "", alert_report.to_markdown(alerts).rstrip("\n")]
+    out.write("\n".join(lines) + "\n")
+    return 0
+
+
+def positive_int(text):
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not an integer: {text!r}") from None
+    if value < 1:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return value
+
+
 REPORT_KINDS = ("progression", "pvp", "fleet", "dashboard")
 REPORT_FORMATS = ("markdown", "json")
 
@@ -315,7 +445,7 @@ def main():
         dest="registry",
         default=None,
         metavar="PATH",
-        help="account registry JSON for --report fleet; adds the isolation audit",
+        help="account registry JSON: required by --fleet-dry-run; adds the isolation audit to --report fleet",
     )
     parser.add_argument(
         "--report-format",
@@ -331,7 +461,58 @@ def main():
         metavar="PATH",
         help="HTML file to write for --report dashboard (required there); replaced atomically",
     )
+    parser.add_argument(
+        "--fleet-dry-run",
+        dest="fleet_dry_run",
+        action="store_true",
+        default=False,
+        help="dry-run every enabled --registry account (credentials from the environment variables its "
+        "credentials_secret names), journal each plan, print the fleet report and alerts, then exit; "
+        "never changes an account",
+    )
+    parser.add_argument(
+        "--concurrent",
+        dest="concurrent",
+        type=positive_int,
+        default=None,
+        metavar="N",
+        help="with --fleet-dry-run: run up to N accounts at once (default: one at a time)",
+    )
+    parser.add_argument(
+        "--fleet-journal-dir",
+        dest="fleet_journal_dir",
+        default=None,
+        metavar="DIR",
+        help=f"with --fleet-dry-run: directory for the per-account <alias>.log journals "
+        f"(default: {FLEET_JOURNAL_DIR_DEFAULT})",
+    )
+    parser.add_argument(
+        "--identity-salt-env",
+        dest="identity_salt_env",
+        default=None,
+        metavar="NAME",
+        help="with --fleet-dry-run: environment variable holding the game identity salt",
+    )
     args = parser.parse_args()
+
+    # The fleet dry run is handled before any SMTP setup or single-account login.
+    if args.fleet_dry_run:
+        conflicting = [flag for flag, value in (
+            ("--report", args.report), ("--journal", args.journals), ("--output", args.output),
+            ("--progression-dry-run", args.progression_dry_run), ("--run-battle", args.run_battle),
+            ("--auth-file", args.auth_file), ("--login-email", args.login_email),
+            ("--password-file", args.password_file), ("--device-key", args.device_key),
+            ("--smtp-email", args.smtp_email), ("--smtp-password-file", args.smtp_password_file),
+            ("--recipient", args.recipient),
+        ) if value]
+        if conflicting:
+            parser.error(f"--fleet-dry-run cannot be combined with {', '.join(conflicting)}")
+        if not args.registry:
+            parser.error("--fleet-dry-run needs --registry PATH")
+        sys.exit(run_fleet_dry_run(args.registry, args.fleet_journal_dir, args.concurrent,
+                                   args.identity_salt_env))
+    if args.concurrent is not None or args.fleet_journal_dir or args.identity_salt_env:
+        parser.error("--concurrent, --fleet-journal-dir and --identity-salt-env are only used with --fleet-dry-run")
 
     # Offline reports read local journals only: handled before any SMTP setup,
     # Device/Client construction, credential prompt, login or network access.
@@ -405,8 +586,7 @@ def main():
         settings["allow_email_password_login"] = True
     
     # Add checksum settings for RebuildAmmo3 and other native checksums
-    settings["checksum_key"] = "5343"
-    settings["savy_checksum"] = "Savvy!s0d@"
+    settings.update(CLIENT_CHECKSUM_SETTINGS)
 
     client = Client(device=device, settings=settings)
 
