@@ -8,6 +8,6 @@
 | `unregistered-account` | A journal owner, or a foreign event's alias, is not in the registry |
 | `attempt-id-reused` | One attempt id appears more than once, in one journal or across journals |
 | `overlapping-attempts` | Two attempted events on one account were in flight at the same time. Windows that only touch do not overlap. |
-| `budget-exceeded` | An account's observed spend (negative cost deltas of attempted events) in one budget period exceeds its budget for that currency. Periods are fixed windows counted from the Unix epoch, so UTC days by default. An omitted starbux budget is 0, so any starbux spend is an incident. |
+| `budget-exceeded` | An account's charged spend in one budget period exceeds its budget for that currency. Charged spend is the observed spend (negative `<kind>_delta` cost values of attempted events), plus the planned amount journaled as `<kind>_uncertain` for each attempt whose `<kind>_delta` was not observed (see [fleet accounts](fleet-accounts.md#orchestration)). The incident detail says how much of the amount came from such uncertain attempts. Periods are fixed windows counted from the Unix epoch, so UTC days by default. An omitted starbux budget is 0, so any starbux spend is an incident. |
 
 Each `Incident` names the rule, the account, the attempt ids involved and a one-line detail. `AuditReport` states `accounts_checked` and `events_checked` even when it is clean, and offers `by_rule()` and `to_json()`.

@@ -10,8 +10,10 @@ reports incidents. Rules:
   or twice in one journal.
 - ``overlapping-attempts``: two attempted mutating events on one account
   whose time windows overlap.
-- ``budget-exceeded``: observed spend in one budget period above the
-  account's budget for that currency. Periods are fixed windows of
+- ``budget-exceeded``: charged spend in one budget period above the
+  account's budget for that currency. Charged spend is the observed spend
+  (negative ``<kind>_delta``), plus the planned amount (``<kind>_uncertain``)
+  of attempts whose delta was not observed. Periods are fixed windows of
   ``period`` length counted from the Unix epoch (UTC days by default).
 
 An empty report still states how many accounts and events were checked.
@@ -58,6 +60,28 @@ class AuditReport:
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), indent=2, sort_keys=True)
+
+
+def charged_spend(cost: Optional[Mapping]) -> dict[str, tuple[int, bool]]:
+    """Spend to charge against budgets for one attempted event's ``cost``.
+
+    Returns ``kind -> (amount, uncertain)``. An observed delta is charged when
+    it is negative (spend). When the delta was not observed, the planned amount
+    journaled as ``<kind>_uncertain`` is charged instead (conservative), with
+    ``uncertain`` set. Events without ``_uncertain`` keys charge observed spend only.
+    """
+    cost = cost or {}
+    charged: dict[str, tuple[int, bool]] = {}
+    for kind in RESOURCE_KINDS:
+        value = cost.get(f"{kind}_delta")
+        if value is not None:
+            if value < 0:
+                charged[kind] = (int(-value), False)
+            continue
+        possible = cost.get(f"{kind}_uncertain")
+        if possible is not None and possible > 0:
+            charged[kind] = (int(possible), True)
+    return charged
 
 
 def _period_start(moment: datetime, period: timedelta) -> datetime:
@@ -111,20 +135,23 @@ def audit_fleet(
         if owner in registry:
             profile = registry.get(owner)
             spent: dict[tuple, int] = defaultdict(int)
+            uncertain: dict[tuple, int] = defaultdict(int)
             contributors: dict[tuple, list[str]] = defaultdict(list)
             for event in own:
                 bucket = _period_start(datetime.fromisoformat(event.finished_at), period)
-                for kind in RESOURCE_KINDS:
-                    value = (event.cost or {}).get(f"{kind}_delta")
-                    if value is not None and value < 0:
-                        spent[(bucket, kind)] += -value
-                        contributors[(bucket, kind)].append(event.attempt_id)
+                for kind, (amount, is_uncertain) in charged_spend(event.cost).items():
+                    spent[(bucket, kind)] += amount
+                    if is_uncertain:
+                        uncertain[(bucket, kind)] += amount
+                    contributors[(bucket, kind)].append(event.attempt_id)
             for (bucket, kind), amount in sorted(spent.items()):
                 limit: Optional[int] = profile.budget(kind)
                 if limit is not None and amount > limit:
+                    possibly = uncertain[(bucket, kind)]
+                    note = f" ({possibly} of it from attempts whose effect was not observed)" if possibly else ""
                     incidents.append(Incident(
                         "budget-exceeded", owner, tuple(contributors[(bucket, kind)]),
-                        f"spent {amount} {kind} in the period starting {bucket.isoformat()}, budget {limit}",
+                        f"spent {amount} {kind}{note} in the period starting {bucket.isoformat()}, budget {limit}",
                     ))
 
     for attempt_id, owners in sorted(attempt_owners.items()):
