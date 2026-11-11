@@ -658,7 +658,7 @@
     {
       "slice_id": "r5-account-registry",
       "title": "Account registry with objectives, budgets and strategy assignment (AUTO-009)",
-      "status": "queued",
+      "status": "done",
       "priority": 270,
       "domain": "fleet",
       "allowed_paths": [
