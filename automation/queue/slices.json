@@ -610,7 +610,7 @@
     {
       "slice_id": "r4-economy-experiment-report",
       "title": "Market return and resource-allocation report (R4 exit metrics)",
-      "status": "queued",
+      "status": "done",
       "priority": 250,
       "domain": "observability",
       "allowed_paths": [

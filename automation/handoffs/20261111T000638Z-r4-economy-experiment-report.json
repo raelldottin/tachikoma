@@ -1,0 +1,48 @@
+{
+  "slice_id": "r4-economy-experiment-report",
+  "status": "done",
+  "summary": "Added sdk/reports/economy.py: TradeRecord, LedgerRecord, EconomyRow, compute_economy_report (market return = completed sell proceeds minus completed buy cost per currency, None without a completed trade; fees shown separately; expired and unreconciled counts; ledger gained/spent/samples, window and per-hour gain with None when unobserved; spend by action; unattributed and ambiguous entry counts) plus JSON and Markdown output. Exported from sdk.reports. 6 tests in tests/test_economy_report.py. Documented in docs/baseline/economy-report.md.",
+  "files_touched": [
+    "sdk/reports/economy.py",
+    "sdk/reports/__init__.py",
+    "tests/test_economy_report.py",
+    "docs/baseline/economy-report.md"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "R4 economy report",
+      "before": "No market return or resource-allocation metric existed",
+      "after": "Market return and resource allocation are reported per account and variant from reconciled trades and ledgers, with sample counts",
+      "proof": [
+        "tests.test_economy_report: 6 tests OK",
+        "make test: 631 tests OK (1 skipped)",
+        "scripts/ci.py lint: no new findings",
+        "run.py --help exits 0"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "Real market figures need SellItem3/Purchase4, which remain unimplemented pending owner captures."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-11T00:07:59Z"
+}
