@@ -1,0 +1,55 @@
+{
+  "slice_id": "spec-approvals-docs",
+  "status": "done",
+  "summary": "Marks SPEC-01..12 Approved for offline work. The owner approved them through the session goal \"complete the plan in docs/specs/\"; owner questions take their safe defaults and no live gate (G1-G5) is opened. SPEC-01 now reports Approved specs without failing, requires tests only for MUSTs with offline acceptance criteria, and requires evidence for live-only MUSTs. SPEC-02's work moves to slice spec02-credential-safety. Implemented by the parent (owner approval record) specialist subagent in an isolated worktree, independently reviewed by the verifier subagent (n/a (docs)), and re-validated by the parent.",
+  "files_touched": [
+    "docs/specs/README.md",
+    "docs/specs/SPEC-01-traceability.md",
+    "docs/specs/SPEC-02-local-credential-safety.md",
+    "docs/specs/SPEC-03-verified-profile-reads.md",
+    "docs/specs/SPEC-04-account-baselines.md",
+    "docs/specs/SPEC-05-live-execution-gate.md",
+    "docs/specs/SPEC-06-legacy-daily-run.md",
+    "docs/specs/SPEC-07-progression-trial.md",
+    "docs/specs/SPEC-08-pvp-trial.md",
+    "docs/specs/SPEC-09-market-trades.md",
+    "docs/specs/SPEC-10-fleet-trial.md",
+    "docs/specs/SPEC-11-alert-delivery.md",
+    "docs/specs/SPEC-12-study-report.md"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "Record owner approval of the specs and amend SPEC-01",
+      "before": "Roadmap item not implemented",
+      "after": "Record owner approval of the specs and amend SPEC-01 (offline)",
+      "proof": [
+        "make syntax-check, make test, scripts/ci.py lint and git diff --check pass on current main",
+        "verifier verdict: n/a (docs)"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "Offline only; no live game verification."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-11T19:53:38Z"
+}
