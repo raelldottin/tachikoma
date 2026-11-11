@@ -1433,7 +1433,7 @@
     {
       "slice_id": "spec07-trial-report",
       "title": "SPEC-07: trial report builder",
-      "status": "queued",
+      "status": "done",
       "priority": 389,
       "domain": "observability",
       "allowed_paths": [
