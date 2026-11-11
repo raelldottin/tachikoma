@@ -1,0 +1,48 @@
+{
+  "slice_id": "r5-account-registry",
+  "status": "done",
+  "summary": "Added sdk/fleet with AccountProfile (alias rule, registered policy, strategy key format, budgets for minerals/gas/starbux with starbux 0 by default, positive max_actions, boolean enabled, upper-snake secret name), AccountRegistry (unique aliases, enabled() in alias order) and load_registry/registry_from_dict (version 1, unknown fields refused, secret-named keys and secret-shaped values refused anywhere, errors never echo values). 8 tests in tests/test_fleet_accounts.py. Documented in docs/baseline/fleet-accounts.md.",
+  "files_touched": [
+    "sdk/fleet/__init__.py",
+    "sdk/fleet/accounts.py",
+    "tests/test_fleet_accounts.py",
+    "docs/baseline/fleet-accounts.md"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "Fleet account registry (AUTO-009)",
+      "before": "Every run handled one account with no account-level objectives or budgets",
+      "after": "A validated registry describes each account's objective, policy, strategy, budgets and credential secret name",
+      "proof": [
+        "tests.test_fleet_accounts: 8 tests OK",
+        "make test: 639 tests OK (1 skipped)",
+        "scripts/ci.py lint: no new findings",
+        "run.py --help exits 0"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "Budgets are declared here but enforced only once the orchestrator slice lands."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-11T00:12:28Z"
+}
