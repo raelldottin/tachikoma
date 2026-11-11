@@ -70,9 +70,20 @@ If a release for the tag already exists, `publish` fails rather than overwriting
 
 ## What the archive contains
 
-The archive is built from Git objects at the tagged commit, not from the working tree. It contains `run.py`, `requirements.txt`, `LICENSE`, `README.md` and the `.py` files under `sdk/`. Member order, timestamps, ownership and gzip headers are fixed, so the same commit builds byte-identical archives.
+The archive is built from Git objects at the tagged commit, not from the working tree, so untracked and uncommitted files never reach it. It contains:
 
-It does not contain tests, docs, `automation/`, `scripts/`, logs, captures or device files. It also leaves out non-Python files under `sdk/`, so the bundled scenarios in `sdk/simulation/scenarios/*.json` are missing from a release archive. Dependencies are not bundled; install them from `requirements.txt`.
+- `run.py`, `requirements.txt`, `LICENSE` and `README.md`;
+- the `.py` files under `sdk/`;
+- package data under `sdk/` from an explicit allow-list of extensions, currently only `.json`. This ships the bundled scenarios in `sdk/simulation/scenarios/*.json`, so `sdk.simulation.load_scenario("single-account")` works from an extracted archive.
+
+Member order, timestamps (the commit time), ownership (uid/gid 0, no names), file modes (0644, or 0755 for executables) and gzip headers are fixed, so the same commit builds byte-identical archives. `release-manifest.json` and `SHA256SUMS` are unchanged; the manifest's `files` count includes the data files.
+
+It does not contain tests, docs, `automation/`, `scripts/`, logs, captures or device files. Under `sdk/`, anything in a `tests/`, `test/` or `__pycache__/` directory and any file with an extension outside the allow-list is left out. The build refuses the release, instead of quietly dropping the file, when:
+
+- an allowed `sdk/` data file has a path that looks private: a hidden file or directory, or a path word such as `secret`, `password`, `token`, `credential`, `cookie`, `session`, `auth`, `capture`, `device`, `profile`, `dump`, `har`, `pcap`, `log` or `env` (the full list is `RELEASE_PRIVATE_WORDS` in `scripts/ci.py`);
+- an `sdk/` `.json` file is not valid UTF-8 JSON.
+
+A test in `tests/test_ci.py` checks every tracked file against these rules and parses every selected `sdk/` `.json` file, so a tracked file that would block a release fails CI first. To ship a new kind of package data, add its extension to `RELEASE_SDK_DATA_SUFFIXES` with a test. Dependencies are not bundled; install them from `requirements.txt`.
 
 ## What is manual or undefined
 

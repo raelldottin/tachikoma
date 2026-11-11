@@ -1087,7 +1087,7 @@
       ],
       "max_files_changed": 3,
       "notes": "Release lane. The release archive includes only .py files under sdk/, so sdk/simulation/scenarios/*.json is missing. Include tracked non-Python package data under sdk/ (at least *.json) while keeping archives byte-reproducible and still excluding tests, captures, secrets and logs. Update tests and docs/RELEASE.md.",
-      "status": "queued",
+      "status": "done",
       "depends_on": [
         "r6-release-and-limitations"
       ],
