@@ -588,7 +588,7 @@
     {
       "slice_id": "r4-market-trade-reconciliation",
       "title": "Reconcile a market trade's lifecycle from observations, never from listing creation alone",
-      "status": "queued",
+      "status": "done",
       "priority": 240,
       "domain": "economy",
       "allowed_paths": [

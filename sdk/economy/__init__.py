@@ -8,9 +8,29 @@ from sdk.economy.market import (
     observed_listings,
     parse_listing,
 )
+from sdk.economy.trades import (
+    BuyRequest,
+    CurrencyChange,
+    InventoryChange,
+    ListingGone,
+    ListingSeen,
+    SellRequest,
+    TradeInputError,
+    TradeReconciliation,
+    reconcile_trade,
+)
 
 __all__ = [
+    "BuyRequest",
+    "CurrencyChange",
     "FlowTotals",
+    "InventoryChange",
+    "ListingGone",
+    "ListingSeen",
+    "SellRequest",
+    "TradeInputError",
+    "TradeReconciliation",
+    "reconcile_trade",
     "Ledger",
     "LedgerEntry",
     "MarketInputError",
