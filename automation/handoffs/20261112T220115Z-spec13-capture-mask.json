@@ -1,0 +1,45 @@
+{
+  "slice_id": "spec13-capture-mask",
+  "status": "done",
+  "summary": "Capture run 43314838395 recorded the room and ship designs, but all 430 ShipDesign masks (the interior grid: one digit per cell, Rows x Columns) were redacted, because one long run of digits looks like a token to both the value check and the leak scan. An all-digit @Mask is now written in space-separated groups of 12 digits; join_mask restores it exactly. Any other @Mask value is still redacted. The leak scan is unchanged, and the split mask passes it at every hull size up to 81 x 40.",
+  "files_touched": [
+    "sdk/state/capture.py",
+    "tests/test_capture_reads.py"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "make lint",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "Keep the ship interior mask in captures",
+      "before": "ShipDesign masks redacted",
+      "after": "all-digit masks kept, split into 12-digit groups",
+      "proof": [
+        "tests: a long all-digit mask is captured split and joins back exactly; a non-digit mask is still redacted; split masks pass the unchanged scan up to 3240 cells",
+        "make syntax-check, make test (1317 OK), make lint, git diff --check pass"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "None beyond the existing scan; only digit-only Mask values are kept."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-12T22:01:35Z"
+}

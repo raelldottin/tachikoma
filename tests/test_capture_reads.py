@@ -39,8 +39,10 @@ from sdk.state.capture import (
     Placeholders,
     _letters,
     field_category,
+    join_mask,
     sanitize_capture,
     scan_capture_text,
+    split_mask,
 )
 from sdk.state.snapshot import game_identity_fingerprint
 from tests import test_profile_reads as profile_tests  # a module import: its test cases are not rerun here
@@ -136,6 +138,9 @@ def battles_xml(uid, alias):
             f'</Battles></ListPvPBattles2></BattleService>')
 
 
+LONG_MASK = ("0011111111111100" * 9)[:153]  # a 9 x 17 hull: one digit per cell, one long run as the server sends it
+
+
 def room_designs_xml():
     return ('<RoomService><ListRoomDesigns2><RoomDesigns>'
             '<RoomDesign RoomDesignId="6" RoomName="Mineral Mining Laser Lv1" RoomType="Laser" '
@@ -147,8 +152,10 @@ def room_designs_xml():
 def all_designs():
     """What ``Client.listAllDesigns4`` keeps: each design list under its own attribute."""
     return {
-        "shipDesigns": parse('<ShipDesigns><ShipDesign ShipDesignId="17" ShipDesignName="Hull 1" Rows="12" '
-                             'Columns="16" Mask="0011110000111100" ShipLevel="1"/></ShipDesigns>')["ShipDesigns"],
+        "shipDesigns": parse('<ShipDesigns><ShipDesign ShipDesignId="17" ShipDesignName="Hull 1" Rows="9" '
+                             f'Columns="17" Mask="{LONG_MASK}" ShipLevel="1"/>'
+                             '<ShipDesign ShipDesignId="18" ShipDesignName="Odd" Rows="1" Columns="1" '
+                             f'Mask="{LONG_BLOB}"/></ShipDesigns>')["ShipDesigns"],
         "roomDesignPurchases": parse('<RoomDesignPurchases><RoomDesignPurchase RoomDesignPurchaseId="301" '
                                      'RoomDesignId="6" Level="1" Quantity="1"/></RoomDesignPurchases>')[
                                          "RoomDesignPurchases"],
@@ -336,14 +343,30 @@ class CaptureCommandTests(unittest.TestCase):
                      'PriceString="mineral:500"', 'MinShipLevel="1"'):
             self.assertIn(kept, rooms)
         ships = (self.output / "alpha/ship_designs.xml").read_text(encoding="utf-8")
-        for kept in ('ShipDesignId="17"', 'Rows="12"', 'Columns="16"', 'Mask="0011110000111100"'):
+        for kept in ('ShipDesignId="17"', 'Rows="9"', 'Columns="17"'):
             self.assertIn(kept, ships)
+        hulls = {design["@ShipDesignId"]: design for design in parse(ships)["ShipDesigns"]["ShipDesign"]}
+        # The long all-digit mask is kept, split into short groups that the leak scan passes; nothing is lost.
+        self.assertIn(" ", hulls["17"]["@Mask"])
+        self.assertEqual(join_mask(hulls["17"]["@Mask"]), LONG_MASK)
+        # A mask that is not all digits is still redacted.
+        self.assertNotIn(LONG_BLOB, ships)
+        self.assertNotEqual(hulls["18"]["@Mask"], LONG_BLOB)
         self.assertTrue(ships.lstrip().startswith(("<ShipDesigns", "<?xml")))
         purchases = (self.output / "alpha/room_design_purchases.xml").read_text(encoding="utf-8")
         self.assertIn('RoomDesignId="6"', purchases)
         self.assertNotIn('RoomDesignPurchaseId="301"', purchases)  # not a game-data id: replaced by a placeholder
         for alias in ("alpha", "bravo"):  # listAllDesigns4 runs once per account; the purchases reuse its response
             self.assertEqual(CaptureClient.instances[["alpha", "bravo"].index(alias)].calls.count("listAllDesigns4"), 1)
+
+    # Verifies: S13-R1
+    def test_split_mask_round_trips_and_passes_the_scan(self):
+        for mask in ("0", "0123456789", LONG_MASK, "1" * 3240):
+            with self.subTest(length=len(mask)):
+                text = split_mask(mask)
+                self.assertEqual(join_mask(text), mask)
+                self.assertTrue(all(len(group) <= 12 for group in text.split()))
+                self.assertEqual(scan_capture_text(f'<ShipDesign Mask="{text}"/>'), [])
 
     # Verifies: S13-R1
     def test_purchases_read_reports_the_failed_design_read_not_login(self):
