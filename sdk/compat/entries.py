@@ -1,8 +1,9 @@
 """The shipped compatibility ledger.
 
-Every entry comes from a fact already recorded in the repository. Nothing here
-was observed fresh: versions and dates are the ones the cited source records,
-and ``None`` where it records none. When two repository sources disagree on how
+Every entry comes from a fact already recorded in the repository: versions and
+dates are the ones the cited source records, and ``None`` where it records none.
+The read-path entries cite the sanitized captures in tests/fixtures/live_sanitized/,
+taken by the owner-dispatched G1 runs of 2026-11-12 (SPEC-03 S03-R7). When two repository sources disagree on how
 strong a source is, the weaker class is recorded and the note says why.
 
 See docs/baseline/compatibility-ledger.md.
@@ -25,6 +26,9 @@ CLIENT = "sdk/client.py"
 SECURITY = "sdk/security.py"
 CREW = "sdk/crew_leveling.py"
 FORMULAS = "sdk/game_formulas.py"
+
+LIVE_CAPTURES = "tests/fixtures/live_sanitized/README.md"
+G1_EVIDENCE = "docs/experiments/live/g1-evidence.md"
 
 HULL14_NOTES = "https://blog.pixelstarships.com/2026/06/17/hull-14-major-update-patch-notes-v0-999-55/"
 PREVIEW_1_0 = "https://blog.pixelstarships.com/2026/10/16/sneak-peek-pixel-starships-1-0/"
@@ -60,12 +64,71 @@ _DIGEST_COMMUNITY_NOTE = (
 )
 
 
+def _g1_read(entry_id: str, subject: str, note: str, *code: str) -> LedgerEntry:
+    """A read endpoint seen in the G1 captures: the server settings reported RecommendedVersion 1.0."""
+    return LedgerEntry(
+        entry_id,
+        "endpoint",
+        subject,
+        (
+            Evidence(
+                "dynamically-demonstrated",
+                LIVE_CAPTURES,
+                game_version="1.0",
+                observed="2026-11-12",
+                note=note + " Version: the server's RecommendedVersion in the same runs (the client declares "
+                "0.999.59); see " + G1_EVIDENCE + ".",
+            ),
+        ),
+        code=code,
+    )
+
+
 def _formula(entry_id: str, subject: str, source: str, *code: str, note: str = _WIKI_NOTE) -> LedgerEntry:
     return LedgerEntry(entry_id, "formula", subject, (Evidence("community", source, note=note),), code=code)
 
 
 LEDGER: tuple[LedgerEntry, ...] = validate_ledger(
     (
+        # ---------------------------------------------------------------
+        # Read path (G1 captures, 2026-11-12)
+        _g1_read(
+            "endpoint.user.device-login17-profile",
+            "The DeviceLogin17 User record holds trophies in @Trophy, starbux in @Credits and @HighestTrophy",
+            "pss5/user_login.xml (owner-dispatched capture run 43187703923).",
+            "sdk.state.profile_reads:parse_profile",
+        ),
+        _g1_read(
+            "endpoint.ladder.find-user-ranking",
+            "FindUserRanking returns the ladder position (@Ranking, @TotalUsers, @TotalActiveUsers) and no trophy count",
+            "pss1/find_user_ranking.xml and pss5/find_user_ranking.xml (run 43187703923).",
+            "sdk.client:Client.findUserRanking",
+            "sdk.state.profile_reads:parse_ranking",
+        ),
+        _g1_read(
+            "endpoint.battle.list-pvp-battles2",
+            "ListPvPBattles2 lists Battle records under ListPvPBattles/Battles with BattleId, Attacking/DefendingUserId, "
+            "OutcomeType and Win/LoseTrophyResult; a new account's list is empty",
+            "pss1/list_pvp_battles2.xml (10 battles) and pss5/list_pvp_battles2.xml (none), run 43187703923. "
+            "Trophy counts in the records were all 0, so they are read as unreported.",
+            "sdk.client:Client.listPvPBattles2",
+            "sdk.state.profile_reads:parse_battles",
+        ),
+        _g1_read(
+            "endpoint.ship.get-ship-by-user-id-empty-containers",
+            "GetShipByUserId on a new ship returns empty <Rooms/> and <Researches/> elements",
+            "Every ship read of pss2 to pss5 failed on these in the first capture run; fixed in #183 and read "
+            "cleanly in run 43187703923.",
+            "sdk.client:Client.getShipByUserId",
+        ),
+        _g1_read(
+            "endpoint.setting.get-latest-version3-fields",
+            "GetLatestVersion3's Setting has no LatestVersion, LatestClientVersion or LatestVersionIOS; it reports "
+            "RecommendedVersion, MinimumClientVersion, MinimumVersion and CurrentAndroidVersion, plus integer "
+            "data counters such as ServerSettingVersion",
+            "pss1/server_settings_fields.json (field names only), run 43187703923; read by #187.",
+            "sdk.fleet.factory:server_game_version",
+        ),
         # ---------------------------------------------------------------
         # Session and battle chain
         # ---------------------------------------------------------------

@@ -247,11 +247,26 @@ class ShippedLedgerTests(unittest.TestCase):
         ):
             self.assertIn(entry_id, report.weak_only)
 
-    def test_target_1_0_flags_every_entry(self):
+    # Verifies: S03-R7
+    def test_target_1_0_flags_every_entry_but_the_g1_read_path(self):
         report = check_compatibility("1.0")
-        self.assertEqual(report.current, ())
-        self.assertEqual(report.summary()["clean"], 0)
+        g1 = {"endpoint.user.device-login17-profile", "endpoint.ladder.find-user-ranking",
+              "endpoint.battle.list-pvp-battles2", "endpoint.ship.get-ship-by-user-id-empty-containers",
+              "endpoint.setting.get-latest-version3-fields"}
+        self.assertEqual(set(report.current), g1)
+        self.assertEqual(report.summary()["clean"], len(g1))
         self.assertTrue(report.client_behind_target)
+
+    # Verifies: S03-R7
+    def test_g1_read_path_entries_are_live_evidence_at_1_0(self):
+        for entry in LEDGER:
+            if entry.entry_id.startswith(("endpoint.user.device-login17", "endpoint.ladder.", "endpoint.battle.list-",
+                                          "endpoint.ship.", "endpoint.setting.")):
+                with self.subTest(entry=entry.entry_id):
+                    (evidence,) = entry.evidence
+                    self.assertEqual((evidence.evidence_class, evidence.game_version, evidence.observed),
+                                     ("dynamically-demonstrated", "1.0", "2026-11-12"))
+                    self.assertEqual(evidence.source, "tests/fixtures/live_sanitized/README.md")
 
     def test_doc_lists_every_entry_id(self):
         text = DOC_PATH.read_text(encoding="utf-8")
