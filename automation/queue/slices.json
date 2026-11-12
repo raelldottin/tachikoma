@@ -1666,6 +1666,33 @@
         "make test",
         "git diff --check"
       ]
+    },
+    {
+      "slice_id": "spec03-capture-command",
+      "title": "SPEC-03: read-only, sanitizing capture command for the owner's G1 run",
+      "status": "queued",
+      "priority": 399,
+      "domain": "safety",
+      "allowed_paths": [
+        "run.py",
+        "sdk/fleet/factory.py",
+        "sdk/state/capture.py",
+        "tests/test_capture_reads.py",
+        "README.template",
+        "README.md",
+        "docs/baseline/capability-inventory.json",
+        "tests/fixtures/live_sanitized/README.md"
+      ],
+      "depends_on": [
+        "spec-status-verified-offline"
+      ],
+      "max_files_changed": 8,
+      "notes": "Supports S03-R1/R2 under gate G1 (approved 2026-11-12). run.py --capture-reads --registry --output: read-only calls only, every response sanitized with stable placeholders and scanned before it is written; the owner dispatches it through live-trial.yml. Fakes only in tests.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
     }
   ]
 }
