@@ -2093,10 +2093,10 @@
     {
       "slice_id": "spec06-policy-coverage",
       "title": "Cover daily-run.yml and live-trial.yml in the workflow policy check",
-      "status": "blocked",
+      "status": "queued",
       "priority": 408,
       "domain": "ci",
-      "entry_condition": "The owner merges #209 (daily-run.yml hardening); then a chore(queue) PR sets this to queued.",
+      "entry_condition": "Met: the owner merged #209 (daily-run.yml hardening) on 2026-11-12.",
       "allowed_paths": [
         "scripts/ci.py",
         "tests/test_ci.py",
