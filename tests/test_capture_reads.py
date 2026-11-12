@@ -9,6 +9,7 @@ e-mails are used, and nothing is written under tests/fixtures/.
 import inspect
 import io
 import json
+import re
 import logging
 import os
 import socket
@@ -135,6 +136,25 @@ def battles_xml(uid, alias):
             f'</Battles></ListPvPBattles2></BattleService>')
 
 
+def room_designs_xml():
+    return ('<RoomService><ListRoomDesigns2><RoomDesigns>'
+            '<RoomDesign RoomDesignId="6" RoomName="Mineral Mining Laser Lv1" RoomType="Laser" '
+            'ManufactureType="Mineral" Rows="2" Columns="2" PriceString="mineral:500" ImageSpriteId="1200" '
+            'RootRoomDesignId="6" UpgradeFromRoomDesignId="0" MinShipLevel="1"/>'
+            '</RoomDesigns></ListRoomDesigns2></RoomService>')
+
+
+def all_designs():
+    """What ``Client.listAllDesigns4`` keeps: each design list under its own attribute."""
+    return {
+        "shipDesigns": parse('<ShipDesigns><ShipDesign ShipDesignId="17" ShipDesignName="Hull 1" Rows="12" '
+                             'Columns="16" Mask="0011110000111100" ShipLevel="1"/></ShipDesigns>')["ShipDesigns"],
+        "roomDesignPurchases": parse('<RoomDesignPurchases><RoomDesignPurchase RoomDesignPurchaseId="301" '
+                                     'RoomDesignId="6" Level="1" Quantity="1"/></RoomDesignPurchases>')[
+                                         "RoomDesignPurchases"],
+    }
+
+
 def parse(text):
     return xmltodict.parse(text, xml_attribs=True)
 
@@ -205,6 +225,18 @@ class CaptureClient:
     def listPvPBattles2(self, take=25, skip=0):
         self.pvp_arguments = (take, skip)
         return self._serve("listPvPBattles2", "pvpBattles", battles_xml(self.user.id, self.alias))
+
+    def listRoomDesigns2(self):
+        return self._serve("listRoomDesigns2", "roomDesigns", room_designs_xml())
+
+    def listAllDesigns4(self):
+        self.calls.append("listAllDesigns4")
+        override = CaptureClient.overrides.get("listAllDesigns4")
+        if override is not None:
+            return override(self)
+        for attribute, value in all_designs().items():
+            setattr(self, attribute, value)
+        return True
 
 
 class CaptureCommandTests(unittest.TestCase):
@@ -291,9 +323,35 @@ class CaptureCommandTests(unittest.TestCase):
         self.assertEqual(endpoints, {read.endpoint for read in CAPTURE_READS} | {SETTINGS_SUMMARY.endpoint})
         self.assertIn("FindUserRanking", endpoints)
         self.assertIn("ListPvPBattles2", endpoints)
-        self.assertIn("| alpha | logged in | 0.999.60 | 8 | 0 |", out)
+        self.assertIn("| alpha | logged in | 0.999.60 | 11 | 0 |", out)
         self.assertIn("| charlie | disabled |", out)
         self.assertIn("## Rows for tests/fixtures/live_sanitized/README.md", out)
+
+    # Verifies: S13-R1
+    def test_room_and_ship_designs_are_captured_with_game_ids_kept(self):
+        code, out, err, _ = self.run_main()
+        self.assertEqual(code, 0, err)
+        rooms = (self.output / "alpha/list_room_designs2.xml").read_text(encoding="utf-8")
+        for kept in ('RoomDesignId="6"', 'RoomType="Laser"', 'ManufactureType="Mineral"', 'Rows="2"', 'Columns="2"',
+                     'PriceString="mineral:500"', 'MinShipLevel="1"'):
+            self.assertIn(kept, rooms)
+        ships = (self.output / "alpha/ship_designs.xml").read_text(encoding="utf-8")
+        for kept in ('ShipDesignId="17"', 'Rows="12"', 'Columns="16"', 'Mask="0011110000111100"'):
+            self.assertIn(kept, ships)
+        self.assertTrue(ships.lstrip().startswith(("<ShipDesigns", "<?xml")))
+        purchases = (self.output / "alpha/room_design_purchases.xml").read_text(encoding="utf-8")
+        self.assertIn('RoomDesignId="6"', purchases)
+        self.assertNotIn('RoomDesignPurchaseId="301"', purchases)  # not a game-data id: replaced by a placeholder
+        for alias in ("alpha", "bravo"):  # listAllDesigns4 runs once per account; the purchases reuse its response
+            self.assertEqual(CaptureClient.instances[["alpha", "bravo"].index(alias)].calls.count("listAllDesigns4"), 1)
+
+    # Verifies: S13-R1
+    def test_purchases_read_reports_the_failed_design_read_not_login(self):
+        CaptureClient.overrides = {"listAllDesigns4": lambda client: False}
+        _, out, _, _ = self.run_main()  # a read with no data makes the command exit non-zero
+        self.assertIn("| alpha | ListAllDesigns4 (ShipDesigns) | no data |", out)
+        self.assertIn("listAllDesigns4 left no response", out)
+        self.assertNotIn("| alpha | ListAllDesigns4 (RoomDesignPurchases) | no data | n/a | not scanned | login", out)
 
     # Verifies: S03-R1
     def test_only_read_only_methods_are_called(self):
@@ -393,7 +451,7 @@ class CaptureCommandTests(unittest.TestCase):
         self.assertEqual((battles["status"], battles["scan"]),
                          ("withheld", "withheld: response is not well-formed XML"))
         self.assertIn("| alpha | FindUserRanking | withheld |", out)
-        self.assertIn("| alpha | logged in | 0.999.60 | 6 | 2 |", out)
+        self.assertIn("| alpha | logged in | 0.999.60 | 9 | 2 |", out)
         # The rule is reported, never the value.
         self.assertNotIn(UNSANITIZABLE_KEY, out + err + log + self.everything_written())
         self.assert_no_planted_value(out, err, log, self.everything_written())
@@ -574,7 +632,30 @@ REAL_REGISTRY = {"version": 1, "accounts": [
 ALLOWED_PATHS = {"/UserService/DeviceLogin17", "/SettingService/GetLatestVersion3",
                  "/LiveOpsService/GetTodayLiveOps2", "/ShipService/GetShipByUserId",
                  "/CharacterService/ListAllCharactersOfUser", "/ItemService/ListItemsOfAShip",
-                 "/LadderService/FindUserRanking", "/BattleService/ListPvPBattles2"}
+                 "/LadderService/FindUserRanking", "/BattleService/ListPvPBattles2",
+                 "/RoomService/ListRoomDesigns2", "/DesignService/ListAllDesigns4"}
+# Every design list ListAllDesigns4 must return (Client.listAllDesigns4 refuses a response missing one), and the
+# version fields the real client reads from the settings to build that request.
+CLIENT_SOURCE = (REPO_ROOT / "sdk/client.py").read_text(encoding="utf-8")
+DESIGN_VERSION_FIELDS = sorted(set(re.findall(r"versions\['@(\w+)'\]", CLIENT_SOURCE)))
+ALL_DESIGN_LISTS = re.findall(r'^\s+"(\w+)",$', CLIENT_SOURCE.split("designs = [", 1)[1].split("]", 1)[0], re.M)
+
+
+def real_latest_xml():
+    """The settings a live server sends: the version fields of latest_xml plus every design list version."""
+    versions = " ".join(f'{name}="1"' for name in DESIGN_VERSION_FIELDS if name not in ("RoomDesignVersion",
+                                                                                         "ResearchDesignVersion"))
+    return latest_xml().replace("<Setting ", f"<Setting {versions} ", 1)
+
+
+def all_designs_xml():
+    """A ListAllDesigns4 response: ShipDesigns and RoomDesignPurchases filled in, every other list empty."""
+    filled = {"ShipDesigns": '<ShipDesign ShipDesignId="17" ShipDesignName="Hull 1" Rows="12" Columns="16" '
+                             'Mask="0011110000111100" ShipLevel="1"/>',
+              "RoomDesignPurchases": '<RoomDesignPurchase RoomDesignPurchaseId="301" RoomDesignId="6" Level="1" '
+                                     'Quantity="1"/>'}
+    lists = "".join(f"<{name}>{filled[name]}</{name}>" if name in filled else f"<{name}/>" for name in ALL_DESIGN_LISTS)
+    return f"<DesignService><ListAllDesigns>{lists}</ListAllDesigns></DesignService>"
 
 
 def xml_response(text):
@@ -603,7 +684,11 @@ class CaptureGameAdapter(BaseAdapter):
             self.alias_by_token[REAL_TOKENS[alias]] = alias
             return xml_response(login_xml(UIDS[alias], alias, REAL_TOKENS[alias]))
         if parts.path.endswith("GetLatestVersion3"):
-            return xml_response(latest_xml())
+            return xml_response(real_latest_xml())
+        if parts.path.endswith("ListRoomDesigns2"):
+            return xml_response(room_designs_xml())
+        if parts.path.endswith("ListAllDesigns4"):
+            return xml_response(all_designs_xml())
         if parts.path.endswith("GetTodayLiveOps2"):
             return xml_response("<LiveOpsService><GetTodayLiveOps/></LiveOpsService>")
         alias = self.alias_by_token[parse_qs(parts.query)["accessToken"][0]]
