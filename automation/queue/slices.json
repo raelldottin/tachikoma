@@ -1697,7 +1697,7 @@
     {
       "slice_id": "g1-live-fixes",
       "title": "Fix defects the first G1 capture run found",
-      "status": "queued",
+      "status": "done",
       "priority": 400,
       "domain": "safety",
       "allowed_paths": [

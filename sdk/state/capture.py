@@ -104,6 +104,11 @@ CAPTURE_READS: tuple[CaptureRead, ...] = (
     CaptureRead("find_user_ranking", "FindUserRanking", "findUserRanking", "userRanking"),
     CaptureRead("list_pvp_battles2", "ListPvPBattles2", "listPvPBattles2", "pvpBattles", {"take": 25}),
 )
+# A field value kept in the settings summary: a version number, nothing else.
+SETTINGS_VERSION_VALUE = re.compile(r"^[0-9]+(?:\.[0-9]+){1,3}[A-Za-z0-9]{0,4}$")
+SETTINGS_SUMMARY = CaptureRead("server_settings_fields", "GetLatestVersion3 (field names)", None, "latestVersion",
+                               note="field names of the server settings; values kept only when they look like a "
+                                    "version number")
 # Every Client method the command calls after login, in call order.
 CAPTURE_METHODS: tuple[str, ...] = tuple(read.method for read in CAPTURE_READS if read.method)
 
@@ -414,7 +419,55 @@ def capture_account(alias: str, client: Any, *, game_version: Optional[str],
     with no_relogin(client):
         for read in reads:
             results.append(_capture_one(alias, client, read, placeholders, game_version, scrub_text, clock))
+    results.append(settings_fields(alias, getattr(client, "latestVersion", None), game_version, clock))
     return results
+
+
+def _setting_records(settings: Any) -> Iterable[tuple[str, Mapping]]:
+    """Every mapping under the settings response that holds ``@`` attributes, with its path."""
+    stack = [("", settings)]
+    while stack:
+        path, node = stack.pop()
+        if isinstance(node, Mapping):
+            if any(str(key).startswith("@") for key in node):
+                yield path or "/", node
+            for key, value in node.items():
+                if not str(key).startswith("@"):
+                    stack.append((f"{path}/{key}", value))
+        elif isinstance(node, list):
+            for index, value in enumerate(node):
+                stack.append((f"{path}[{index}]", value))
+
+
+def settings_fields(alias: str, settings: Any, game_version: Optional[str],
+                    clock: Callable[[], datetime]) -> CaptureResult:
+    """A summary of the server settings that is safe to share even when the settings are withheld.
+
+    It lists each field's name and the length of its value; a value is kept
+    only when it looks like a version number. That shows which field holds the
+    game version without exposing any other value.
+    """
+    captured_at = _utc(clock)
+    if not isinstance(settings, Mapping) or not settings:
+        return CaptureResult(alias, SETTINGS_SUMMARY, "no data", captured_at, game_version,
+                             reason="login left no server settings")
+    summary = {}
+    for path, record in sorted(_setting_records(settings)):
+        fields = {}
+        for key in sorted(k for k in record if str(k).startswith("@")):
+            value = record[key]
+            text = "" if value is None else str(value)
+            fields[str(key).lstrip("@")] = text if SETTINGS_VERSION_VALUE.match(text) else f"<{len(text)} characters>"
+        summary[path] = fields
+    text = json.dumps({"endpoint": "GetLatestVersion3", "fields": summary}, indent=2, sort_keys=True) + "\n"
+    findings = scan_capture_text(text, f"{alias}/{SETTINGS_SUMMARY.stem}.json")
+    if findings:
+        rules = describe_findings(findings)
+        return CaptureResult(alias, SETTINGS_SUMMARY, "withheld", captured_at, game_version,
+                             scan=f"withheld: {rules}", reason=f"scan found {rules}")
+    return CaptureResult(alias, SETTINGS_SUMMARY, "captured", captured_at, game_version,
+                         steps=("2: field names only; values kept only when they look like a version number",),
+                         scan="clean", text=text, extension=".json")
 
 
 def _capture_one(alias: str, client: Any, read: CaptureRead, placeholders: Placeholders,
