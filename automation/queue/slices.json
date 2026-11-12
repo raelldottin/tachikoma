@@ -1961,7 +1961,7 @@
         "manual owner dispatch of postmerge-ci.yml on the branch is green"
       ],
       "depends_on": [
-        "b0-test-repo-root-a"
+        "b0-test-repo-root-c"
       ],
       "max_files_changed": 5,
       "notes": "Same fix at tests/test_pvp_safety.py:14 and tests/test_tui.py:11; tests/test_pvp_safety.py:160 joins PYTHONPATH with os.pathsep. Add to TestIsolationTests in tests/test_ci.py an AST guard (ast.Call nodes only, so the string literal at test_ci.py:395 passes) that forbids Path(__file__).resolve() and os.path.realpath(__file__) in tests/**/*.py and in an explicit file list that starts as [scripts/ci.py]; a listed file that is missing fails the guard. Record sdk/simulation/game.py:43 in the test as the one known runtime exception. The owner dispatches postmerge-ci.yml on the branch. Plan: docs/BAZEL_MIGRATION_ROADMAP.md."
@@ -2018,6 +2018,32 @@
       "max_files_changed": 7,
       "notes": "pyproject.toml [project]: name \"tachikoma\", version \"0.0.0\" (not the release version), requires-python \">=3.11\", dependencies = the 7 runtime pins of requirements.txt; [dependency-groups] ci = [\"ruff==0.15.5\", \"PyYAML==6.0.3\"]; [tool.uv] required-version = \">=0.13.7,<0.14\"; [tool.ruff] keeps target-version py311; no [build-system]. Run `uv lock`, then `uv export --frozen --group ci --no-emit-project --no-annotate --no-header --format requirements-txt -o requirements_lock.txt`. tests/test_dependency_locks.py (tomllib, offline) asserts: uv.lock has packages and requires-python >=3.11; the only non-registry package is the root tachikoma with source virtual \".\"; every other source is registry https://pypi.org/simple; the lock's name==version set equals the default+ci resolution; per-package sha256 sets equal uv.lock wheel+sdist hashes; every non-comment line is a requirement or a --hash continuation; every package except the allowlist {ratelimit} has a wheel; pyproject runtime pins equal the == pins in requirements.txt. requirements.txt and .github/requirements-ci.txt stay unchanged. Mention the lock files in docs/RELEASE.md. Plan: docs/BAZEL_MIGRATION_ROADMAP.md.",
       "entry_condition": "On or after 2026-11-17, when uv 0.13.7 (released 2026-11-03) is 14 days old. The owner then sets status to queued in a chore(queue) PR."
+    },
+    {
+      "slice_id": "b0-test-repo-root-c",
+      "title": "Stop five later test modules from resolving __file__ out of the runfiles tree",
+      "status": "queued",
+      "priority": 350,
+      "domain": "tests",
+      "allowed_paths": [
+        "tests/test_account_baselines.py",
+        "tests/test_capture_reads.py",
+        "tests/test_fleet_execute.py",
+        "tests/test_profile_reads.py",
+        "tests/test_spec_traceability.py",
+        ".github/ruff-baseline.json"
+      ],
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "make lint",
+        "git diff --check"
+      ],
+      "depends_on": [
+        "b0-test-repo-root-a"
+      ],
+      "max_files_changed": 6,
+      "notes": "Added 2026-11-12: five test modules added after the roadmap was written (#161, #164, #166, #178, #180) still use Path(__file__).resolve(), so b0-test-repo-root-b's AST guard would fail on them. Apply b0-test-repo-root-a's fix: Path(os.path.abspath(__file__)) at tests/test_account_baselines.py, tests/test_capture_reads.py, tests/test_fleet_execute.py, tests/test_profile_reads.py and tests/test_spec_traceability.py (find each by content). No assertion changes. Plan: docs/BAZEL_MIGRATION_ROADMAP.md."
     }
   ]
 }
