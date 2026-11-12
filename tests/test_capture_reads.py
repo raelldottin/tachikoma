@@ -51,7 +51,7 @@ from tests.synthetic_fixtures import (
     SYNTHETIC_IOS_CHECKSUM_1,
 )
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(os.path.abspath(__file__)).parents[1]
 INVENTORY = json.loads((REPO_ROOT / "docs/baseline/capability-inventory.json").read_text(encoding="utf-8"))
 KINDS = {entry["name"]: entry["kind"] for entry in INVENTORY["client_methods"]}
 MUTATING_OR_SESSION = {name for name, kind in KINDS.items() if kind in ("mutating", "session")}

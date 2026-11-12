@@ -1,6 +1,7 @@
 """Tests for sdk.state.baseline (SPEC-04). Synthetic data only; sockets blocked."""
 
 import json
+import os
 import socket
 import tempfile
 import unittest
@@ -24,7 +25,7 @@ from sdk.state.baseline import (
 from sdk.state.snapshot import SECTIONS, game_identity_fingerprint
 from tests.synthetic_fixtures import SYNTHETIC_ACCESS_TOKEN, SYNTHETIC_DEVICE_KEY_IOS, SYNTHETIC_EMAIL
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(os.path.abspath(__file__)).parents[1]
 T0 = datetime(2026, 11, 10, 12, 0, 5, 123456, tzinfo=timezone.utc)
 SERVER_VERSION = "0.999.60"
 SALT = "synthetic-identity-salt-0123456789"

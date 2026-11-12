@@ -4,6 +4,7 @@ import ast
 from contextlib import redirect_stderr, redirect_stdout
 import io
 from pathlib import Path
+import os
 import socket
 import sys
 from tempfile import TemporaryDirectory
@@ -14,7 +15,7 @@ from unittest import mock
 from scripts import spec_trace
 
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(os.path.abspath(__file__)).parent.parent
 # Built by concatenation so that no line of this file is itself read as a citation.
 MARK = "# " + "Verifies:"
 

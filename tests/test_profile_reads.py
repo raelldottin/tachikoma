@@ -7,6 +7,7 @@ Parser and provider tests arrive with the owner's captures (S03-R1).
 
 from __future__ import annotations
 
+import os
 import re
 import tempfile
 import unittest
@@ -22,7 +23,7 @@ from tests.synthetic_fixtures import (
     SYNTHETIC_IOS_CHECKSUM_1,
 )
 
-LIVE_SANITIZED_DIR = Path(__file__).resolve().parent / "fixtures" / "live_sanitized"
+LIVE_SANITIZED_DIR = Path(os.path.abspath(__file__)).parent / "fixtures" / "live_sanitized"
 
 # Field names that hold a user id: ``Id`` exactly, or anything ending in
 # ``UserId`` (``UserId``, ``AttackingUserId``...), optionally ``@``-prefixed as

@@ -63,7 +63,7 @@ from tests.test_fleet_dry_run import (
 )
 from tests.test_fleet_dry_run import ENV as CREDENTIALS
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(os.path.abspath(__file__)).parents[1]
 SALT_ENV = "FLEET_SALT"
 ENV = {**CREDENTIALS, SALT_ENV: SALT}
 SECRET_VALUES = (ALPHA_AUTH, ALPHA_REFRESH, BRAVO_EMAIL, BRAVO_PASSWORD, SALT)
