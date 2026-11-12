@@ -2331,7 +2331,7 @@
     {
       "slice_id": "spec13-capture-designs",
       "title": "Capture room designs, ship designs and room purchase limits read-only",
-      "status": "queued",
+      "status": "done",
       "priority": 419,
       "domain": "fleet",
       "allowed_paths": [
