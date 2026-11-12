@@ -2473,6 +2473,26 @@
         "make lint",
         "git diff --check"
       ]
+    },
+    {
+      "slice_id": "spec13-q3-gas-collector",
+      "title": "Record the owner's change of SPEC-13's room to a Gas Collector Lv1",
+      "status": "queued",
+      "priority": 425,
+      "domain": "fleet",
+      "allowed_paths": [
+        "docs/specs/SPEC-13-room-placement.md"
+      ],
+      "depends_on": [
+        "spec13-capture-mask"
+      ],
+      "max_files_changed": 1,
+      "notes": "Owner decision 2026-11-12 ('Yes, gas collector'): S13-Q3 changes from a level-1 mineral collector to Gas Collector Lv1 (RoomDesignId 42, 2x2, mineral:10, construction 10 s), because capture run 43314838395 showed Mineral Extractor Lv1 costs 25 gas and pss5 has no gas above its reserve. Q4's cap becomes 10 minerals. Record the design facts the capture confirmed.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
     }
   ]
 }
