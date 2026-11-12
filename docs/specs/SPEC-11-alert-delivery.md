@@ -65,7 +65,7 @@ Extend `tests/test_fleet_execute.py`; a fake `smtplib.SMTP` as the existing SMTP
 
 **Offline verification:** every MUST with an offline acceptance criterion is covered by a test that cites it (checked by `scripts/spec_trace.py`). Implemented in #173.
 
-Pending.
+**Live evidence (S11-AC3, pending the owner's confirmation):** after each G2 canary of 2026-11-12, alerts were evaluated into the run record (one `no-verified-action` warning) and the dashboard was written next to the journals: [G2 evidence](../experiments/live/g2-evidence.md). The spec is `Done` once the owner confirms seeing them.
 
 ## Open questions and risks
 
