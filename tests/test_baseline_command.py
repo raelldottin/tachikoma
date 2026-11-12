@@ -346,6 +346,26 @@ class ServerGameVersionTests(unittest.TestCase):
         client.headers = {"ClientVersion": DECLARED_VERSION}  # the declared version is never consulted
         self.assertIsNone(server_game_version(client))
 
+    # Verifies: S04-R3
+    def test_live_setting_shape_gives_recommended_version_and_data_counter(self):
+        """The G1 capture showed none of the first three attributes; RecommendedVersion and the counter exist."""
+        class Holder:
+            pass
+
+        client = Holder()
+        live = {"@MinimumClientVersion": "1.0", "@MinimumVersion": "1.0", "@CurrentAndroidVersion": "1.0",
+                "@RecommendedVersion": "1.0", "@ServerSettingVersion": "1234567"}
+        client.latestVersion = latest_setting(**live)
+        self.assertEqual(server_game_version(client), "1.0+settings.1234567")
+        client.latestVersion = latest_setting(**{**live, "@LatestVersion": "0.999.60"})
+        self.assertEqual(server_game_version(client), "0.999.60+settings.1234567")
+        client.latestVersion = latest_setting(**{"@ServerSettingVersion": "1234567"})
+        self.assertEqual(server_game_version(client), "settings.1234567")
+        client.latestVersion = latest_setting(**{"@RecommendedVersion": "1.0", "@ServerSettingVersion": "12ab"})
+        self.assertEqual(server_game_version(client), "1.0")  # a non-numeric counter is not recorded
+        client.latestVersion = latest_setting(**{"@MinimumClientVersion": "1.0", "@CurrentAndroidVersion": "1.0"})
+        self.assertIsNone(server_game_version(client))  # minimum and other-platform versions are not used
+
     # Verifies: S04-R1, S04-R3
     def test_open_baseline_takes_one_read_only_snapshot(self):
         BaselineClient.touched = []

@@ -1,0 +1,48 @@
+{
+  "slice_id": "g1-game-version",
+  "status": "done",
+  "summary": "The third G1 capture wrote the server settings field summary. None of @LatestVersion, @LatestClientVersion or @LatestVersionIOS exists live, so every baseline recorded game_version null. The live Setting record has RecommendedVersion, MinimumClientVersion, MinimumVersion and CurrentAndroidVersion (all 1.0) and integer data counters.  server_game_version now also tries @RecommendedVersion and appends the @ServerSettingVersion counter when it is all digits (1.0+settings.<n>), so two observations on different game data differ. MinimumClientVersion and the declared ClientVersion stay unused (S04-R3). A regression test with the live setting shape fails on the old code. Found from the owner-dispatched G1 capture's settings field summary; fixed and re-validated by the parent agent.",
+  "files_touched": [
+    "README.md",
+    "README.template",
+    "docs/baseline/account-snapshot.md",
+    "docs/specs/SPEC-04-account-baselines.md",
+    "sdk/fleet/factory.py",
+    "tests/test_baseline_command.py"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "Read the game version from the server settings fields the live server returns",
+      "before": "Every live baseline records game_version null",
+      "after": "game_version reads RecommendedVersion plus the ServerSettingVersion counter",
+      "proof": [
+        "make syntax-check, make test, scripts/ci.py lint and git diff --check pass on current main",
+        "regression test with the live setting shape fails on the old code"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "Confirmed live only after the owner re-dispatches baseline."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-12T09:05:54Z"
+}
