@@ -1693,6 +1693,29 @@
         "make test",
         "git diff --check"
       ]
+    },
+    {
+      "slice_id": "g1-live-fixes",
+      "title": "Fix defects the first G1 capture run found",
+      "status": "queued",
+      "priority": 400,
+      "domain": "safety",
+      "allowed_paths": [
+        "sdk/client.py",
+        "sdk/state/capture.py",
+        "tests/test_capture_reads.py",
+        "tests/test_runtime_guards.py"
+      ],
+      "depends_on": [
+        "spec03-capture-command"
+      ],
+      "max_files_changed": 4,
+      "notes": "The first live capture run (G1, 2026-11-12) found: Client.getShipByUserId crashed on new ships whose <Researches/> or <Rooms/> is empty (pss2-pss5); and the server settings (GetLatestVersion3) were withheld by the scan, so the game version stayed unknown. Guard the empty containers (shapes otherwise unchanged) and add a field-name summary of the settings that keeps only version-like values. Regression tests fail on the old code.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
     }
   ]
 }
