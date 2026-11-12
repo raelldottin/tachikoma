@@ -1968,7 +1968,7 @@
     {
       "slice_id": "b0-strict-skip-mode",
       "title": "Turn dependency skips into failures under TACHIKOMA_STRICT_DEPS=1",
-      "status": "queued",
+      "status": "done",
       "priority": 352,
       "domain": "tests",
       "allowed_paths": [
