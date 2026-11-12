@@ -1,6 +1,6 @@
 # SPEC-05: Authorized live execution with a canary and kill switch
 
-**Status:** Verified offline
+**Status:** Done, 2026-11-12. Evidence: [G2 evidence](../experiments/live/g2-evidence.md).
 **Approval:** owner, 2026-11-11, through the session goal "complete the plan in docs/specs/". This approves building and testing the spec offline; owner questions take their safe defaults. It does not open any live gate (G1–G5), so live acceptance criteria stay pending.
 **Release:** R2 (prerequisite for every live trial)
 **Owner gate:** none to build (offline); G2 to use
@@ -77,7 +77,13 @@ The scheduler, runner and fleet orchestrator can execute actions (`run(execute=T
 
 **Offline verification:** every MUST with an offline acceptance criterion is covered by a test that cites it (checked by `scripts/spec_trace.py`). Implemented in #162, #171.
 
-Pending (recorded under SPEC-07).
+**Live evidence (S05-AC6):** the owner ran the canary on `pss5` under the G2 authorization (runs 43261519416 and 43262412245, 2026-11-12). Each executed exactly one `collect_all_resources`, spent nothing, and recorded its reconciliation (`not-observed`: minerals and gas unchanged), the run record and the alerts: [G2 evidence](../experiments/live/g2-evidence.md).
+
+**Live findings.** The first owner-dispatched G2 canary (run 43256792025, 2026-11-12) executed nothing, and `g2-canary-fixes` corrects what it found:
+
+- Live `ListItemsOfAShip` items carry no `@Type`/`@ItemType`, so minerals and gas were never observed and baseline-v1 refused every cost-bearing action. The dry run and execute paths now map items to resources through the server's item designs (`client.itemDesigns` from `listAllDesigns4`, by `@ItemType`); anything ambiguous or unmapped stays `None`. If `listAllDesigns4` fails live, they stay unobserved.
+- baseline-v1 plans `collect_all_resources` only after a room upgrade, so the canary had no safe-to-retry request and rejected `collect_daily_reward` with a misleading reason. In canary mode, when no safe-to-retry request remains, the policy did not plan the collection itself and the authorization allows it, the plan now holds one `collect_all_resources` (S05-R4's "first safe-to-retry action in its plan" is that request); not-safe requests are rejected with `canary: not safe to retry`. Full mode is unchanged.
+- The run record's `game_version.server` was hard-coded `null`. Each account's `server_game_version` is now recorded at login and reported per account, and at the top level when all accounts agree.
 
 ## Open questions and risks
 

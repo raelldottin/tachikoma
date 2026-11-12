@@ -1,0 +1,46 @@
+{
+  "slice_id": "spec04-baseline-evidence",
+  "status": "done",
+  "summary": "The owner-dispatched baseline run 43256802775 (2026-11-12) took a read-only baseline of pss1-pss5 with game version 1.0+settings.3307714, the profile observed and every section present. Minerals and gas stay None: the live item list identifies resources only by design id. Per S04-Q2's safe default only the summary table is committed; it passes the S04-R7 scan.",
+  "files_touched": [
+    "docs/experiments/baselines/2026-11-12-g1.md",
+    "docs/experiments/live/g1-evidence.md",
+    "docs/specs/README.md",
+    "docs/specs/SPEC-04-account-baselines.md"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "Commit the G1 baseline summary and mark SPEC-04 done",
+      "before": "SPEC-04 Verified offline",
+      "after": "SPEC-04 Done with the G1 baseline summary",
+      "proof": [
+        "make syntax-check, make test, scripts/spec_trace.py and git diff --check pass on current main",
+        "the downloaded artifact re-scanned clean"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "Minerals and gas are not observed by the baseline path."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-12T16:22:49Z"
+}

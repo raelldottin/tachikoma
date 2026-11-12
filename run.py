@@ -978,6 +978,10 @@ def run_fleet_execute(registry_path, authorization_path, mode=None, journal_dir=
     def scrub_text(text):
         return scrubber.scrub(text) if text else text
 
+    # The server's game version each account saw at login (pattern-checked, so it holds no secret).
+    game_versions = factory.game_versions()
+    observed_versions = set(game_versions.values())
+    common_server_version = observed_versions.pop() if len(observed_versions) == 1 else None
     record_accounts = []
     for run in fleet_run.accounts:
         report = orchestrator.reports.get(run.alias)
@@ -987,6 +991,7 @@ def run_fleet_execute(registry_path, authorization_path, mode=None, journal_dir=
             "status": run.status,
             "reason": scrub_text(run.reason),
             "policy_version": registry.get(run.alias).policy_id,
+            "game_version": game_versions.get(run.alias),
             "dry_run_id": plan.dry_run_id if plan else None,
             "dry_run_finished_at": plan.finished_at.isoformat() if plan else None,
             "game_identity": run.game_identity,
@@ -1034,8 +1039,9 @@ def run_fleet_execute(registry_path, authorization_path, mode=None, journal_dir=
                           "expires": authorization.expires.isoformat(), "actions": list(authorization.actions)},
         "registry_hash": registry_hash(registry),
         "policy_versions": {profile.alias: profile.policy_id for profile in enabled},
-        # The client version this build identifies as; the server's game version is not observed.
-        "game_version": {"client": DECLARED_CLIENT_VERSION, "server": None},
+        # The client version this build identifies as, and the server's game version when every account
+        # that logged in observed the same one (None when they differ or none was observed).
+        "game_version": {"client": DECLARED_CLIENT_VERSION, "server": common_server_version},
         "halt_share": halt_share,
         "stop_reason": scrub_text(fleet_run.stop_reason),
         "accounts": record_accounts,

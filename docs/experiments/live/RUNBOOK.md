@@ -52,6 +52,8 @@ After that pull request merges:
 gh workflow run live-trial.yml -f step=canary
 ```
 
+Done 2026-11-12: see [G2 evidence](g2-evidence.md).
+
 The canary runs a fresh dry run, then at most one safe-to-retry action (`collect_all_resources`) on pss5, and records the reconciliation, run record, alerts and dashboard. It never spends: the authorization allows `canary` mode only.
 
 ## What still needs the owner before the progression trial
