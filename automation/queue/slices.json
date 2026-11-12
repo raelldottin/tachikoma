@@ -2211,6 +2211,29 @@
         "make test",
         "git diff --check"
       ]
+    },
+    {
+      "slice_id": "spec07-verified-canary-precondition",
+      "title": "Require a verified canary before the SPEC-07 trial opens",
+      "status": "queued",
+      "priority": 414,
+      "domain": "fleet",
+      "allowed_paths": [
+        "docs/experiments/r2-progression-trial.md",
+        "docs/specs/SPEC-07-progression-trial.md",
+        "docs/experiments/live/RUNBOOK.md",
+        "docs/specs/README.md"
+      ],
+      "depends_on": [
+        "g2-canary-evidence"
+      ],
+      "max_files_changed": 4,
+      "notes": "Implements an owner decision of 2026-11-12 on S07-R2: the canary 'succeeds' only when a collection reconciles verified (an observed increase), not merely not-observed. Both G2 canaries so far reconciled not-observed, so the verification loop has not been proven live. Record it in the trial plan, SPEC-07 (S07-R2 wording and evidence) and the runbook (how to get a verified canary: wait for production, free storage by hand if full, re-dispatch step=canary within the canary authorization, which expires 2026-11-26; a further not-observed with free storage is a defect to investigate before block 1). Docs only.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
     }
   ]
 }
