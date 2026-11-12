@@ -56,6 +56,16 @@ Done 2026-11-12: see [G2 evidence](g2-evidence.md).
 
 The canary runs a fresh dry run, then at most one safe-to-retry action (`collect_all_resources`) on pss5, and records the reconciliation, run record, alerts and dashboard. It never spends: the authorization allows `canary` mode only.
 
+## Getting a verified canary
+
+SPEC-07 needs a canary whose collection reconciles `verified` before trial block 1 opens on 2026-11-23 (S07-R2). The canaries of 2026-11-12 were `not-observed`: minerals and gas did not change. Either storage was full or nothing had been produced since the last collection. To get a verified one:
+
+1. Give production time. The legacy daily run skips pss5, so nothing else collects from it. Wait several hours after the last canary.
+2. If pss5's mineral or gas storage is full, spend some by hand in the game first, for example on an upgrade. Log it as an intervention if a trial window is open.
+3. Dispatch `gh workflow run live-trial.yml -f step=canary`. It runs a fresh dry run first. The canary authorization runs until 2026-11-26.
+
+An agent reads the artifact and records the result in [G2 evidence](g2-evidence.md). A further `not-observed` result with free storage and time for production points to a defect in the before-and-after check. That gets investigated before block 1 opens.
+
 ## What still needs the owner before the progression trial
 
 SPEC-07's trial plan needs, before its window opens:
