@@ -1787,7 +1787,7 @@
     {
       "slice_id": "spec03-profile-read",
       "title": "Parse the captured profile into observed trophies and starbux",
-      "status": "queued",
+      "status": "done",
       "priority": 404,
       "domain": "state",
       "allowed_paths": [
