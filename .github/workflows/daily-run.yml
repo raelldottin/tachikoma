@@ -27,6 +27,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
       - name: Process account 1
+        if: ${{ !contains(format(',{0},', vars.LEGACY_RUN_SKIP), ',1,') }}
         continue-on-error: true
         env:
           PSS_EMAIL: ${{ secrets.PSS_ACCOUNT_1_EMAIL }}
@@ -51,6 +52,7 @@ jobs:
             --run-battle
 
       - name: Process account 2
+        if: ${{ !contains(format(',{0},', vars.LEGACY_RUN_SKIP), ',2,') }}
         continue-on-error: true
         env:
           PSS_EMAIL: ${{ secrets.PSS_ACCOUNT_2_EMAIL }}
@@ -75,6 +77,7 @@ jobs:
             --run-battle
 
       - name: Process account 3
+        if: ${{ !contains(format(',{0},', vars.LEGACY_RUN_SKIP), ',3,') }}
         continue-on-error: true
         env:
           PSS_EMAIL: ${{ secrets.PSS_ACCOUNT_3_EMAIL }}
@@ -99,6 +102,7 @@ jobs:
             --run-battle
 
       - name: Process account 4
+        if: ${{ !contains(format(',{0},', vars.LEGACY_RUN_SKIP), ',4,') }}
         continue-on-error: true
         env:
           PSS_EMAIL: ${{ secrets.PSS_ACCOUNT_4_EMAIL }}
@@ -123,6 +127,7 @@ jobs:
             --run-battle
 
       - name: Process account 5
+        if: ${{ !contains(format(',{0},', vars.LEGACY_RUN_SKIP), ',5,') }}
         continue-on-error: true
         env:
           PSS_EMAIL: ${{ secrets.PSS_ACCOUNT_5_EMAIL }}

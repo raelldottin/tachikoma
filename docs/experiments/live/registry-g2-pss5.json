@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "accounts": [
+    {
+      "alias": "pss5",
+      "objective": "R0/R2 live trial test account",
+      "policy_id": "baseline-v1",
+      "budgets": {
+        "minerals": 0,
+        "gas": 0,
+        "starbux": 0
+      },
+      "max_actions": 5,
+      "enabled": true,
+      "credentials_secret": "PSS_ACCOUNT_5",
+      "legacy_run_account": 5
+    }
+  ]
+}
