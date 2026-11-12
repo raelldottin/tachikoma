@@ -2191,7 +2191,7 @@
     {
       "slice_id": "g2-canary-evidence",
       "title": "Record the G2 canary evidence and mark SPEC-05 done",
-      "status": "queued",
+      "status": "done",
       "priority": 412,
       "domain": "fleet",
       "allowed_paths": [
