@@ -2046,6 +2046,31 @@
       ],
       "max_files_changed": 6,
       "notes": "Added 2026-11-12: five test modules added after the roadmap was written (#161, #164, #166, #178, #180) still use Path(__file__).resolve(), so b0-test-repo-root-b's AST guard would fail on them. Apply b0-test-repo-root-a's fix: Path(os.path.abspath(__file__)) at tests/test_account_baselines.py, tests/test_capture_reads.py, tests/test_fleet_execute.py, tests/test_profile_reads.py and tests/test_spec_traceability.py (find each by content). No assertion changes. Plan: docs/BAZEL_MIGRATION_ROADMAP.md."
+    },
+    {
+      "slice_id": "spec03-ledger-evidence",
+      "title": "Record the G1-confirmed read endpoints in the compatibility ledger",
+      "status": "queued",
+      "priority": 406,
+      "domain": "compat",
+      "allowed_paths": [
+        "sdk/compat/entries.py",
+        "docs/baseline/compatibility-ledger.md",
+        "tests/test_compat_ledger.py",
+        "docs/experiments/live/g1-evidence.md",
+        "docs/specs/SPEC-03-verified-profile-reads.md",
+        "docs/specs/README.md"
+      ],
+      "depends_on": [
+        "spec03-battle-history"
+      ],
+      "max_files_changed": 6,
+      "notes": "Implements S03-R7 (AC5). The owner-dispatched G1 capture runs of 2026-11-12 (43187703923 and earlier) read the profile, ranking, ship and battle history; the server settings reported RecommendedVersion 1.0 (the client declares 0.999.59). Add dynamically-demonstrated ledger entries at game version 1.0 for the confirmed fields of DeviceLogin17 (User @Trophy, @Credits), FindUserRanking, ListPvPBattles2, GetShipByUserId (empty containers) and GetLatestVersion3 (no LatestVersion*; RecommendedVersion and ServerSettingVersion), citing tests/fixtures/live_sanitized/README.md; update the summary table and the test that expected every entry flagged at 1.0. Write docs/experiments/live/g1-evidence.md (runs, what each found, the fixes) and mark SPEC-03 Done with evidence links.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
     }
   ]
 }
