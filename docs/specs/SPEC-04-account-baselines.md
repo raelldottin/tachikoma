@@ -70,7 +70,7 @@ R0's exit needs a recorded starting state for every participating ship and the g
 
 **Offline verification:** every MUST with an offline acceptance criterion is covered by a test that cites it (checked by `scripts/spec_trace.py`). Implemented in #166, #175.
 
-Pending.
+**Live findings (G1, 2026-11-12):** the first baseline runs (owner-dispatched `live-trial.yml`, `baseline` step) recorded every ship section for `pss1`–`pss5` once #183 fixed new ships' empty rooms and research. `game_version` was `null` on all of them: the server settings field summary from the capture step showed that none of the expected version attributes exists live. `g1-game-version` reads `RecommendedVersion` and the `ServerSettingVersion` counter instead (S04-R3 still holds: both come from the server's latest-version setting). S04-AC4 waits for a baseline run with that fix; the profile section waits for the SPEC-03 parsers.
 
 ## Open questions and risks
 

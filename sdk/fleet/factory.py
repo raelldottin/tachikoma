@@ -523,10 +523,15 @@ class EnvironmentAccountFactory:
 # --- Baselines (SPEC-04, S04-R1 and S04-R3) -----------------------------------------------------
 
 # Attributes of the ``GetLatestVersion3`` ``Setting`` record that may name the current game version, in
-# the order they are tried. They are not verified against the live server (SPEC-04 open risk): when none
-# is present the version is unobserved (``None``). ``MinimumClientVersion`` is deliberately not one of
-# them: the oldest version the server accepts is not the version the observation was made on.
-SERVER_VERSION_ATTRIBUTES = ("@LatestVersion", "@LatestClientVersion", "@LatestVersionIOS")
+# the order they are tried. The live server (G1 capture, 2026-11-12) returns none of the first three; it
+# returns ``RecommendedVersion`` (``1.0``), so that is tried last. When none is present the client
+# version is unobserved. ``MinimumClientVersion`` is deliberately not one of them: the oldest version
+# the server accepts is not the version the observation was made on.
+SERVER_VERSION_ATTRIBUTES = ("@LatestVersion", "@LatestClientVersion", "@LatestVersionIOS", "@RecommendedVersion")
+# The server's settings data counter. The client version above stayed ``1.0`` live, so the counter is
+# what tells two observations on different game data apart. Digits only; anything else is not recorded.
+SERVER_DATA_VERSION_ATTRIBUTE = "@ServerSettingVersion"
+SERVER_DATA_VERSION_PATTERN = re.compile(r"^[0-9]{1,12}$")
 # A version string such as ``0.999.60``; anything else from the server is not recorded.
 GAME_VERSION_PATTERN = re.compile(r"^[0-9]+(?:\.[0-9]+){1,3}[A-Za-z0-9]{0,4}$")
 
@@ -554,20 +559,29 @@ def server_game_version(client: Any) -> Optional[str]:
 
     ``Client.login`` calls ``getLatestVersion3`` (``SettingService/GetLatestVersion3``, read-only) and
     stores the parsed reply in ``client.latestVersion``; its ``SettingService/GetLatestSetting/Setting``
-    record is the one ``listRoomDesigns2`` and ``listAllDesigns4`` take their design versions from. The
-    first ``SERVER_VERSION_ATTRIBUTES`` value that looks like a version is returned. This makes no call,
-    and never falls back to the ``ClientVersion`` the client declares at login.
+    record is the one ``listRoomDesigns2`` and ``listAllDesigns4`` take their design versions from.
+
+    The result is the first ``SERVER_VERSION_ATTRIBUTES`` value that looks like a version, followed by
+    ``+settings.<n>`` when the record's ``ServerSettingVersion`` counter is all digits (``1.0+settings.42``),
+    or ``settings.<n>`` alone when only the counter is present. This makes no call, and never falls back
+    to the ``ClientVersion`` the client declares at login.
     """
     setting = getattr(client, "latestVersion", None)
     for key in ("SettingService", "GetLatestSetting", "Setting"):
         setting = setting.get(key) if isinstance(setting, Mapping) else None
     if not isinstance(setting, Mapping):
         return None
+    version = None
     for attribute in SERVER_VERSION_ATTRIBUTES:
         value = setting.get(attribute)
         if isinstance(value, str) and GAME_VERSION_PATTERN.match(value.strip()):
-            return value.strip()
-    return None
+            version = value.strip()
+            break
+    counter = setting.get(SERVER_DATA_VERSION_ATTRIBUTE)
+    counter = counter.strip() if isinstance(counter, str) else None
+    if counter and SERVER_DATA_VERSION_PATTERN.match(counter):
+        return f"{version}+settings.{counter}" if version else f"settings.{counter}"
+    return version
 
 
 # --- Dry-run plan stamps (SPEC-05, S05-R3) ------------------------------------------------------
