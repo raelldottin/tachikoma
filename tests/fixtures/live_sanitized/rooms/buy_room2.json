@@ -1,0 +1,23 @@
+{
+  "method": "GET",
+  "path": "/RoomService/BuyRoom2",
+  "query": {
+    "roomDesignId": "6",
+    "column": "11",
+    "row": "2",
+    "constructionStartDate": "2026-10-19T19:15:38",
+    "accessToken": "ACCESS_TOKEN"
+  },
+  "headers": {
+    "Host": "api.pixelstarships.com",
+    "User-Agent": "UnityPlayer/6000.0.84f1 (UnityWebRequest/1.0, libcurl/8.10.1-DEV)",
+    "Accept": "*/*",
+    "Accept-Encoding": "deflate, gzip",
+    "Proxy-Connection": "Keep-Alive",
+    "X-Unity-Version": "6000.0.84f1"
+  },
+  "body": "",
+  "response": "<RoomService><BuyRoom2><Room RoomId=\"ROOM-A\" RoomDesignId=\"6\" ShipId=\"SHIP-A\" RoomStatus=\"Building\" Row=\"2\" Column=\"11\" Manufactured=\"0\" RandomSeed=\"1\" CapacityUsed=\"0\" ItemIds=\"\" SalvageString=\"\" ManufactureString=\"\" TargetManufactureString=\"\" Priority=\"50\" PowerGenerated=\"0\" ManufactureStartDate=\"2026-10-19T19:15:38\" ConstructionStartDate=\"2026-10-19T19:15:38\" UpgradeRoomDesignId=\"0\" CurrentSkinKey=\"0\" PreviousSkinKey=\"0\"><RoomActions></RoomActions></Room></BuyRoom2></RoomService>",
+  "ship_before": "<ShipService><GetShipByUserId><Ship ShipId=\"SHIP-A\" ShipDesignId=\"2\" Hp=\"4\" ShipStatus=\"Online\" StandardCharacterDraws=\"0\" UniqueCharacterDraws=\"0\" BrightnessValue=\"0\" SaturationValue=\"0\" HueValue=\"0\" StickerString=\"\" ShipLevel=\"1\" PowerScore=\"100\" StarSystemId=\"8\" FromStarSystemId=\"8\" NextStarSystemId=\"8\" OriginStarSystemId=\"1\" OriginNextStarSystemId=\"1\" Tags=\"\" SkinOpacityValue=\"0.375\" StarSystemArrivalDate=\"2000-01-01T00:00:00\" UpdateDate=\"2026-10-19T19:15:13\" StatusStartDate=\"2026-10-19T19:15:13\" UpgradeStartDate=\"2026-10-19T19:15:13\" UserId=\"USER-A\" OriginalRaceId=\"2\" SkinItemDesignId=\"0\" UpgradeShipDesignId=\"0\" ImmunityDate=\"2000-01-01T00:00:00\" ShipName=\"PLAYER-A\" Shield=\"0\" SalvageArgument=\"0\"><Items></Items><Rooms><Room RoomId=\"ROOM-A\" RoomDesignId=\"6\" ShipId=\"SHIP-A\" RoomStatus=\"Building\" Row=\"2\" Column=\"11\" Manufactured=\"0\" RandomSeed=\"1\" CapacityUsed=\"0\" ItemIds=\"\" SalvageString=\"\" ManufactureString=\"\" TargetManufactureString=\"\" Priority=\"50\" PowerGenerated=\"0\" ManufactureStartDate=\"2026-10-19T19:15:38\" ConstructionStartDate=\"2026-10-19T19:15:38\" UpgradeRoomDesignId=\"0\" CurrentSkinKey=\"0\" PreviousSkinKey=\"0\"><RoomActions></RoomActions></Room></Rooms></Ship><User Id=\"USER-A\" Name=\"PLAYER-A\" LastAlertDate=\"2026-10-19T17:58:35.327\" UserType=\"Unverified\" GenderType=\"Male\" RaceType=\"Asian\" Credits=\"100\" ProfileImageUrl=\"\" Trophy=\"1000\" GameCenterName=\"\" CompletedMissionDesigns=\"\" LanguageKey=\"en\" TutorialStatus=\"4\" IconSpriteId=\"654\" TipStatus=\"0\" AllianceMembership=\"None\" CrewDonated=\"0\" CrewReceived=\"0\" FreeStarbuxReceivedToday=\"0\" DailyRewardStatus=\"0\" HeroBonusChance=\"0\" GameCenterFriendCount=\"25\" CompletedMissionEventIds=\"\" UnlockedShipDesignIds=\"\" UnlockedCharacterDesignIds=\"240\" Status=\"0\" UserSourceAdsPlatformType=\"Unknown\" AdsPlatformUserId=\"\" LastCatalogPurchaseDate=\"1900-01-01T00:00:00\" VipExpiryDate=\"1900-01-01T00:00:00\" ChallengeWins=\"0\" ChallengeLosses=\"0\" LoadingPercentage=\"0\" AllianceSupplyDonation=\"0\" TotalSupplyDonation=\"0\" DailyMissionsAttempted=\"\" PurchaseRewardPoints=\"0\" UsedRewardPoints=\"0\" GooglePlayName=\"\" TournamentRewardPoints=\"0\" AllianceScore=\"0\" ChampionshipScore=\"0\" DailyChallengeWinStreak=\"0\" DrawsUsedToday=\"0\" ActivatedPromotions=\"\" PVPAttackWins=\"0\" PVPAttackLosses=\"0\" PVPAttackDraws=\"0\" PVPDefenceDraws=\"0\" PVPDefenceWins=\"0\" PVPDefenceLosses=\"0\" HighestTrophy=\"1000\" ChatAppearance=\"0\" AuthenticationType=\"Basic\" DailyPVPAttacks=\"0\" ExploredStarSystemIds=\"\" TournamentBonusScore=\"0\" SituationOccurrencesToday=\"0\" Flags=\"0\" Email=\"\"/></GetShipByUserId></ShipService>",
+  "ship_after": null
+}
