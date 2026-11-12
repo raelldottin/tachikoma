@@ -1,7 +1,6 @@
 # SPEC-03: Verified trophy, starbux and battle-history reads
 
-**Status:** Approved
-**Blocked:** S03-R1 and R3–R8 need the owner's sanitized captures (gate G1). The parsers and the profile read cannot be written or tested until those captures exist. Done offline so far: #161 (the capture scan, S03-R2).
+**Status:** Done, 2026-11-12. Evidence: [G1 evidence](../experiments/live/g1-evidence.md).
 **Approval:** owner, 2026-11-11, through the session goal "complete the plan in docs/specs/". This approves building and testing the spec offline; owner questions take their safe defaults. It does not open any live gate (G1–G5), so live acceptance criteria stay pending.
 **Release:** R1 (state) and R3 (PvP evidence)
 **Owner gate:** G1 (read-only access and sanitized captures)
@@ -73,7 +72,11 @@
 
 ## Evidence
 
-**Captures (S03-R1):** six sanitized responses from the owner-dispatched G1 capture run of 2026-11-12, in `tests/fixtures/live_sanitized/` (`spec03-captures`, reviewed by the owner).
+**Offline verification:** every MUST with an offline acceptance criterion is covered by a test that cites it (checked by `scripts/spec_trace.py`). Implemented in #161, #180, #183, #185, #187, #199, #200.
+
+**Live evidence (AC5, S03-R7):** the owner-dispatched G1 runs of 2026-11-12 read the profile, ranking, ship and battle history of `pss1`–`pss5` read-only; the server reported `RecommendedVersion` `1.0` (the client declares `0.999.59`). The confirmed fields are five `dynamically-demonstrated` entries at `1.0` in the [compatibility ledger](../baseline/compatibility-ledger.md). Runs, findings and fixes: [G1 evidence](../experiments/live/g1-evidence.md).
+
+**Captures (S03-R1):** six sanitized responses from the owner-dispatched G1 capture run of 2026-11-12, in `tests/fixtures/live_sanitized/` (#189, reviewed and merged by the owner).
 
 **Implementation note on S03-R3 (for owner review):** no read-only call in the client returns the current user's trophies and starbux; the login response's `User` record (`@Trophy`, `@Credits`) is the only server response that holds them, and `FindUserRanking` holds only the ladder position. `spec03-profile-read` therefore treats the login response as the profile read, but only through a `ProfileObservation` that carries when the server sent it: it is used for one snapshot, and only while it is at most 5 minutes old. A snapshot after an action never reuses it, so reconciliation sees `None` (unknown), not a stale "no change". Only the baseline path passes one. If a fresher read-only profile call is found, it replaces the login record without changing the snapshot contract.
 

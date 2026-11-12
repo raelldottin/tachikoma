@@ -1,0 +1,48 @@
+{
+  "slice_id": "spec03-ledger-evidence",
+  "status": "done",
+  "summary": "The owner-dispatched G1 runs of 2026-11-12 read the profile, ranking, ship and battle history of pss1-pss5 read-only, and the server settings reported RecommendedVersion 1.0 (the client declares 0.999.59).  - Five dynamically-demonstrated ledger entries at 1.0, citing the   committed live captures: the DeviceLogin17 profile fields,   FindUserRanking, ListPvPBattles2, GetShipByUserId's empty containers and   GetLatestVersion3's fields. The summary table and the test that expected   every entry flagged at 1.0 are updated. - docs/experiments/live/g1-evidence.md records each run, what it found and   the fix. - SPEC-03 is Done with links to that evidence.",
+  "files_touched": [
+    "docs/baseline/compatibility-ledger.md",
+    "docs/experiments/live/g1-evidence.md",
+    "docs/specs/README.md",
+    "docs/specs/SPEC-03-verified-profile-reads.md",
+    "sdk/compat/entries.py",
+    "tests/test_compat_ledger.py"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "Record the G1-confirmed read endpoints in the compatibility ledger",
+      "before": "SPEC-03 Approved; no live ledger evidence",
+      "after": "SPEC-03 Done; five live read-path ledger entries at 1.0",
+      "proof": [
+        "make syntax-check, make test, scripts/ci.py lint, scripts/spec_trace.py and git diff --check pass on current main",
+        "run ids checked against gh run list"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "The ledger version is the server's RecommendedVersion, which stayed 1.0; the data counter was not read on that run."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-12T15:24:42Z"
+}
