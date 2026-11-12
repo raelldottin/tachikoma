@@ -5,9 +5,14 @@ call performs three reads (ship, crew, inventory) and nothing else. It never
 calls a method that changes the account. A read that raises, returns
 ``False`` or yields no payload leaves its sections ``missing``.
 
-Values the client only holds from login, such as starbux credits and
-trophies, are deliberately not reported. They could be hours old and would
-make reconciliation report "no change" when the value is simply unknown.
+Values the client holds from login, such as starbux credits and trophies,
+are reported only through a ``ProfileObservation`` (``sdk.state.profile_reads``,
+S03-R3): the login ``User`` record with the time the server sent it. The first
+snapshot uses it when it is at most ``PROFILE_MAX_AGE`` old; it is never used
+again, so a later snapshot (after an action) reports ``profile`` missing
+instead of repeating pre-action values, which would make reconciliation report
+"no change" when the value is simply unknown. Without one, ``profile`` is
+missing and starbux is ``None``.
 
 Game identity: when the caller passes ``identity_salt``, each snapshot carries
 ``game_identity``, an HMAC fingerprint of ``client.user.id`` (the id the
@@ -21,6 +26,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Callable, Optional
 
+from sdk.state.profile_reads import ProfileObservation, fresh_profile
 from sdk.state.snapshot import (
     ACCOUNT_ALIAS_PATTERN,
     AccountSnapshot,
@@ -104,6 +110,7 @@ class ClientSnapshotProvider:
         source: str = "client-reads",
         clock: Callable[[], datetime] = _utc_now,
         identity_salt: Optional[bytes | str] = None,
+        profile_observation: Optional[ProfileObservation] = None,
     ) -> None:
         if not ACCOUNT_ALIAS_PATTERN.match(account_alias or ""):
             raise SnapshotInputError("account_alias must be a lowercase alias, not an e-mail or display name")
@@ -115,6 +122,7 @@ class ClientSnapshotProvider:
         self.source = source
         self.clock = clock
         self.failed_reads: tuple[str, ...] = ()
+        self._profile_observation = profile_observation
 
     def _read(self, method_name: str, attribute: str) -> Any:
         try:
@@ -134,8 +142,15 @@ class ClientSnapshotProvider:
         except SnapshotInputError:  # unknown id: identity stays unobserved
             return None
 
+    def _profile(self, now: datetime):
+        """The profile for this snapshot: the observation once, while it is fresh; never again."""
+        observation, self._profile_observation = self._profile_observation, None
+        return fresh_profile(observation, now)
+
     def __call__(self) -> AccountSnapshot:
         failed = []
+        observed_at = self.clock()
+        profile = self._profile(observed_at)
 
         ship_payload = self._read("getShipByUserId", "shipByUserId")
         ship = _find(ship_payload, "Ship") if ship_payload is not None else None
@@ -159,21 +174,23 @@ class ClientSnapshotProvider:
         if items is None:
             failed.append("listItemsOfAShip")
 
+        starbux = profile.starbux if profile is not None else None
         resources = None
-        if items is not None:
+        if items is not None or starbux is not None:
             resources = {
                 "minerals": _resource_from_items(items, "mineral"),
                 "gas": _resource_from_items(items, "gas"),
-                "starbux": None,
+                "starbux": starbux,
             }
 
         self.failed_reads = tuple(failed)
         ship_fields = {key: value for key, value in ship.items() if key.startswith("@")} if ship else None
         return build_snapshot(
             self.account_alias,
-            self.clock(),
+            observed_at,
             self.source,
             game_version=self.game_version,
+            profile=profile.snapshot_profile() if profile is not None else None,
             ship=ship_fields,
             resources=resources,
             crew=crew,

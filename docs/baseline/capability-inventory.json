@@ -406,8 +406,10 @@
       "name": "findUserRanking",
       "pillar": "C",
       "kind": "read-only",
-      "evidence": "untested",
-      "tests": []
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_profile_reads.py"
+      ]
     },
     {
       "name": "activateItem3",

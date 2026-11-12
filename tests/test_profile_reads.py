@@ -1,8 +1,8 @@
 """Tests for SPEC-03 verified profile reads (offline, no network).
 
-So far this holds the S03-R2 scan of ``tests/fixtures/live_sanitized/``: every
-file there must be free of secrets and user ids before a parser is built on it.
-Parser and provider tests arrive with the owner's captures (S03-R1).
+It holds the S03-R2 scan of ``tests/fixtures/live_sanitized/`` (every file
+there must be free of secrets and user ids), and the parser and provider tests
+built on those captures (S03-R3).
 """
 
 from __future__ import annotations
@@ -270,6 +270,231 @@ class TestLiveSanitizedFixtureScan(unittest.TestCase):
         message = _format(findings)
         self.assertNotIn(SYNTHETIC_ACCESS_TOKEN, message)
         self.assertNotIn("4242", message)
+
+
+# --- Profile (S03-R3) ------------------------------------------------------------------------------
+
+def _load_capture(relative):
+    import xmltodict
+    return xmltodict.parse((LIVE_SANITIZED_DIR / relative).read_text(encoding="utf-8"), xml_attribs=True)
+
+
+class ProfileParserTests(unittest.TestCase):
+    """Trophies and starbux from the captured login ``User`` record (pss5, G1 2026-11-12)."""
+
+    # Verifies: S03-R3
+    def test_captured_profile_gives_trophies_and_starbux(self):
+        from sdk.state.profile_reads import parse_profile
+        profile = parse_profile(_load_capture("pss5/user_login.xml"))
+        self.assertEqual((profile.trophies, profile.highest_trophy, profile.starbux), (931, 1016, 164))
+
+    # Verifies: S03-R3
+    def test_absent_or_malformed_fields_stay_none(self):
+        from sdk.state.profile_reads import parse_profile
+        profile = parse_profile({"@Trophy": "not a number", "@Name": "PLAYER-A"})
+        self.assertEqual((profile.trophies, profile.highest_trophy, profile.starbux), (None, None, None))
+        self.assertIsNone(parse_profile(None))
+        self.assertIsNone(parse_profile({"UserService": {"UserLogin": "unexpected"}}))
+
+    # Verifies: S03-R3
+    def test_observation_keeps_only_profile_fields(self):
+        from datetime import datetime, timezone
+        from sdk.state.profile_reads import ProfileObservation, user_record
+        record = user_record(_load_capture("pss5/user_login.xml"))
+        observation = ProfileObservation(record, datetime(2026, 11, 12, tzinfo=timezone.utc))
+        self.assertEqual(set(observation.record), {"@Trophy", "@HighestTrophy", "@Credits"})
+        with self.assertRaises(ValueError):
+            ProfileObservation(record, datetime(2026, 11, 12))  # naive time
+
+
+class ProfileReviewRegressionTests(unittest.TestCase):
+    """Findings of the independent review of the profile slice."""
+
+    # Verifies: S03-R3
+    def test_wrapped_login_response_gives_the_user_element(self):
+        from sdk.state.profile_reads import parse_profile
+        wrapped = {"UserService": {"UserLogin": {"@UserId": "USER-A", "@Status": "1",
+                                                 "User": {"@Id": "USER-A", "@Trophy": "931", "@Credits": "164"}}}}
+        profile = parse_profile(wrapped)
+        self.assertEqual((profile.trophies, profile.starbux), (931, 164))
+
+    # Verifies: S03-R3
+    def test_malformed_numbers_are_none_not_errors(self):
+        from sdk.state.profile_reads import int_or_none
+        for text in ("--5", "\u00b2", "1.5", "", "five", True):
+            with self.subTest(text=text):
+                self.assertIsNone(int_or_none(text))
+        self.assertEqual((int_or_none("-5"), int_or_none(" 42 "), int_or_none(7)), (-5, 42, 7))
+
+    # Verifies: S03-R3
+    def test_dry_run_path_never_reports_the_login_profile(self):
+        import os
+        from sdk.fleet.accounts import AccountProfile
+        from sdk.fleet.factory import EnvironmentAccountFactory
+        from sdk.state.snapshot import Completeness
+        from tests.test_baseline_command import ENV, BaselineClient, FakeClient
+        captured = _load_capture("pss5/user_login.xml")
+
+        class ProfileClient(BaselineClient):
+            def login(self, email=None, password=None):
+                ok = super().login(email=email, password=password)
+                if ok:
+                    self.info = captured
+                return ok
+
+        FakeClient.instances = []
+        FakeClient.login_error = False
+        profile = AccountProfile(alias="alpha", objective="grow", policy_id="baseline-v1",
+                                 credentials_secret="ALPHA_AUTH")
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = os.getcwd()
+            os.chdir(tmp)
+            try:
+                context = EnvironmentAccountFactory(tmp, client_cls=ProfileClient, environ=ENV,
+                                                    source="run.py --fleet-dry-run")(profile)
+                snapshot = context.snapshot_provider()
+            finally:
+                os.chdir(cwd)
+        self.assertEqual(snapshot.section("profile"), Completeness.MISSING)
+        self.assertIsNone(snapshot.resources.starbux if snapshot.resources else None)
+
+
+class RankingTests(unittest.TestCase):
+    """``Client.findUserRanking`` with the captured response as mocked traffic, then ``parse_ranking``."""
+
+    # Verifies: S03-R3
+    def test_find_user_ranking_capture_parses(self):
+        from sdk.client import Client
+        from sdk.state.profile_reads import parse_ranking
+        body = (LIVE_SANITIZED_DIR / "pss5" / "find_user_ranking.xml").read_bytes()
+        requests = []
+
+        class Response:
+            content = body
+
+        client = object.__new__(Client)
+        client.accessToken = "synthetic-session"
+        client.request = lambda url, method: requests.append((url.split("?")[0], method)) or Response()
+        client.findUserRanking()
+        self.assertEqual(requests, [("https://api.pixelstarships.com/LadderService/FindUserRanking", "GET")])
+        ranking = parse_ranking(client.userRanking)
+        self.assertIsNotNone(ranking.ranking)
+        self.assertIsNotNone(ranking.total_users)
+        self.assertEqual(parse_ranking(_load_capture("pss1/find_user_ranking.xml")).total_active_users, 59191)
+
+    # Verifies: S03-R3
+    def test_missing_ranking_is_none(self):
+        from sdk.state.profile_reads import parse_ranking
+        self.assertIsNone(parse_ranking(None))
+        self.assertIsNone(parse_ranking({"LadderService": {"FindUserRanking": None}}))
+        self.assertIsNone(parse_ranking({"LadderService": {}}))
+
+
+class _ProviderClient:
+    """Read-only fake: ship, crew and items succeed with empty records."""
+
+    def getShipByUserId(self):
+        self.shipByUserId = {"ShipService": {"GetShipByUserId": {"Ship": {"@ShipLevel": "3"}}}}
+        return True
+
+    def listAllCharactersOfUser(self):
+        self.allCharactersOfUser = {"CharacterService": {"ListAllCharactersOfUser": {"Characters": None}}}
+        return True
+
+    def listItemsOfAShip(self):
+        self.itemsOfAShip = {"ItemService": {"ListItemsOfAShip": {"Items": None}}}
+        return True
+
+
+class ProfileProviderTests(unittest.TestCase):
+    """``ClientSnapshotProvider`` reports the profile once, while the server response is fresh."""
+
+    def setUp(self):
+        from datetime import datetime, timezone
+        from sdk.state.profile_reads import ProfileObservation, user_record
+        self.login_at = datetime(2026, 11, 12, 9, 0, tzinfo=timezone.utc)
+        self.observation = ProfileObservation(user_record(_load_capture("pss5/user_login.xml")), self.login_at)
+
+    def provider(self, clock_times, observation):
+        from sdk.state.client_provider import ClientSnapshotProvider
+        times = iter(clock_times)
+        return ClientSnapshotProvider(_ProviderClient(), "pss5", clock=lambda: next(times),
+                                      profile_observation=observation)
+
+    # Verifies: S03-R3
+    def test_fresh_profile_is_observed_once_then_missing(self):
+        from datetime import timedelta
+        from sdk.state.snapshot import Completeness
+        provider = self.provider([self.login_at + timedelta(seconds=20), self.login_at + timedelta(seconds=40)],
+                                 self.observation)
+        first, second = provider(), provider()
+        self.assertEqual(first.section("profile"), Completeness.COMPLETE)
+        self.assertEqual((first.trophies, first.resources.starbux), (931, 164))
+        # The second snapshot (for example after an action) never repeats the login values.
+        self.assertEqual(second.section("profile"), Completeness.MISSING)
+        self.assertEqual((second.trophies, second.resources.starbux), (None, None))
+
+    # Verifies: S03-R3
+    def test_stale_or_absent_profile_is_missing(self):
+        from datetime import timedelta
+        from sdk.state.profile_reads import PROFILE_MAX_AGE
+        from sdk.state.snapshot import Completeness
+        stale = self.provider([self.login_at + PROFILE_MAX_AGE + timedelta(seconds=1)], self.observation)()
+        self.assertEqual(stale.section("profile"), Completeness.MISSING)
+        self.assertIsNone(stale.trophies)
+        future = self.provider([self.login_at - timedelta(minutes=2)], self.observation)()
+        self.assertEqual(future.section("profile"), Completeness.MISSING)  # response from the clock's future
+        none = self.provider([self.login_at], None)()
+        self.assertEqual(none.section("profile"), Completeness.MISSING)
+        self.assertIsNone(none.resources.starbux)
+
+    # Verifies: S03-R3
+    def test_profile_without_trophies_is_partial(self):
+        from sdk.state.profile_reads import ProfileObservation
+        from sdk.state.snapshot import Completeness
+        snapshot = self.provider([self.login_at], ProfileObservation({"@Credits": "7"}, self.login_at))()
+        self.assertEqual(snapshot.section("profile"), Completeness.PARTIAL)
+        self.assertEqual((snapshot.trophies, snapshot.resources.starbux), (None, 7))
+        empty = self.provider([self.login_at], ProfileObservation({"@Name": "PLAYER-A"}, self.login_at))()
+        self.assertEqual(empty.section("profile"), Completeness.MISSING)  # no profile field at all
+
+
+class BaselineProfileTests(unittest.TestCase):
+    """``open_baseline`` passes the login ``User`` record, observed when login started."""
+
+    # Verifies: S03-R3
+    def test_open_baseline_reports_the_login_profile(self):
+        import os
+        from datetime import datetime, timezone
+        from sdk.fleet.accounts import AccountProfile
+        from sdk.fleet.factory import EnvironmentAccountFactory
+        from sdk.state.snapshot import Completeness
+        from tests.test_baseline_command import ENV, BaselineClient, FakeClient
+        captured = _load_capture("pss5/user_login.xml")
+
+        class ProfileClient(BaselineClient):
+            def login(self, email=None, password=None):
+                ok = super().login(email=email, password=password)
+                if ok:
+                    self.info = captured
+                return ok
+
+        FakeClient.instances = []
+        FakeClient.login_error = False
+        observed = datetime(2026, 11, 12, 9, 0, tzinfo=timezone.utc)
+        profile = AccountProfile(alias="alpha", objective="grow", policy_id="baseline-v1",
+                                 credentials_secret="ALPHA_AUTH")
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = os.getcwd()
+            os.chdir(tmp)
+            try:
+                factory = EnvironmentAccountFactory(tmp, client_cls=ProfileClient, environ=ENV,
+                                                    source="run.py --baseline")
+                observation = factory.open_baseline(profile, clock=lambda: observed)
+            finally:
+                os.chdir(cwd)
+        self.assertEqual(observation.snapshot.section("profile"), Completeness.COMPLETE)
+        self.assertEqual((observation.snapshot.trophies, observation.snapshot.resources.starbux), (931, 164))
 
 
 if __name__ == "__main__":

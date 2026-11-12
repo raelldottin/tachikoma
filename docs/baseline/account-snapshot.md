@@ -43,7 +43,7 @@ These attribute names come from existing client code and mocked tests. Whether t
 - A read that raises, returns `False` or yields no payload leaves its sections `missing`. The method names are recorded in `failed_reads`.
 - A container element that is present but has no records, such as `<Researches/>` on a new ship, is observed and empty: the section is `complete`, with no records. Only an absent container, or a failed read, leaves the section `missing`.
 - Minerals and gas come only from inventory items whose `@ItemType`/`@Type` names them, with exactly one match each. Unlike `collectAllResources`, there is no fallback to item position.
-- Starbux and trophies are not reported, so the `profile` section stays `missing`. The client only holds those values from login, and reporting them would mislabel stale data with the current observation time.
+- Starbux and trophies come only from the login `User` record (`@Trophy`, `@Credits`; no read-only call returns them), so the provider reports them only through a `ProfileObservation` (`sdk/state/profile_reads.py`, SPEC-03 S03-R3): the record and the time the server sent it. The first snapshot uses it when it is at most `PROFILE_MAX_AGE` (5 minutes) old; later snapshots report `profile` missing and starbux `None`, so pre-action values are never relabelled with a post-action time. `open_baseline` passes one, observed when login started; the fleet dry run and execute paths do not, so their `profile` stays `missing`.
 - A copied value that looks like a secret still raises `SnapshotInputError`. Refusing outright is deliberate.
 
 ## Game identity

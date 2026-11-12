@@ -1,0 +1,49 @@
+{
+  "slice_id": "spec03-profile-read",
+  "status": "done",
+  "summary": "The G1 captures show that no read-only call returns the current user's trophies and starbux: only the login User record holds them (@Trophy, @Credits), and FindUserRanking holds the ladder position.  - sdk/state/profile_reads.py: parse_profile and parse_ranking, built on the   captured responses; absent or malformed fields stay None. - ProfileObservation carries the record (only Trophy, HighestTrophy and   Credits are kept) and when the server sent it. ClientSnapshotProvider uses   it for one snapshot, and only while it is at most five minutes old, so a   snapshot after an action reports the profile missing instead of   repeating pre-action values. - open_baseline passes the login record, observed when login started; the   dry-run and execute paths pass none, so their profile stays missing. - findUserRanking moves to mocked-test: the real Client method is exercised   with the captured response as mocked traffic. Written by the parent agent; an independent verifier subagent approved it after two low findings were fixed (wrapped login response, dry-run regression test).",
+  "files_touched": [
+    "docs/baseline/account-snapshot.md",
+    "docs/baseline/capability-inventory.json",
+    "docs/specs/SPEC-03-verified-profile-reads.md",
+    "sdk/fleet/factory.py",
+    "sdk/state/client_provider.py",
+    "sdk/state/profile_reads.py",
+    "tests/test_profile_reads.py"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "Parse the captured profile into observed trophies and starbux",
+      "before": "profile section always missing; findUserRanking untested",
+      "after": "profile observed once from a fresh login record; findUserRanking mocked-test",
+      "proof": [
+        "make syntax-check, make test, scripts/ci.py lint and git diff --check pass on current main",
+        "verifier verdict: APPROVE (010e016, rebased as 5049ac9)"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "The profile comes from the login response, used once within 5 minutes; recorded in SPEC-03 for owner review."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-12T15:17:39Z"
+}
