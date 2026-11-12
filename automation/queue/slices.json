@@ -2022,7 +2022,7 @@
     {
       "slice_id": "b0-test-repo-root-c",
       "title": "Stop five later test modules from resolving __file__ out of the runfiles tree",
-      "status": "queued",
+      "status": "done",
       "priority": 350,
       "domain": "tests",
       "allowed_paths": [
