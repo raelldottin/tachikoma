@@ -78,6 +78,12 @@ MANIFEST_FORMAT = "tachikoma-capture-manifest"
 MANIFEST_FORMAT_VERSION = 1
 REDACTED = "***REDACTED***"
 REDACTED_EMAIL = "***REDACTED_EMAIL***"
+# ShipDesign @Mask: the hull's interior grid, one digit per cell (Rows x Columns). It is game data, but as one long run
+# of digits it looks like a token to the value check and the leak scan. An all-digit mask is written in groups of
+# MASK_GROUP digits separated by spaces; removing the spaces restores it. Any other @Mask value is still redacted.
+MASK_FIELD = "@Mask"
+MASK_GROUP = 12
+MASK_VALUE = re.compile(r"[0-9]{1,10000}")
 # Columns of the "Record of captures" table in tests/fixtures/live_sanitized/README.md.
 README_COLUMNS = ("File", "Endpoint", "Captured (date)", "Game version", "Sanitization steps applied", "Reviewed by")
 REVIEW_PENDING = "pending"
@@ -314,6 +320,16 @@ def _flagged(value: str, scrub_text: Callable[[str], str]) -> bool:
     return redact_secrets(value) != value or scrub_text(value) != value or bool(scan_capture_text(value))
 
 
+def split_mask(mask: str) -> str:
+    """An all-digit interior mask in space-separated groups of ``MASK_GROUP`` digits (``join_mask`` undoes it)."""
+    return " ".join(mask[index:index + MASK_GROUP] for index in range(0, len(mask), MASK_GROUP))
+
+
+def join_mask(text: str) -> str:
+    """The interior mask written by ``split_mask``, with its spaces removed."""
+    return "".join(text.split())
+
+
 def sanitize_payload(payload: Any, placeholders: Placeholders,
                      scrub_text: Callable[[str], str] = redact_secrets) -> tuple[Any, Counter]:
     """A sanitized copy of parsed ``payload`` and how many values each step replaced (see the module doc)."""
@@ -342,6 +358,8 @@ def sanitize_payload(payload: Any, placeholders: Placeholders,
             if replaced != parts:
                 counts[INSTANCE] += 1
             return ",".join(replaced)
+        if name == MASK_FIELD and MASK_VALUE.fullmatch(value):
+            return split_mask(value)
         if _flagged(value, scrub_text):
             counts["value"] += 1
             return REDACTED
