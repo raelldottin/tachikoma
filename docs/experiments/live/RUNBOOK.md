@@ -44,6 +44,8 @@ gh workflow run live-trial.yml -f step=enrol
 
 The enrol run prints pss5's identity fingerprint. An agent adds it to [registry-g2-pss5.json](registry-g2-pss5.json) as `expected_game_identity` in a pull request. A fingerprint is not secret, because it is salted. Execution refuses any profile without one.
 
+Done 2026-11-12: enrol run 43247933379 (a dry run; nothing executed, one `collect_daily_reward` planned) gave pss5's fingerprint, now in the registry.
+
 After that pull request merges:
 
 ```bash

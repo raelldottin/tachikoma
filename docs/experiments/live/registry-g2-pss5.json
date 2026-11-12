@@ -13,6 +13,7 @@
       "max_actions": 5,
       "enabled": true,
       "credentials_secret": "PSS_ACCOUNT_5",
+      "expected_game_identity": "gid1-c2fc0631d4ec45f76dc7c64f316ccb6b",
       "legacy_run_account": 5
     }
   ]
