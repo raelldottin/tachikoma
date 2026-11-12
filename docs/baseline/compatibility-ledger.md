@@ -2,7 +2,7 @@
 
 `sdk/compat/` records the game rules, endpoints and formulas the repository relies on, with the evidence for each and the game version that evidence was observed on. A check compares the ledger with a target game version and reports what has not been shown to hold there. Only strong evidence shows an entry holds. It is pure and offline: it reads no game state and opens no connection.
 
-Every entry comes from a fact already recorded in the repository. Nothing in the ledger was observed fresh, and no version or date was inferred: where a source records none, the field is `None`.
+Every entry comes from a fact already recorded in the repository, and no version or date was inferred: where a source records none, the field is `None`. The read-path entries cite the sanitized captures from the owner-dispatched G1 runs of 2026-11-12 ([SPEC-03](../specs/SPEC-03-verified-profile-reads.md) S03-R7).
 
 ## Model
 
@@ -53,18 +53,30 @@ from sdk.compat import check_compatibility
 print(check_compatibility("0.999.60").render_text())
 ```
 
-For the shipped ledger of 31 entries:
+For the shipped ledger of 36 entries:
 
 | Target | Current | Weak at target | Stale | Unknown version | Weak only | Clean | Client behind target |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `0.999.55` | 4 | 1 | 0 | 26 | 22 | 4 | no |
-| `0.999.59` | 1 | 1 | 3 | 26 | 22 | 1 | no |
-| `0.999.60` | 1 | 0 | 4 | 26 | 22 | 1 | yes |
-| `1.0` | 0 | 0 | 5 | 26 | 22 | 0 | yes |
+| `0.999.55` | 9 | 1 | 0 | 26 | 22 | 9 | no |
+| `0.999.59` | 6 | 1 | 3 | 26 | 22 | 6 | no |
+| `0.999.60` | 6 | 0 | 4 | 26 | 22 | 6 | yes |
+| `1.0` | 5 | 0 | 5 | 26 | 22 | 5 | yes |
 
 `rule.client.declared-version` is `unverified`, so it is never `current`: up to `0.999.59` it is `weak_at_target`, and above that it is `stale`.
 
 ## Entries
+
+### Read path (G1 captures, 2026-11-12)
+
+All five are `dynamically-demonstrated` at `1.0`, observed 2026-11-12, citing [the live captures](../../tests/fixtures/live_sanitized/README.md). `1.0` is the `RecommendedVersion` the server's settings reported in the same runs; the client still declares `0.999.59`, so `client_behind_target` is true from `0.999.60` on. The runs and fixes are recorded in [g1-evidence.md](../experiments/live/g1-evidence.md).
+
+| Entry | Kind | Evidence |
+| --- | --- | --- |
+| `endpoint.user.device-login17-profile` | endpoint | the login `User` record holds `@Trophy`, `@Credits` (starbux) and `@HighestTrophy` |
+| `endpoint.ladder.find-user-ranking` | endpoint | `@Ranking`, `@TotalUsers`, `@TotalActiveUsers`; no trophy count |
+| `endpoint.battle.list-pvp-battles2` | endpoint | `Battle` records under `ListPvPBattles/Battles`; trophy counts in records were all `0`, read as unreported |
+| `endpoint.ship.get-ship-by-user-id-empty-containers` | endpoint | a new ship's `<Rooms/>` and `<Researches/>` are empty (fixed in #183) |
+| `endpoint.setting.get-latest-version3-fields` | endpoint | no `LatestVersion*`; `RecommendedVersion`, minimum versions and data counters such as `ServerSettingVersion` (read by #187) |
 
 ### Session and battle chain
 
@@ -139,6 +151,6 @@ All of these are `community` with no recorded version or date.
 
 ## Limits
 
-- The ledger records evidence; it does not gather it. Nothing here is re-verified against the live server.
+- The ledger records evidence; it does not gather it. Only the read-path entries come from live captures; nothing else is re-verified against the live server.
 - A new patch does not mark anything stale until someone records evidence with a version. Most entries have no recorded version, so they are reported as unknown rather than stale.
 - Nothing in `run.py` calls the check yet.
