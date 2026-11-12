@@ -1763,6 +1763,79 @@
         "make test",
         "git diff --check"
       ]
+    },
+    {
+      "slice_id": "spec03-captures",
+      "title": "Add the reviewed G1 captures to tests/fixtures/live_sanitized/",
+      "status": "queued",
+      "priority": 403,
+      "domain": "safety",
+      "allowed_paths": [
+        "tests/fixtures/live_sanitized/"
+      ],
+      "depends_on": [
+        "g1-capture-review"
+      ],
+      "max_files_changed": 8,
+      "notes": "Implements S03-R1. Owner slice: the agent prepares the PR from the owner-dispatched capture run 43187703923 (re-downloaded, re-scanned, read in full); the owner reviews and merges it. Files: pss5 profile (DeviceLogin17), FindUserRanking for pss1 and pss5, ListPvPBattles2 for pss1 (10 battles) and pss5 (empty), and the pss1 settings field summary. pss1's profile is left out: its creation date and lifetime PvP totals could identify the account.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
+    },
+    {
+      "slice_id": "spec03-profile-read",
+      "title": "Parse the captured profile into observed trophies and starbux",
+      "status": "queued",
+      "priority": 404,
+      "domain": "state",
+      "allowed_paths": [
+        "sdk/state/profile_reads.py",
+        "sdk/state/client_provider.py",
+        "sdk/fleet/factory.py",
+        "tests/test_profile_reads.py",
+        "docs/baseline/capability-inventory.json",
+        "docs/specs/SPEC-03-verified-profile-reads.md",
+        "docs/baseline/account-snapshot.md"
+      ],
+      "depends_on": [
+        "spec03-captures"
+      ],
+      "max_files_changed": 7,
+      "notes": "Implements S03-R3, S03-R8. No captured read-only call returns trophies or starbux except the login response (User@Trophy, User@Credits). The provider reports the profile section observed only from a server response no older than a freshness window, so post-action snapshots keep it missing instead of reporting stale values. findUserRanking moves to mocked-test.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
+    },
+    {
+      "slice_id": "spec03-battle-history",
+      "title": "Parse ListPvPBattles2 into typed battle records and use them for verification and cohorts",
+      "status": "queued",
+      "priority": 405,
+      "domain": "pvp",
+      "allowed_paths": [
+        "sdk/state/profile_reads.py",
+        "sdk/actions/catalog.py",
+        "sdk/reports/battles.py",
+        "tests/test_profile_reads.py",
+        "tests/test_pvp_battle_action.py",
+        "tests/test_battle_results_from_journal.py",
+        "docs/baseline/capability-inventory.json",
+        "docs/specs/SPEC-03-verified-profile-reads.md"
+      ],
+      "depends_on": [
+        "spec03-profile-read"
+      ],
+      "max_files_changed": 8,
+      "notes": "Implements S03-R4, S03-R5, S03-R6, S03-R8. Battle records from the captured ListPvPBattles2 shape (BattleId, AttackingUserId/DefendingUserId for role, OutcomeType, Win/LoseTrophyResult, ship design ids); absent fields stay None. listPvPBattles2 moves to mocked-test.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
     }
   ]
 }
