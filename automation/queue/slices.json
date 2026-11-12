@@ -2050,7 +2050,7 @@
     {
       "slice_id": "spec03-ledger-evidence",
       "title": "Record the G1-confirmed read endpoints in the compatibility ledger",
-      "status": "queued",
+      "status": "done",
       "priority": 406,
       "domain": "compat",
       "allowed_paths": [
