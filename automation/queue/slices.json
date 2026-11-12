@@ -2261,6 +2261,29 @@
         "make lint",
         "git diff --check"
       ]
+    },
+    {
+      "slice_id": "g2-canary-no-collectors",
+      "title": "Record that pss5 has no collectors, so its canary cannot verify a collection",
+      "status": "queued",
+      "priority": 416,
+      "domain": "fleet",
+      "allowed_paths": [
+        "docs/experiments/live/g2-evidence.md",
+        "docs/experiments/live/RUNBOOK.md",
+        "docs/experiments/r2-progression-trial.md",
+        "docs/specs/SPEC-07-progression-trial.md"
+      ],
+      "depends_on": [
+        "collect-room-fill-evidence"
+      ],
+      "max_files_changed": 4,
+      "notes": "Records owner-dispatched canary 43305786623 (2026-11-12, main 286818a): not-observed, and the new room-fill evidence shows every room at CapacityUsed 0 before and after, with room_fill_note. pss5's nine rooms are Bridge, Bedroom, Bolter, three Lifts, Engine, Small Reactor and a Mineral Mining Laser: no mineral or gas collector and no storage, so collect_all_resources has nothing to collect and S07-R2 cannot be met on pss5 as it stands. Gas is 0 above the reserve, so baseline-v1's research is all refused too. Record this in the G2 evidence, update the runbook's verified-canary steps (the owner builds a collector by hand, or chooses another approach), and add it to the trial plan and SPEC-07 as a blocker on block 1. Docs only.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
     }
   ]
 }
