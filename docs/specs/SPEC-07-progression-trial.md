@@ -19,7 +19,7 @@
 ## Requirements
 
 - **S07-R1 (MUST)** A written trial plan in `docs/experiments/r2-progression-trial.md` fixes, before the window opens: account alias, manual routine, arm schedule (ABBA crossover or matched pair from the study design), window dates, snapshot times, primary metric (growth velocity) and the smallest effect worth detecting, sample size from `sdk.experiments.study`, stop thresholds, and the authorization reference.
-- **S07-R2 (MUST)** A canary run (S05-R4) succeeds and reconciles before the first automated window.
+- **S07-R2 (MUST)** A canary run (S05-R4) succeeds and reconciles before the first automated window. It succeeds only when its action reconciles `verified`; `not-observed` does not count (owner decision, 2026-11-12).
 - **S07-R3 (MUST)** Automated windows run `--fleet-execute` under the authorization; manual windows take read-only snapshots at the same times.
 - **S07-R4 (MUST)** The primary metric is computed the same way in both arms, from snapshot diffs, never from journal outcomes alone.
 - **S07-R5 (MUST)** Operator minutes are logged per account-day in both arms in the format the fleet report takes (`manual_minutes`, `operator_minutes`).
@@ -75,7 +75,7 @@
 
 **Offline verification:** every MUST with an offline acceptance criterion is covered by a test that cites it (checked by `scripts/spec_trace.py`). Implemented in #167.
 
-**Trial plan (S07-R1):** a draft for the owner to approve is in [r2-progression-trial.md](../experiments/r2-progression-trial.md): `pss5`, a baseline window from 2026-11-16, then four 7-day ABBA blocks (14 account-days per arm, enough for a 1.5 sd effect). It is not approved, so the trial has not started: the owner writes the manual routine, confirms the windows and stop thresholds, and writes the full-mode authorization. The canary (S07-R2) must also succeed and reconcile first.
+**Trial plan (S07-R1):** a draft for the owner to approve is in [r2-progression-trial.md](../experiments/r2-progression-trial.md): `pss5`, a baseline window from 2026-11-16, then four 7-day ABBA blocks (14 account-days per arm, enough for a 1.5 sd effect). It is not approved, so the trial has not started: the owner writes the manual routine, confirms the windows and stop thresholds, and writes the full-mode authorization. The canary (S07-R2) must also reconcile `verified` first. The two G2 canaries of 2026-11-12 reconciled `not-observed` ([G2 evidence](../experiments/live/g2-evidence.md)), so S07-R2 is not met yet.
 
 Pending.
 

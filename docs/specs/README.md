@@ -75,7 +75,7 @@ M0 can start as soon as G0 is given. M1 and the offline build of M2 can then run
 Every offline slice in the plan is merged (#157–#176). What remains needs the owner:
 
 - **G1 (open):** SPEC-03 and SPEC-04 are done ([G1 evidence](../experiments/live/g1-evidence.md), [baseline](../experiments/baselines/2026-11-12-g1.md)).
-- **G2 (open):** the SPEC-05 canary ran ([evidence](../experiments/live/g2-evidence.md)); SPEC-06 is verified offline (#209 merged) and its last criterion follows the SPEC-07 trial; SPEC-07 needs the owner to approve its [draft trial plan](../experiments/r2-progression-trial.md); SPEC-11 needs the owner to confirm seeing the canary's alerts and dashboard.
+- **G2 (open):** the SPEC-05 canary ran ([evidence](../experiments/live/g2-evidence.md)); SPEC-06 is verified offline (#209 merged) and its last criterion follows the SPEC-07 trial; SPEC-07 needs the owner to approve its [draft trial plan](../experiments/r2-progression-trial.md) and a canary that reconciles `verified` (S07-R2); SPEC-11 needs the owner to confirm seeing the canary's alerts and dashboard.
 - **G3, G4, G5:** PvP, market captures, and a second account, for SPEC-08, SPEC-09 and SPEC-10.
 - SPEC-12's written report follows the trials.
 

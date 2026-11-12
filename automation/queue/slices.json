@@ -2215,7 +2215,7 @@
     {
       "slice_id": "spec07-verified-canary-precondition",
       "title": "Require a verified canary before the SPEC-07 trial opens",
-      "status": "queued",
+      "status": "done",
       "priority": 414,
       "domain": "fleet",
       "allowed_paths": [

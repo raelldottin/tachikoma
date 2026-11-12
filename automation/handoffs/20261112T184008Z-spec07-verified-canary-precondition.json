@@ -1,0 +1,45 @@
+{
+  "slice_id": "spec07-verified-canary-precondition",
+  "status": "done",
+  "summary": "The owner decided (2026-11-12) that the S07-R2 canary succeeds only when its collection reconciles verified. A not-observed result shows the call went through, not that the trial can measure an effect. Both G2 canaries so far were not-observed. The trial plan, SPEC-07 and the specs README now say so, and the runbook gains a section on getting a verified canary: give production time, free storage by hand if full, and re-dispatch step=canary before the canary authorization expires on 2026-11-26. Block 1 does not open until it is verified.",
+  "files_touched": [
+    "docs/experiments/live/RUNBOOK.md",
+    "docs/experiments/r2-progression-trial.md",
+    "docs/specs/README.md",
+    "docs/specs/SPEC-07-progression-trial.md"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "Require a verified canary before the SPEC-07 trial opens",
+      "before": "S07-R2 did not define canary success",
+      "after": "S07-R2 requires a verified reconciliation; runbook says how to get one",
+      "proof": [
+        "make syntax-check, make test, scripts/spec_trace.py and git diff --check pass"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "Docs only; the verified canary itself is an owner dispatch."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-12T18:40:25Z"
+}
