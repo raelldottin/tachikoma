@@ -26,6 +26,18 @@ except ImportError:
     yaml = None
 
 
+def child_env(**extra):
+    """Environment for a child interpreter that imports scripts.ci without relying on its working directory.
+
+    PYTHONSAFEPATH=1 (and Bazel) keep the CWD off sys.path, so the checkout root is put on PYTHONPATH instead.
+    """
+    env = dict(os.environ)
+    existing = env.get("PYTHONPATH")
+    env["PYTHONPATH"] = os.pathsep.join([str(ci.ROOT), existing]) if existing else str(ci.ROOT)
+    env.update(extra)
+    return env
+
+
 class RequiredGateTests(unittest.TestCase):
     def test_all_success_is_required(self):
         ci.require_success({"checks": {"result": "success"}, "tests": {"result": "success"}}, ["checks", "tests"])
@@ -95,6 +107,7 @@ with patch.object(unittest.defaultTestLoader, 'discover', return_value=unittest.
         result = subprocess.run(
             [sys.executable, "-c", program],
             cwd=ci.ROOT,
+            env=child_env(),
             capture_output=True,
             text=True,
             timeout=30,
@@ -106,7 +119,7 @@ with patch.object(unittest.defaultTestLoader, 'discover', return_value=unittest.
 
 class LintRatchetTests(unittest.TestCase):
     def test_signature_includes_file_rule_and_message_but_not_line_number(self):
-        root = Path(__file__).resolve().parent.parent
+        root = Path(os.path.abspath(__file__)).parent.parent
         findings = [
             {"filename": str(root / "run.py"), "code": "F401", "message": "unused import", "location": {"row": 1}}
         ]
@@ -658,6 +671,17 @@ class CredentialFileSafetyTests(unittest.TestCase):
                 self.assert_probe_ran_and_temp_dir_removed(result)
                 self.assert_sentinels_untouched()
 
+    def test_verbose_prints_every_test_id_and_the_default_does_not(self):
+        probe_id = "(tests.test_security.SentinelProbe"
+        for verbose, expected in ((["--verbose"], True), ([], False)):
+            with self.subTest(verbose=verbose):
+                names = ["--names", "tests.test_security"]
+                result = self.run_in_root([sys.executable, "scripts/ci.py", "test", *verbose, *names])
+                self.assert_probe_ran_and_temp_dir_removed(result)
+                self.assertEqual(probe_id in result.stderr, expected, result.stderr)
+                self.assertEqual("test_writes_device_and_log_in_the_working_directory" in result.stderr, expected)
+                self.assert_sentinels_untouched()
+
     # Verifies: S02-R1
     def test_run_tests_uses_a_fresh_temporary_directory_and_restores_the_working_directory(self):
         program = """
@@ -753,3 +777,112 @@ print(repr((code, seen[0], os.getcwd(), os.path.exists(seen[0]))))
         result = self.run_in_root([sys.executable, "-m", "unittest", "tests.test_security"])
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("Ran 1 test", result.stderr)
+
+
+RECORD_WORKING_DIRECTORY = """
+import os
+import unittest
+from unittest.mock import patch
+from scripts import ci
+
+seen = []
+
+class RecordWorkingDirectory(unittest.TestCase):
+    def runTest(self):
+        seen.append(os.getcwd())
+
+with patch.object(unittest.defaultTestLoader, "discover", return_value=unittest.TestSuite([RecordWorkingDirectory()])):
+    code = ci.run_tests([])
+print(repr((code, seen[0], os.getcwd(), os.path.isdir(seen[0]))))
+"""
+
+
+class TestRunnerPortabilityTests(unittest.TestCase):
+    """scripts/ci.py must work from a Bazel runfiles tree and per-test $TEST_TMPDIR as well as from a checkout."""
+
+    def setUp(self):
+        directory = TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(directory.cleanup)
+        self.work = Path(os.path.abspath(directory.name)) / "work"
+        self.temp = Path(os.path.abspath(directory.name)) / "tmp"
+        self.work.mkdir()
+        self.temp.mkdir()
+
+    def run_child(self, command, **extra):
+        env = child_env(PYTHONDONTWRITEBYTECODE="1", TMPDIR=str(self.temp), TEMP=str(self.temp), TMP=str(self.temp))
+        env.pop("TEST_TMPDIR", None)
+        env.update(extra)
+        return subprocess.run(command, cwd=self.work, env=env, capture_output=True, text=True, timeout=120)
+
+    def test_root_is_derived_with_abspath_without_resolving_symlinks(self):
+        self.assertEqual(ci.ROOT, Path(os.path.abspath(ci.__file__)).parent.parent)
+        # Evaluate the module under a fictitious path with resolve() disabled: a runfiles symlink must not be followed.
+        fake = str(self.work / "runfiles" / "_main" / "scripts" / "ci.py")
+        source = (ci.ROOT / "scripts" / "ci.py").read_text(encoding="utf-8")
+        namespace = {"__file__": fake, "__name__": "ci_root_probe"}
+        with patch.object(Path, "resolve", side_effect=AssertionError("ROOT must not call resolve()")):
+            exec(compile(source, fake, "exec"), namespace)
+        self.assertEqual(namespace["ROOT"], self.work / "runfiles" / "_main")
+
+    def test_require_tests_fails_on_an_empty_suite_and_the_default_does_not(self):
+        program = """
+import unittest
+from unittest.mock import patch
+from scripts import ci
+
+with patch.object(unittest.defaultTestLoader, "discover", return_value=unittest.TestSuite()):
+    print(repr((ci.run_tests([]), ci.run_tests([], require_tests=True))))
+"""
+        result = self.run_child([sys.executable, "-c", program])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(ast.literal_eval(result.stdout.strip().splitlines()[-1]), (0, 1))
+        self.assertIn("CI ran no tests, but at least one was required.", result.stderr)
+
+    def test_child_with_pythonsafepath_still_imports_scripts_ci(self):
+        program = "from scripts import ci; print(ci.ROOT)"
+        result = self.run_child([sys.executable, "-c", program], PYTHONSAFEPATH="1")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), str(ci.ROOT))
+        if sys.version_info >= (3, 11):
+            # Without PYTHONPATH the checkout root is not importable even from the checkout itself.
+            env = child_env(PYTHONSAFEPATH="1")
+            del env["PYTHONPATH"]
+            bare = subprocess.run(
+                [sys.executable, "-c", program], cwd=ci.ROOT, env=env, capture_output=True, text=True, timeout=30
+            )
+            self.assertNotEqual(bare.returncode, 0)
+            self.assertIn("ModuleNotFoundError", bare.stderr)
+
+    def test_run_tests_stays_in_test_tmpdir_and_otherwise_uses_a_fresh_directory(self):
+        result = self.run_child([sys.executable, "-c", RECORD_WORKING_DIRECTORY], TEST_TMPDIR=str(self.work))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        code, seen, after, still_exists = ast.literal_eval(result.stdout.strip().splitlines()[-1])
+        self.assertEqual(code, 0)
+        self.assertTrue(os.path.samefile(seen, self.work))
+        self.assertTrue(os.path.samefile(after, self.work))
+        self.assertTrue(still_exists)
+        # A $TEST_TMPDIR that is not the working directory changes nothing: a fresh directory is still used.
+        elsewhere = self.temp / "elsewhere"
+        elsewhere.mkdir()
+        result = self.run_child([sys.executable, "-c", RECORD_WORKING_DIRECTORY], TEST_TMPDIR=str(elsewhere))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        code, seen, after, still_exists = ast.literal_eval(result.stdout.strip().splitlines()[-1])
+        self.assertEqual(code, 0)
+        self.assertEqual(Path(seen).resolve().parent, self.temp.resolve())
+        self.assertTrue(os.path.samefile(after, self.work))
+        self.assertFalse(still_exists)
+
+    def test_device_test_module_leaves_a_sentinel_device_in_the_starting_directory_untouched(self):
+        sentinel = self.work / ".device"
+        content = f"Android|{SYNTHETIC_DEVICE_KEY_IOS}|sentinel-refresh|en|{SYNTHETIC_ACCESS_TOKEN}|1".encode()
+        sentinel.write_bytes(content)
+        os.utime(sentinel, ns=(SENTINEL_MTIME_NS, SENTINEL_MTIME_NS))
+        # tests.test_battle_flow constructs Device(), which reads and rewrites ./.device.
+        command = [sys.executable, str(ci.ROOT / "scripts" / "ci.py"), "test", "--names", "tests.test_battle_flow"]
+        result = self.run_child(command)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertRegex(result.stderr, r"Ran [1-9][0-9]* tests?")
+        self.assertEqual(sentinel.read_bytes(), content)
+        self.assertEqual(sentinel.stat().st_mtime_ns, SENTINEL_MTIME_NS)
+        self.assertEqual(sorted(os.listdir(self.work)), [".device"])
+        self.assertEqual(list(self.temp.iterdir()), [], "the temporary working directory must be removed")
