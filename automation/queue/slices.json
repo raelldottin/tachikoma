@@ -2141,7 +2141,7 @@
     {
       "slice_id": "g2-canary-fixes",
       "title": "Fix what the first G2 canary found: unobserved minerals and gas, an empty canary, and no server version",
-      "status": "queued",
+      "status": "done",
       "priority": 410,
       "domain": "fleet",
       "allowed_paths": [
