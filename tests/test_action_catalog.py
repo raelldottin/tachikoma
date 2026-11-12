@@ -15,7 +15,7 @@ from sdk.actions import (
     get_spec,
     reconcile,
 )
-from sdk.state import AccountMismatchError, build_snapshot
+from sdk.state import AccountMismatchError, build_snapshot, diff_snapshots
 
 REPO_ROOT = Path(os.path.abspath(__file__)).parents[1]
 T0 = datetime(2026, 11, 10, 12, 0, tzinfo=timezone.utc)
@@ -158,6 +158,88 @@ class ReconcileTests(unittest.TestCase):
     def test_cross_account_reconciliation_is_refused(self):
         with self.assertRaises(AccountMismatchError):
             reconcile(get_spec("collect_all_resources"), snap(), snap(seconds=1, alias="bravo"))
+
+
+class CollectionEvidenceTests(unittest.TestCase):
+    """The collection's room-fill probe and evidence never raise and never invent a fill."""
+
+    def setUp(self):
+        spec = get_spec("collect_all_resources")
+        self.probe, self.evidence = spec.evidence_probe, spec.evidence
+
+    def test_collection_has_a_room_fill_probe(self):
+        self.assertIsNotNone(self.probe)
+        self.assertIsNotNone(self.evidence)
+
+    def test_probe_reads_only_client_attributes_and_survives_bad_ones(self):
+        class Exploding:
+            @property
+            def rooms(self):
+                raise RuntimeError("boom")
+
+        class Odd:
+            rooms = [{"@RoomId": "x1", "@RoomDesignId": "5", "@CapacityUsed": "7"}, "not a record", {"@RoomDesignId": "5"}]
+            roomDesigns = "not designs"
+
+        self.assertEqual(self.probe(Exploding()), {"probe_failed": True})
+        self.assertEqual(self.probe(object()), {"probe_failed": True})
+        odd = self.probe(Odd())
+        # A record that is not a room is skipped; a room without an id still counts.
+        self.assertEqual((odd["fills"], odd["designs"]), ({"x1": ("5", 7), "#1": ("5", None)}, {}))
+        single = type("Single", (), {"rooms": {"@RoomId": "x2", "@RoomDesignId": "6", "@CapacityUsed": "0"}})()
+        self.assertEqual(self.probe(single)["fills"], {"x2": ("6", 0)})
+
+    def test_room_designs_that_cannot_be_read_keep_the_fill(self):
+        class BadDesigns:
+            rooms = [{"@RoomId": "x1", "@RoomDesignId": "5", "@CapacityUsed": "7"}]
+
+            @property
+            def roomDesigns(self):
+                raise RuntimeError("boom")
+
+        probe = self.probe(BadDesigns())
+        self.assertEqual((probe["fills"], probe["designs"]), ({"x1": ("5", 7)}, {}))
+
+    def test_evidence_never_raises_on_malformed_probes(self):
+        malformed = ({"fills": "nonsense"}, {"fills": {"r": "bad"}}, {"fills": {"r": ("1", 2)}, "designs": 4}, {})
+        for before in malformed:
+            for after in malformed:
+                with self.subTest(before=before, after=after):
+                    for delta in (None, self.delta):
+                        self.assertIsInstance(self.evidence(before, after, N, delta), dict)
+
+    @property
+    def delta(self):
+        return diff_snapshots(snap(), snap(seconds=60))
+
+    @staticmethod
+    def empty_rooms():
+        return {"fills": {"r": ("1", 0)}, "designs": {}, "source": [object()]}
+
+    def test_both_probes_failed_journals_no_evidence(self):
+        self.assertEqual(self.evidence({"probe_failed": True}, {"probe_failed": True}, N, self.delta), {})
+
+    def test_empty_note_only_for_a_not_observed_collection(self):
+        self.assertIn("room_fill_note", self.evidence(self.empty_rooms(), self.empty_rooms(), N, self.delta))
+        for status in (V, C, U):
+            with self.subTest(status=status):
+                self.assertNotIn("room_fill_note",
+                                 self.evidence(self.empty_rooms(), self.empty_rooms(), status, self.delta))
+
+    def test_rooms_not_read_fresh_on_both_sides_are_unobserved(self):
+        before = self.empty_rooms()
+        rooms_missing_after = diff_snapshots(snap(), snap(seconds=60, rooms=None))
+        cases = {
+            "after-snapshot failed": (before, self.empty_rooms(), None),
+            "rooms section missing": (before, self.empty_rooms(), rooms_missing_after),
+            "same list as before": (before, dict(before), self.delta),
+        }
+        for name, (first, second, delta) in cases.items():
+            with self.subTest(case=name):
+                evidence = self.evidence(first, second, N, delta)
+                self.assertEqual((evidence["room_fill_observed"], evidence["room_fill_before_total"],
+                                  evidence["room_fill_after_total"], evidence["room_fill"]), (False, None, None, []))
+                self.assertNotIn("room_fill_note", evidence)
 
 
 if __name__ == "__main__":

@@ -2238,7 +2238,7 @@
     {
       "slice_id": "collect-room-fill-evidence",
       "title": "Journal each room's fill before and after a collection",
-      "status": "queued",
+      "status": "done",
       "priority": 415,
       "domain": "fleet",
       "allowed_paths": [

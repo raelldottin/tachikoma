@@ -14,7 +14,7 @@ from enum import Enum
 from typing import Any, Callable, Mapping, Optional
 
 from sdk.state import AccountSnapshot, Completeness, SnapshotDelta, diff_snapshots
-from sdk.state.profile_reads import ATTACKER, BattleRecord, matching_battle, parse_battles
+from sdk.state.profile_reads import ATTACKER, BattleRecord, int_or_none, matching_battle, parse_battles
 
 
 class Idempotency(str, Enum):
@@ -355,6 +355,129 @@ def _build_battle_evidence(before: Mapping[str, Any], after: Mapping[str, Any], 
     return evidence
 
 
+# --- collection evidence -----------------------------------------------------------
+#
+# How full each room was just before and just after a collection. The probe reads
+# the ship's room records (``client.rooms``) that the runner's before and after
+# snapshots already fetched, and the room designs (``client.roomDesigns``); it never
+# calls the game. Rooms are grouped by design, with the design's name, room type,
+# manufacture type and capacity, so room instance ids never reach the journal. The
+# evidence tells "nothing was waiting in any room" apart from "something was waiting
+# and the collection was not seen". It never changes the reconciled outcome:
+# what ``@CapacityUsed`` counts for each room type is not yet confirmed live, and
+# the totals add up every room, storage included.
+#
+# ``Client.getShipByUserId`` replaces ``client.rooms`` only when the read
+# succeeds, so after a failed read the list is left over from an earlier one.
+# Room fill is therefore journaled only when both snapshots observed the rooms
+# section and the after-call list is a different object from the one read
+# before. Otherwise both sides are unobserved (``None``), never a stale value. A
+# client with no room records on either side (a fake, say) journals no evidence.
+ROOM_FILL_EMPTY_NOTE = "no room reported anything stored (CapacityUsed 0) before the collection"
+ROOM_FILL_UNREAD_REASON = "the ship's rooms were not read fresh both before and after the collection"
+
+
+def _room_records(value: Any) -> Optional[list]:
+    if isinstance(value, Mapping):
+        return [value]
+    if isinstance(value, list):
+        return [record for record in value if isinstance(record, Mapping)]
+    return None
+
+
+def _room_designs(client: Any) -> dict[str, Mapping[str, Any]]:
+    """``client.roomDesigns`` as ``{design id: RoomDesign record}``; empty when they are not loaded."""
+    designs = getattr(client, "roomDesigns", None)
+    if not isinstance(designs, Mapping):
+        return {}
+    from sdk.client import _extract_collection  # imported here: the catalog itself makes no game calls
+
+    return {str(record["@RoomDesignId"]).strip(): record for record in _extract_collection(designs, "RoomDesign")
+            if str(record.get("@RoomDesignId") or "").strip()}
+
+
+def _collection_probe(client: Any) -> Mapping[str, Any]:
+    try:
+        source = getattr(client, "rooms", None)
+        rooms = _room_records(source)
+        if rooms is None:
+            return {_PROBE_FAILED: True}
+        fills = {}
+        for index, room in enumerate(rooms):
+            # Room ids are kept in the probe only to pair rooms; they are never journaled.
+            room_id = str(room.get("@RoomId") or "").strip() or f"#{index}"
+            fills[room_id] = (str(room.get("@RoomDesignId") or "").strip() or None,
+                              int_or_none(room.get("@CapacityUsed")))
+    except Exception:  # the probe runs before and after the call and must not raise
+        return {_PROBE_FAILED: True}
+    try:
+        designs = _room_designs(client)
+    except Exception:  # designs only name the rooms; their fill stands without them
+        designs = {}
+    return {"fills": fills, "designs": designs, "source": source}
+
+
+def _fill_total(fills: Mapping[str, tuple]) -> Optional[int]:
+    """The summed fill of all rooms; ``None`` when no room was read or any room's fill is unknown."""
+    values = [fill for _, fill in fills.values()]
+    if not values or any(value is None for value in values):
+        return None
+    return sum(values)
+
+
+def _collection_evidence(before: Mapping[str, Any], after: Mapping[str, Any], status: ReconciliationStatus,
+                         delta: Optional[SnapshotDelta]) -> Mapping[str, Any]:
+    try:
+        return _build_collection_evidence(before, after, status, delta)
+    except Exception:  # evidence never breaks the journal entry
+        return {"room_fill_observed": False}
+
+
+def _build_collection_evidence(before: Mapping[str, Any], after: Mapping[str, Any],
+                               status: ReconciliationStatus, delta: Optional[SnapshotDelta]) -> dict:
+    if before.get(_PROBE_FAILED) and after.get(_PROBE_FAILED):
+        return {}  # the client holds no room records on either side: nothing to report
+    # A ship read that failed on either side leaves client.rooms from an earlier read: unobserved, not stale.
+    stale = (delta is None or "rooms" in delta.unknown_sections
+             or (not before.get(_PROBE_FAILED) and before.get("source") is after.get("source")))
+    if stale:
+        return {"room_fill_observed": False, "room_fill_before_total": None, "room_fill_after_total": None,
+                "room_fill": [], "room_fill_unobserved_reason": ROOM_FILL_UNREAD_REASON}
+    before_fills = {} if before.get(_PROBE_FAILED) else dict(before.get("fills") or {})
+    after_fills = {} if after.get(_PROBE_FAILED) else dict(after.get("fills") or {})
+    designs = {**(after.get("designs") or {}), **(before.get("designs") or {})}
+    groups: dict[str, dict] = {}
+    for room_id in sorted(set(before_fills) | set(after_fills)):
+        design_id, fill_before = before_fills.get(room_id, (None, None))
+        after_design, fill_after = after_fills.get(room_id, (None, None))
+        design_id = design_id or after_design
+        record = designs.get(design_id or "", {})
+        group = groups.setdefault(design_id or "unknown", {
+            "design_id": design_id,
+            "name": str(record.get("@RoomName") or "") or None,
+            "room_type": str(record.get("@RoomType") or "") or None,
+            "manufacture_type": str(record.get("@ManufactureType") or "") or None,
+            "design_capacity": int_or_none(record.get("@Capacity")),
+            "rooms": 0,
+            "fill_before": 0,
+            "fill_after": 0,
+        })
+        group["rooms"] += 1
+        for key, fill, seen in (("fill_before", fill_before, room_id in before_fills),
+                                ("fill_after", fill_after, room_id in after_fills)):
+            group[key] = None if group[key] is None or fill is None or not seen else group[key] + fill
+    total_before = _fill_total(before_fills)
+    evidence = {
+        "room_fill_observed": bool(before_fills),
+        "room_fill_before_total": total_before,
+        "room_fill_after_total": _fill_total(after_fills),
+        "room_fill": [groups[key] for key in sorted(groups)],
+    }
+    if status is ReconciliationStatus.NOT_OBSERVED and total_before == 0:
+        evidence["room_fill_note"] = ROOM_FILL_EMPTY_NOTE
+    return evidence
+
+
 CATALOG: dict[str, ActionSpec] = {
     spec.action_id: spec
     for spec in (
@@ -367,6 +490,8 @@ CATALOG: dict[str, ActionSpec] = {
             preconditions=(_section_observed("resources"),),
             postcondition=_resources_collected,
             expected_effect="minerals and/or gas increase",
+            evidence_probe=_collection_probe,
+            evidence=_collection_evidence,
         ),
         ActionSpec(
             action_id="collect_daily_reward",

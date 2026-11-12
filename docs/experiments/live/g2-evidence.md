@@ -12,8 +12,9 @@
 | 43256792025 | canary | nothing | — | minerals and gas were never observed (live items carry only `ItemDesignId`), and with no safe-to-retry request the canary had nothing to run; fixed in #214 |
 | 43261519416 | canary | one `collect_all_resources` | `not-observed`: minerals and gas unchanged | server version `1.0+settings.3307714` recorded; one `no-verified-action` warning; dashboard written |
 | 43262412245 | canary | one `collect_all_resources` | `not-observed`: minerals and gas unchanged | as above |
+| 43284132171 | canary | one `collect_all_resources` | `not-observed`: minerals and gas unchanged | about two hours after the previous canary, for SPEC-07's verified-canary precondition (S07-R2); as above |
 
-In both executing runs:
+In all three executing runs:
 
 - exactly one action ran, the first safe-to-retry one (S05-R4); `collect_daily_reward` was held back as not safe to retry;
 - nothing was spent and starbux stayed disabled (S05-R6); every room upgrade and research was refused by the caps (0) or for its starbux cost;
@@ -22,9 +23,9 @@ In both executing runs:
 
 ## Reconciliation
 
-Both collections reconciled to `not-observed`: the before and after snapshots showed the same mineral and gas balances. The plan reported 500 minerals and no gas above the reserve, so the likely cause is full storage or nothing produced since the last collection; the runs cannot tell which. Nothing is claimed as verified.
+All three collections reconciled to `not-observed`: the before and after snapshots showed the same mineral and gas balances. The plans reported minerals above the reserve and no gas above it. The likely cause is that nothing was waiting to be collected, or that storage was full. pss5's ship capture from earlier that day showed every room with `CapacityUsed` 0 and `PowerGenerated` 0. The runs cannot tell which, because the journal did not record room fill. Since `collect-room-fill-evidence`, a collection's journal evidence lists, per room design, the `CapacityUsed` before and after the call, with the design's name, room type, manufacture type and capacity. When the total was 0 before a `not-observed` collection, it says so. The next canary should therefore help tell the cases apart, although what `CapacityUsed` counts for each room type is still to be confirmed against live data. Nothing is claimed as verified.
 
 ## What this does not show
 
-- A verified effect. A canary on an account with free storage, or the progression trial's snapshot diffs, will.
+- A verified effect. SPEC-07 needs one before its block 1 opens (S07-R2); see [Getting a verified canary](RUNBOOK.md#getting-a-verified-canary).
 - That the owner has looked at the alerts and dashboard (S11-AC3); they are in each canary artifact (`journals/dashboard.html`), which expires after seven days.
