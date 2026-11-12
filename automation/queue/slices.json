@@ -2354,7 +2354,7 @@
     {
       "slice_id": "spec13-grid-model",
       "title": "SPEC-13 grid model and placement check",
-      "status": "blocked",
+      "status": "queued",
       "priority": 420,
       "domain": "fleet",
       "allowed_paths": [
@@ -2366,8 +2366,8 @@
         "spec13-capture-designs"
       ],
       "max_files_changed": 3,
-      "notes": "Implements S13-R3, R9. Needs the design records from a step=capture run after spec13-capture-designs, so the grid encoding is read from real data.",
-      "entry_condition": "The owner dispatches step=capture after spec13-capture-designs merges and an agent confirms the room, ship design and purchase records were captured; then a chore(queue) PR sets this to queued.",
+      "notes": "Implements S13-R3, R9. Needs the design records from a step=capture run after spec13-capture-designs, so the grid encoding is read from real data. Confirmed from that capture: the mask is Rows x Columns digits, row-major from the top-left; 0 is outside, 1 is buildable, 2 appears on 178 of 430 hulls with unknown meaning (refuse). Room @Row/@Column are 0-based top-left of a @Rows x @Columns footprint; pss5's nine rooms all sit on 1-cells without overlap. RoomDesignPurchase lists (RoomDesignId root, Level, Quantity, AvailabilityMask) per ship level. Tests use pss5's hull mask and room layout (game data) as constants; no capture file is committed.",
+      "entry_condition": "Met: capture run 43316397906 (2026-11-12, main aa882d5) recorded unredacted ShipDesign masks with the room and purchase records.",
       "required_validations": [
         "make syntax-check",
         "make test",
