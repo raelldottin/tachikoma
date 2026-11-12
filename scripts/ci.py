@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
+from contextlib import nullcontext
 import gzip
 import hashlib
 import io
@@ -19,7 +20,9 @@ from tempfile import TemporaryDirectory
 import unittest
 
 
-ROOT = Path(__file__).resolve().parent.parent
+# abspath, not resolve(): under Bazel this file is a runfiles symlink, and following it would leave the
+# runfiles tree for the source checkout.
+ROOT = Path(os.path.abspath(__file__)).parent.parent
 WORKFLOWS = (
     "blocking-ci.yml",
     "automation-check.yml",
@@ -261,7 +264,18 @@ def close_root_log_files_under(directory: Path) -> None:
                 handler.close()
 
 
-def run_tests(names: list[str]) -> int:
+def in_bazel_test_tmpdir() -> bool:
+    """True when the working directory is already the scratch directory Bazel made for this test."""
+    test_tmpdir = os.environ.get("TEST_TMPDIR")
+    if not test_tmpdir:
+        return False
+    try:
+        return os.path.samefile(os.getcwd(), test_tmpdir)
+    except OSError:
+        return False
+
+
+def run_tests(names: list[str], require_tests: bool = False, verbosity: int = 1) -> int:
     """Run mocked tests and fail even when a forbidden network error is swallowed."""
     attempts = []
 
@@ -275,23 +289,34 @@ def run_tests(names: list[str]) -> int:
     sys.path.insert(0, str(ROOT))
     # Tests that construct Device() or import run.py write ./.device and ./tachikoma.log. Running them in a
     # fresh, empty working directory keeps them away from the real credential files in the repository root.
+    # Under Bazel the working directory is already the per-test $TEST_TMPDIR, so it is used as it is.
     previous_cwd = os.getcwd()
-    with TemporaryDirectory(prefix="tachikoma-test-", ignore_cleanup_errors=True) as scratch:
-        os.chdir(scratch)
+    workdir = (
+        nullcontext(None)
+        if in_bazel_test_tmpdir()
+        else TemporaryDirectory(prefix="tachikoma-test-", ignore_cleanup_errors=True)
+    )
+    with workdir as scratch:
         try:
+            if scratch is not None:
+                os.chdir(scratch)
             suite = (
                 unittest.defaultTestLoader.loadTestsFromNames(names)
                 if names
                 else unittest.defaultTestLoader.discover(str(ROOT / "tests"), pattern="test_*.py")
             )
-            result = unittest.TextTestRunner().run(suite)
+            result = unittest.TextTestRunner(verbosity=verbosity).run(suite)
         finally:
             # Leave the directory and close log files opened in it (run.py logs to ./tachikoma.log) before it is
             # removed: Windows cannot delete the working directory or an open file.
             os.chdir(previous_cwd)
-            close_root_log_files_under(Path(scratch))
+            if scratch is not None:
+                close_root_log_files_under(Path(scratch))
     if attempts:
         print(f"CI rejected {len(attempts)} unmocked network connection attempt(s).", file=sys.stderr)
+    if require_tests and result.testsRun == 0:
+        print("CI ran no tests, but at least one was required.", file=sys.stderr)
+        return 1
     return 0 if result.wasSuccessful() and not attempts else 1
 
 
@@ -304,6 +329,7 @@ def main(argv: list[str] | None = None) -> int:
     commands.add_parser("repository")
     tests = commands.add_parser("test")
     tests.add_argument("--names", nargs="+", default=[])
+    tests.add_argument("--verbose", action="store_true", help="print every test id (unittest verbosity 2)")
     release = commands.add_parser("release")
     release.add_argument("--tag", required=True)
     release.add_argument("--main-ref", default="origin/main")
@@ -318,7 +344,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "repository":
             check_repository(ROOT)
         elif args.command == "test":
-            return run_tests(args.names)
+            return run_tests(args.names, verbosity=2 if args.verbose else 1)
         else:
             print(json.dumps(build_release(ROOT, args.tag, args.output, args.main_ref), sort_keys=True))
     except (ValueError, KeyError, OSError, subprocess.CalledProcessError) as error:
