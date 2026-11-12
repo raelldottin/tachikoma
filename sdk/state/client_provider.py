@@ -19,12 +19,18 @@ Game identity: when the caller passes ``identity_salt``, each snapshot carries
 client logged in as and reads its ship with). The raw id is read only inside
 ``_game_identity`` and is never stored, returned or put in error text. No salt,
 or an unknown id, leaves ``game_identity`` as ``None``.
+
+Minerals and gas: an inventory item whose own ``@Type``/``@ItemType`` names the
+resource, or, for an item without one, whose ``@ItemDesignId`` maps to it in
+``resource_item_designs`` (``item_resource_kinds`` of the server's item
+designs). Live ``ListItemsOfAShip`` items carry no type, so without that
+mapping minerals and gas stay ``None``. Exactly one item must match each.
 """
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Iterable, Mapping, Optional
 
 from sdk.state.profile_reads import ProfileObservation, fresh_profile
 from sdk.state.snapshot import (
@@ -84,19 +90,59 @@ def _container_records(data: Any, container_key: str, record_key: str) -> Option
     return None
 
 
-def _resource_from_items(items: Optional[list[dict]], kind: str) -> Optional[str]:
+RESOURCE_KINDS = ("mineral", "gas")
+
+
+def item_resource_kinds(item_designs: Optional[Iterable[Any]]) -> dict[str, str]:
+    """Map each ``@ItemDesignId`` whose design's ``@ItemType`` names one resource to that resource.
+
+    ``item_designs`` are ``ItemDesign`` records (``client.itemDesigns`` from
+    ``listAllDesigns4``). A design whose type names ``mineral`` or ``gas``
+    (case-insensitive) maps to that kind. A design naming both or neither, one
+    without an id, and an id whose designs disagree are left out, so an item of
+    that design never becomes a resource.
+    """
+    # Every id seen, with its classification (None: not a resource), so a design typed as a resource in
+    # one record and as anything else in another is a conflict, in either order.
+    seen: dict[str, Optional[str]] = {}
+    conflicting: set[str] = set()
+    for design in item_designs or ():
+        if not isinstance(design, Mapping):
+            continue
+        design_id = str(design.get("@ItemDesignId") or "").strip()
+        if not design_id:
+            continue
+        item_type = str(design.get("@ItemType") or "").lower()
+        named = [kind for kind in RESOURCE_KINDS if kind in item_type]
+        kind = named[0] if len(named) == 1 else None
+        if design_id in seen and seen[design_id] != kind:
+            conflicting.add(design_id)
+        seen.setdefault(design_id, kind)
+    return {design_id: kind for design_id, kind in seen.items()
+            if kind is not None and design_id not in conflicting}
+
+
+def _item_kind_matches(item: dict, kind: str, design_kinds: Mapping[str, str]) -> bool:
+    """Whether ``item`` is of resource ``kind``: by its own type when it has one, else by its design."""
+    own_type = item.get("@Type") or item.get("@ItemType")
+    if own_type:
+        return kind in str(own_type).lower()
+    return design_kinds.get(str(item.get("@ItemDesignId") or "").strip()) == kind
+
+
+def _resource_from_items(items: Optional[list[dict]], kind: str,
+                         design_kinds: Optional[Mapping[str, str]] = None) -> Optional[str]:
     """Return the quantity of the item typed as ``kind`` (mineral or gas).
 
-    Unlike ``Client.collectAllResources``, this never falls back to item
-    position: an item without a matching type leaves the resource unknown.
+    An item's own ``@Type``/``@ItemType`` decides; an item without one (live
+    ``ListItemsOfAShip`` items carry none) is of the kind its ``@ItemDesignId``
+    maps to in ``design_kinds`` (``item_resource_kinds``). Exactly one item must
+    match. Unlike ``Client.collectAllResources``, this never falls back to item
+    position: no match, or more than one, leaves the resource unknown.
     """
     if not items:
         return None
-    matches = [
-        item
-        for item in items
-        if kind in str(item.get("@Type") or item.get("@ItemType") or "").lower()
-    ]
+    matches = [item for item in items if _item_kind_matches(item, kind, design_kinds or {})]
     return str(matches[0].get("@Quantity")) if len(matches) == 1 else None
 
 
@@ -111,6 +157,7 @@ class ClientSnapshotProvider:
         clock: Callable[[], datetime] = _utc_now,
         identity_salt: Optional[bytes | str] = None,
         profile_observation: Optional[ProfileObservation] = None,
+        resource_item_designs: Optional[Mapping[str, str]] = None,
     ) -> None:
         if not ACCOUNT_ALIAS_PATTERN.match(account_alias or ""):
             raise SnapshotInputError("account_alias must be a lowercase alias, not an e-mail or display name")
@@ -123,6 +170,7 @@ class ClientSnapshotProvider:
         self.clock = clock
         self.failed_reads: tuple[str, ...] = ()
         self._profile_observation = profile_observation
+        self._resource_item_designs = dict(resource_item_designs or {})
 
     def _read(self, method_name: str, attribute: str) -> Any:
         try:
@@ -178,8 +226,8 @@ class ClientSnapshotProvider:
         resources = None
         if items is not None or starbux is not None:
             resources = {
-                "minerals": _resource_from_items(items, "mineral"),
-                "gas": _resource_from_items(items, "gas"),
+                "minerals": _resource_from_items(items, "mineral", self._resource_item_designs),
+                "gas": _resource_from_items(items, "gas", self._resource_item_designs),
                 "starbux": starbux,
             }
 
