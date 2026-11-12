@@ -409,7 +409,7 @@ class RepositoryTests(unittest.TestCase):
     # Verifies: S01-R1, S01-R9
     def test_real_specs_parse(self):
         specs = {spec.id: spec for spec in spec_trace.load_specs(REPO_ROOT)}
-        self.assertEqual(sorted(specs), [f"S{n:02d}" for n in range(1, 13)])
+        self.assertEqual(sorted(specs), [f"S{n:02d}" for n in range(1, 14)])
         own = specs["S01"]
         self.assertEqual(list(own.requirements), [f"S01-R{k}" for k in range(1, 10)])
         self.assertEqual(own.requirements["S01-R7"].level, "SHOULD")
