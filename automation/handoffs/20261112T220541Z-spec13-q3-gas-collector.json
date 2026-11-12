@@ -1,0 +1,44 @@
+{
+  "slice_id": "spec13-q3-gas-collector",
+  "status": "done",
+  "summary": "The owner changed S13-Q3 on 2026-11-12: the live placement is a Gas Collector Lv1 (room design 42, 2x2, 10 minerals, 10-second build) instead of a mineral collector. Capture run 43314838395 showed that Mineral Extractor Lv1 costs 25 gas, and pss5 has no gas above its reserve. Q4's cap becomes 10 minerals. The Evidence section now records the design fields that capture confirmed.",
+  "files_touched": [
+    "docs/specs/SPEC-13-room-placement.md"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "Record the Gas Collector decision",
+      "before": "Q3: level-1 mineral collector",
+      "after": "Q3: Gas Collector Lv1, cap 10 minerals",
+      "proof": [
+        "owner message 'Yes, gas collector' (2026-11-12)",
+        "design facts read from capture artifact 43314838395 after a clean re-scan",
+        "scripts/spec_trace.py, make syntax-check, make test, git diff --check pass"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "None; docs only."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-12T22:06:02Z"
+}
