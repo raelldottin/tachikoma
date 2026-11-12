@@ -1868,7 +1868,7 @@
     {
       "slice_id": "b0-ci-root-and-runner",
       "title": "Make scripts/ci.py runfiles-safe and run every suite in a temporary CWD",
-      "status": "queued",
+      "status": "blocked",
       "priority": 347,
       "domain": "tests",
       "allowed_paths": [
@@ -1889,7 +1889,8 @@
         "b0-make-hermetic-local"
       ],
       "max_files_changed": 5,
-      "notes": "Reconciled 2026-11-12 after SPEC-02 (#165): run_tests already runs in a TemporaryDirectory and tests/__init__.py already refuses a repo-root run while ./.device exists (keep both; do not duplicate the sentinel test SPEC-02 added). What is left: ROOT from os.path.abspath, require_tests, --verbose, the PYTHONPATH child fix and their regression tests. scripts/ci.py: ROOT = Path(os.path.abspath(__file__)).parent.parent. run_tests(names, require_tests=False, verbosity=1) changes into a fresh tempfile.TemporaryDirectory(ignore_cleanup_errors=True) before loading tests (unless the CWD is already $TEST_TMPDIR) and restores the CWD in a finally block; with require_tests it fails when 0 tests ran. `ci.py test --verbose` sets verbosity 2. Do not touch release_identity, release_includes, build_release, VERSION_RE or the RELEASE_* constants. tests/test_ci.py:93 passes PYTHONPATH=ci.ROOT (joined with any existing value by os.pathsep) to its child; tests/test_ci.py:107 uses os.path.abspath. tests/__init__.py raises a clear error when the CWD is the repo root and ./.device exists (protects direct `python -m unittest tests.x` runs). Regression tests, portable (no symlinks): ROOT equals the abspath-derived root; require_tests fails on an empty suite and the default does not; --verbose prints test ids; a child with PYTHONSAFEPATH=1 still imports scripts.ci; `ci.py test --names tests.test_battle_flow` (it constructs Device()) started in a directory holding a sentinel .device leaves that file byte-identical with the same mtime. The owner dispatches postmerge-ci.yml on the branch (Windows and Python 3.11). Plan: docs/BAZEL_MIGRATION_ROADMAP.md."
+      "notes": "Reconciled 2026-11-12 after SPEC-02 (#165): run_tests already runs in a TemporaryDirectory and tests/__init__.py already refuses a repo-root run while ./.device exists (keep both; do not duplicate the sentinel test SPEC-02 added). What is left: ROOT from os.path.abspath, require_tests, --verbose, the PYTHONPATH child fix and their regression tests. scripts/ci.py: ROOT = Path(os.path.abspath(__file__)).parent.parent. run_tests(names, require_tests=False, verbosity=1) changes into a fresh tempfile.TemporaryDirectory(ignore_cleanup_errors=True) before loading tests (unless the CWD is already $TEST_TMPDIR) and restores the CWD in a finally block; with require_tests it fails when 0 tests ran. `ci.py test --verbose` sets verbosity 2. Do not touch release_identity, release_includes, build_release, VERSION_RE or the RELEASE_* constants. tests/test_ci.py:93 passes PYTHONPATH=ci.ROOT (joined with any existing value by os.pathsep) to its child; tests/test_ci.py:107 uses os.path.abspath. tests/__init__.py raises a clear error when the CWD is the repo root and ./.device exists (protects direct `python -m unittest tests.x` runs). Regression tests, portable (no symlinks): ROOT equals the abspath-derived root; require_tests fails on an empty suite and the default does not; --verbose prints test ids; a child with PYTHONSAFEPATH=1 still imports scripts.ci; `ci.py test --names tests.test_battle_flow` (it constructs Device()) started in a directory holding a sentinel .device leaves that file byte-identical with the same mtime. The owner dispatches postmerge-ci.yml on the branch (Windows and Python 3.11). Plan: docs/BAZEL_MIGRATION_ROADMAP.md.",
+      "entry_condition": "Owner dispatches postmerge-ci.yml on preview/b0-ci-root-and-runner (commit 9616e71, already rebased on main and V-REL-checked) and it is green on Windows and Python 3.11; then a chore(queue) PR sets status back to queued."
     },
     {
       "slice_id": "b0-bazel-ignore-hygiene",
@@ -1908,10 +1909,10 @@
         "git diff --check"
       ],
       "depends_on": [
-        "b0-ci-root-and-runner"
+        "b0-make-hermetic-local"
       ],
       "max_files_changed": 4,
-      "notes": "Add /bazel-* to .gitignore (not .bazelrc.user: personal Bazel flags belong in ~/.bazelrc, so a stray .bazelrc.user stays visible as untracked dirt). Extend tests/test_build_hygiene.py: bazel-bin is ignored; git check-ignore -q succeeds for .device, config.secrets, passwords.txt, .profiles/x, tachikoma.log, x.har and x.pcap; git ls-files contains none of tools/bazel, tools/bazel.*, .bazeliskrc or .bazelrc.user (each would change which binary or flags run). Plan: docs/BAZEL_MIGRATION_ROADMAP.md."
+      "notes": "Add /bazel-* to .gitignore (not .bazelrc.user: personal Bazel flags belong in ~/.bazelrc, so a stray .bazelrc.user stays visible as untracked dirt). Extend tests/test_build_hygiene.py: bazel-bin is ignored; git check-ignore -q succeeds for .device, config.secrets, passwords.txt, .profiles/x, tachikoma.log, x.har and x.pcap; git ls-files contains none of tools/bazel, tools/bazel.*, .bazeliskrc or .bazelrc.user (each would change which binary or flags run). Plan: docs/BAZEL_MIGRATION_ROADMAP.md. Re-pointed 2026-11-12: it touches neither scripts/ci.py nor tests/test_ci.py, so it depends on b0-make-hermetic-local (which adds tests/test_build_hygiene.py) instead of b0-ci-root-and-runner, which waits for an owner dispatch."
     },
     {
       "slice_id": "b0-test-repo-root-a",
