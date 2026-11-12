@@ -2455,7 +2455,7 @@
     {
       "slice_id": "spec13-capture-mask",
       "title": "Keep the ship interior mask in captures, split so the leak scan passes",
-      "status": "queued",
+      "status": "done",
       "priority": 424,
       "domain": "fleet",
       "allowed_paths": [
