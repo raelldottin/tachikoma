@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "owner": "owner",
+  "purpose": "G2 canary on test account pss5, approved 2026-11-12: one safe collection; canary mode never spends",
+  "accounts": [
+    "pss5"
+  ],
+  "actions": [
+    "collect_all_resources",
+    "collect_daily_reward"
+  ],
+  "not_before": "2026-11-12T00:00:00Z",
+  "expires": "2026-11-26T00:00:00Z",
+  "caps": {
+    "pss5": {
+      "minerals": 2000,
+      "gas": 500
+    }
+  },
+  "modes": [
+    "canary"
+  ],
+  "legacy_run_skipped": [
+    5
+  ]
+}
