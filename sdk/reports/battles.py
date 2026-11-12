@@ -14,8 +14,14 @@ Rules:
   started (the start time is normalised to UTC first). A battle outside
   every window has no strategy.
 - Skipped and dry-run events are not battles.
-- Opponent cohorts are labelled only from recorded opponent facts. Nothing
-  records them yet, so they are ``unknown``.
+- Opponent cohorts are labelled only from recorded opponent facts (S03-R6).
+  An observed battle record with the event's battle id that shows the account
+  attacking supplies them: one passed in ``battle_records``, else the one the
+  runner journaled as ``evidence["battle_record"]``. Without one, the
+  ``opponent_*`` evidence fields are used; nothing else records them, so the
+  cohort is ``unknown``. The captured battle list holds no hull level and
+  reports every trophy count as 0 (read as unreported), so a record alone
+  labels both cohorts ``unknown`` today.
 """
 
 from __future__ import annotations
@@ -26,6 +32,7 @@ from typing import Iterable, List, Mapping, Optional
 
 from sdk.journal import GameplayEvent
 from sdk.pvp import BattleOutcome, BattleResult, BattleRole, BattleStrategy, ExperimentSchedule
+from sdk.state.profile_reads import ATTACKER, BattleRecord, matching_battle
 
 BATTLE_ACTION_ID = "run_pvp_battle"
 UNKNOWN_COHORT = "unknown"
@@ -91,9 +98,23 @@ def _outcome(event: GameplayEvent, tier: str, trophy_delta: Optional[int]) -> st
     return BattleOutcome.WIN.value if trophy_delta > 0 else BattleOutcome.LOSS.value
 
 
+def _opponent_facts(evidence: Mapping, records: List[BattleRecord]) -> Mapping:
+    """Opponent facts from the observed attack record with the event's battle id, else from the evidence."""
+    record = matching_battle(records, evidence.get("battle_id"))
+    if record is not None and record.role == ATTACKER:
+        return {"opponent_hull_level": record.opponent_hull_level, "opponent_trophies": record.opponent_trophies}
+    journaled = evidence.get("battle_record")
+    if isinstance(journaled, Mapping) and journaled.get("role") == ATTACKER:
+        return journaled
+    return evidence
+
+
 def battles_from_events(
-    events: Iterable[GameplayEvent], schedule: Optional[ExperimentSchedule] = None
+    events: Iterable[GameplayEvent], schedule: Optional[ExperimentSchedule] = None,
+    battle_records: Iterable[BattleRecord] = (),
 ) -> List[JournalBattle]:
+    """One ``JournalBattle`` per attempted battle; ``battle_records`` are observed ``ListPvPBattles2`` records."""
+    records = list(battle_records)
     battles = []
     for event in events:
         if event.action_id != BATTLE_ACTION_ID or not event.attempted or event.dry_run:
@@ -107,8 +128,9 @@ def battles_from_events(
         if schedule is not None:
             strategy = schedule.active_strategy(event.account_alias, _utc(event.started_at))
 
-        opponent_hull = _int_or_none(evidence.get("opponent_hull_level"))
-        opponent_trophies = _int_or_none(evidence.get("opponent_trophies"))
+        opponent = _opponent_facts(evidence, records)
+        opponent_hull = _int_or_none(opponent.get("opponent_hull_level"))
+        opponent_trophies = _int_or_none(opponent.get("opponent_trophies"))
         battle_id = evidence.get("battle_id") or f"attempt-{event.attempt_id}"
         result = BattleResult(
             battle_id=str(battle_id),

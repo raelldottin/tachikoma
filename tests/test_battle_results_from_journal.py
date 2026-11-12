@@ -91,6 +91,47 @@ class BattlesFromEventsTests(unittest.TestCase):
         self.assertEqual((known.opponent_hull_bracket, known.opponent_trophy_bracket), ("hull 8-10", "trophies 1500-1999"))
         self.assertEqual(known.result.opponent_hull_level, 9)
 
+    # Verifies: S03-R6
+    def test_cohorts_come_from_the_matching_attack_record(self):
+        from dataclasses import replace
+        from sdk.state.profile_reads import parse_battles
+        [attack] = parse_battles(battle_action.battle_list(("4028975", "USER-A", "USER-B")), "USER-A")
+        observed = replace(attack, opponent_hull_level=9, opponent_trophies=1720)
+        defense = replace(observed, battle_id="BATTLEID-D", role="defender")
+        matched, unmatched, defended = battles_from_events(
+            [event(opponent_hull_level=2, opponent_trophies=10), event(minutes=1, battle_id="BATTLEID-OTHER"),
+             event(minutes=2, battle_id="BATTLEID-D")],
+            battle_records=[observed, defense])
+        self.assertEqual((matched.opponent_hull_bracket, matched.opponent_trophy_bracket),
+                         ("hull 8-10", "trophies 1500-1999"))  # the record wins over the evidence fields
+        self.assertEqual(matched.result.opponent_hull_level, 9)
+        self.assertEqual((unmatched.opponent_hull_bracket, unmatched.opponent_trophy_bracket), ("unknown", "unknown"))
+        self.assertEqual((defended.opponent_hull_bracket, defended.opponent_trophy_bracket), ("unknown", "unknown"))
+
+    # Verifies: S03-R6
+    def test_captured_record_overrides_evidence_and_leaves_cohorts_unknown(self):
+        # The pss1 capture has no hull level and reports trophies as "0", so the matching record labels
+        # nothing, and it replaces the event's own opponent evidence.
+        from sdk.state.profile_reads import parse_battles
+        from tests.test_profile_reads import _load_capture
+        records = parse_battles(_load_capture("pss1/list_pvp_battles2.xml"), "USER-A")
+        events = [event(battle_id="BATTLEID-A", opponent_hull_level=9, opponent_trophies=1720)]
+        [without_records] = battles_from_events(events)
+        self.assertEqual((without_records.opponent_hull_bracket, without_records.opponent_trophy_bracket),
+                         ("hull 8-10", "trophies 1500-1999"))
+        [battle] = battles_from_events(events, battle_records=records)
+        self.assertEqual((battle.opponent_hull_bracket, battle.opponent_trophy_bracket), ("unknown", "unknown"))
+        self.assertIsNone(battle.result.opponent_hull_level)
+
+    # Verifies: S03-R6
+    def test_runner_journaled_attack_record_labels_cohorts(self):
+        journaled = {"role": "attacker", "opponent_hull_level": 12, "opponent_trophies": 2100}
+        [battle] = battles_from_events([event(battle_record=journaled, opponent_trophies=10)])
+        self.assertEqual((battle.opponent_hull_bracket, battle.opponent_trophy_bracket),
+                         ("hull 11-13", "trophies 2000-2499"))
+        [defense] = battles_from_events([event(battle_record={**journaled, "role": "defender"})])
+        self.assertEqual((defense.opponent_hull_bracket, defense.opponent_trophy_bracket), ("unknown", "unknown"))
+
     def test_bracket_helpers(self):
         self.assertEqual(hull_bracket(None), "unknown")
         self.assertEqual(hull_bracket(1), "hull 1-4")

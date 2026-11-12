@@ -1813,7 +1813,7 @@
     {
       "slice_id": "spec03-battle-history",
       "title": "Parse ListPvPBattles2 into typed battle records and use them for verification and cohorts",
-      "status": "queued",
+      "status": "done",
       "priority": 405,
       "domain": "pvp",
       "allowed_paths": [

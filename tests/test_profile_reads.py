@@ -2,7 +2,7 @@
 
 It holds the S03-R2 scan of ``tests/fixtures/live_sanitized/`` (every file
 there must be free of secrets and user ids), and the parser and provider tests
-built on those captures (S03-R3).
+built on those captures (S03-R3, and the S03-R4 battle records).
 """
 
 from __future__ import annotations
@@ -388,6 +388,124 @@ class RankingTests(unittest.TestCase):
         self.assertIsNone(parse_ranking(None))
         self.assertIsNone(parse_ranking({"LadderService": {"FindUserRanking": None}}))
         self.assertIsNone(parse_ranking({"LadderService": {}}))
+
+
+class BattleParserTests(unittest.TestCase):
+    """``ListPvPBattles2`` records from the pss1 (10 battles) and pss5 (empty) captures, G1 2026-11-12.
+
+    USER-A is the capturing account. Values below were read by hand from the XML.
+    """
+
+    # Verifies: S03-R4
+    def test_list_pvp_battles2_capture_through_the_client(self):
+        from sdk.client import Client
+        from sdk.state.profile_reads import parse_battles
+        body = (LIVE_SANITIZED_DIR / "pss1" / "list_pvp_battles2.xml").read_bytes()
+        requests = []
+
+        class Response:
+            content = body
+
+        class AuthorizedUser:
+            isAuthorized = True
+
+        client = object.__new__(Client)
+        client.accessToken = "synthetic-session"
+        client.user = AuthorizedUser()
+        client.request = lambda url, method: requests.append((url.split("?")[0], method)) or Response()
+        self.assertTrue(client.listPvPBattles2())
+        self.assertEqual(requests, [("https://api.pixelstarships.com/BattleService/ListPvPBattles2", "GET")])
+        records = parse_battles(client.pvpBattles, "USER-A")
+        self.assertEqual(len(records), 10)
+        self.assertEqual([r.battle_id for r in records], [f"BATTLEID-{letter}" for letter in "ABCDEFGHIJ"])
+
+    # Verifies: S03-R4
+    def test_captured_attack_record(self):
+        from datetime import datetime, timezone
+        from sdk.state.profile_reads import parse_battles
+        records = parse_battles(_load_capture("pss1/list_pvp_battles2.xml"), "USER-A")
+        attack = records[0]  # BATTLEID-A: USER-A attacked USER-C (design 12), Win/LoseTrophyResult 40/1
+        self.assertEqual(attack.battle_id, "BATTLEID-A")
+        self.assertEqual(attack.role, "attacker")
+        self.assertEqual((attack.outcome, attack.client_outcome, attack.server_outcome),
+                         ("Attacker Won", "Attacker Won", "Waiting"))
+        self.assertIs(attack.won, True)
+        self.assertEqual(attack.trophy_change, 40)
+        self.assertEqual(attack.opponent_ship_design_id, "12")
+        self.assertIsNone(attack.opponent_trophies)  # DefendingUserTrophy="0" is read as unreported
+        self.assertIsNone(attack.opponent_hull_level)  # no battle field holds it
+        self.assertEqual(attack.battle_date, datetime(2026, 11, 12, 6, 21, 20, tzinfo=timezone.utc))
+
+    # Verifies: S03-R4
+    def test_captured_defense_record(self):
+        from datetime import datetime, timezone
+        from sdk.state.profile_reads import parse_battles
+        records = parse_battles(_load_capture("pss1/list_pvp_battles2.xml"), "USER-A")
+        defense = records[4]  # BATTLEID-E: USER-G (design 382) attacked USER-A and won, 1/40
+        self.assertEqual(defense.battle_id, "BATTLEID-E")
+        self.assertEqual(defense.role, "defender")
+        self.assertEqual(defense.outcome, "Attacker Won")
+        self.assertIs(defense.won, False)
+        self.assertIsNone(defense.trophy_change)  # the capture does not say how a defender's trophies change
+        self.assertEqual(defense.opponent_ship_design_id, "382")
+        self.assertIsNone(defense.opponent_trophies)
+        self.assertEqual(defense.battle_date, datetime(2026, 11, 11, 7, 14, 4, tzinfo=timezone.utc))
+        roles = [r.role for r in records]
+        self.assertEqual(roles.count("attacker"), 6)
+        self.assertEqual([r.battle_id for r in records if r.role == "defender"],
+                         ["BATTLEID-C", "BATTLEID-E", "BATTLEID-H", "BATTLEID-J"])
+
+    # Verifies: S03-R4
+    def test_empty_capture_and_missing_response(self):
+        from sdk.state.profile_reads import parse_battles
+        self.assertEqual(parse_battles(_load_capture("pss5/list_pvp_battles2.xml"), "USER-A"), [])
+        self.assertIsNone(parse_battles(None, "USER-A"))
+        self.assertIsNone(parse_battles({"BattleService": {}}, "USER-A"))
+
+    # Verifies: S03-R4
+    def test_malformed_battle_list_is_unobserved(self):
+        from sdk.state.profile_reads import parse_battles
+        for listing in ("garbage", {"Battles": "garbage"}, {"Battles": {"Battle": "garbage"}},
+                        {"Battles": {"Battle": [{"@BattleId": "BATTLEID-A"}, "garbage"]}}, ["garbage"]):
+            with self.subTest(listing=listing):
+                self.assertIsNone(parse_battles({"BattleService": {"ListPvPBattles": listing}}, "USER-A"))
+        for listing in (None, {}, {"Battles": None}, {"Battles": {}}):
+            with self.subTest(listing=listing):
+                self.assertEqual(parse_battles({"BattleService": {"ListPvPBattles": listing}}, "USER-A"), [])
+
+    # Verifies: S03-R4
+    def test_single_battle_and_absent_fields_stay_none(self):
+        from sdk.state.profile_reads import parse_battles
+        single = {"BattleService": {"ListPvPBattles": {"Battles": {"Battle": {
+            "@BattleId": "BATTLEID-Z", "@AttackingUserId": "USER-X", "@DefendingUserId": "USER-A",
+            "@OutcomeType": "Defender Won", "@DefendingUserTrophy": "1720", "@AttackingUserTrophy": "1650"}}}}}
+        [record] = parse_battles(single, "USER-A")
+        self.assertEqual((record.role, record.won), ("defender", True))
+        self.assertEqual(record.opponent_trophies, 1650)  # a non-zero count is kept
+        self.assertEqual((record.trophy_change, record.opponent_ship_design_id, record.battle_date),
+                         (None, None, None))
+        [bare] = parse_battles({"BattleService": {"ListPvPBattles": {"Battles": {"Battle": {}}}}}, "USER-A")
+        self.assertEqual(bare.battle_id, None)
+        self.assertEqual((bare.role, bare.outcome, bare.won, bare.trophy_change, bare.opponent_trophies),
+                         (None, None, None, None, None))
+
+    # Verifies: S03-R4
+    def test_role_and_win_need_a_known_user_and_a_named_winner(self):
+        from sdk.state.profile_reads import parse_battles
+        capture = _load_capture("pss1/list_pvp_battles2.xml")
+        for own in (None, "", "0", "USER-Q"):
+            with self.subTest(own=own):
+                records = parse_battles(capture, own)
+                self.assertEqual({(r.role, r.won, r.trophy_change, r.opponent_ship_design_id) for r in records},
+                                 {(None, None, None, None)})
+        lost = {"BattleService": {"ListPvPBattles": {"Battles": {"Battle": [
+            {"@BattleId": "BATTLEID-Y", "@AttackingUserId": "USER-A", "@OutcomeType": "Defender Won",
+             "@WinTrophyResult": "12", "@LoseTrophyResult": "9"},
+            {"@BattleId": "BATTLEID-X", "@AttackingUserId": "USER-A", "@OutcomeType": "Draw", "@WinTrophyResult": "12"},
+        ]}}}}
+        defeat, draw = parse_battles(lost, "USER-A")
+        self.assertEqual((defeat.won, defeat.trophy_change), (False, -9))
+        self.assertEqual((draw.won, draw.trophy_change, draw.outcome), (None, None, "Draw"))
 
 
 class _ProviderClient:

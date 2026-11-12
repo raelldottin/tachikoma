@@ -1,0 +1,50 @@
+{
+  "slice_id": "spec03-battle-history",
+  "status": "done",
+  "summary": "parse_battles reads ListPvPBattles2 into BattleRecord values against the pss1/pss5 captures. Absent fields stay None; trophy counts of \"0\" are read as unreported, a defender's trophy change and opponent hull level are not derivable from the capture. A malformed battle list is unobserved (None).  run_pvp_battle evidence uses a battle list re-read after the call and only a battle id lastBattleId took during the call. A matching attack record supports the outcome only when it is decided and its trophy change agrees in sign with the observed one; a defense record never does. Building the evidence never raises after a battle: a failure journals it unsupported. Battle reports take opponent cohorts from a matching attack record. listPvPBattles2 moves to mocked-test. Built by a subagent in an isolated worktree; an independent verifier subagent found 7 issues (stale battle id, undecided or disagreeing records, evidence crash after a battle, malformed lists, a vacuous test, winner vs trophy sign), all fixed with regression tests; re-validated by the parent agent.",
+  "files_touched": [
+    "docs/baseline/capability-inventory.json",
+    "docs/specs/SPEC-03-verified-profile-reads.md",
+    "sdk/actions/catalog.py",
+    "sdk/reports/battles.py",
+    "sdk/state/profile_reads.py",
+    "tests/test_battle_results_from_journal.py",
+    "tests/test_profile_reads.py",
+    "tests/test_pvp_battle_action.py"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "Parse ListPvPBattles2 into typed battle records and use them for verification and cohorts",
+      "before": "battle outcomes verified only from trophy change plus finalise; cohorts from journal evidence only",
+      "after": "typed battle records; a matching attack record from this call supports the outcome; defense records never do",
+      "proof": [
+        "make syntax-check, make test, scripts/ci.py lint and git diff --check pass on current main",
+        "verifier findings fixed; regression tests fail on the old code"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "No live path re-reads the battle list after a battle yet; a record alone cannot upgrade an outcome without runner.py changes (recorded in SPEC-03)."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-12T15:19:29Z"
+}
