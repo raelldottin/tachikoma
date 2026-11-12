@@ -79,6 +79,12 @@ The scheduler, runner and fleet orchestrator can execute actions (`run(execute=T
 
 Pending (recorded under SPEC-07).
 
+**Live findings.** The first owner-dispatched G2 canary (run 43256792025, 2026-11-12) executed nothing, and `g2-canary-fixes` corrects what it found:
+
+- Live `ListItemsOfAShip` items carry no `@Type`/`@ItemType`, so minerals and gas were never observed and baseline-v1 refused every cost-bearing action. The dry run and execute paths now map items to resources through the server's item designs (`client.itemDesigns` from `listAllDesigns4`, by `@ItemType`); anything ambiguous or unmapped stays `None`. If `listAllDesigns4` fails live, they stay unobserved.
+- baseline-v1 plans `collect_all_resources` only after a room upgrade, so the canary had no safe-to-retry request and rejected `collect_daily_reward` with a misleading reason. In canary mode, when no safe-to-retry request remains, the policy did not plan the collection itself and the authorization allows it, the plan now holds one `collect_all_resources` (S05-R4's "first safe-to-retry action in its plan" is that request); not-safe requests are rejected with `canary: not safe to retry`. Full mode is unchanged.
+- The run record's `game_version.server` was hard-coded `null`. Each account's `server_game_version` is now recorded at login and reported per account, and at the top level when all accounts agree.
+
 ## Open questions and risks
 
 The policy's construction-cap limit is only found at execution time; the canary catches it early.

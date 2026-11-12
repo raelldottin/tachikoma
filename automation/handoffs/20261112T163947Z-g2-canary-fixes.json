@@ -1,0 +1,53 @@
+{
+  "slice_id": "g2-canary-fixes",
+  "status": "done",
+  "summary": "The first owner-dispatched G2 canary (2026-11-12) executed nothing:  - Live ListItemsOfAShip items carry no @Type/@ItemType, so minerals and gas   were never observed and baseline-v1 refused every cost-bearing action.   ClientSnapshotProvider takes an optional resource_item_designs mapping   (item_resource_kinds of client.itemDesigns from listAllDesigns4); an item   without its own type is the resource its design's @ItemType names. The   factory passes it only where designs are read, so the baseline path is   unchanged. Ambiguous or unmapped items stay None. - baseline-v1 plans collect_all_resources only after a room upgrade, so the   canary kept nothing and rejected collect_daily_reward with a misleading   reason. In canary mode, when no safe-to-retry request remains, the policy   did not plan the collection itself and the gate allows it, AuthorizedPolicy   plans one collect_all_resources (preconditions checked); --plan-only's   canary_choice mirrors it. Not-safe requests are now rejected with   \"canary: not safe to retry\". Full mode is unchanged. - The run record hard-coded game_version.server as null. The factory records   server_game_version per account at login; the record reports it per account   and at the top level when every logged-in account agrees. Built by a subagent in an isolated worktree; an independent verifier subagent requested changes (a fallback collection when minerals and gas are both unobserved; a design-conflict gap), both fixed with regression tests by the parent agent, who also updated README.template then README.md.",
+  "files_touched": [
+    "README.md",
+    "README.template",
+    "docs/baseline/account-snapshot.md",
+    "docs/baseline/fleet-accounts.md",
+    "docs/specs/SPEC-05-live-execution-gate.md",
+    "run.py",
+    "sdk/fleet/factory.py",
+    "sdk/state/client_provider.py",
+    "tests/test_client_snapshot_provider.py",
+    "tests/test_fleet_execute.py"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "Fix what the first G2 canary found: unobserved minerals and gas, an empty canary, and no server version",
+      "before": "The first canary executed nothing: resources unobserved, no safe-to-retry request, no server version",
+      "after": "Resources mapped through item designs; canary falls back to one reconcilable collection; server version recorded",
+      "proof": [
+        "make syntax-check, make test, scripts/ci.py lint and git diff --check pass on current main",
+        "regression tests fail on the old code",
+        "verifier findings F1 and F2 fixed; F3 (plan-only edge case) cannot occur with baseline-v1"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "listAllDesigns4 is described as often failing; then minerals and gas stay unobserved and the canary executes nothing (fails closed)."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-12T16:40:04Z"
+}
