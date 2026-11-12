@@ -36,6 +36,14 @@ Each run uploads an artifact named `live-<step>-<run id>`. An agent downloads it
 - the reviewed captures in `tests/fixtures/live_sanitized/`, which unblock the SPEC-03 parsers;
 - the baseline summary in `docs/experiments/baselines/`.
 
+Since `spec13-capture-designs`, the capture step also records game data for room placement (SPEC-13, S13-R1). Each account gets three extra files:
+
+- `list_room_designs2.xml`: room types, sizes and prices;
+- `ship_designs.xml`: the hull designs and their interior grids, the `ShipDesigns` part of `ListAllDesigns4`;
+- `room_design_purchases.xml`: per-level room limits.
+
+These are read-only calls. A capture run after that slice merges unblocks `spec13-grid-model`.
+
 ## G2: first live execution (SPEC-05, SPEC-07)
 
 ```bash

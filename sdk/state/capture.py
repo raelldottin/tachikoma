@@ -90,7 +90,8 @@ class CaptureRead:
     """One response to capture: the file stem, the server endpoint, how it is read and where it is held.
 
     ``method`` is the ``Client`` method called, or ``None`` for a response
-    ``Client.login`` already holds. ``wrap`` names the root element the held
+    the client already holds: from ``Client.login``, or from an earlier read
+    in the list whose method stored several responses (``listAllDesigns4``). ``wrap`` names the root element the held
     value is put under when the client keeps only part of the response.
     """
 
@@ -101,6 +102,8 @@ class CaptureRead:
     kwargs: Mapping[str, Any] = field(default_factory=dict)
     wrap: Optional[str] = None
     note: Optional[str] = None
+    # For a read with no method of its own: the earlier read's method that stores its response.
+    held_from: Optional[str] = None
 
 
 CAPTURE_READS: tuple[CaptureRead, ...] = (
@@ -115,6 +118,13 @@ CAPTURE_READS: tuple[CaptureRead, ...] = (
     CaptureRead("list_items_of_a_ship", "ListItemsOfAShip", "listItemsOfAShip", "itemsOfAShip"),
     CaptureRead("find_user_ranking", "FindUserRanking", "findUserRanking", "userRanking"),
     CaptureRead("list_pvp_battles2", "ListPvPBattles2", "listPvPBattles2", "pvpBattles", {"take": 25}),
+    # Game data for room placement (SPEC-13, S13-R1): room sizes, the ship's interior grid and per-level limits.
+    CaptureRead("list_room_designs2", "ListRoomDesigns2", "listRoomDesigns2", "roomDesigns"),
+    CaptureRead("ship_designs", "ListAllDesigns4 (ShipDesigns)", "listAllDesigns4", "shipDesigns", wrap="ShipDesigns",
+                note="the ShipDesigns part of ListAllDesigns4, as Client.listAllDesigns4 holds it"),
+    CaptureRead("room_design_purchases", "ListAllDesigns4 (RoomDesignPurchases)", None, "roomDesignPurchases",
+                wrap="RoomDesignPurchases", held_from="listAllDesigns4",
+                note="the RoomDesignPurchases part of the ListAllDesigns4 response read for ship_designs"),
 )
 # A field value kept in the settings summary: a version number, nothing else.
 SETTINGS_VERSION_VALUE = re.compile(r"^[0-9]+(?:\.[0-9]+){1,3}[A-Za-z0-9]{0,4}$")
@@ -546,7 +556,7 @@ def _capture_one(alias: str, client: Any, read: CaptureRead, placeholders: Place
     except Exception as error:  # one read's failure must not stop the others
         return result("error", reason=f"{type(error).__name__}: {scrub_text(str(error))}")
     if response is None or (isinstance(response, (Mapping, str, bytes)) and not response):
-        return result("no data", reason=f"{read.method or 'login'} left no response")
+        return result("no data", reason=f"{read.method or read.held_from or 'login'} left no response")
     if read.wrap is not None and isinstance(response, Mapping):
         response = {read.wrap: response}
     try:

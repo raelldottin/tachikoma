@@ -1,0 +1,46 @@
+{
+  "slice_id": "spec13-capture-designs",
+  "status": "done",
+  "summary": "SPEC-13 needs room sizes, the ship's interior grid and per-level room limits from real data before the placement check can be written. The read-only capture step now also records ListRoomDesigns2 and the ShipDesigns and RoomDesignPurchases parts of ListAllDesigns4, sanitized and scanned like every other capture. Both calls are read-only in the capability inventory, ListAllDesigns4 runs once per account, and a failed design read is reported by name. No workflow change: the owner's next step=capture run picks them up. The real-client capture test now serves the two endpoints and checks that only allow-listed read-only paths are called.",
+  "files_touched": [
+    "docs/experiments/live/RUNBOOK.md",
+    "sdk/state/capture.py",
+    "tests/test_capture_reads.py"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "make lint",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "Capture room designs, ship designs and room purchase limits read-only",
+      "before": "design records not captured",
+      "after": "capture step records the three design lists",
+      "proof": [
+        "tests: design captures keep game-data ids and grid fields, purchase ids are replaced, ListAllDesigns4 runs once per account, a failed design read is named; real Client against a fake adapter calls only allow-listed read-only paths",
+        "make syntax-check, make test (1316 OK), make lint, git diff --check pass"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "Live design records may be withheld by the scan if a field looks secret-like; the capture report says so."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-12T21:52:16Z"
+}
