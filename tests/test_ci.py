@@ -617,8 +617,9 @@ class CredentialFileSafetyTests(unittest.TestCase):
         for name in ("run.py", "Makefile", "scripts/ci.py", "tests/__init__.py"):
             shutil.copy2(ci.ROOT / name, self.root / name)
         # The probe writes ./.device and ./tachikoma.log in its working directory, as the real device and
-        # run.py tests do. Its name matches both `make test` (test_*.py) and `make test-security` (test_security*.py).
-        (self.root / "tests" / "test_security_sentinel_probe.py").write_text(SENTINEL_PROBE, encoding="utf-8")
+        # run.py tests do. It stands in for tests/test_security.py, so both `make test` (every test_*.py) and
+        # `make test-security` (--names tests.test_security) run it.
+        (self.root / "tests" / "test_security.py").write_text(SENTINEL_PROBE, encoding="utf-8")
         self.sentinels = {
             ".device": f"Android|{SYNTHETIC_DEVICE_KEY_IOS}|sentinel-refresh|en|{SYNTHETIC_ACCESS_TOKEN}|1".encode(),
             "tachikoma.log": b"sentinel log line\n",
@@ -651,7 +652,7 @@ class CredentialFileSafetyTests(unittest.TestCase):
 
     # Verifies: S02-R1, S02-R2
     def test_ci_test_command_leaves_root_credential_files_untouched(self):
-        for names in ([], ["--names", "tests.test_security_sentinel_probe"]):
+        for names in ([], ["--names", "tests.test_security"]):
             with self.subTest(names=names):
                 result = self.run_in_root([sys.executable, "scripts/ci.py", "test", *names])
                 self.assert_probe_ran_and_temp_dir_removed(result)
@@ -723,8 +724,8 @@ print(repr((code, seen[0], os.getcwd(), os.path.exists(seen[0]))))
                     recipe = result.stdout
                     self.assertIn("mktemp -d", recipe)
                     self.assertIn("trap ", recipe)
-                    self.assertIn(f'-s "{self.root / "tests"}" -t "{self.root}"', recipe)
-                    interpreter = recipe.split('cd "$tmp" && "', 1)[1].split('"', 1)[0]
+                    self.assertIn(f'"{self.root / "scripts" / "ci.py"}" test', recipe)
+                    interpreter = recipe.split('cd "$tmp" && PYTHONDONTWRITEBYTECODE=1 "', 1)[1].split('"', 1)[0]
                     self.assertTrue(os.path.isabs(interpreter), interpreter)
                     if expected is not None:
                         self.assertEqual(interpreter, expected)
@@ -733,11 +734,14 @@ print(repr((code, seen[0], os.getcwd(), os.path.exists(seen[0]))))
         venv_python.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
         venv_python.chmod(0o755)
         result = self.run_in_root(["make", "-n", "test"])
-        self.assertIn(f'cd "$tmp" && "{venv_python}" -m unittest discover', result.stdout)
+        self.assertIn(
+            f'cd "$tmp" && PYTHONDONTWRITEBYTECODE=1 "{venv_python}" "{self.root / "scripts" / "ci.py"}" test',
+            result.stdout,
+        )
 
     # Verifies: S02-R3
     def test_repository_root_unittest_run_is_refused_while_device_exists(self):
-        result = self.run_in_root([sys.executable, "-m", "unittest", "tests.test_security_sentinel_probe"])
+        result = self.run_in_root([sys.executable, "-m", "unittest", "tests.test_security"])
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("python scripts/ci.py test --names tests.<module>", result.stderr)
         self.assertNotIn("Ran ", result.stderr)
@@ -746,6 +750,6 @@ print(repr((code, seen[0], os.getcwd(), os.path.exists(seen[0]))))
     # Verifies: S02-R3
     def test_guard_allows_a_repository_root_run_without_device(self):
         (self.root / ".device").unlink()
-        result = self.run_in_root([sys.executable, "-m", "unittest", "tests.test_security_sentinel_probe"])
+        result = self.run_in_root([sys.executable, "-m", "unittest", "tests.test_security"])
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("Ran 1 test", result.stderr)
