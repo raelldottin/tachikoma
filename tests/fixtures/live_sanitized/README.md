@@ -29,7 +29,44 @@ None of these may appear in any file here, this README included:
 Game data is fine: design ids (`ShipDesignId`, `ItemDesignId`, `RoomDesignId`), levels, trophy
 counts, starbux balances and timestamps can stay as captured.
 
-## How to sanitize a capture
+## Capture with one command
+
+`run.py --capture-reads` makes the captures and sanitizes them, so no response is edited by hand.
+Run it on the owned test account only, with that account alone enabled in the registry and its
+credentials in the environment variables its `credentials_secret` names
+([fleet accounts](../../../docs/baseline/fleet-accounts.md)):
+
+```sh
+python run.py --capture-reads --registry fleet.json --output ~/pss-captures/2026-11-12
+```
+
+Add `--identity-salt-env NAME` to check the account's `expected_game_identity` before any read.
+
+- It logs in, then calls only read-only methods: the profile and `GetLatestVersion3` settings that
+  login already holds, `getShipByUserId`, `listAllCharactersOfUser`, `listItemsOfAShip`,
+  `findUserRanking` and `listPvPBattles2` (25 battles). It never logs in again.
+- Before writing, it applies steps 2 to 6 below: secret fields become `***REDACTED***`, user ids
+  `USER-A`, `USER-B`... (the test account is `USER-A`), player, ship and alliance names `PLAYER-A`,
+  `SHIP-A`, `ALLIANCE-A`..., and any other value the scan or `sdk/redaction.py` would flag
+  `***REDACTED***`. Placeholders are the same across all of one account's files.
+- It then runs the scan this directory is held to. A response that does not pass is not written;
+  the output names the rule and line, never the value.
+- `--output` must be a new or empty directory outside `tests/fixtures/`. It gets
+  `<alias>/<endpoint>.xml` files and `manifest.json`, which records for each endpoint the status,
+  UTC time, game version, sanitization steps applied, scan result and a ready row for the table
+  below (the command also prints those rows).
+
+Then review before anything enters this directory:
+
+1. Read every file. Look for what the scan cannot recognise: crew or ship names a player chose,
+   message text, and ids such as `ShipId` or `BattleId` that could link back to the account
+   (replace them as in step 7 below and say so in the row).
+2. Copy the reviewed files here (for example `alpha/list_pvp_battles2.xml` as
+   `list_pvp_battles2.xml`), paste their rows into the table, fix the file names in them, and put
+   your name under "Reviewed by".
+3. Run the scan (step 9 below) and fix every finding before committing.
+
+## How to sanitize a capture by hand
 
 1. Capture the raw response on the owned test account only, and keep the raw file outside this
    repository.
@@ -66,8 +103,10 @@ Add one row per file. A capture without a row is not used.
 | --- | --- | --- | --- | --- | --- |
 | *(none yet)* | | | | | |
 
-"Game version" is the client version the response came from, as the game reports it. "Sanitization
-steps applied" lists the step numbers above and anything done beyond them.
+"Game version" is the client version the response came from, as the game reports it; rows from
+`run.py --capture-reads` give the version in the server's `GetLatestVersion3` setting (`n/a` when
+it was not observed). "Sanitization steps applied" lists the step numbers above and anything done
+beyond them.
 
 ## What the scan checks
 
