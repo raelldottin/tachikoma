@@ -2288,7 +2288,7 @@
     {
       "slice_id": "spec13-room-placement-draft",
       "title": "Draft SPEC-13: automated room placement",
-      "status": "queued",
+      "status": "done",
       "priority": 417,
       "domain": "fleet",
       "allowed_paths": [

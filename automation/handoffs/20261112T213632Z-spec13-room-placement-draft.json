@@ -1,0 +1,45 @@
+{
+  "slice_id": "spec13-room-placement-draft",
+  "status": "done",
+  "summary": "The owner asked to automate placing a room on the ship. The client can only upgrade existing rooms; nothing buys and places one, and the request shape is unknown. SPEC-13 is a draft for the owner to approve: - owner-supplied sanitized captures first (new gate G6); - a pure placement check that refuses on any unobserved grid, size, position or price; - a non-idempotent place_room action verified only from a later ship read; - an account-wide block after an unknown placement; - an explicit one-off --mode place, authorized per account and position, never from   a policy, so baseline-v1 and the SPEC-07 trial are unchanged; - one live placement, with the workflow step owner-only. An agent review found no blockers; its findings (data provenance, the no-retry scope, AC3 versus the runner, contradicted scope, precondition inputs, baseline format, authorization and mode wiring, plan-only scope, the secret-holding workflow, trial interventions) are folded in. Added to the spec plan as Draft.  test_real_specs_parse now expects S01 to S13.",
+  "files_touched": [
+    "docs/specs/README.md",
+    "docs/specs/SPEC-13-room-placement.md",
+    "tests/test_spec_traceability.py"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "Draft SPEC-13: automated room placement",
+      "before": "no spec for room placement",
+      "after": "SPEC-13 Draft awaiting owner approval",
+      "proof": [
+        "code names cited by the spec checked with grep (baseline _ROOM_KEYS, sdk/ship_layout.py, RoomDesignPurchases, RUN_MODES, EXECUTE_MODES)",
+        "scripts/spec_trace.py, make syntax-check, make test and git diff --check pass"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "Draft only; request shape and grid encoding unknown until the owner's captures."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-12T21:36:51Z"
+}
