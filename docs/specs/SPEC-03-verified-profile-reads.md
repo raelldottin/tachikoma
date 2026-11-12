@@ -77,6 +77,8 @@
 
 **Implementation note on S03-R3 (for owner review):** no read-only call in the client returns the current user's trophies and starbux; the login response's `User` record (`@Trophy`, `@Credits`) is the only server response that holds them, and `FindUserRanking` holds only the ladder position. `spec03-profile-read` therefore treats the login response as the profile read, but only through a `ProfileObservation` that carries when the server sent it: it is used for one snapshot, and only while it is at most 5 minutes old. A snapshot after an action never reuses it, so reconciliation sees `None` (unknown), not a stale "no change". Only the baseline path passes one. If a fresher read-only profile call is found, it replaces the login record without changing the snapshot contract.
 
+**Battle history (S03-R4 to S03-R6):** `spec03-battle-history` implements R4–R6 offline against the pss1 (10 battles) and pss5 (empty) `ListPvPBattles2` captures. Not derivable from them: opponent hull level (no battle field holds one), opponent trophies (every `AttackingUserTrophy`/`DefendingUserTrophy` is `"0"`, read as unreported) and a defender's trophy change; all stay `None`. `OutcomeType` always equals `ClientOutcomeType` while `ServerOutcomeType` is `"Waiting"`, so the listed outcome may echo the attacking client. A battle record supports a journaled attack only when `client.pvpBattles` is re-read after the call; no live path does that re-read yet.
+
 ## Open questions and risks
 
 Whether a dedicated profile endpoint exists is unknown; the captures decide it. If battle history omits opponent facts, S03-R6 cohorts stay `unknown` and the R3 comparison must be unstratified.

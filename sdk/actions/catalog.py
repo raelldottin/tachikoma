@@ -14,6 +14,7 @@ from enum import Enum
 from typing import Any, Callable, Mapping, Optional
 
 from sdk.state import AccountSnapshot, Completeness, SnapshotDelta, diff_snapshots
+from sdk.state.profile_reads import ATTACKER, BattleRecord, matching_battle, parse_battles
 
 
 class Idempotency(str, Enum):
@@ -204,6 +205,19 @@ def _battle_outcome_observed(delta, before, after, params):
 # attributed to this call's battle only if the call reached FinaliseBattle15:
 # without it no attack result was reported, so the change came from elsewhere
 # (for example a defense) and "outcome-observed" is not reached.
+#
+# Battle records (S03-R5). When the client's ``ListPvPBattles2`` response
+# (``client.pvpBattles``) was replaced after the call began, its records are
+# observed after the call. This call's battle id is one ``lastBattleId`` took
+# during the call; an id left over from an earlier battle matches nothing. A
+# record with this call's battle id decides what supports the outcome: an
+# attack record supports it, with or without FinaliseBattle15, only when its
+# outcome is decided and its trophy change has the sign of the observed one; a
+# defense record never does, finalised or not. Without a matching record,
+# support falls back to FinaliseBattle15 as above. The reconciled status still
+# comes from the trophy change, so a record alone, with trophies unobserved,
+# stays unknown. Evidence is built after a non-idempotent battle, so building it
+# never raises: a failure journals the outcome as unsupported.
 BATTLE_EVIDENCE_TIERS = ("request-sent", "battle-created", "battle-accepted", "finalised", "outcome-observed")
 _BATTLE_RESULT_ATTRIBUTES = {
     "battle-created": "createBattle9Result",
@@ -214,36 +228,130 @@ _BATTLE_RESULT_ATTRIBUTES = {
 OUTCOME_SUPPORTING_STEP = "finalised"
 
 
+_PROBE_FAILED = "probe_failed"
+_EVIDENCE_FAILURE_REASON = "battle evidence could not be read, so nothing supports this battle's outcome"
+
+
 def _battle_probe(client: Any) -> Mapping[str, Any]:
-    probe = {tier: getattr(client, attribute, None) for tier, attribute in _BATTLE_RESULT_ATTRIBUTES.items()}
-    probe["battle_id"] = getattr(client, "lastBattleId", None)
+    try:
+        probe = {tier: getattr(client, attribute, None) for tier, attribute in _BATTLE_RESULT_ATTRIBUTES.items()}
+        probe["battle_id"] = getattr(client, "lastBattleId", None)
+        probe["battles"] = getattr(client, "pvpBattles", None)
+        probe["own_user_id"] = getattr(getattr(client, "user", None), "id", None)  # never journaled
+    except Exception:  # the probe runs after the battle too and must not raise there
+        return {_PROBE_FAILED: True}
     return probe
+
+
+def _journaled_record(record: BattleRecord) -> dict:
+    """The facts of a matching battle record that the journal keeps (no user ids)."""
+    return {
+        "role": record.role,
+        "outcome": record.outcome,
+        "server_outcome": record.server_outcome,
+        "won": record.won,
+        "trophy_change": record.trophy_change,
+        "opponent_ship_design_id": record.opponent_ship_design_id,
+        "opponent_trophies": record.opponent_trophies,
+        "opponent_hull_level": record.opponent_hull_level,
+        "battle_date": record.battle_date.isoformat() if record.battle_date else None,
+    }
+
+
+def _observed_battle_record(before: Mapping[str, Any], after: Mapping[str, Any],
+                            battle_id: Optional[str]) -> Optional[BattleRecord]:
+    """This call's battle record, from a battle list read after the call began; else ``None``.
+
+    A record whose role is unknown (the own user id was not known) is not used.
+    """
+    battles = after.get("battles")
+    if battles is None or battles is before.get("battles"):
+        return None
+    record = matching_battle(parse_battles(battles, after.get("own_user_id")), battle_id)
+    return record if record is not None and record.role is not None else None
+
+
+def _sign(value: int) -> int:
+    return (value > 0) - (value < 0)
+
+
+def _record_support(record: BattleRecord, delta: Optional[SnapshotDelta]) -> tuple[bool, str]:
+    """Whether this call's battle record supports the observed outcome, and why not."""
+    if record.role != ATTACKER:
+        return False, ("the battle record for this battle id shows the account defending; "
+                       "a defense never verifies an attack")
+    if record.won is None:
+        return False, "the battle record for this battle id does not say who won"
+    observed = delta.trophies if delta is not None else None
+    if observed is not None and record.trophy_change is not None and _sign(observed) != _sign(record.trophy_change):
+        return False, "the battle record's trophy change disagrees in sign with the observed trophy change"
+    # Without a trophy number in the record, the winner still fixes the sign: a win never loses trophies
+    # and a loss never gains them.
+    if observed is not None and record.trophy_change is None and observed != 0 \
+            and _sign(observed) != (1 if record.won else -1):
+        return False, "the battle record's winner disagrees with the observed trophy change"
+    return True, ""
+
+
+def _failed_battle_evidence() -> dict:
+    """Evidence when it could not be built: nothing reached, nothing supported, no values."""
+    return {
+        "evidence_tier": BATTLE_EVIDENCE_TIERS[0],
+        "steps": {name: False for name in BATTLE_EVIDENCE_TIERS[1:]},
+        "battle_id": None,
+        "client_reported_outcome_trusted": False,
+        "trophies_delta": None,
+        "outcome_supported": False,
+        "outcome_support_reason": _EVIDENCE_FAILURE_REASON,
+    }
 
 
 def _battle_evidence(before: Mapping[str, Any], after: Mapping[str, Any], status: ReconciliationStatus,
                      delta: Optional[SnapshotDelta] = None):
+    try:
+        if before.get(_PROBE_FAILED) or after.get(_PROBE_FAILED):
+            return _failed_battle_evidence()
+        return _build_battle_evidence(before, after, status, delta)
+    except Exception:  # built after a non-idempotent battle: never raise there
+        return _failed_battle_evidence()
+
+
+def _build_battle_evidence(before: Mapping[str, Any], after: Mapping[str, Any], status: ReconciliationStatus,
+                           delta: Optional[SnapshotDelta]):
     # A step happened during this call only if its parsed response object was replaced.
     reached = {tier: after.get(tier) is not None and after.get(tier) is not before.get(tier)
                for tier in _BATTLE_RESULT_ATTRIBUTES}
-    outcome_supported = bool(reached[OUTCOME_SUPPORTING_STEP])
+    # The battle id is this call's only if lastBattleId changed during it: a
+    # created battle whose id could not be read leaves the previous battle's id.
+    battle_id = after.get("battle_id")
+    if not reached["battle-created"] or battle_id == before.get("battle_id"):
+        battle_id = None
+    battle_id = str(battle_id) if battle_id not in (None, "", "0") else None
+    record = _observed_battle_record(before, after, battle_id)
+    if record is not None:
+        outcome_supported, support_reason = _record_support(record, delta)
+    else:
+        outcome_supported = bool(reached[OUTCOME_SUPPORTING_STEP])
+        support_reason = (
+            f"this call did not reach {OUTCOME_SUPPORTING_STEP}, so a trophy change is not this battle's outcome"
+        )
     reached["outcome-observed"] = status is ReconciliationStatus.VERIFIED and outcome_supported
     tier = "request-sent"
     for name in BATTLE_EVIDENCE_TIERS[1:]:
         if reached.get(name):
             tier = name
-    battle_id = after.get("battle_id") if reached["battle-created"] else None
     evidence = {
         "evidence_tier": tier,
         "steps": {name: bool(reached.get(name)) for name in BATTLE_EVIDENCE_TIERS[1:]},
-        "battle_id": str(battle_id) if battle_id not in (None, "", "0") else None,
+        "battle_id": battle_id,
         "client_reported_outcome_trusted": False,
         "trophies_delta": delta.trophies if delta is not None else None,
         "outcome_supported": outcome_supported,
     }
+    if record is not None:
+        evidence["battle_record"] = _journaled_record(record)
     if not outcome_supported:
-        evidence["outcome_support_reason"] = (
-            f"this call did not reach {OUTCOME_SUPPORTING_STEP}, so a trophy change is not this battle's outcome"
-        )
+        evidence["outcome_support_reason"] = support_reason
     return evidence
 
 
