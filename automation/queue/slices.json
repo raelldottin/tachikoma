@@ -2075,7 +2075,7 @@
     {
       "slice_id": "g2-enrol-pss5",
       "title": "Record pss5's game identity fingerprint for the G2 canary",
-      "status": "queued",
+      "status": "done",
       "priority": 407,
       "domain": "fleet",
       "allowed_paths": [
