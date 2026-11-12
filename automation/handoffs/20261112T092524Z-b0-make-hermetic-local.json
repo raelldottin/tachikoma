@@ -1,0 +1,49 @@
+{
+  "slice_id": "b0-make-hermetic-local",
+  "status": "done",
+  "summary": "make test and make test-security now run `scripts/ci.py test` (test-security with `--names tests.test_security`) from a `mktemp -d` directory removed by a trap, with an absolute interpreter, so they get the same network audit hook and temporary working directory as CI. test, test-security and lint stop with a clear message on Python older than 3.11; the other targets are unchanged.  make lint now mirrors the CI lint job: it requires the ruff version pinned in .github/requirements-ci.txt, runs the `scripts/ci.py lint` ratchet and the format check, and keeps ty advisory through `uv run --frozen --no-sync`, which leaves .venv and uv.lock alone.  Add tests/test_build_hygiene.py, a checkout-level check of the Makefile contract (never a Bazel target), and update the test_ci.py recipe assertions for the new recipe. Fix the stale Python 3.9 and hourly-run.yml notes in docs/workflows/tachikoma-automation.md. Built by a B0 subagent in an isolated worktree; re-validated by the parent agent, every required make target run in a scratch clone.",
+  "files_touched": [
+    "Makefile",
+    "docs/workflows/tachikoma-automation.md",
+    "tests/test_build_hygiene.py",
+    "tests/test_ci.py"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "make test-security",
+    "make lint",
+    "make automation-check",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "Run local tests from a temporary CWD and make make lint mirror CI",
+      "before": "make test/test-security run unittest discover; make lint runs uv run (rebuilds .venv, rewrites uv.lock)",
+      "after": "make test/test-security run scripts/ci.py test from mktemp -d; make lint mirrors the CI ratchet",
+      "proof": [
+        "make syntax-check, make test, make test-security, make lint, make automation-check and git diff --check pass in a scratch clone of main with the change",
+        "tests/test_build_hygiene.py fails on the old Makefile"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "make lint's ty step is advisory (Q-5 default) and was run offline in a scratch clone."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-12T09:25:43Z"
+}

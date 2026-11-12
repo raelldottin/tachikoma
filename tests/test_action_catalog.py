@@ -1,6 +1,7 @@
 """Tests for sdk.actions catalog and reconciliation. Synthetic snapshots only."""
 
 import json
+import os
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -16,7 +17,7 @@ from sdk.actions import (
 )
 from sdk.state import AccountMismatchError, build_snapshot
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(os.path.abspath(__file__)).parents[1]
 T0 = datetime(2026, 11, 10, 12, 0, tzinfo=timezone.utc)
 V, N, C, U = (
     ReconciliationStatus.VERIFIED,

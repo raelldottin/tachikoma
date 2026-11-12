@@ -1836,6 +1836,216 @@
         "make test",
         "git diff --check"
       ]
+    },
+    {
+      "slice_id": "b0-make-hermetic-local",
+      "title": "Run local tests from a temporary CWD and make make lint mirror CI",
+      "status": "done",
+      "priority": 346,
+      "domain": "tests",
+      "allowed_paths": [
+        "Makefile",
+        "tests/test_pvp_sanitized_inputs.py",
+        "tests/test_build_hygiene.py",
+        "docs/workflows/tachikoma-automation.md",
+        ".github/ruff-baseline.json",
+        "tests/test_ci.py"
+      ],
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "make test-security",
+        "make lint",
+        "make automation-check",
+        "git diff --check"
+      ],
+      "depends_on": [
+        "bazel-migration-roadmap-docs"
+      ],
+      "max_files_changed": 6,
+      "notes": "Reconciled 2026-11-12 after SPEC-02 (#165): make test and make test-security already run from mktemp -d with an absolute interpreter (unittest discover); what is left is running them through scripts/ci.py test, the Python >= 3.11 guard, make lint mirroring CI (no uv run, which rebuilds .venv and rewrites uv.lock), tests/test_build_hygiene.py, any remaining test_pvp_sanitized_inputs path fix, and the stale docs. Makefile: PYTHON is \"$(CURDIR)/.venv/bin/python\" when that file is executable, else `command -v python3` (never wrap the fallback in $(abspath)). A Python >= 3.11 guard runs only in test, test-security and lint. test runs `$(PYTHON) \"$(CURDIR)/scripts/ci.py\" test` from `mktemp -d`, removed by `trap` on exit; test-security adds `--names tests.test_security`. lint: ruff version must equal the pin in .github/requirements-ci.txt, then `$(PYTHON) scripts/ci.py lint`, `$(PYTHON) -m ruff format --check scripts/ci.py tests/test_ci.py`, `-uv run --frozen --no-sync ty check --exit-zero run.py sdk tests`. automation-check is unchanged. tests/test_pvp_sanitized_inputs.py:114-117 reads its 4 sdk files relative to os.path.abspath(__file__). New tests/test_build_hygiene.py (checkout-level; never a Bazel target): `make -n -C <root> test` from a temp CWD shows an absolute interpreter, mktemp -d and scripts/ci.py test; `make -n lint` shows scripts/ci.py lint and ruff format --check; the 8 contract targets exist; tests.test_pvp_sanitized_inputs passes from a temp CWD. Fix the stale Python 3.9 and hourly-run.yml notes in docs/workflows/tachikoma-automation.md. Record `uv pip freeze` and `git status` before and after make lint. Until this merges, never run tests from the repo root. Plan: docs/BAZEL_MIGRATION_ROADMAP.md. Widened 2026-11-12: SPEC-02's CredentialFileSafetyTests in tests/test_ci.py pin the old unittest-discover recipe, so they are updated with it."
+    },
+    {
+      "slice_id": "b0-ci-root-and-runner",
+      "title": "Make scripts/ci.py runfiles-safe and run every suite in a temporary CWD",
+      "status": "blocked",
+      "priority": 347,
+      "domain": "tests",
+      "allowed_paths": [
+        "scripts/ci.py",
+        "tests/test_ci.py",
+        "tests/__init__.py",
+        ".github/ruff-baseline.json"
+      ],
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "make lint",
+        "git diff --check",
+        "manual V-REL release parity",
+        "manual owner dispatch of postmerge-ci.yml on the branch is green"
+      ],
+      "depends_on": [
+        "b0-make-hermetic-local"
+      ],
+      "max_files_changed": 5,
+      "notes": "Reconciled 2026-11-12 after SPEC-02 (#165): run_tests already runs in a TemporaryDirectory and tests/__init__.py already refuses a repo-root run while ./.device exists (keep both; do not duplicate the sentinel test SPEC-02 added). What is left: ROOT from os.path.abspath, require_tests, --verbose, the PYTHONPATH child fix and their regression tests. scripts/ci.py: ROOT = Path(os.path.abspath(__file__)).parent.parent. run_tests(names, require_tests=False, verbosity=1) changes into a fresh tempfile.TemporaryDirectory(ignore_cleanup_errors=True) before loading tests (unless the CWD is already $TEST_TMPDIR) and restores the CWD in a finally block; with require_tests it fails when 0 tests ran. `ci.py test --verbose` sets verbosity 2. Do not touch release_identity, release_includes, build_release, VERSION_RE or the RELEASE_* constants. tests/test_ci.py:93 passes PYTHONPATH=ci.ROOT (joined with any existing value by os.pathsep) to its child; tests/test_ci.py:107 uses os.path.abspath. tests/__init__.py raises a clear error when the CWD is the repo root and ./.device exists (protects direct `python -m unittest tests.x` runs). Regression tests, portable (no symlinks): ROOT equals the abspath-derived root; require_tests fails on an empty suite and the default does not; --verbose prints test ids; a child with PYTHONSAFEPATH=1 still imports scripts.ci; `ci.py test --names tests.test_battle_flow` (it constructs Device()) started in a directory holding a sentinel .device leaves that file byte-identical with the same mtime. The owner dispatches postmerge-ci.yml on the branch (Windows and Python 3.11). Plan: docs/BAZEL_MIGRATION_ROADMAP.md.",
+      "entry_condition": "Owner dispatches postmerge-ci.yml on preview/b0-stack (tip 93a3d81: b0-ci-root-and-runner d6ce2f3, b0-test-repo-root-b d550a81 and b0-strict-skip-mode 93a3d81 stacked on main 27c0331; V-REL already passed for the ci-root change) and it is green on Windows and Python 3.11; then a chore(queue) PR sets these three back to queued."
+    },
+    {
+      "slice_id": "b0-bazel-ignore-hygiene",
+      "title": "Ignore Bazel outputs and personal rc files before any Bazel command runs",
+      "status": "done",
+      "priority": 348,
+      "domain": "build",
+      "allowed_paths": [
+        ".gitignore",
+        "tests/test_build_hygiene.py"
+      ],
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "make lint",
+        "git diff --check"
+      ],
+      "depends_on": [
+        "b0-make-hermetic-local"
+      ],
+      "max_files_changed": 4,
+      "notes": "Add /bazel-* to .gitignore (not .bazelrc.user: personal Bazel flags belong in ~/.bazelrc, so a stray .bazelrc.user stays visible as untracked dirt). Extend tests/test_build_hygiene.py: bazel-bin is ignored; git check-ignore -q succeeds for .device, config.secrets, passwords.txt, .profiles/x, tachikoma.log, x.har and x.pcap; git ls-files contains none of tools/bazel, tools/bazel.*, .bazeliskrc or .bazelrc.user (each would change which binary or flags run). Plan: docs/BAZEL_MIGRATION_ROADMAP.md. Re-pointed 2026-11-12: it touches neither scripts/ci.py nor tests/test_ci.py, so it depends on b0-make-hermetic-local (which adds tests/test_build_hygiene.py) instead of b0-ci-root-and-runner, which waits for an owner dispatch."
+    },
+    {
+      "slice_id": "b0-test-repo-root-a",
+      "title": "Stop six test modules from resolving __file__ out of the runfiles tree",
+      "status": "done",
+      "priority": 349,
+      "domain": "tests",
+      "allowed_paths": [
+        "tests/test_action_catalog.py",
+        "tests/test_capability_inventory.py",
+        "tests/test_client_snapshot_provider.py",
+        "tests/test_compat_ledger.py",
+        "tests/test_progression_dry_run.py",
+        "tests/test_fleet_dry_run.py",
+        ".github/ruff-baseline.json"
+      ],
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "make lint",
+        "git diff --check"
+      ],
+      "depends_on": [
+        "b0-bazel-ignore-hygiene"
+      ],
+      "max_files_changed": 8,
+      "notes": "In the six modules replace Path(__file__).resolve().parents[1] with Path(os.path.abspath(__file__)).parents[1]. No assertion changes. The regression test is the AST guard added by b0-test-repo-root-b. Plan: docs/BAZEL_MIGRATION_ROADMAP.md."
+    },
+    {
+      "slice_id": "b0-test-repo-root-b",
+      "title": "Fix the last resolve() escapes in tests and add the AST guard",
+      "status": "blocked",
+      "priority": 351,
+      "domain": "tests",
+      "allowed_paths": [
+        "tests/test_pvp_safety.py",
+        "tests/test_tui.py",
+        "tests/test_ci.py",
+        ".github/ruff-baseline.json"
+      ],
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "make lint",
+        "git diff --check",
+        "manual owner dispatch of postmerge-ci.yml on the branch is green"
+      ],
+      "depends_on": [
+        "b0-test-repo-root-c"
+      ],
+      "max_files_changed": 5,
+      "notes": "Same fix at tests/test_pvp_safety.py:14 and tests/test_tui.py:11; tests/test_pvp_safety.py:160 joins PYTHONPATH with os.pathsep. Add to TestIsolationTests in tests/test_ci.py an AST guard (ast.Call nodes only, so the string literal at test_ci.py:395 passes) that forbids Path(__file__).resolve() and os.path.realpath(__file__) in tests/**/*.py and in an explicit file list that starts as [scripts/ci.py]; a listed file that is missing fails the guard. Record sdk/simulation/game.py:43 in the test as the one known runtime exception. The owner dispatches postmerge-ci.yml on the branch. Plan: docs/BAZEL_MIGRATION_ROADMAP.md.",
+      "entry_condition": "Owner dispatches postmerge-ci.yml on preview/b0-stack (tip 93a3d81: b0-ci-root-and-runner d6ce2f3, b0-test-repo-root-b d550a81 and b0-strict-skip-mode 93a3d81 stacked on main 27c0331; V-REL already passed for the ci-root change) and it is green on Windows and Python 3.11; then a chore(queue) PR sets these three back to queued."
+    },
+    {
+      "slice_id": "b0-strict-skip-mode",
+      "title": "Turn dependency skips into failures under TACHIKOMA_STRICT_DEPS=1",
+      "status": "blocked",
+      "priority": 352,
+      "domain": "tests",
+      "allowed_paths": [
+        "tests/test_ci.py",
+        "tests/test_pvp_safety.py",
+        "tests/test_build_hygiene.py",
+        "tests/test_strict_mode.py",
+        ".github/ruff-baseline.json"
+      ],
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "make lint",
+        "git diff --check",
+        "manual owner dispatch of postmerge-ci.yml on the branch is green"
+      ],
+      "depends_on": [
+        "b0-test-repo-root-b"
+      ],
+      "max_files_changed": 6,
+      "notes": "With TACHIKOMA_STRICT_DEPS=1 these fail instead of skipping: missing yaml (test_ci.py:159), missing git binary (test_ci.py:277 and 387), a missing pvp shim (test_pvp_safety.py:36), and missing make or git in tests/test_build_hygiene.py. test_ci.py:566 (RepositoryReleaseSelectionTests) stays a skip when only .git is missing. Unset, behaviour is unchanged. tests/test_strict_mode.py simulates each case with patch. The owner dispatches postmerge-ci.yml on the branch. Plan: docs/BAZEL_MIGRATION_ROADMAP.md.",
+      "entry_condition": "Owner dispatches postmerge-ci.yml on preview/b0-stack (tip 93a3d81: b0-ci-root-and-runner d6ce2f3, b0-test-repo-root-b d550a81 and b0-strict-skip-mode 93a3d81 stacked on main 27c0331; V-REL already passed for the ci-root change) and it is green on Windows and Python 3.11; then a chore(queue) PR sets these three back to queued."
+    },
+    {
+      "slice_id": "b0-dependency-lock",
+      "title": "Declare runtime and CI dependencies once and lock them with hashes",
+      "status": "blocked",
+      "priority": 353,
+      "domain": "build",
+      "allowed_paths": [
+        "pyproject.toml",
+        "uv.lock",
+        "requirements_lock.txt",
+        "tests/test_dependency_locks.py",
+        "docs/RELEASE.md"
+      ],
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "make lint",
+        "git diff --check",
+        "uv lock --check"
+      ],
+      "depends_on": [
+        "b0-strict-skip-mode"
+      ],
+      "max_files_changed": 7,
+      "notes": "pyproject.toml [project]: name \"tachikoma\", version \"0.0.0\" (not the release version), requires-python \">=3.11\", dependencies = the 7 runtime pins of requirements.txt; [dependency-groups] ci = [\"ruff==0.15.5\", \"PyYAML==6.0.3\"]; [tool.uv] required-version = \">=0.13.7,<0.14\"; [tool.ruff] keeps target-version py311; no [build-system]. Run `uv lock`, then `uv export --frozen --group ci --no-emit-project --no-annotate --no-header --format requirements-txt -o requirements_lock.txt`. tests/test_dependency_locks.py (tomllib, offline) asserts: uv.lock has packages and requires-python >=3.11; the only non-registry package is the root tachikoma with source virtual \".\"; every other source is registry https://pypi.org/simple; the lock's name==version set equals the default+ci resolution; per-package sha256 sets equal uv.lock wheel+sdist hashes; every non-comment line is a requirement or a --hash continuation; every package except the allowlist {ratelimit} has a wheel; pyproject runtime pins equal the == pins in requirements.txt. requirements.txt and .github/requirements-ci.txt stay unchanged. Mention the lock files in docs/RELEASE.md. Plan: docs/BAZEL_MIGRATION_ROADMAP.md.",
+      "entry_condition": "On or after 2026-11-17, when uv 0.13.7 (released 2026-11-03) is 14 days old. The owner then sets status to queued in a chore(queue) PR."
+    },
+    {
+      "slice_id": "b0-test-repo-root-c",
+      "title": "Stop five later test modules from resolving __file__ out of the runfiles tree",
+      "status": "done",
+      "priority": 350,
+      "domain": "tests",
+      "allowed_paths": [
+        "tests/test_account_baselines.py",
+        "tests/test_capture_reads.py",
+        "tests/test_fleet_execute.py",
+        "tests/test_profile_reads.py",
+        "tests/test_spec_traceability.py",
+        ".github/ruff-baseline.json"
+      ],
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "make lint",
+        "git diff --check"
+      ],
+      "depends_on": [
+        "b0-test-repo-root-a"
+      ],
+      "max_files_changed": 6,
+      "notes": "Added 2026-11-12: five test modules added after the roadmap was written (#161, #164, #166, #178, #180) still use Path(__file__).resolve(), so b0-test-repo-root-b's AST guard would fail on them. Apply b0-test-repo-root-a's fix: Path(os.path.abspath(__file__)) at tests/test_account_baselines.py, tests/test_capture_reads.py, tests/test_fleet_execute.py, tests/test_profile_reads.py and tests/test_spec_traceability.py (find each by content). No assertion changes. Plan: docs/BAZEL_MIGRATION_ROADMAP.md."
     }
   ]
 }

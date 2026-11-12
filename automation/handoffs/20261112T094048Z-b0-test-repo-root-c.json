@@ -1,0 +1,47 @@
+{
+  "slice_id": "b0-test-repo-root-c",
+  "status": "done",
+  "summary": "Path(__file__).resolve() follows symlinks, so under Bazel's runfiles tree it escapes to the source checkout. Use Path(os.path.abspath(__file__)) in test_account_baselines, test_capture_reads, test_fleet_execute, test_profile_reads and test_spec_traceability, as b0-test-repo-root-a did for six others. No assertion changes. Found by the B0 root-b subagent's pre-check; implemented and re-validated by the parent agent.",
+  "files_touched": [
+    "tests/test_account_baselines.py",
+    "tests/test_capture_reads.py",
+    "tests/test_fleet_execute.py",
+    "tests/test_profile_reads.py",
+    "tests/test_spec_traceability.py"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "make lint",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "Stop five later test modules from resolving __file__ out of the runfiles tree",
+      "before": "Five test modules resolve __file__ through symlinks",
+      "after": "They use os.path.abspath",
+      "proof": [
+        "make syntax-check, make test, make lint, git diff --check pass in a scratch clone of main with the change"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "The AST guard lands with b0-test-repo-root-b."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-12T09:41:08Z"
+}

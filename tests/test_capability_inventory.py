@@ -2,11 +2,12 @@
 
 import ast
 import json
+import os
 import re
 import unittest
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(os.path.abspath(__file__)).parents[1]
 INVENTORY_PATH = REPO_ROOT / "docs" / "baseline" / "capability-inventory.json"
 PILLARS = {"platform", "A", "B", "C", "D", "E", "F"}
 KINDS = {"read-only", "mutating", "session"}
