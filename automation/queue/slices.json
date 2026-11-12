@@ -1670,7 +1670,7 @@
     {
       "slice_id": "spec03-capture-command",
       "title": "SPEC-03: read-only, sanitizing capture command for the owner's G1 run",
-      "status": "queued",
+      "status": "done",
       "priority": 399,
       "domain": "safety",
       "allowed_paths": [
