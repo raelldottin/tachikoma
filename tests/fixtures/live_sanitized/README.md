@@ -6,7 +6,7 @@ This directory holds sanitized copies of real Pixel Starships responses. Parsers
 
 Only the owner adds captures here. An agent never makes a live request to get one.
 
-Today the directory holds only this README. SPEC-03 expects these captures:
+It holds the captures below, from `pss1` and `pss5`, two of the owner's test accounts (G1, read-only). SPEC-03 expects these captures:
 
 | Capture | Endpoint | Used by |
 | --- | --- | --- |
@@ -103,9 +103,18 @@ Then review before anything enters this directory:
 
 Add one row per file. A capture without a row is not used.
 
+The rows below come from the owner-dispatched `live-trial.yml` capture run of 2026-11-12. `pss1`'s
+profile (`user_login.xml`) is not committed: its creation date and lifetime PvP totals could
+identify the account. `pss5`'s profile is a new account's. No value was edited by hand.
+
 | File | Endpoint | Captured (date) | Game version | Sanitization steps applied | Reviewed by |
 | --- | --- | --- | --- | --- | --- |
-| *(none yet)* | | | | | |
+| pss5/user_login.xml | DeviceLogin17 | 2026-11-12 | 1.0 (server `RecommendedVersion`, from `pss1/server_settings_fields.json` of the same run) | 2: response body only (no request URL or headers); 3: secret fields set to ***REDACTED*** (2); 4: user ids replaced with USER-* placeholders (3); 5: player, ship, alliance and crew names replaced with PLAYER-*, SHIP-*, ALLIANCE-*, CREW-* placeholders (1); 7: instance ids (ship, battle, item, alliance...) replaced with *ID-* placeholders (1); 9: scan clean; by run.py --capture-reads | agent pass 2026-11-12 (every file read; re-scanned); owner: pending |
+| pss1/find_user_ranking.xml | FindUserRanking | 2026-11-12 | 1.0 (server `RecommendedVersion`, from `pss1/server_settings_fields.json` of the same run) | 2: response body only (no request URL or headers); 4: user ids replaced with USER-* placeholders (1); 9: scan clean; by run.py --capture-reads | agent pass 2026-11-12 (every file read; re-scanned); owner: pending |
+| pss5/find_user_ranking.xml | FindUserRanking | 2026-11-12 | 1.0 (server `RecommendedVersion`, from `pss1/server_settings_fields.json` of the same run) | 2: response body only (no request URL or headers); 4: user ids replaced with USER-* placeholders (1); 9: scan clean; by run.py --capture-reads | agent pass 2026-11-12 (every file read; re-scanned); owner: pending |
+| pss1/list_pvp_battles2.xml | ListPvPBattles2 | 2026-11-12 | 1.0 (server `RecommendedVersion`, from `pss1/server_settings_fields.json` of the same run) | 2: response body only (no request URL or headers); 4: user ids replaced with USER-* placeholders (40); 5: player, ship, alliance and crew names replaced with PLAYER-*, SHIP-*, ALLIANCE-*, CREW-* placeholders (26); 7: instance ids (ship, battle, item, alliance...) replaced with *ID-* placeholders (36); 9: scan clean; by run.py --capture-reads; 10 battles | agent pass 2026-11-12 (every file read; re-scanned); owner: pending |
+| pss5/list_pvp_battles2.xml | ListPvPBattles2 | 2026-11-12 | 1.0 (server `RecommendedVersion`, from `pss1/server_settings_fields.json` of the same run) | 2: response body only (no request URL or headers); 9: scan clean; by run.py --capture-reads; no battles (new account) | agent pass 2026-11-12 (every file read; re-scanned); owner: pending |
+| pss1/server_settings_fields.json | GetLatestVersion3 (field names) | 2026-11-12 | 1.0 (server `RecommendedVersion`, from `pss1/server_settings_fields.json` of the same run) | 2: field names only; values kept only when they look like a version number; 9: scan clean; by run.py --capture-reads | agent pass 2026-11-12 (every file read; re-scanned); owner: pending |
 
 "Game version" is the client version the response came from, as the game reports it; rows from
 `run.py --capture-reads` give the version in the server's `GetLatestVersion3` setting (`n/a` when
