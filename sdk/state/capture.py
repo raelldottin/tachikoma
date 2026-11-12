@@ -17,8 +17,20 @@ attribute, key or element that holds them:
 - user ids: ``Id``, ``AccountId`` and any name ending in ``UserId``, in any
   case, become ``USER-A``, ``USER-B``...;
 - names: ``Name`` and names ending in ``UserName`` or ``PlayerName`` become
-  ``PLAYER-A``..., names ending in ``ShipName`` ``SHIP-A``..., and names
-  ending in ``AllianceName`` ``ALLIANCE-A``...;
+  ``PLAYER-A``..., names ending in ``ShipName`` ``SHIP-A``..., names
+  ending in ``AllianceName`` ``ALLIANCE-A``..., and crew names a player chose
+  (names ending in ``CharacterName``) ``CREW-A``...;
+- instance ids: any other name ending in ``Id`` or ``Ids`` (comma lists),
+  such as ``ShipId``, ``BattleId``, ``ItemId`` or ``AllianceId``, becomes a
+  placeholder for its kind (``SHIPID-A``, ``BATTLEID-A``...), because these ids
+  belong to one account and could link back to it. Every name ending in
+  ``ShipId`` (``AttackingShipId``, ``OwnerShipId``...) shares the ``SHIPID``
+  labels, and the same for ``AllianceId``, ``CharacterId``, ``ItemId`` and
+  ``RoomId``, so cross-references line up. ``0`` stays ``0`` (it means none).
+  Ids that name game data stay as captured: names ending in ``DesignId``,
+  ``SpriteId``, ``TypeId``, ``RaceId``, ``BackgroundId``, ``MissionEventId``
+  and ``StarSystemId`` (but ``UserStarSystemId`` is an instance id), each with
+  its ``Ids`` list form;
 - any other value that ``sdk.redaction.redact_secrets``, the caller's
   ``scrub_text`` (``run.py`` passes the fleet ``LogScrubber``, which knows the
   account's credential values and display name) or ``scan_capture_text``
@@ -192,15 +204,22 @@ def describe_findings(findings: Iterable[Finding]) -> str:
 # --- Sanitize (S03-R1) -----------------------------------------------------------------------------
 
 SECRET_NAME_WORDS = ("token", "secret", "password", "checksum", "email", "devicekey")
-USER, PLAYER, SHIP, ALLIANCE = "USER", "PLAYER", "SHIP", "ALLIANCE"
+USER, PLAYER, SHIP, ALLIANCE, CREW = "USER", "PLAYER", "SHIP", "ALLIANCE", "CREW"
+INSTANCE = "instance"
 STEP_LABELS = {
     "body": "2: response body only (no request URL or headers)",
     "secret": "3: secret fields set to " + REDACTED,
     USER: "4: user ids replaced with USER-* placeholders",
-    "name": "5: player, ship and alliance names replaced with PLAYER-*, SHIP-*, ALLIANCE-* placeholders",
+    "name": "5: player, ship, alliance and crew names replaced with PLAYER-*, SHIP-*, ALLIANCE-*, CREW-* placeholders",
     "value": "6: other values the redaction or scan rules flag set to " + REDACTED,
+    INSTANCE: "7: instance ids (ship, battle, item, alliance...) replaced with *ID-* placeholders",
 }
-STEP_ORDER = ("body", "secret", USER, "name", "value")
+STEP_ORDER = ("body", "secret", USER, "name", "value", INSTANCE)
+# Id names that hold game data, kept as captured. Checked after USER and ``userstarsystemid``.
+GAME_DATA_ID_SUFFIXES = ("designid", "spriteid", "typeid", "raceid", "backgroundid", "missioneventid",
+                         "starsystemid")
+# Instance ids whose role-prefixed forms (``AttackingShipId``, ``OwnerShipId``) share one set of labels.
+SHARED_INSTANCE_KINDS = ("ship", "alliance", "character", "item", "room")
 
 
 class CaptureWithheld(Exception):
@@ -235,8 +254,32 @@ class Placeholders:
             self.get(category, str(value))
 
 
+def instance_kind(name: str) -> Optional[str]:
+    """The placeholder category (``SHIPID``, ``BATTLEID``...) for an instance-id field name, else ``None``.
+
+    The name must end in ``Id`` or ``Ids`` as written (``IsPaid`` is not an id). ``Ids`` names are comma
+    lists of the singular kind. User ids and game-data ids are not instance ids.
+    """
+    bare = name.lstrip("@")
+    if bare.endswith("Ids"):
+        bare = bare[:-1]
+    if not bare.endswith("Id"):
+        return None
+    lower = bare.lower()
+    if lower in ("id", "accountid") or lower.endswith(("userid", "accountid")):
+        return None
+    if not lower.endswith("userstarsystemid") and lower.endswith(GAME_DATA_ID_SUFFIXES):
+        return None
+    noun = lower[:-2]
+    for kind in SHARED_INSTANCE_KINDS:
+        if noun.endswith(kind):
+            noun = kind
+            break
+    return noun.upper() + "ID" if noun else None
+
+
 def field_category(name: str) -> Optional[str]:
-    """``secret``, ``email``, ``USER``, ``PLAYER``, ``SHIP``, ``ALLIANCE`` or ``None`` for a field name."""
+    """``secret``, ``email``, ``USER``, the name kinds, ``INSTANCE`` or ``None`` for a field name."""
     lower = name.lstrip("@").lower()
     if "email" in lower:
         return "email"
@@ -250,6 +293,10 @@ def field_category(name: str) -> Optional[str]:
         return SHIP
     if lower.endswith("alliancename"):
         return ALLIANCE
+    if lower.endswith("charactername"):
+        return CREW
+    if instance_kind(name):
+        return INSTANCE
     return None
 
 
@@ -275,9 +322,16 @@ def sanitize_payload(payload: Any, placeholders: Placeholders,
         if category == USER:
             counts[USER] += 1
             return placeholders.get(USER, value)
-        if category in (PLAYER, SHIP, ALLIANCE):
+        if category in (PLAYER, SHIP, ALLIANCE, CREW):
             counts["name"] += 1
             return placeholders.get(category, value)
+        if category == INSTANCE:
+            kind = instance_kind(name)
+            parts = value.split(",")
+            replaced = [part if part.strip() in ("", "0") else placeholders.get(kind, part.strip()) for part in parts]
+            if replaced != parts:
+                counts[INSTANCE] += 1
+            return ",".join(replaced)
         if _flagged(value, scrub_text):
             counts["value"] += 1
             return REDACTED
@@ -425,18 +479,25 @@ def capture_account(alias: str, client: Any, *, game_version: Optional[str],
 
 def _setting_records(settings: Any) -> Iterable[tuple[str, Mapping]]:
     """Every mapping under the settings response that holds ``@`` attributes, with its path."""
+    # Paths are dot-joined: slash-joined element names look like base64 to the scan.
     stack = [("", settings)]
     while stack:
         path, node = stack.pop()
         if isinstance(node, Mapping):
             if any(str(key).startswith("@") for key in node):
-                yield path or "/", node
+                yield path or "(root)", node
             for key, value in node.items():
                 if not str(key).startswith("@"):
-                    stack.append((f"{path}/{key}", value))
+                    name = _summary_name(str(key))
+                    stack.append((f"{path}.{name}" if path else name, value))
         elif isinstance(node, list):
             for index, value in enumerate(node):
                 stack.append((f"{path}[{index}]", value))
+
+
+def _summary_name(name: str) -> str:
+    """``name``, or its length when the scan would flag the name itself."""
+    return f"<name of {len(name)} characters>" if scan_capture_text(name) else name
 
 
 def settings_fields(alias: str, settings: Any, game_version: Optional[str],
@@ -457,7 +518,8 @@ def settings_fields(alias: str, settings: Any, game_version: Optional[str],
         for key in sorted(k for k in record if str(k).startswith("@")):
             value = record[key]
             text = "" if value is None else str(value)
-            fields[str(key).lstrip("@")] = text if SETTINGS_VERSION_VALUE.match(text) else f"<{len(text)} characters>"
+            fields[_summary_name(str(key).lstrip("@"))] = (
+                text if SETTINGS_VERSION_VALUE.match(text) else f"<{len(text)} characters>")
         summary[path] = fields
     text = json.dumps({"endpoint": "GetLatestVersion3", "fields": summary}, indent=2, sort_keys=True) + "\n"
     findings = scan_capture_text(text, f"{alias}/{SETTINGS_SUMMARY.stem}.json")
