@@ -1,6 +1,6 @@
 # Spec-driven plan for completing the roadmap
 
-**Status:** 2026-11-12. SPEC-03 and SPEC-04 are `Done` with G1 live evidence and SPEC-05 with G2 evidence; seven specs are `Verified offline`; SPEC-06 and SPEC-09 are approved but blocked on owner steps (the `daily-run.yml` hardening, and gate G4). G1 and G2 are open; G3–G5 are not.
+**Status:** 2026-11-12. SPEC-03 and SPEC-04 are `Done` with G1 live evidence and SPEC-05 with G2 evidence; eight specs are `Verified offline`; SPEC-09 is approved but blocked on gate G4. G1 and G2 are open; G3–G5 are not.
 **Covers:** everything left in [PRODUCT_ROADMAP.md](../PRODUCT_ROADMAP.md) after #152. The [Bazel migration](../BAZEL_MIGRATION_ROADMAP.md) is a separate track with its own plan.
 
 Every offline slice of R0–R6 is merged. What is left is live work that changes real accounts, reads whose response shapes were never confirmed, and some library pieces that nothing uses yet. Mistakes in that work are hard to undo, so each piece starts as a spec: what must be true, how it will be proven, and what the owner must decide. Code comes after.
@@ -36,7 +36,7 @@ A spec that needs no live evidence goes from stage 6 straight to `Done`.
 | [SPEC-03](SPEC-03-verified-profile-reads.md) | Verified trophy, starbux and battle-history reads | R1/R3 | G1 | 01 | Done ([evidence](../experiments/live/g1-evidence.md)) |
 | [SPEC-04](SPEC-04-account-baselines.md) | Per-ship baselines and game-version provenance | R0 | G1 | 01, 03 | Done ([evidence](../experiments/baselines/2026-11-12-g1.md)) |
 | [SPEC-05](SPEC-05-live-execution-gate.md) | Authorized live execution with a canary and kill switch | R2 | G2 for use | 01, 02 | Done ([evidence](../experiments/live/g2-evidence.md)) |
-| [SPEC-06](SPEC-06-legacy-daily-run.md) | Fence the legacy daily run away from trial accounts | ops | G2 | 05 | Approved, blocked on G2 |
+| [SPEC-06](SPEC-06-legacy-daily-run.md) | Fence the legacy daily run away from trial accounts | ops | G2 | 05 | Verified offline |
 | [SPEC-07](SPEC-07-progression-trial.md) | Live progression trial, manual vs `baseline-v1` | R2 exit | G2 | 04, 05, 06 | Verified offline |
 | [SPEC-08](SPEC-08-pvp-trial.md) | Live PvP strategy comparison | R3 exit | G3 | 03, 05, 07 | Verified offline |
 | [SPEC-09](SPEC-09-market-trades.md) | Market trade calls and a reconciled live trade | R4 exit | G4 | 03, 05 | Approved, blocked on G4 |
@@ -75,7 +75,7 @@ M0 can start as soon as G0 is given. M1 and the offline build of M2 can then run
 Every offline slice in the plan is merged (#157–#176). What remains needs the owner:
 
 - **G1 (open):** SPEC-03 and SPEC-04 are done ([G1 evidence](../experiments/live/g1-evidence.md), [baseline](../experiments/baselines/2026-11-12-g1.md)).
-- **G2 (open):** the SPEC-05 canary ran ([evidence](../experiments/live/g2-evidence.md)); SPEC-06 needs the owner's `daily-run.yml` hardening merged (#209); SPEC-07 needs the owner to approve its [draft trial plan](../experiments/r2-progression-trial.md); SPEC-11 needs the owner to confirm seeing the canary's alerts and dashboard.
+- **G2 (open):** the SPEC-05 canary ran ([evidence](../experiments/live/g2-evidence.md)); SPEC-06 is verified offline (#209 merged) and its last criterion follows the SPEC-07 trial; SPEC-07 needs the owner to approve its [draft trial plan](../experiments/r2-progression-trial.md); SPEC-11 needs the owner to confirm seeing the canary's alerts and dashboard.
 - **G3, G4, G5:** PvP, market captures, and a second account, for SPEC-08, SPEC-09 and SPEC-10.
 - SPEC-12's written report follows the trials.
 
