@@ -2354,7 +2354,7 @@
     {
       "slice_id": "spec13-grid-model",
       "title": "SPEC-13 grid model and placement check",
-      "status": "queued",
+      "status": "done",
       "priority": 420,
       "domain": "fleet",
       "allowed_paths": [
