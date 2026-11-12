@@ -2166,6 +2166,27 @@
         "make test",
         "git diff --check"
       ]
+    },
+    {
+      "slice_id": "spec07-trial-plan-draft",
+      "title": "Draft the R2 progression trial plan for the owner to approve",
+      "status": "queued",
+      "priority": 411,
+      "domain": "experiments",
+      "allowed_paths": [
+        "docs/experiments/r2-progression-trial.md",
+        "docs/specs/SPEC-07-progression-trial.md"
+      ],
+      "depends_on": [
+        "g2-canary-fixes"
+      ],
+      "max_files_changed": 2,
+      "notes": "Prepares S07-R1. S07-Q1's safe default is that the trial does not start, so this is a draft proposal, marked unapproved: account pss5, a 7-day baseline window, four 7-day ABBA blocks (14 account-days per arm, enough for a 1.5 sd effect per sdk.experiments.study), daily snapshot times, operator-minute logging format, stop thresholds from the alert rules, and the full-mode authorization the owner must write. The manual routine is left for the owner. No code.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
     }
   ]
 }
