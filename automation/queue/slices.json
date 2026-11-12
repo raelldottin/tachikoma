@@ -2451,6 +2451,28 @@
         "make lint",
         "git diff --check"
       ]
+    },
+    {
+      "slice_id": "spec13-capture-mask",
+      "title": "Keep the ship interior mask in captures, split so the leak scan passes",
+      "status": "queued",
+      "priority": 424,
+      "domain": "fleet",
+      "allowed_paths": [
+        "sdk/state/capture.py",
+        "tests/test_capture_reads.py"
+      ],
+      "depends_on": [
+        "spec13-capture-designs"
+      ],
+      "max_files_changed": 2,
+      "notes": "Implements S13-R1. Capture run 43314838395 recorded the design lists, but every ShipDesign @Mask (the interior grid, a digit string of Rows x Columns) was redacted as token-like, and the file scan flags it too. Keep an all-digit @Mask value by writing it in space-separated groups of 12 digits (reversible: remove the spaces; the length is Rows x Columns); anything else stays redacted. The leak scan itself is unchanged.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "make lint",
+        "git diff --check"
+      ]
     }
   ]
 }
