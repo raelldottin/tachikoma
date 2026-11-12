@@ -1,0 +1,44 @@
+{
+  "slice_id": "g2-enrol-pss5",
+  "status": "done",
+  "summary": "The owner-dispatched enrol run 43247933379 (a dry run; nothing executed) printed pss5's salted gid1- fingerprint. Execution refuses a profile without expected_game_identity, so it is added to the G2 registry, and the runbook notes that the canary is next. A salted fingerprint is not secret.",
+  "files_touched": [
+    "docs/experiments/live/RUNBOOK.md",
+    "docs/experiments/live/registry-g2-pss5.json"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "Record pss5's game identity fingerprint for the G2 canary",
+      "before": "G2 registry has no expected_game_identity; execute refuses pss5",
+      "after": "pss5's fingerprint recorded; the canary can run",
+      "proof": [
+        "make syntax-check, make test and git diff --check pass on current main",
+        "the registry loads with load_registry; fingerprint matches gid1-[0-9a-f]{32}"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "The canary is the first live action; the owner dispatches it."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-12T15:34:33Z"
+}
