@@ -1,0 +1,75 @@
+{
+  "version": 1,
+  "accounts": [
+    {
+      "alias": "pss1",
+      "objective": "R0/R2 live trial test account",
+      "policy_id": "baseline-v1",
+      "budgets": {
+        "minerals": 0,
+        "gas": 0,
+        "starbux": 0
+      },
+      "max_actions": 5,
+      "enabled": true,
+      "credentials_secret": "PSS_ACCOUNT_1",
+      "legacy_run_account": 1
+    },
+    {
+      "alias": "pss2",
+      "objective": "R0/R2 live trial test account",
+      "policy_id": "baseline-v1",
+      "budgets": {
+        "minerals": 0,
+        "gas": 0,
+        "starbux": 0
+      },
+      "max_actions": 5,
+      "enabled": true,
+      "credentials_secret": "PSS_ACCOUNT_2",
+      "legacy_run_account": 2
+    },
+    {
+      "alias": "pss3",
+      "objective": "R0/R2 live trial test account",
+      "policy_id": "baseline-v1",
+      "budgets": {
+        "minerals": 0,
+        "gas": 0,
+        "starbux": 0
+      },
+      "max_actions": 5,
+      "enabled": true,
+      "credentials_secret": "PSS_ACCOUNT_3",
+      "legacy_run_account": 3
+    },
+    {
+      "alias": "pss4",
+      "objective": "R0/R2 live trial test account",
+      "policy_id": "baseline-v1",
+      "budgets": {
+        "minerals": 0,
+        "gas": 0,
+        "starbux": 0
+      },
+      "max_actions": 5,
+      "enabled": true,
+      "credentials_secret": "PSS_ACCOUNT_4",
+      "legacy_run_account": 4
+    },
+    {
+      "alias": "pss5",
+      "objective": "R0/R2 live trial test account",
+      "policy_id": "baseline-v1",
+      "budgets": {
+        "minerals": 0,
+        "gas": 0,
+        "starbux": 0
+      },
+      "max_actions": 5,
+      "enabled": true,
+      "credentials_secret": "PSS_ACCOUNT_5",
+      "legacy_run_account": 5
+    }
+  ]
+}

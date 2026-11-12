@@ -1,0 +1,131 @@
+name: Live trial (owner-dispatched)
+
+# Runs one owner-approved live step of the spec plan (docs/specs/) against the
+# test accounts whose credentials are repository secrets. It only runs when the
+# owner dispatches it; it never runs on a schedule or on pull requests.
+#   capture   G1: read-only, sanitized response captures of pss1..pss5
+#   baseline  G1: read-only baseline snapshot of pss1..pss5
+#   enrol     G2: dry run of pss5 with the identity salt, to read its fingerprint
+#   canary    G2: dry run, then one authorized safe action on pss5
+# Output (sanitized, scanned) is uploaded as a short-lived artifact.
+
+on:
+  workflow_dispatch:
+    inputs:
+      step:
+        description: Live step to run
+        required: true
+        type: choice
+        options:
+          - capture
+          - baseline
+          - enrol
+          - canary
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live-trial
+  cancel-in-progress: false
+
+jobs:
+  live:
+    name: 'Live step: ${{ inputs.step }}'
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      OUT: ${{ github.workspace }}/live-out
+      G1_REGISTRY: docs/experiments/live/registry-g1-readonly.json
+      G2_REGISTRY: docs/experiments/live/registry-g2-pss5.json
+      G2_AUTHORIZATION: docs/experiments/live/authorization-g2-pss5-canary.json
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Capture sanitized reads (G1)
+        if: inputs.step == 'capture'
+        env:
+          PSS_ACCOUNT_1_EMAIL: ${{ secrets.PSS_ACCOUNT_1_EMAIL }}
+          PSS_ACCOUNT_1_PASSWORD: ${{ secrets.PSS_ACCOUNT_1_PASSWORD }}
+          PSS_ACCOUNT_2_EMAIL: ${{ secrets.PSS_ACCOUNT_2_EMAIL }}
+          PSS_ACCOUNT_2_PASSWORD: ${{ secrets.PSS_ACCOUNT_2_PASSWORD }}
+          PSS_ACCOUNT_3_EMAIL: ${{ secrets.PSS_ACCOUNT_3_EMAIL }}
+          PSS_ACCOUNT_3_PASSWORD: ${{ secrets.PSS_ACCOUNT_3_PASSWORD }}
+          PSS_ACCOUNT_4_EMAIL: ${{ secrets.PSS_ACCOUNT_4_EMAIL }}
+          PSS_ACCOUNT_4_PASSWORD: ${{ secrets.PSS_ACCOUNT_4_PASSWORD }}
+          PSS_ACCOUNT_5_EMAIL: ${{ secrets.PSS_ACCOUNT_5_EMAIL }}
+          PSS_ACCOUNT_5_PASSWORD: ${{ secrets.PSS_ACCOUNT_5_PASSWORD }}
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p "$OUT"
+          python run.py --capture-reads --registry "$G1_REGISTRY" --output "$OUT/captures"
+
+      - name: Read-only baselines (G1)
+        if: inputs.step == 'baseline'
+        env:
+          PSS_ACCOUNT_1_EMAIL: ${{ secrets.PSS_ACCOUNT_1_EMAIL }}
+          PSS_ACCOUNT_1_PASSWORD: ${{ secrets.PSS_ACCOUNT_1_PASSWORD }}
+          PSS_ACCOUNT_2_EMAIL: ${{ secrets.PSS_ACCOUNT_2_EMAIL }}
+          PSS_ACCOUNT_2_PASSWORD: ${{ secrets.PSS_ACCOUNT_2_PASSWORD }}
+          PSS_ACCOUNT_3_EMAIL: ${{ secrets.PSS_ACCOUNT_3_EMAIL }}
+          PSS_ACCOUNT_3_PASSWORD: ${{ secrets.PSS_ACCOUNT_3_PASSWORD }}
+          PSS_ACCOUNT_4_EMAIL: ${{ secrets.PSS_ACCOUNT_4_EMAIL }}
+          PSS_ACCOUNT_4_PASSWORD: ${{ secrets.PSS_ACCOUNT_4_PASSWORD }}
+          PSS_ACCOUNT_5_EMAIL: ${{ secrets.PSS_ACCOUNT_5_EMAIL }}
+          PSS_ACCOUNT_5_PASSWORD: ${{ secrets.PSS_ACCOUNT_5_PASSWORD }}
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p "$OUT/baselines"
+          python run.py --baseline --registry "$G1_REGISTRY" --output "$OUT/baselines" \
+            --baseline-summary "$OUT/baselines/SUMMARY.md"
+
+      - name: Enrol the identity fingerprint (G2)
+        if: inputs.step == 'enrol'
+        env:
+          PSS_ACCOUNT_5_EMAIL: ${{ secrets.PSS_ACCOUNT_5_EMAIL }}
+          PSS_ACCOUNT_5_PASSWORD: ${{ secrets.PSS_ACCOUNT_5_PASSWORD }}
+          TACHIKOMA_FLEET_SALT: ${{ secrets.TACHIKOMA_FLEET_SALT }}
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p "$OUT/journals"
+          python run.py --fleet-dry-run --registry "$G2_REGISTRY" --fleet-journal-dir "$OUT/journals" \
+            --identity-salt-env TACHIKOMA_FLEET_SALT | tee "$OUT/enrol.md"
+
+      - name: Canary (G2)
+        if: inputs.step == 'canary'
+        env:
+          PSS_ACCOUNT_5_EMAIL: ${{ secrets.PSS_ACCOUNT_5_EMAIL }}
+          PSS_ACCOUNT_5_PASSWORD: ${{ secrets.PSS_ACCOUNT_5_PASSWORD }}
+          TACHIKOMA_FLEET_SALT: ${{ secrets.TACHIKOMA_FLEET_SALT }}
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p "$OUT/journals"
+          python run.py --fleet-dry-run --registry "$G2_REGISTRY" --fleet-journal-dir "$OUT/journals" \
+            --identity-salt-env TACHIKOMA_FLEET_SALT
+          python run.py --fleet-execute --registry "$G2_REGISTRY" --authorization "$G2_AUTHORIZATION" \
+            --mode canary --identity-salt-env TACHIKOMA_FLEET_SALT --fleet-journal-dir "$OUT/journals"
+
+      - name: Upload sanitized output
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: live-${{ inputs.step }}-${{ github.run_id }}
+          path: ${{ env.OUT }}
+          retention-days: 7
+          if-no-files-found: ignore

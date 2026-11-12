@@ -48,14 +48,14 @@ A spec that needs no live evidence goes from stage 6 straight to `Done`.
 
 The roadmap cannot be completed without these decisions. Each is asked once, recorded in the spec that needs it, and unblocks a milestone. Nothing in a gate is assumed.
 
-| Gate | What the owner provides | Unblocks |
-| --- | --- | --- |
-| **G0** | Approve SPEC-01 and SPEC-02 (no live access) | M0 |
-| **G1** | Read-only live access for one owned test account, and sanitized captures (no tokens, ids or e-mails) of the responses SPEC-03 lists | M1 |
-| **G2** | Live execution on one named test account; the manual routine; trial windows; removing the account from the legacy daily run; the stop thresholds | M2 |
-| **G3** | Live PvP on the trial account; the two strategies; whether a strategy is applied by the bot or by hand | M3 (PvP) |
-| **G4** | Sanitized current captures of `SellItem3` and `Purchase4`; live trades on the test account with a value cap | M3 (market) |
-| **G5** | A second owned test account; operator-minute logging; live fleet runs | M4 |
+| Gate | What the owner provides | Unblocks | Status |
+| --- | --- | --- | --- |
+| **G0** | Approve SPEC-01 and SPEC-02 (no live access) | M0 | Approved 2026-11-11 |
+| **G1** | Read-only live access for one owned test account, and sanitized captures (no tokens, ids or e-mails) of the responses SPEC-03 lists | M1 | Approved 2026-11-12 for `pss1`–`pss5` (read-only) |
+| **G2** | Live execution on one named test account; the manual routine; trial windows; removing the account from the legacy daily run; the stop thresholds | M2 | Approved 2026-11-12 for `pss5`; see [the runbook](../experiments/live/RUNBOOK.md) |
+| **G3** | Live PvP on the trial account; the two strategies; whether a strategy is applied by the bot or by hand | M3 (PvP) | Not given |
+| **G4** | Sanitized current captures of `SellItem3` and `Purchase4`; live trades on the test account with a value cap | M3 (market) | Not given |
+| **G5** | A second owned test account; operator-minute logging; live fleet runs | M4 | Not given |
 
 ## Milestones
 
