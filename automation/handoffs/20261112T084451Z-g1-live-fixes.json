@@ -1,0 +1,46 @@
+{
+  "slice_id": "g1-live-fixes",
+  "status": "done",
+  "summary": "The first G1 capture run found two defects:  - GetShipByUserId on a new ship can return an empty <Rooms/> or   <Researches/>, which parses to None; the client then crashed with   \"'NoneType' object has no attribute 'get'\" and the ship, rooms and   research reads failed for pss2-pss5. Empty or missing containers now   give an empty list; present records keep their shape. - The capture withheld GetLatestVersion3 as unscannable, so the game   version field is still unknown. The capture now writes   server_settings_fields.json: the field names, with version-shaped values   kept and every other value replaced by its length, scanned before writing.  Regression tests cover both. Found by the owner-dispatched G1 capture run; fixed and re-validated by the parent agent.",
+  "files_touched": [
+    "sdk/client.py",
+    "sdk/state/capture.py",
+    "tests/test_capture_reads.py",
+    "tests/test_runtime_guards.py"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "Fix defects the first G1 capture run found",
+      "before": "Ship reads crash on empty containers; game version field unknown",
+      "after": "Empty containers read as no records; capture summarises settings field names",
+      "proof": [
+        "make syntax-check, make test, scripts/ci.py lint and git diff --check pass on current main",
+        "regression tests fail on the old client (errors=2)"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "Live behaviour confirmed only after the owner re-dispatches capture and baseline."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-12T08:45:25Z"
+}

@@ -186,6 +186,39 @@ class TestRoomDesignShapeGuards(unittest.TestCase):
         self.client.listUpgradingRooms()
 
 
+class TestShipReadEmptyContainers(unittest.TestCase):
+    """Regression: a new ship's empty <Researches/> or <Rooms/> crashed getShipByUserId (found in the G1 capture run)."""
+
+    def setUp(self):
+        self.device = MagicMock(spec=Device)  # type: ignore
+        self.device.languageKey = "en"
+        self.client = Client(device=self.device)
+        self.client.accessToken = "token"
+        self.client.user = MagicMock(id="1")
+
+    def read(self, ship_xml):
+        body = ("<ShipService><GetShipByUserId>" + ship_xml + "</GetShipByUserId></ShipService>").encode()
+        response = MagicMock(content=body, text=body.decode())
+        with patch.object(self.client, "request", return_value=response):
+            return self.client.getShipByUserId()
+
+    def test_empty_research_and_rooms_are_empty_lists(self):
+        self.assertTrue(self.read('<Ship ShipId="9"><Rooms/><Researches/></Ship>'))
+        self.assertEqual(self.client.rooms, [])
+        self.assertEqual(self.client.researches, [])
+
+    def test_missing_containers_are_empty_lists(self):
+        self.assertTrue(self.read('<Ship ShipId="9"></Ship>'))
+        self.assertEqual((self.client.rooms, self.client.researches), ([], []))
+
+    def test_present_records_keep_their_shape(self):
+        self.assertTrue(self.read('<Ship ShipId="9"><Rooms><Room RoomId="1"/></Rooms>'
+                                  '<Researches><Research ResearchDesignId="5"/><Research ResearchDesignId="6"/>'
+                                  '</Researches></Ship>'))
+        self.assertEqual(self.client.rooms, {"@RoomId": "1"})  # a single room stays a dict, as before
+        self.assertEqual([r["@ResearchDesignId"] for r in self.client.researches], ["5", "6"])
+
+
 class TestTargetedRoomUpgrade(unittest.TestCase):
     """Regression: upgradeRooms delegates each UpgradeRoom2 request to upgradeRoom unchanged."""
 
