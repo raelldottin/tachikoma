@@ -2293,13 +2293,14 @@
       "domain": "fleet",
       "allowed_paths": [
         "docs/specs/SPEC-13-room-placement.md",
-        "docs/specs/README.md"
+        "docs/specs/README.md",
+        "tests/test_spec_traceability.py"
       ],
       "depends_on": [
         "g2-canary-no-collectors"
       ],
-      "max_files_changed": 2,
-      "notes": "Owner request 2026-11-12: 'automate placing the room on the ship', then 'draft the spec'. Draft only (Status: Draft): requirements, acceptance criteria, slices, owner decisions and a new owner gate for sanitized captures of the room-purchase request and one live placement. No code. baseline-v1 must stay unchanged; placement is an explicit, authorized one-off action. Add the spec to docs/specs/README.md (table, gates, where it stands).",
+      "max_files_changed": 3,
+      "notes": "Owner request 2026-11-12: 'automate placing the room on the ship', then 'draft the spec'. Draft only (Status: Draft): requirements, acceptance criteria, slices, owner decisions and a new owner gate for sanitized captures of the room-purchase request and one live placement. No code. baseline-v1 must stay unchanged; placement is an explicit, authorized one-off action. Add the spec to docs/specs/README.md (table, gates, where it stands). tests/test_spec_traceability.py hard-codes the spec ids S01-S12 (test_real_specs_parse) and must list S13.",
       "required_validations": [
         "make syntax-check",
         "make test",
