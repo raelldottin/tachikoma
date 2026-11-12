@@ -1,0 +1,47 @@
+{
+  "slice_id": "g2-canary-evidence",
+  "status": "done",
+  "summary": "The owner ran the canary on pss5 under the G2 authorization (2026-11-12). After #214, runs 43261519416 and 43262412245 each executed exactly one collect_all_resources, spent nothing, and recorded the reconciliation (not-observed: minerals and gas unchanged), the run record with the server version, the alerts and the dashboard. The evidence is summarised without raw ids; SPEC-11's alert and dashboard evidence is noted pending the owner's confirmation.",
+  "files_touched": [
+    "docs/experiments/live/RUNBOOK.md",
+    "docs/experiments/live/g2-evidence.md",
+    "docs/specs/README.md",
+    "docs/specs/SPEC-05-live-execution-gate.md",
+    "docs/specs/SPEC-11-alert-delivery.md"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "Record the G2 canary evidence and mark SPEC-05 done",
+      "before": "SPEC-05 Verified offline",
+      "after": "SPEC-05 Done with G2 canary evidence",
+      "proof": [
+        "make syntax-check, make test, scripts/spec_trace.py and git diff --check pass",
+        "run ids and outcomes read from the downloaded artifacts"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "No verified effect yet: both collections reconciled not-observed."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-12T16:50:38Z"
+}
