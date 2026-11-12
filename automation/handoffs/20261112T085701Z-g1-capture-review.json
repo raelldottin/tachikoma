@@ -1,0 +1,46 @@
+{
+  "slice_id": "g1-capture-review",
+  "status": "done",
+  "summary": "Reviewing the second G1 capture run (every file scanned clean) found values the scan cannot recognise that could link back to an account: ship ids (own and opponents', in battles too), alliance ids, battle ids, item, room, character and other per-account instance ids, and crew names players chose.  - Any field name ending in Id or Ids that is not a user id or a game-data id   (DesignId, SpriteId, TypeId, RaceId, BackgroundId, MissionEventId,   StarSystemId) now gets a stable placeholder per kind (SHIPID-A,   BATTLEID-A...); role-prefixed forms such as AttackingShipId or OwnerShipId   share the kind's labels so cross-references line up, and 0 stays 0. - CharacterName becomes CREW-A... - The server settings summary was withheld because its slash-joined paths   match the long base64 rule. Paths are now dot-joined, and a single name   the scan would flag is shown only by its length.  Regression tests fail on the old module. Re-sanitizing the 30 downloaded captures offline leaves no instance id or crew name and every file clean. Found by reviewing the owner-dispatched G1 capture run; fixed and re-validated by the parent agent.",
+  "files_touched": [
+    "sdk/state/capture.py",
+    "tests/fixtures/live_sanitized/README.md",
+    "tests/test_capture_reads.py"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "Replace instance ids and crew names in captures; make the settings summary scannable",
+      "before": "Captures keep account-linkable instance ids and crew names; settings summary withheld",
+      "after": "Instance ids and crew names become placeholders; settings summary scans clean",
+      "proof": [
+        "make syntax-check, make test, scripts/ci.py lint and git diff --check pass on current main",
+        "regression tests fail on the old module (failures=7, errors=1)",
+        "offline re-sanitize of the 30 downloaded captures: all clean, no instance id or crew name left"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "Settings summary confirmed live only after the owner re-dispatches capture."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-12T08:57:18Z"
+}
