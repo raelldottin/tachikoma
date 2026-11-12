@@ -100,6 +100,22 @@ python run.py --baseline --registry fleet.json --output baselines/ --concurrent 
 - **Secrets.** The dry run's scrubbing applies to the log and to every printed reason, and each file passes the baseline secret scan before it is written.
 - A missing or invalid registry, an unset or too short salt, or an output directory that cannot be created prints an error and exits with code 2. Otherwise the exit code is 0 when every enabled account was written, and 1 when any was not. `--concurrent N` works as in the dry run. `--baseline` refuses the other fleet, report, single-account login, battle, progression and SMTP flags, and `--fleet-journal-dir` (it writes no journal).
 
+### Read captures
+
+`--capture-reads` produces the sanitized captures [SPEC-03](docs/specs/SPEC-03-verified-profile-reads.md) needs (S03-R1) in one command, without anyone editing a response by hand. It logs each enabled registry account in as `--fleet-dry-run` does, then makes only read-only calls, sanitizes and scans every response, writes the clean ones and a manifest, and exits. Run it only on an owned test account.
+
+```bash
+python run.py --capture-reads --registry fleet.json --output captures/
+python run.py --capture-reads --registry fleet.json --output captures/ --identity-salt-env TACHIKOMA_FLEET_SALT
+```
+
+- **Reads.** The profile (the `User` record login holds: trophies, starbux) and the `GetLatestVersion3` server settings come from login itself; then `getShipByUserId`, `listAllCharactersOfUser`, `listItemsOfAShip`, `findUserRanking` and `listPvPBattles2` (25 battles). All are `read-only` in the [capability inventory](docs/baseline/capability-inventory.md). No other call is made, and an expired session is reported as an error instead of logging in again.
+- **Sanitizing.** Before anything is written, every value in a token, secret, password, checksum, e-mail or device key field becomes `***REDACTED***`; every `Id`, `AccountId` and `*UserId` value becomes `USER-A`, `USER-B`...; player, ship and alliance names become `PLAYER-A`, `SHIP-A`, `ALLIANCE-A`...; and any other value that `sdk/redaction.py`, the account's credential values or the S03-R2 scan would flag becomes `***REDACTED***`. Placeholders are stable per account (the account itself is `USER-A` and `PLAYER-A` in every file), so cross-references still line up. The sanitized text then gets the S03-R2 scan (`sdk/state/capture.py`, the same rules as `tests/test_profile_reads.py`); a response that does not scan clean, or is not well-formed XML, is withheld and only the rule and line are reported, never the value.
+- **Files.** `--output DIR` must be new or empty and outside `tests/fixtures/`. Each clean response goes to `<alias>/<endpoint>.xml` (`.json` when it is not one XML document), and `manifest.json` records per alias and endpoint the status, the UTC time, the server's game version (as in `--baseline`), the sanitization steps applied, the scan result and a ready row for the [capture record](tests/fixtures/live_sanitized/README.md#record-of-captures). Files are never overwritten.
+- **Review.** The command never writes into `tests/fixtures/`. The owner reviews each file (names the scan cannot recognise, and ids such as `ShipId` or `BattleId`), copies it into `tests/fixtures/live_sanitized/`, adds its row and runs the scan there.
+- **Accounts never mix.** Each account has its own placeholders. With `--identity-salt-env NAME`, an account whose game identity differs from its `expected_game_identity` or was already observed for another alias is `refused` before any read.
+- A missing or invalid registry, an unset or too short salt, or an output directory that is not empty, is inside `tests/fixtures/` or cannot be created prints an error and exits with code 2 before any login. Otherwise the exit code is 0 when every endpoint of every enabled account was written, and 1 when any was not. `--capture-reads` refuses every other fleet, baseline, report, single-account login, battle, progression and SMTP flag, and `--concurrent`.
+
 ### Fleet execute
 
 `--fleet-execute` is the only command that changes an account ([SPEC-05](docs/specs/SPEC-05-live-execution-gate.md)). It runs the plan of every enabled registry account under an owner-written authorization file (format in [docs/baseline/fleet-accounts.md](docs/baseline/fleet-accounts.md#live-execution-authorization)), then prints the reconciliation and writes a run record. Never point it at an account the authorization does not name.

@@ -990,7 +990,8 @@
         "tests/test_offline_reports.py",
         "tests/test_fleet_dry_run.py",
         "tests/test_fleet_execute.py",
-        "tests/test_baseline_command.py"
+        "tests/test_baseline_command.py",
+        "tests/test_capture_reads.py"
       ]
     },
     {
@@ -1009,7 +1010,8 @@
       "evidence": "mocked-test",
       "tests": [
         "tests/test_dashboard_report.py",
-        "tests/test_baseline_command.py"
+        "tests/test_baseline_command.py",
+        "tests/test_capture_reads.py"
       ]
     },
     {
@@ -1050,7 +1052,8 @@
       "tests": [
         "tests/test_fleet_dry_run.py",
         "tests/test_fleet_execute.py",
-        "tests/test_baseline_command.py"
+        "tests/test_baseline_command.py",
+        "tests/test_capture_reads.py"
       ]
     },
     {
@@ -1069,6 +1072,15 @@
       "evidence": "mocked-test",
       "tests": [
         "tests/test_baseline_command.py"
+      ]
+    },
+    {
+      "flag": "--capture-reads",
+      "pillar": "A",
+      "kind": "read-only",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_capture_reads.py"
       ]
     },
     {
