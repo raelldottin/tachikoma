@@ -1,0 +1,48 @@
+{
+  "slice_id": "b0-test-repo-root-a",
+  "status": "done",
+  "summary": "Path(__file__).resolve() follows symlinks, so under Bazel's runfiles tree it escapes to the source checkout. Use Path(os.path.abspath(__file__)).parents[1] instead in test_action_catalog, test_capability_inventory, test_client_snapshot_provider, test_compat_ledger, test_progression_dry_run and test_fleet_dry_run. No assertion changes; the regression guard lands with b0-test-repo-root-b. Built by a B0 subagent in an isolated worktree; re-validated by the parent agent.",
+  "files_touched": [
+    "tests/test_action_catalog.py",
+    "tests/test_capability_inventory.py",
+    "tests/test_client_snapshot_provider.py",
+    "tests/test_compat_ledger.py",
+    "tests/test_fleet_dry_run.py",
+    "tests/test_progression_dry_run.py"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "make lint",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "Stop six test modules from resolving __file__ out of the runfiles tree",
+      "before": "Six test modules resolve __file__ through symlinks",
+      "after": "They use os.path.abspath, staying inside a runfiles tree",
+      "proof": [
+        "make syntax-check, make test, make lint, git diff --check pass in a scratch clone of main with the change"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "The AST guard against regressions lands with b0-test-repo-root-b."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-12T09:36:14Z"
+}

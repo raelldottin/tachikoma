@@ -2,6 +2,7 @@
 
 import importlib
 import json
+import os
 import re
 import socket
 import unittest
@@ -21,7 +22,7 @@ from sdk.compat import (
     validate_ledger,
 )
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(os.path.abspath(__file__)).parents[1]
 INVENTORY_PATH = REPO_ROOT / "docs" / "baseline" / "capability-inventory.json"
 DOC_PATH = REPO_ROOT / "docs" / "baseline" / "compatibility-ledger.md"
 # Documents whose text must already cite any public URL the ledger uses.
