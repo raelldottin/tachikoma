@@ -334,7 +334,7 @@ class CaptureCommandTests(unittest.TestCase):
             "Battles"]["Battle"]
         self.assertEqual(battle["@ReplayToken"], REDACTED)
         self.assertEqual((defense["@Note"], defense["@Blob"]), (REDACTED, REDACTED))
-        self.assertEqual((battle["@BattleId"], battle["@TrophyChange"], battle["@HullLevel"]), ("9001", "12", "10"))
+        self.assertEqual((battle["@BattleId"], battle["@TrophyChange"], battle["@HullLevel"]), ("BATTLEID-A", "12", "10"))
 
     # Verifies: S03-R1
     def test_placeholders_are_stable_and_consistent_across_files(self):
@@ -524,8 +524,10 @@ class SanitizerTests(unittest.TestCase):
                  "@Name": "PLAYER", "@UserName": "PLAYER", "@DefendingUserName": "PLAYER", "PlayerName": "PLAYER",
                  "@ShipName": "SHIP", "@AllianceName": "ALLIANCE", "@accessToken": "secret",
                  "@RefreshToken": "secret", "@DeviceKey": "secret", "@Checksum": "secret", "Password": "secret",
-                 "@client_secret": "secret", "@Email": "email", "@ShipDesignId": None, "@BattleId": None,
-                 "@Trophy": None, "@RoomName": None}
+                 "@client_secret": "secret", "@Email": "email", "@ShipDesignId": None, "@BattleId": "instance",
+                 "@Trophy": None, "@RoomName": None, "@CharacterName": "CREW", "@IsPaid": None,
+                 "@IconSpriteId": None, "@ActionTypeId": None, "@StarSystemId": None,
+                 "@UserStarSystemId": "instance", "@UnlockedShipDesignIds": None, "@ItemIds": "instance"}
         for name, category in cases.items():
             with self.subTest(name=name):
                 self.assertEqual(field_category(name), category)
@@ -657,8 +659,6 @@ class RealClientCaptureTests(unittest.TestCase):
         self.assertFalse((directory / ".device").exists())
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class SettingsFieldsTests(unittest.TestCase):
@@ -687,3 +687,77 @@ class SettingsFieldsTests(unittest.TestCase):
         from sdk.state.capture import settings_fields
         result = settings_fields("pss1", None, None, lambda: datetime(2026, 11, 12, tzinfo=timezone.utc))
         self.assertEqual(result.status, "no data")
+
+
+class InstanceIdTests(unittest.TestCase):
+    """Ids that belong to one account become placeholders; game-data ids stay (second G1 capture review)."""
+
+    def sanitize(self, xml):
+        from sdk.state.capture import Placeholders, sanitize_capture
+        return sanitize_capture(xml, Placeholders(), path="t.xml")
+
+    # Verifies: S03-R1
+    def test_instance_kinds(self):
+        from sdk.state.capture import instance_kind
+        cases = {"@ShipId": "SHIPID", "@AttackingShipId": "SHIPID", "@OwnerShipId": "SHIPID",
+                 "@DefendingAllianceId": "ALLIANCEID", "@BattleId": "BATTLEID", "@ItemIds": "ITEMID",
+                 "@CharacterActionId": "CHARACTERACTIONID", "@RoomActionId": "ROOMACTIONID",
+                 "@UserStarSystemId": "USERSTARSYSTEMID", "@UserSeasonId": "USERSEASONID",
+                 "@ShipDesignId": None, "@AttackingAllianceSpriteId": None, "@ConditionTypeId": None,
+                 "@OriginalRaceId": None, "@BackgroundId": None, "@FromStarSystemId": None,
+                 "@ExploredStarSystemIds": None, "@CompletedMissionEventIds": None, "@Id": None,
+                 "@AttackingUserId": None, "@IsPaid": None, "@Trophy": None}
+        for name, kind in cases.items():
+            with self.subTest(name=name):
+                self.assertEqual(instance_kind(name), kind)
+
+    # Verifies: S03-R1, S03-R2
+    def test_ship_battle_and_crew_values_are_replaced_and_cross_references_line_up(self):
+        capture = self.sanitize(
+            '<R><Ship ShipId="2708491" ShipDesignId="149" StarSystemId="11"/>'
+            '<Character CharacterId="16681254" CharacterName="Hulk" OwnerShipId="2708491" RoomId="0" '
+            'ItemIds="231455761,0" CharacterDesignId="20"/>'
+            '<Battle BattleId="311497" AttackingShipId="2708491" DefendingShipId="9069446" '
+            'AttackingAllianceId="12008" DefendingAllianceId="0" BackgroundId="13"/></R>')
+        text = capture.text
+        for value in ("2708491", "9069446", "16681254", "Hulk", "231455761", "311497", "12008"):
+            self.assertNotIn(value, text)
+        self.assertIn('ShipId="SHIPID-A"', text)
+        self.assertIn('OwnerShipId="SHIPID-A"', text)
+        self.assertIn('AttackingShipId="SHIPID-A"', text)
+        self.assertIn('DefendingShipId="SHIPID-B"', text)
+        self.assertIn('CharacterName="CREW-A"', text)
+        self.assertIn('ItemIds="ITEMID-A,0"', text)
+        self.assertIn('BattleId="BATTLEID-A"', text)
+        self.assertIn('AttackingAllianceId="ALLIANCEID-A"', text)
+        self.assertIn('DefendingAllianceId="0"', text)
+        self.assertIn('RoomId="0"', text)
+        for kept in ('ShipDesignId="149"', 'StarSystemId="11"', 'CharacterDesignId="20"', 'BackgroundId="13"'):
+            self.assertIn(kept, text)
+        self.assertTrue(any(step.startswith("7: instance ids") for step in capture.steps), capture.steps)
+        self.assertTrue(capture.clean)
+
+
+class SettingsSummaryPathTests(unittest.TestCase):
+    """The settings summary of the second G1 capture was withheld: slash-joined paths looked like base64."""
+
+    # Verifies: S03-R1, S03-R2
+    def test_long_paths_and_names_do_not_trip_the_scan(self):
+        from datetime import datetime, timezone
+        from sdk.state.capture import settings_fields
+        long_name = "VeryLongSettingNameThatLooksLikeBase64ToTheScan"
+        settings = {"SettingService": {"GetLatestVersion": {"Setting": {
+            "@LatestVersion": "0.999.60", "@MaintenanceMessage": "x"},
+            "SettingsCollectionForExtendedClientVersions": {"@MinimumClientVersion": "0.999.55",
+                                                            "@" + long_name: "1"}}}}
+        result = settings_fields("pss1", settings, None, lambda: datetime(2026, 11, 12, tzinfo=timezone.utc))
+        self.assertEqual((result.status, result.scan), ("captured", "clean"), result.reason)
+        self.assertIn('"SettingService.GetLatestVersion.Setting"', result.text)
+        self.assertIn('"LatestVersion": "0.999.60"', result.text)
+        self.assertIn('"MinimumClientVersion": "0.999.55"', result.text)
+        self.assertIn(f'"<name of {len(long_name)} characters>"', result.text)
+        self.assertNotIn(long_name, result.text)
+
+
+if __name__ == "__main__":
+    unittest.main()

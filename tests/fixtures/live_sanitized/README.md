@@ -45,10 +45,14 @@ Add `--identity-salt-env NAME` to check the account's `expected_game_identity` b
 - It logs in, then calls only read-only methods: the profile and `GetLatestVersion3` settings that
   login already holds, `getShipByUserId`, `listAllCharactersOfUser`, `listItemsOfAShip`,
   `findUserRanking` and `listPvPBattles2` (25 battles). It never logs in again.
-- Before writing, it applies steps 2 to 6 below: secret fields become `***REDACTED***`, user ids
-  `USER-A`, `USER-B`... (the test account is `USER-A`), player, ship and alliance names `PLAYER-A`,
-  `SHIP-A`, `ALLIANCE-A`..., and any other value the scan or `sdk/redaction.py` would flag
-  `***REDACTED***`. Placeholders are the same across all of one account's files.
+- Before writing, it applies steps 2 to 7 below: secret fields become `***REDACTED***`, user ids
+  `USER-A`, `USER-B`... (the test account is `USER-A`), player, ship, alliance and crew names
+  `PLAYER-A`, `SHIP-A`, `ALLIANCE-A`, `CREW-A`..., and any other value the scan or
+  `sdk/redaction.py` would flag `***REDACTED***`. Instance ids that belong to one account
+  (`ShipId`, `AttackingShipId`, `BattleId`, `CharacterId`, `ItemId`, `ItemIds`, `RoomId`,
+  `AllianceId`...) become `SHIPID-A`, `BATTLEID-A`... per kind; `0` stays `0`. Ids that name game
+  data (`...DesignId`, `...SpriteId`, `...TypeId`, `...RaceId`, `BackgroundId`, `MissionEventId`,
+  `StarSystemId`) stay. Placeholders are the same across all of one account's files.
 - It then runs the scan this directory is held to. A response that does not pass is not written;
   the output names the rule and line, never the value.
 - `--output` must be a new or empty directory outside `tests/fixtures/`. It gets
@@ -58,9 +62,9 @@ Add `--identity-salt-env NAME` to check the account's `expected_game_identity` b
 
 Then review before anything enters this directory:
 
-1. Read every file. Look for what the scan cannot recognise: crew or ship names a player chose,
-   message text, and ids such as `ShipId` or `BattleId` that could link back to the account
-   (replace them as in step 7 below and say so in the row).
+1. Read every file. Look for what the scan cannot recognise: names a player chose that the command
+   did not replace, message text, and any id the instance-id rule above missed (replace them as in
+   step 7 below and say so in the row).
 2. Copy the reviewed files here (for example `alpha/list_pvp_battles2.xml` as
    `list_pvp_battles2.xml`), paste their rows into the table, fix the file names in them, and put
    your name under "Reviewed by".
