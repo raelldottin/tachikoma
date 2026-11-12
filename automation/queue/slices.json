@@ -1890,7 +1890,7 @@
       ],
       "max_files_changed": 5,
       "notes": "Reconciled 2026-11-12 after SPEC-02 (#165): run_tests already runs in a TemporaryDirectory and tests/__init__.py already refuses a repo-root run while ./.device exists (keep both; do not duplicate the sentinel test SPEC-02 added). What is left: ROOT from os.path.abspath, require_tests, --verbose, the PYTHONPATH child fix and their regression tests. scripts/ci.py: ROOT = Path(os.path.abspath(__file__)).parent.parent. run_tests(names, require_tests=False, verbosity=1) changes into a fresh tempfile.TemporaryDirectory(ignore_cleanup_errors=True) before loading tests (unless the CWD is already $TEST_TMPDIR) and restores the CWD in a finally block; with require_tests it fails when 0 tests ran. `ci.py test --verbose` sets verbosity 2. Do not touch release_identity, release_includes, build_release, VERSION_RE or the RELEASE_* constants. tests/test_ci.py:93 passes PYTHONPATH=ci.ROOT (joined with any existing value by os.pathsep) to its child; tests/test_ci.py:107 uses os.path.abspath. tests/__init__.py raises a clear error when the CWD is the repo root and ./.device exists (protects direct `python -m unittest tests.x` runs). Regression tests, portable (no symlinks): ROOT equals the abspath-derived root; require_tests fails on an empty suite and the default does not; --verbose prints test ids; a child with PYTHONSAFEPATH=1 still imports scripts.ci; `ci.py test --names tests.test_battle_flow` (it constructs Device()) started in a directory holding a sentinel .device leaves that file byte-identical with the same mtime. The owner dispatches postmerge-ci.yml on the branch (Windows and Python 3.11). Plan: docs/BAZEL_MIGRATION_ROADMAP.md.",
-      "entry_condition": "Owner dispatches postmerge-ci.yml on preview/b0-ci-root-and-runner (commit 9616e71, already rebased on main and V-REL-checked) and it is green on Windows and Python 3.11; then a chore(queue) PR sets status back to queued."
+      "entry_condition": "Owner dispatches postmerge-ci.yml on preview/b0-stack (tip 93a3d81: b0-ci-root-and-runner d6ce2f3, b0-test-repo-root-b d550a81 and b0-strict-skip-mode 93a3d81 stacked on main 27c0331; V-REL already passed for the ci-root change) and it is green on Windows and Python 3.11; then a chore(queue) PR sets these three back to queued."
     },
     {
       "slice_id": "b0-bazel-ignore-hygiene",
@@ -1944,7 +1944,7 @@
     {
       "slice_id": "b0-test-repo-root-b",
       "title": "Fix the last resolve() escapes in tests and add the AST guard",
-      "status": "queued",
+      "status": "blocked",
       "priority": 351,
       "domain": "tests",
       "allowed_paths": [
@@ -1964,12 +1964,13 @@
         "b0-test-repo-root-c"
       ],
       "max_files_changed": 5,
-      "notes": "Same fix at tests/test_pvp_safety.py:14 and tests/test_tui.py:11; tests/test_pvp_safety.py:160 joins PYTHONPATH with os.pathsep. Add to TestIsolationTests in tests/test_ci.py an AST guard (ast.Call nodes only, so the string literal at test_ci.py:395 passes) that forbids Path(__file__).resolve() and os.path.realpath(__file__) in tests/**/*.py and in an explicit file list that starts as [scripts/ci.py]; a listed file that is missing fails the guard. Record sdk/simulation/game.py:43 in the test as the one known runtime exception. The owner dispatches postmerge-ci.yml on the branch. Plan: docs/BAZEL_MIGRATION_ROADMAP.md."
+      "notes": "Same fix at tests/test_pvp_safety.py:14 and tests/test_tui.py:11; tests/test_pvp_safety.py:160 joins PYTHONPATH with os.pathsep. Add to TestIsolationTests in tests/test_ci.py an AST guard (ast.Call nodes only, so the string literal at test_ci.py:395 passes) that forbids Path(__file__).resolve() and os.path.realpath(__file__) in tests/**/*.py and in an explicit file list that starts as [scripts/ci.py]; a listed file that is missing fails the guard. Record sdk/simulation/game.py:43 in the test as the one known runtime exception. The owner dispatches postmerge-ci.yml on the branch. Plan: docs/BAZEL_MIGRATION_ROADMAP.md.",
+      "entry_condition": "Owner dispatches postmerge-ci.yml on preview/b0-stack (tip 93a3d81: b0-ci-root-and-runner d6ce2f3, b0-test-repo-root-b d550a81 and b0-strict-skip-mode 93a3d81 stacked on main 27c0331; V-REL already passed for the ci-root change) and it is green on Windows and Python 3.11; then a chore(queue) PR sets these three back to queued."
     },
     {
       "slice_id": "b0-strict-skip-mode",
       "title": "Turn dependency skips into failures under TACHIKOMA_STRICT_DEPS=1",
-      "status": "queued",
+      "status": "blocked",
       "priority": 352,
       "domain": "tests",
       "allowed_paths": [
@@ -1990,7 +1991,8 @@
         "b0-test-repo-root-b"
       ],
       "max_files_changed": 6,
-      "notes": "With TACHIKOMA_STRICT_DEPS=1 these fail instead of skipping: missing yaml (test_ci.py:159), missing git binary (test_ci.py:277 and 387), a missing pvp shim (test_pvp_safety.py:36), and missing make or git in tests/test_build_hygiene.py. test_ci.py:566 (RepositoryReleaseSelectionTests) stays a skip when only .git is missing. Unset, behaviour is unchanged. tests/test_strict_mode.py simulates each case with patch. The owner dispatches postmerge-ci.yml on the branch. Plan: docs/BAZEL_MIGRATION_ROADMAP.md."
+      "notes": "With TACHIKOMA_STRICT_DEPS=1 these fail instead of skipping: missing yaml (test_ci.py:159), missing git binary (test_ci.py:277 and 387), a missing pvp shim (test_pvp_safety.py:36), and missing make or git in tests/test_build_hygiene.py. test_ci.py:566 (RepositoryReleaseSelectionTests) stays a skip when only .git is missing. Unset, behaviour is unchanged. tests/test_strict_mode.py simulates each case with patch. The owner dispatches postmerge-ci.yml on the branch. Plan: docs/BAZEL_MIGRATION_ROADMAP.md.",
+      "entry_condition": "Owner dispatches postmerge-ci.yml on preview/b0-stack (tip 93a3d81: b0-ci-root-and-runner d6ce2f3, b0-test-repo-root-b d550a81 and b0-strict-skip-mode 93a3d81 stacked on main 27c0331; V-REL already passed for the ci-root change) and it is green on Windows and Python 3.11; then a chore(queue) PR sets these three back to queued."
     },
     {
       "slice_id": "b0-dependency-lock",
