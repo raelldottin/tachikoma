@@ -1,6 +1,6 @@
 # SPEC-04: Per-ship baselines and game-version provenance
 
-**Status:** Verified offline
+**Status:** Done, 2026-11-12. Evidence: [G1 baseline](../experiments/baselines/2026-11-12-g1.md).
 **Approval:** owner, 2026-11-11, through the session goal "complete the plan in docs/specs/". This approves building and testing the spec offline; owner questions take their safe defaults. It does not open any live gate (G1–G5), so live acceptance criteria stay pending.
 **Release:** R0 (the remaining part)
 **Owner gate:** G1
@@ -71,6 +71,8 @@ R0's exit needs a recorded starting state for every participating ship and the g
 **Offline verification:** every MUST with an offline acceptance criterion is covered by a test that cites it (checked by `scripts/spec_trace.py`). Implemented in #166, #175.
 
 **Live findings (G1, 2026-11-12):** the first baseline runs (owner-dispatched `live-trial.yml`, `baseline` step) recorded every ship section for `pss1`–`pss5` once #183 fixed new ships' empty rooms and research. `game_version` was `null` on all of them: the server settings field summary from the capture step showed that none of the expected version attributes exists live. `g1-game-version` reads `RecommendedVersion` and the `ServerSettingVersion` counter instead (S04-R3 still holds: both come from the server's latest-version setting). S04-AC4 waits for a baseline run with that fix; the profile section waits for the SPEC-03 parsers.
+
+**Live evidence (S04-AC4):** the owner-dispatched baseline run 43256802775 (2026-11-12), after #187 and #199, recorded a baseline of each test account, `pss1`–`pss5`, with game version `1.0+settings.3307714` and every section present: [G1 baseline summary](../experiments/baselines/2026-11-12-g1.md). Minerals and gas are `None` (not observed), as S04-R2 allows.
 
 ## Open questions and risks
 
