@@ -2071,6 +2071,27 @@
         "make test",
         "git diff --check"
       ]
+    },
+    {
+      "slice_id": "g2-enrol-pss5",
+      "title": "Record pss5's game identity fingerprint for the G2 canary",
+      "status": "queued",
+      "priority": 407,
+      "domain": "fleet",
+      "allowed_paths": [
+        "docs/experiments/live/registry-g2-pss5.json",
+        "docs/experiments/live/RUNBOOK.md"
+      ],
+      "depends_on": [
+        "spec03-ledger-evidence"
+      ],
+      "max_files_changed": 2,
+      "notes": "Implements S05-R8 (execution refuses a profile without expected_game_identity). The owner-dispatched enrol run 43247933379 (2026-11-12, dry run, nothing executed) printed pss5's salted gid1- fingerprint; add it as expected_game_identity in the G2 registry and note in the runbook that enrol is done and the canary is next. A salted fingerprint is not secret.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
     }
   ]
 }
