@@ -1716,6 +1716,28 @@
         "make test",
         "git diff --check"
       ]
+    },
+    {
+      "slice_id": "g1-capture-review",
+      "title": "Replace instance ids and crew names in captures; make the settings summary scannable",
+      "status": "queued",
+      "priority": 401,
+      "domain": "safety",
+      "allowed_paths": [
+        "sdk/state/capture.py",
+        "tests/test_capture_reads.py",
+        "tests/fixtures/live_sanitized/README.md"
+      ],
+      "depends_on": [
+        "g1-live-fixes"
+      ],
+      "max_files_changed": 3,
+      "notes": "Implements S03-R1, S03-R2. Review of the second G1 capture run (2026-11-12): every file scanned clean, but they keep values the scan cannot recognise that could link back to an account: ShipId (own and opponents, also AttackingShipId, DefendingShipId, OwnerShipId), AllianceIds, BattleId, CharacterId, ItemId(s), RoomId and other per-account instance ids, and player-chosen crew names (CharacterName). Replace them with stable letter placeholders per kind (0 stays 0), keeping design, sprite, type, race, background, mission-event and star-system ids. The server settings field summary was withheld because its slash-joined paths match the long base64 rule: join paths with dots and hide any single name the rule would flag. Regression tests fail on the old code.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
     }
   ]
 }
