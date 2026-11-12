@@ -1,0 +1,44 @@
+{
+  "slice_id": "spec07-trial-plan-draft",
+  "status": "done",
+  "summary": "An unapproved proposal: pss5, a 7-day baseline window from 2026-11-16, then four 7-day ABBA blocks (14 account-days per arm, enough for a 1.5 sd effect per sdk.experiments.study), daily snapshot and execute times, the operator-minute and intervention log formats, proposed stop thresholds from the alert rules, and the full-mode authorization the owner must write. The manual routine is left for the owner. The trial does not start until the owner approves it.",
+  "files_touched": [
+    "docs/experiments/r2-progression-trial.md",
+    "docs/specs/SPEC-07-progression-trial.md"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "Draft the R2 progression trial plan for the owner to approve",
+      "before": "No R2 trial plan",
+      "after": "Draft trial plan awaiting owner approval",
+      "proof": [
+        "make syntax-check, make test, scripts/spec_trace.py and git diff --check pass",
+        "sample sizes computed with sdk.experiments.per_arm_min_sample"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "Draft only; the trial does not start until the owner approves it."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-12T16:45:24Z"
+}
