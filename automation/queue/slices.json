@@ -2284,6 +2284,27 @@
         "make test",
         "git diff --check"
       ]
+    },
+    {
+      "slice_id": "spec13-room-placement-draft",
+      "title": "Draft SPEC-13: automated room placement",
+      "status": "queued",
+      "priority": 417,
+      "domain": "fleet",
+      "allowed_paths": [
+        "docs/specs/SPEC-13-room-placement.md",
+        "docs/specs/README.md"
+      ],
+      "depends_on": [
+        "g2-canary-no-collectors"
+      ],
+      "max_files_changed": 2,
+      "notes": "Owner request 2026-11-12: 'automate placing the room on the ship', then 'draft the spec'. Draft only (Status: Draft): requirements, acceptance criteria, slices, owner decisions and a new owner gate for sanitized captures of the room-purchase request and one live placement. No code. baseline-v1 must stay unchanged; placement is an explicit, authorized one-off action. Add the spec to docs/specs/README.md (table, gates, where it stands).",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
     }
   ]
 }
