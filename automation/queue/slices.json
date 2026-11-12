@@ -1738,6 +1738,31 @@
         "make test",
         "git diff --check"
       ]
+    },
+    {
+      "slice_id": "g1-game-version",
+      "title": "Read the game version from the server settings fields the live server returns",
+      "status": "queued",
+      "priority": 402,
+      "domain": "safety",
+      "allowed_paths": [
+        "sdk/fleet/factory.py",
+        "tests/test_baseline_command.py",
+        "docs/baseline/account-snapshot.md",
+        "README.template",
+        "README.md",
+        "docs/specs/SPEC-04-account-baselines.md"
+      ],
+      "depends_on": [
+        "g1-capture-review"
+      ],
+      "max_files_changed": 6,
+      "notes": "Implements S04-R3. The third G1 capture (2026-11-12) wrote the server settings field summary: none of @LatestVersion, @LatestClientVersion or @LatestVersionIOS exists, so every baseline recorded game_version null. The live setting has RecommendedVersion, MinimumClientVersion, MinimumVersion and CurrentAndroidVersion (all 1.0) and integer data-version counters such as ServerSettingVersion. Read RecommendedVersion after the existing attributes, and append the ServerSettingVersion counter (digits only) so observations on different game data differ: 1.0+settings.<n>. MinimumClientVersion and the declared ClientVersion stay unused. Regression tests fail on the old code.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
     }
   ]
 }
