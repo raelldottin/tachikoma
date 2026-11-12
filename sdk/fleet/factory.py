@@ -44,6 +44,13 @@ returns nothing, they stay empty and the reason is recorded in
 research designs come from ``listRoomDesigns2`` and
 ``listAllResearchDesigns2``, as in ``run.py --progression-dry-run``. Those
 calls run after ``listAllDesigns4``, so their payloads are the ones parsed.
+``listAllDesigns4`` also stores the item designs (``client.itemDesigns``); live
+ship items carry no type, so the snapshot provider tells minerals and gas apart
+by their designs' ``@ItemType`` (``item_resource_kinds``). Without item designs
+minerals and gas stay unobserved.
+
+Server game version. Every login records ``server_game_version`` for the
+account; ``game_versions()`` returns them for the run record.
 
 Dry-run plan stamps (SPEC-05, S05-R3). With ``dry_run_registry_stamp`` the
 factory gives each account a ``DryRunJournal``: it holds the account's dry-run
@@ -57,7 +64,8 @@ Execute gate (SPEC-05, S05-R1 and S05-R4 to S05-R6). ``ExecuteFleetOrchestrator`
 and ``ConcurrentExecuteFleetOrchestrator`` run the fleet orchestrators' own
 per-account steps under an ``ExecutionGate`` built from an owner-written
 ``Authorization``: the plan keeps only authorized actions (in ``canary`` mode
-only the first safe-to-retry one), budgets are the tighter of the registry's
+only the first safe-to-retry one, or else one ``collect_all_resources`` when the
+authorization allows it), budgets are the tighter of the registry's
 and the authorization's caps with starbux at 0, ``GatedActionRunner`` refuses
 an action outside the authorization or one whose cap would be exceeded, and
 the fleet halts when more than ``halt_share`` of its accounts stopped.
@@ -89,7 +97,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Optional, Sequence
 from urllib.parse import quote, quote_plus
 
-from sdk.actions import Idempotency, get_spec
+from sdk.actions import Idempotency, check_preconditions, get_spec
 from sdk.client import _extract_collection
 from sdk.device import Device
 from sdk.execution import ActionRunner, UncertainPriorAttemptError
@@ -108,10 +116,11 @@ from sdk.fleet.orchestrator import (
     spent_in_period,
 )
 from sdk.journal import GameplayEvent, GameplayJournal, new_attempt_id
-from sdk.policy import DesignData, Plan, PolicyConfig, ProgressionPolicy, Rejection, get_policy
+from sdk.policy import ActionRequest, DesignData, Plan, PolicyConfig, ProgressionPolicy, Rejection, get_policy
 from sdk.redaction import redact_secrets
 from sdk.scheduler import DailyScheduler, ScheduleReport, SchedulerConfig
 from sdk.state import AccountSnapshot, ClientSnapshotProvider
+from sdk.state.client_provider import item_resource_kinds
 from sdk.state.profile_reads import ProfileObservation, user_record
 from sdk.state.snapshot import SnapshotInputError, game_identity_fingerprint
 
@@ -407,6 +416,7 @@ class EnvironmentAccountFactory:
         self._lock = threading.Lock()
         self._notes: dict[str, list[str]] = {}
         self._dry_run_journals: dict[str, DryRunJournal] = {}
+        self._game_versions: dict[str, Optional[str]] = {}
 
     def journal_path(self, alias: str) -> Path:
         return self.journal_dir / f"{alias}{JOURNAL_SUFFIX}"
@@ -415,6 +425,11 @@ class EnvironmentAccountFactory:
         """Per alias, operator notes: the e-mail login form, and design data that could not be read."""
         with self._lock:
             return {alias: tuple(items) for alias, items in self._notes.items()}
+
+    def game_versions(self) -> dict[str, Optional[str]]:
+        """Per alias that logged in, ``server_game_version`` at login (``None`` when not observed)."""
+        with self._lock:
+            return dict(self._game_versions)
 
     def _note(self, alias: str, items: Iterable[str]) -> None:
         with self._lock:
@@ -449,18 +464,24 @@ class EnvironmentAccountFactory:
         """Log ``profile`` in; return its client, snapshot provider and (if read) design data.
 
         With ``profile_observed_at``, the provider's first snapshot may use the login ``User`` record
-        (``client.info``) as the profile, observed at that time (S03-R3).
+        (``client.info``) as the profile, observed at that time (S03-R3). With ``read_designs``, the
+        provider maps ship items to minerals and gas through the item designs read with them.
         """
         credentials = resolve_credentials(profile.credentials_secret, self.environ)
         if self.log_scrubber is not None:
             self.log_scrubber.add_secrets(credentials.values())
         if credentials.email:
             self._note(profile.alias, [EMAIL_FORM_NOTE])
-        design, notes = None, ()
+        design, notes, resource_kinds = None, (), None
         try:
             client = self._login(credentials)
+            with self._lock:
+                self._game_versions[profile.alias] = server_game_version(client)
             if read_designs:
                 design, notes = read_design_data(client)
+                # Live ship items carry no type, so minerals and gas are told apart by their item designs.
+                resource_kinds = item_resource_kinds(
+                    _extract_collection(getattr(client, "itemDesigns", None), "ItemDesign"))
         except LoginError:
             raise
         except Exception as error:  # never let a credential value reach the AccountRun reason
@@ -471,6 +492,8 @@ class EnvironmentAccountFactory:
         record = user_record(getattr(client, "info", None)) if profile_observed_at is not None else None
         if record is not None:
             options["profile_observation"] = ProfileObservation(record, profile_observed_at)
+        if resource_kinds is not None:
+            options["resource_item_designs"] = resource_kinds
         provider = ClientSnapshotProvider(client, profile.alias, source=self.source,
                                           identity_salt=self._identity_salt, **options)
         return client, provider, design
@@ -797,12 +820,26 @@ def _candidate(action_id: str, params: Mapping[str, Any]) -> str:
     return " ".join([action_id, *(str(value) for value in params.values())])
 
 
+# The canary's own request when the plan keeps no safe-to-retry one (baseline-v1 plans a collection only
+# after a room upgrade). It is safe to retry and costs nothing, so a canary still proves the execute path.
+CANARY_FALLBACK_ACTION = "collect_all_resources"
+CANARY_NOT_SAFE = "canary: not safe to retry"
+CANARY_NOT_FIRST = "canary: only the first safe-to-retry action runs"
+
+
+def _safe_to_retry(action_id: str) -> bool:
+    return get_spec(action_id).idempotency is Idempotency.SAFE_TO_RETRY
+
+
 class AuthorizedPolicy:
     """A progression policy whose plan keeps only what the gate allows.
 
     Requests the authorization does not allow, and any request with a planned
     starbux cost, move to ``rejected``. In canary mode only the first
-    remaining safe-to-retry request is kept. ``journal`` supplies the events
+    remaining safe-to-retry request is kept; when none remains and the policy
+    did not plan ``collect_all_resources`` itself, a single
+    ``collect_all_resources`` request is planned instead, if the gate allows it
+    for the account and its preconditions hold. ``journal`` supplies the events
     the battle cap is checked with.
     """
 
@@ -827,13 +864,37 @@ class AuthorizedPolicy:
             else:
                 kept.append(request)
         if self.gate.canary:
-            canary = next((request for request in kept
-                           if get_spec(request.action_id).idempotency is Idempotency.SAFE_TO_RETRY), None)
+            first = next((index for index, request in enumerate(kept) if _safe_to_retry(request.action_id)), None)
+            canary = kept[first] if first is not None else None
             rejected += [Rejection(_candidate(request.action_id, request.params),
-                                   "canary: only the first safe-to-retry action runs")
-                         for request in kept if request is not canary]
+                                   CANARY_NOT_FIRST if _safe_to_retry(request.action_id) else CANARY_NOT_SAFE)
+                         for index, request in enumerate(kept) if index != first]
+            # A collection the policy planned and the checks above rejected (for a starbux cost, say) is
+            # never planned again here.
+            if canary is None and all(request.action_id != CANARY_FALLBACK_ACTION for request in plan.requests):
+                canary = self._canary_fallback(snapshot, events, rejected)
             kept = [canary] if canary is not None else []
         return replace(plan, requests=tuple(kept), rejected=tuple(rejected))
+
+    def _canary_fallback(self, snapshot: AccountSnapshot, events: Optional[Callable[[], Iterable[GameplayEvent]]],
+                         rejected: list) -> Optional[ActionRequest]:
+        """The canary's ``collect_all_resources`` request when the plan kept no safe-to-retry one, or ``None``.
+
+        Nothing is planned when the gate refuses the action for this account. A
+        failed precondition (such as resources not observed) is a rejection, and so
+        are minerals and gas both unobserved: the collection could then never be
+        verified, so the canary would make a live call it cannot reconcile.
+        """
+        action_id = CANARY_FALLBACK_ACTION
+        if self.gate.refusal(snapshot.account_alias, action_id, events) is not None:
+            return None
+        failures = check_preconditions(get_spec(action_id), snapshot, {})
+        if not failures and snapshot.resources.minerals is None and snapshot.resources.gas is None:
+            failures = ["minerals and gas not observed; the collection could not be verified"]
+        if failures:
+            rejected.append(Rejection(_candidate(action_id, {}), "; ".join(failures)))
+            return None
+        return ActionRequest(action_id, {}, "canary: the plan kept no safe-to-retry action, so collect resources")
 
 
 class GatedActionRunner(ActionRunner):
@@ -1006,9 +1067,15 @@ class ConcurrentExecuteFleetOrchestrator(_ExecuteGateMixin, ConcurrentFleetOrche
 
 def canary_choice(actions: Sequence[str], gate: ExecutionGate, alias: str,
                   events: Optional[Callable[[], Iterable[GameplayEvent]]] = None) -> Optional[str]:
-    """The action a canary run would take from ``actions`` (plan order), or ``None``."""
+    """The action a canary run would take from ``actions`` (plan order), or ``None``.
+
+    As in ``AuthorizedPolicy``: the first authorized safe-to-retry action, else
+    ``collect_all_resources`` when the gate allows it (its preconditions are
+    checked only by the execute run, against a fresh snapshot).
+    """
     for action_id in actions:
-        if (get_spec(action_id).idempotency is Idempotency.SAFE_TO_RETRY
-                and gate.refusal(alias, action_id, events) is None):
+        if _safe_to_retry(action_id) and gate.refusal(alias, action_id, events) is None:
             return action_id
+    if gate.refusal(alias, CANARY_FALLBACK_ACTION, events) is None:
+        return CANARY_FALLBACK_ACTION
     return None

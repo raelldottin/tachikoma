@@ -33,6 +33,8 @@ from sdk.fleet.factory import (
     DRY_RUN_REGISTRY,
     DryRunJournal,
     ExecutionGate,
+    AuthorizedPolicy,
+    EnvironmentAccountFactory,
     ExecutionRefusedError,
     GatedActionRunner,
     _ExecuteGateMixin,
@@ -41,7 +43,7 @@ from sdk.fleet.factory import (
 )
 from sdk.fleet.orchestrator import FleetOrchestrator
 from sdk.journal import GameplayEvent, GameplayJournal, JournalError, read_events
-from sdk.policy import ActionRequest, Plan
+from sdk.policy import ActionRequest, DesignData, Plan, PolicyConfig, get_policy
 from sdk.state import build_snapshot
 from sdk.state.snapshot import game_identity_fingerprint
 from tests.synthetic_fixtures import SYNTHETIC_DEVICE_KEY_IOS, SYNTHETIC_DEVICE_KEY_MAC
@@ -181,6 +183,77 @@ class OverplanningPolicy:
         return Plan(self.name, snapshot.account_alias, snapshot.observed_at.isoformat(), self.requests, ())
 
 
+# Every attribute a live ListItemsOfAShip item carries (first G2 canary, 2026-11-12): none names a type.
+LIVE_ITEM_ATTRIBUTES = ("BonusEnhancementType", "BonusEnhancementValue", "Flags", "IsNew", "ItemDesignId", "ItemId",
+                        "LegendaryBonusEnhancementType", "LegendaryBonusEnhancementValue", "Quantity", "ShipId",
+                        "SkinKey")
+
+
+def live_item(design_id, quantity):
+    item = {f"@{name}": "0" for name in LIVE_ITEM_ATTRIBUTES}
+    item.update({"@ItemDesignId": design_id, "@Quantity": str(quantity)})
+    return item
+
+
+class LiveShapedItems:
+    """Ship items shaped as the live server sends them, and the item designs ``listAllDesigns4`` stores."""
+
+    def listItemsOfAShip(self):
+        self.calls.append("listItemsOfAShip")
+        self.itemsOfAShip = {"ItemService": {"ListItemsOfAShip": {"Items": {"Item": [
+            live_item("1", getattr(self, "minerals", 1000)), live_item("2", getattr(self, "gas", 1000)),
+            live_item("900", 3),
+        ]}}}}
+        return True
+
+    def listAllDesigns4(self):
+        loaded = super().listAllDesigns4()
+        if loaded:
+            self.itemDesigns = {"ItemDesign": [
+                {"@ItemDesignId": "1", "@ItemName": "Mineral", "@ItemType": "Mineral"},
+                {"@ItemDesignId": "2", "@ItemName": "Gas", "@ItemType": "Gas"},
+                {"@ItemDesignId": "900", "@ItemName": "Helmet", "@ItemType": "Equipment"},
+            ]}
+        return loaded
+
+
+class LiveExecClient(LiveShapedItems, ExecClient):
+    """``ExecClient`` with live-shaped ship items."""
+
+
+class LowMineralsDryClient(FakeClient):
+    """The dry-run fake with too few minerals for the room upgrade, so baseline-v1 plans no collection."""
+
+    def listItemsOfAShip(self):
+        self.calls.append("listItemsOfAShip")
+        self.itemsOfAShip = {"Items": {"Item": [
+            {"@ItemDesignId": "1", "@ItemType": "Mineral", "@Quantity": "100"},
+            {"@ItemDesignId": "2", "@ItemType": "Gas", "@Quantity": "1000"},
+        ]}}
+        return True
+
+
+class LowMineralsExecClient(ExecClient):
+    """``ExecClient`` with too few minerals for the room upgrade (300), as on the first live canary."""
+
+    def __init__(self, device=None, settings=None):
+        super().__init__(device, settings)
+        self.minerals = 100
+
+
+SERVER_VERSIONS = {}  # user id -> ServerSettingVersion the fake server reports at login
+
+
+class VersionedExecClient(ExecClient):
+    """``ExecClient`` whose login reads the server's latest-version setting, as ``Client.login`` does."""
+
+    def login(self, email=None, password=None):
+        ok = super().login(email, password)
+        self.latestVersion = {"SettingService": {"GetLatestSetting": {"Setting": {
+            "@RecommendedVersion": "1.0", "@ServerSettingVersion": SERVER_VERSIONS[self.user.id]}}}}
+        return ok
+
+
 class FleetExecuteTestCase(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -241,10 +314,10 @@ class FleetExecuteTestCase(unittest.TestCase):
         self.assertEqual(code, 0, err)
         return out
 
-    def execute(self, *extra, env=ENV):
+    def execute(self, *extra, env=ENV, client=ExecClient):
         return self.main("--fleet-execute", "--registry", str(self.registry), "--authorization",
                          str(self.authorization), "--fleet-journal-dir", str(self.journal_dir),
-                         "--identity-salt-env", SALT_ENV, *extra, env=env)
+                         "--identity-salt-env", SALT_ENV, *extra, env=env, client=client)
 
     def execute_function(self, **options):
         stdout, stderr = io.StringIO(), io.StringIO()
@@ -507,6 +580,112 @@ class CanaryTests(FleetExecuteTestCase):
         self.authorization.unlink()
         code, _, err = self.execute("--plan-only")
         self.assert_refused_before_login(code, err, "authorization not found")
+
+    # Verifies: S05-R4
+    def test_canary_collects_resources_when_the_plan_keeps_no_safe_to_retry_action(self):
+        # Regression (first G2 canary, 2026-11-12): baseline-v1 plans a collection only after a room
+        # upgrade, so with the upgrade unaffordable the canary kept nothing and rejected the daily reward
+        # with "only the first safe-to-retry action runs" although nothing ran.
+        self.dry_run()
+        code, out, err = self.execute(client=LowMineralsExecClient)
+        self.assertEqual(code, 0, err + out)
+        self.assertEqual(sorted(ExecClient.executed), [("1001", "collectAllResources"), ("1002", "collectAllResources")])
+        self.assertIn("| alpha | collect_all_resources | yes | verified |", out)
+        for entry in self.records()[0]["accounts"]:
+            if entry["alias"] == "charlie":
+                continue
+            rejected = {item["candidate"]: item["reason"] for item in entry["rejected"]}
+            self.assertEqual(rejected["collect_daily_reward"], "canary: not safe to retry")
+            self.assertNotIn("canary: only the first safe-to-retry action runs", rejected.values())
+            self.assertIn("needs 300 mineral", rejected["upgrade_room r1"])
+            self.assertEqual(entry["planned"], 1)
+
+    # Verifies: S05-R4, S05-R10
+    def test_plan_only_canary_names_the_collection_a_plan_without_one_gets(self):
+        code, out, err = self.main("--fleet-dry-run", "--registry", str(self.registry), "--fleet-journal-dir",
+                                   str(self.journal_dir), "--identity-salt-env", SALT_ENV, client=LowMineralsDryClient)
+        self.assertEqual(code, 0, err)
+        code, out, err = self.execute("--plan-only", "--mode", "canary")
+        self.assertEqual(code, 0, err)
+        self.assertIn("| collect_all_resources | add_research | 1000 | 1000 |", self.row(out, "alpha"))
+        self.write_authorization(actions=["collect_daily_reward"])
+        code, out, err = self.execute("--plan-only", "--mode", "canary")
+        self.assertEqual(code, 0, err)
+        self.assertIn("| nothing | add_research | 1000 | 1000 |", self.row(out, "alpha"))
+
+    # Verifies: S05-R4, S05-R6
+    def test_the_canary_fallback_is_only_planned_when_allowed_and_observed(self):
+        now = datetime.now(timezone.utc)
+        registry = load_registry(self.registry)
+
+        def plan(mode, *requests, actions=SAFE_ACTIONS, resources=None):
+            gate = ExecutionGate(authorization_from_dict(authorization_payload(actions=list(actions))), registry,
+                                 mode, lambda: now)
+            snapshot = build_snapshot("alpha", now, "test", resources=resources)
+            return AuthorizedPolicy(OverplanningPolicy(*requests), gate).plan(snapshot, DesignData(), PolicyConfig())
+
+        observed = {"minerals": 5, "gas": 5, "starbux": None}
+        daily = ActionRequest("collect_daily_reward", {}, "daily reward")
+        collect = ActionRequest("collect_all_resources", {}, "collect")
+        result = plan("canary", daily, resources=observed)
+        self.assertEqual([request.action_id for request in result.requests], ["collect_all_resources"])
+        self.assertEqual([(item.candidate, item.reason) for item in result.rejected],
+                         [("collect_daily_reward", "canary: not safe to retry")])
+        result = plan("canary", collect, collect, daily, resources=observed)
+        self.assertEqual(result.requests, (collect,))
+        self.assertEqual([item.reason for item in result.rejected],
+                         ["canary: only the first safe-to-retry action runs", "canary: not safe to retry"])
+        # Not outside canary mode, not when the authorization leaves the collection out, and not when the
+        # resources it needs are unobserved.
+        self.assertEqual(plan("full", daily, resources=observed).requests, (daily,))
+        self.assertEqual(plan("canary", daily, actions=["collect_daily_reward"], resources=observed).requests, ())
+        result = plan("canary", daily)
+        self.assertEqual(result.requests, ())
+        self.assertIn("collect_all_resources", [item.candidate for item in result.rejected])
+        # Verifier finding: a resources section that is present but holds no mineral or gas value (item
+        # designs unavailable) must not plan a collection the canary could never verify.
+        result = plan("canary", daily, resources={"minerals": None, "gas": None, "starbux": None})
+        self.assertEqual(result.requests, ())
+        self.assertIn(("collect_all_resources", "minerals and gas not observed; the collection could not be verified"),
+                      [(item.candidate, item.reason) for item in result.rejected])
+        self.assertEqual([r.action_id for r in plan("canary", daily, resources={"minerals": 5, "gas": None,
+                                                                                  "starbux": None}).requests],
+                         ["collect_all_resources"])
+        # A collection the gate rejected for its starbux cost is never planned again without one.
+        result = plan("canary", ActionRequest("collect_all_resources", {}, "starbux", {"starbux": 10}),
+                      resources=observed)
+        self.assertEqual(result.requests, ())
+
+
+# Verifies: S05-R4
+class LiveShapedResourceTests(FleetExecuteTestCase):
+    def test_live_ship_items_are_resources_through_the_item_designs_the_execute_path_reads(self):
+        # Regression (first G2 canary, 2026-11-12): live items carry no @Type/@ItemType, so minerals and
+        # gas were None and baseline-v1 refused every cost-bearing action ("gas balance not observed").
+        factory = EnvironmentAccountFactory(self.journal_dir, client_cls=LiveExecClient, environ=ENV,
+                                            identity_salt=SALT)
+        alpha = load_registry(self.registry).get("alpha")
+        context = factory(alpha)
+        snapshot = context.snapshot_provider()
+        self.assertEqual((snapshot.resources.minerals, snapshot.resources.gas), (1000, 1000))
+        plan = get_policy("baseline-v1").plan(snapshot, context.design, PolicyConfig())
+        self.assertEqual([request.action_id for request in plan.requests],
+                         ["add_research", "upgrade_room", "collect_all_resources", "collect_daily_reward"])
+        self.assertNotIn("not observed", " ".join(item.reason for item in plan.rejected))
+
+        # The baseline reads no designs, so its calls and its unobserved resources are unchanged.
+        observation = factory.open_baseline(alpha)
+        client = FakeClient.instances[-1]
+        self.assertEqual(client.calls, ["login", "getShipByUserId", "listAllCharactersOfUser", "listItemsOfAShip"])
+        self.assertEqual((observation.snapshot.resources.minerals, observation.snapshot.resources.gas), (None, None))
+
+    def test_a_live_shaped_canary_executes_its_collection(self):
+        self.dry_run()
+        code, out, err = self.execute(client=LiveExecClient)
+        self.assertEqual(code, 0, err + out)
+        self.assertEqual(sorted(ExecClient.executed), [("1001", "collectAllResources"), ("1002", "collectAllResources")])
+        self.assertIn("| alpha | collect_all_resources | yes | verified | resources increased: "
+                      "gas +0, minerals +100 |", out)
 
 
 class StopConditionTests(FleetExecuteTestCase):
@@ -811,6 +990,26 @@ class RunRecordTests(FleetExecuteTestCase):
             self.assertEqual({result["outcome"] for result in entry["results"]}, {"verified"})
         code, _, _ = self.execute()
         self.assertEqual(len(self.records()), 2)  # a second run never replaces the first record
+
+    # Verifies: S05-R7
+    def test_run_record_reports_the_server_game_version_each_account_saw(self):
+        # Regression (first G2 canary, 2026-11-12): the record hard-coded the server version as null.
+        self.dry_run()
+        for versions, server in (({"1001": "42", "1002": "42"}, "1.0+settings.42"),
+                                 ({"1001": "42", "1002": "43"}, None)):
+            with self.subTest(versions=versions):
+                SERVER_VERSIONS.clear()
+                SERVER_VERSIONS.update(versions)
+                for path in (self.journal_dir / "runs").glob("*.json"):
+                    path.unlink()
+                code, out, err = self.execute(client=VersionedExecClient)
+                self.assertEqual(code, 0, err + out)
+                record = self.records()[0]
+                self.assertEqual(record["game_version"]["server"], server)
+                by_alias = {entry["alias"]: entry["game_version"] for entry in record["accounts"]}
+                self.assertEqual(by_alias, {"alpha": f"1.0+settings.{versions['1001']}",
+                                            "bravo": f"1.0+settings.{versions['1002']}", "charlie": None})
+        SERVER_VERSIONS.clear()
 
     # Verifies: S05-R8, S10-R1
     def test_a_profile_without_a_fingerprint_or_a_missing_salt_is_refused(self):
