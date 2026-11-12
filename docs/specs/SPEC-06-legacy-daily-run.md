@@ -1,7 +1,7 @@
 # SPEC-06: Fence the legacy daily run away from trial accounts
 
-**Status:** Approved
-**Blocked:** S06-R1 and R5 need the owner to edit `.github/workflows/daily-run.yml` (gate G2); agents never edit that workflow. S06-R5's policy-coverage test follows the owner's edit. Done offline so far: #169 (the execute-time check, S06-R2).
+**Status:** Verified offline
+**Done offline:** S06-R1 (#181, the owner's `LEGACY_RUN_SKIP` step conditions), S06-R2 (#169, the execute-time check), S06-R5 (#209, the owner's hardening of `daily-run.yml`, and `spec06-policy-coverage`, which brings `daily-run.yml` and `live-trial.yml` under `scripts/ci.py repository`). S06-AC2 has live evidence. S06-AC4 (trial interventions) waits for the SPEC-07 trial; S06-R4 waits for the owner's decision (S06-Q1).
 **Approval:** owner, 2026-11-11, through the session goal "complete the plan in docs/specs/". This approves building and testing the spec offline; owner questions take their safe defaults. It does not open any live gate (G1–G5), so live acceptance criteria stay pending.
 **Release:** operations (prerequisite for SPEC-07 and SPEC-10)
 **Owner gate:** G2 (the owner edits the workflow)
@@ -66,7 +66,12 @@ Extend `tests/test_fleet_execute.py` (SPEC-05) and `tests/test_ci.py` once the o
 
 ## Evidence
 
-Pending.
+| Criterion | Result | Evidence |
+| --- | --- | --- |
+| S06-AC1 | Pass (offline) | `tests/test_fleet_accounts.py`, `tests/test_fleet_authorization.py`, `tests/test_fleet_execute.py` (`# Verifies: S06-R2`), from #169 |
+| S06-AC2 | Pass (live) | With `LEGACY_RUN_SKIP=5` set by the owner, the scheduled run [43260995664](https://github.com/raelldottin/tachikoma/actions/runs/43260995664) (2026-11-12T16:39Z) ran the steps for accounts 1–4 and skipped `Process account 5` |
+| S06-AC3 | Pass (offline) | `scripts/ci.py` lists `daily-run.yml` and `live-trial.yml` in `WORKFLOWS`. `tests/test_ci.py` plants an unpinned action, a missing timeout, a persisted checkout token and widened permissions in each one, and sees each refused. It also checks that every account step in `daily-run.yml` keeps its `LEGACY_RUN_SKIP` condition and that `live-trial.yml` runs only on a manual dispatch |
+| S06-AC4 | Pending | Waits for the SPEC-07 trial record |
 
 ## Open questions and risks
 

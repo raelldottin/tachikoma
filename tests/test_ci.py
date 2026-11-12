@@ -294,6 +294,56 @@ class WorkflowPolicyTests(unittest.TestCase):
             with self.subTest(field=field), self.assertRaises(ValueError):
                 ci.check_workflows(docs)
 
+    # Verifies: S06-R5
+    def test_policy_covers_the_secret_holding_workflows(self):
+        self.assertIn("daily-run.yml", ci.WORKFLOWS)
+        self.assertIn("live-trial.yml", ci.WORKFLOWS)
+        for filename in ("daily-run.yml", "live-trial.yml"):
+            job_name, job = next(iter(self.documents[filename]["jobs"].items()))
+            checkout = next(i for i, step in enumerate(job["steps"]) if "checkout@" in step.get("uses", ""))
+            for mutation in ("unpinned", "timeout", "token", "permissions", "job_permissions"):
+                docs = copy.deepcopy(self.documents)
+                target = docs[filename]["jobs"][job_name]
+                if mutation == "unpinned":
+                    target["steps"][checkout]["uses"] = "actions/checkout@v6"
+                elif mutation == "timeout":
+                    del target["timeout-minutes"]
+                elif mutation == "token":
+                    target["steps"][checkout]["with"]["persist-credentials"] = "true"
+                elif mutation == "permissions":
+                    docs[filename]["permissions"] = {"contents": "write"}
+                else:
+                    target["permissions"] = {"contents": "write", "actions": "write"}
+                with self.subTest(filename=filename, mutation=mutation), self.assertRaises(ValueError):
+                    ci.check_workflows(docs)
+
+    # Verifies: S06-R1, S06-R5
+    def test_every_legacy_account_step_stays_skippable(self):
+        job_name, job = next(iter(self.documents["daily-run.yml"]["jobs"].items()))
+        steps = [i for i, step in enumerate(job["steps"]) if "PSS_ACCOUNT_" in json.dumps(step)]
+        self.assertEqual(len(steps), 5)
+        for mutation in ("dropped", "wrong_account", "two_accounts", "no_steps"):
+            docs = copy.deepcopy(self.documents)
+            target = docs["daily-run.yml"]["jobs"][job_name]["steps"]
+            if mutation == "dropped":
+                del target[steps[-1]]["if"]
+            elif mutation == "wrong_account":
+                target[steps[-1]]["if"] = ci.LEGACY_RUN_SKIP_CONDITION.format(account=4)
+            elif mutation == "two_accounts":
+                target[steps[0]]["env"]["EXTRA"] = "${{ secrets.PSS_ACCOUNT_5_EMAIL }}"
+            else:
+                for index in reversed(steps):
+                    del target[index]
+            with self.subTest(mutation=mutation), self.assertRaises(ValueError):
+                ci.check_workflows(docs)
+
+    def test_live_trial_runs_only_on_manual_dispatch(self):
+        for trigger in ("schedule", "push", "pull_request"):
+            docs = copy.deepcopy(self.documents)
+            docs["live-trial.yml"]["on"][trigger] = {}
+            with self.subTest(trigger=trigger), self.assertRaisesRegex(ValueError, "manual dispatch"):
+                ci.check_workflows(docs)
+
     def test_only_release_publisher_has_write_permissions(self):
         for filename, document in self.documents.items():
             for name, job in document["jobs"].items():

@@ -1,0 +1,49 @@
+{
+  "slice_id": "spec06-policy-coverage",
+  "status": "done",
+  "summary": "scripts/ci.py now checks daily-run.yml and live-trial.yml: pinned actions, read-only permissions, timeouts and a checkout that does not keep its token. It also requires every daily-run.yml step that reads an account's secrets to keep its LEGACY_RUN_SKIP condition for that account (S06-R1), and live-trial.yml to run only on a manual dispatch. SPEC-06 records R1 (#181), R2 (#169), R5 (#209 and this slice) and the AC2 live evidence (scheduled run 43260995664 skipped account 5), and moves to Verified offline. AC4 waits for the SPEC-07 trial.",
+  "files_touched": [
+    "scripts/ci.py",
+    "tests/test_ci.py",
+    "docs/specs/SPEC-06-legacy-daily-run.md",
+    "docs/specs/README.md"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "make lint",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "Cover daily-run.yml and live-trial.yml in the workflow policy check",
+      "before": "SPEC-06 Approved, blocked on #209",
+      "after": "SPEC-06 Verified offline",
+      "proof": [
+        "tests/test_ci.py plants an unpinned action, missing timeout, persisted token and widened permissions in each workflow and sees each refused",
+        "a dropped or wrong LEGACY_RUN_SKIP condition, and a scheduled live-trial trigger, are refused",
+        "make syntax-check, make test, make lint and git diff --check pass; scripts/spec_trace.py passes",
+        "run 43260995664 step conclusions read with gh run view"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "S06-AC4 (trial interventions) and S06-R4 (the legacy run's future) are still open."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-12T18:32:28Z"
+}

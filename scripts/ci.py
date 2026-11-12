@@ -29,6 +29,8 @@ WORKFLOWS = (
     "python-tests.yml",
     "postmerge-ci.yml",
     "release.yml",
+    "daily-run.yml",
+    "live-trial.yml",
 )
 MAX_BLOB_BYTES = 1024 * 1024
 RELEASE_ROOT_FILES = ("run.py", "requirements.txt", "LICENSE", "README.md")
@@ -42,6 +44,10 @@ RELEASE_PRIVATE_WORDS = frozenset(
     auth capture captures device devices profile profiles dump dumps har pcap log logs env
     """.split()
 )
+# daily-run.yml (SPEC-06): each account's step reads PSS_ACCOUNT_<N>_* secrets and must be skippable through the
+# LEGACY_RUN_SKIP repository variable, so a trial account can be fenced off without deleting its secrets.
+LEGACY_ACCOUNT_SECRET_RE = re.compile(r"\$\{\{\s*secrets\.PSS_ACCOUNT_([0-9]+)_")
+LEGACY_RUN_SKIP_CONDITION = "${{{{ !contains(format(',{{0}},', vars.LEGACY_RUN_SKIP), ',{account},') }}}}"
 VERSION_RE = re.compile(r"v?((?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))\Z")
 
 
@@ -148,6 +154,10 @@ def check_workflows(documents: dict) -> None:
         gate = documents[filename]["jobs"]["required"]
         if gate.get("if") != "${{ always() }}" or gate.get("needs") != ["checks", "tests"]:
             raise ValueError("aggregate gate must always evaluate all required workflows")
+    check_legacy_run(documents["daily-run.yml"])
+    # live-trial.yml touches real accounts, so only an owner's manual dispatch may start it.
+    if set(documents["live-trial.yml"]["on"]) != {"workflow_dispatch"}:
+        raise ValueError("the live trial workflow must run only on a manual dispatch")
     release = documents["release.yml"]
     jobs = release["jobs"]
     if "workflow_dispatch" not in release["on"]:
@@ -158,6 +168,24 @@ def check_workflows(documents: dict) -> None:
         raise ValueError("release publication must depend on downloaded artifact verification")
     if jobs["publish"].get("if") != "${{ github.event_name == 'push' && github.ref_type == 'tag' }}":
         raise ValueError("release publication must require a real tag push")
+
+
+def check_legacy_run(document: dict) -> None:
+    """Every daily-run.yml step that reads an account's secrets is gated on that account's LEGACY_RUN_SKIP entry."""
+    accounts = []
+    for job in document["jobs"].values():
+        for step in job.get("steps", []):
+            numbers = set(LEGACY_ACCOUNT_SECRET_RE.findall(json.dumps(step)))
+            if not numbers:
+                continue
+            if len(numbers) != 1:
+                raise ValueError("a legacy run step must read exactly one account's secrets")
+            account = numbers.pop()
+            if step.get("if") != LEGACY_RUN_SKIP_CONDITION.format(account=account):
+                raise ValueError(f"legacy run step for account {account} must be skippable through LEGACY_RUN_SKIP")
+            accounts.append(account)
+    if not accounts or len(set(accounts)) != len(accounts):
+        raise ValueError("the legacy run must have one skippable step per account")
 
 
 def check_repository(repo: Path) -> None:

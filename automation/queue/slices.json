@@ -2093,7 +2093,7 @@
     {
       "slice_id": "spec06-policy-coverage",
       "title": "Cover daily-run.yml and live-trial.yml in the workflow policy check",
-      "status": "queued",
+      "status": "done",
       "priority": 408,
       "domain": "ci",
       "entry_condition": "Met: the owner merged #209 (daily-run.yml hardening) on 2026-11-12.",
