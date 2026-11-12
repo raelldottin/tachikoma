@@ -1,6 +1,7 @@
 """Tests for sdk.state.ClientSnapshotProvider with a fake client. No network."""
 
 import json
+import os
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
@@ -8,7 +9,7 @@ from pathlib import Path
 from sdk.state import READ_METHODS, ClientSnapshotProvider, Completeness, SnapshotInputError
 from tests.synthetic_fixtures import SYNTHETIC_ACCESS_TOKEN, SYNTHETIC_EMAIL
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(os.path.abspath(__file__)).parents[1]
 T0 = datetime(2026, 11, 10, 12, 0, tzinfo=timezone.utc)
 INVENTORY = json.loads((REPO_ROOT / "docs/baseline/capability-inventory.json").read_text(encoding="utf-8"))
 MUTATING = {entry["name"] for entry in INVENTORY["client_methods"] if entry["kind"] != "read-only"}

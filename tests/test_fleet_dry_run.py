@@ -43,7 +43,7 @@ from sdk.journal import read_events
 from sdk.state.snapshot import game_identity_fingerprint
 from tests.synthetic_fixtures import SYNTHETIC_DEVICE_KEY_IOS, SYNTHETIC_DEVICE_KEY_MAC, SYNTHETIC_EMAIL
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(os.path.abspath(__file__)).parents[1]
 INVENTORY = json.loads((REPO_ROOT / "docs/baseline/capability-inventory.json").read_text(encoding="utf-8"))
 MUTATING = {entry["name"] for entry in INVENTORY["client_methods"] if entry["kind"] == "mutating"}
 SESSION = {entry["name"] for entry in INVENTORY["client_methods"] if entry["kind"] == "session"}
