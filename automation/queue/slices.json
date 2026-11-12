@@ -2152,13 +2152,15 @@
         "tests/test_client_snapshot_provider.py",
         "docs/baseline/account-snapshot.md",
         "docs/baseline/fleet-accounts.md",
-        "docs/specs/SPEC-05-live-execution-gate.md"
+        "docs/specs/SPEC-05-live-execution-gate.md",
+        "README.template",
+        "README.md"
       ],
       "depends_on": [
         "g2-enrol-pss5"
       ],
-      "max_files_changed": 8,
-      "notes": "Implements S05-R4/R6 follow-ups from the owner-dispatched canary run 43256792025 (2026-11-12): it executed nothing. (1) ListItemsOfAShip items carry only @ItemDesignId and @Quantity (no @Type), so minerals and gas were never observed and every cost-bearing action was refused; map items to resources through the server's own item designs (client.itemDesigns from listAllDesigns4, which the dry-run and execute paths already read), by each design's ItemType naming mineral or gas; anything else stays None. (2) baseline-v1 plans collect_all_resources only after a room upgrade, so the canary had no safe-to-retry request and rejected collect_daily_reward with a misleading reason: in canary mode, when no safe-to-retry request remains and the authorization allows collect_all_resources, plan that one; and give the correct reason. Policy strategy is unchanged outside canary mode. (3) The run record hard-codes game_version.server None: record server_game_version per account at login and report it. Regression tests for each.",
+      "max_files_changed": 10,
+      "notes": "Implements S05-R4/R6 follow-ups from the owner-dispatched canary run 43256792025 (2026-11-12): it executed nothing. (1) ListItemsOfAShip items carry only @ItemDesignId and @Quantity (no @Type), so minerals and gas were never observed and every cost-bearing action was refused; map items to resources through the server's own item designs (client.itemDesigns from listAllDesigns4, which the dry-run and execute paths already read), by each design's ItemType naming mineral or gas; anything else stays None. (2) baseline-v1 plans collect_all_resources only after a room upgrade, so the canary had no safe-to-retry request and rejected collect_daily_reward with a misleading reason: in canary mode, when no safe-to-retry request remains and the authorization allows collect_all_resources, plan that one; and give the correct reason. Policy strategy is unchanged outside canary mode. (3) The run record hard-codes game_version.server None: record server_game_version per account at login and report it. Regression tests for each. Widened 2026-11-12: README.template (then README.md) describe the canary as executing nothing when no safe-to-retry request is planned, and the run record's server version as always null; both change.",
       "required_validations": [
         "make syntax-check",
         "make test",
