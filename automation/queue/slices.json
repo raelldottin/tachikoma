@@ -2118,7 +2118,7 @@
     {
       "slice_id": "spec04-baseline-evidence",
       "title": "Commit the G1 baseline summary and mark SPEC-04 done",
-      "status": "queued",
+      "status": "done",
       "priority": 409,
       "domain": "state",
       "allowed_paths": [

@@ -12,6 +12,7 @@
 | 43185783525 | capture | partial (exit 1 by design: a response was withheld) | every ship read worked; the files kept ship, battle, item and alliance ids and crew names the scan cannot recognise; the settings field summary was withheld (slash-joined paths look like base64) | #185 |
 | 43185803782 | baseline | success | every ship section for all five; `game_version` `n/a`, profile missing | #187, #199 |
 | 43187703923 | capture | partial (exit 1 by design: the raw settings stay withheld) | all files clean, instance ids and crew names replaced; the settings field summary showed no `LatestVersion*` attribute: `RecommendedVersion`, `MinimumClientVersion`, `MinimumVersion` and `CurrentAndroidVersion` are all `1.0` | #187 |
+| 43256802775 | baseline | success | every section for all five, profile observed, game version `1.0+settings.3307714`; minerals and gas not observed | g2-canary-fixes (execute path) |
 
 Eight further dispatches in between (43184063781 to 43184229116) were cancelled while queued behind one another; they made no request. Every artifact was downloaded with `gh run download`, re-scanned with the S03-R2 rules (0 findings in all of them), and re-sanitized offline with each fix to confirm it. Artifacts expire after seven days; the reviewed captures that matter are committed.
 
@@ -30,5 +31,4 @@ Eight further dispatches in between (43184063781 to 43184229116) were cancelled 
 
 ## Still to record
 
-- A `baseline` run after #187 and #199, for SPEC-04 S04-AC4 (game version and profile recorded).
 - The G2 `enrol` and `canary` steps (SPEC-05, SPEC-07, SPEC-11).
