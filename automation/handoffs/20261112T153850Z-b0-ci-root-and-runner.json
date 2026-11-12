@@ -1,0 +1,48 @@
+{
+  "slice_id": "b0-ci-root-and-runner",
+  "status": "done",
+  "summary": "ROOT is now derived with os.path.abspath instead of resolve(), so a Bazel runfiles symlink is not followed back into the source checkout.  run_tests(names, require_tests=False, verbosity=1) keeps SPEC-02's fresh temporary working directory, but uses the CWD as it is when it is already $TEST_TMPDIR, and always restores the CWD in a finally block. require_tests fails a run in which no test ran. `ci.py test --verbose` runs with unittest verbosity 2 so every test id is printed.  tests/test_ci.py children get PYTHONPATH=ci.ROOT (joined with any existing value by os.pathsep), so they import scripts.ci under PYTHONSAFEPATH=1, and the lint-ratchet root uses os.path.abspath.  Regression tests: ROOT is abspath-derived and never calls resolve(); require_tests fails on an empty suite and the default does not; --verbose prints test ids; a PYTHONSAFEPATH=1 child imports scripts.ci; run_tests stays in $TEST_TMPDIR; `ci.py test --names tests.test_battle_flow` leaves a sentinel .device in its starting directory byte-identical with the same mtime.  No release function or constant changed. Built by a B0 subagent in an isolated worktree, stacked with the other dispatch-gated B0 slices on preview/b0-stack; re-validated by the parent agent.",
+  "files_touched": [
+    "scripts/ci.py",
+    "tests/test_ci.py"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "make lint",
+    "git diff --check",
+    "manual V-REL release parity",
+    "manual owner dispatch of postmerge-ci.yml on the branch is green"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "Make scripts/ci.py runfiles-safe and run every suite in a temporary CWD",
+      "before": "see commit",
+      "after": "build(ci): make scripts/ci.py runfiles-safe and Bazel-ready",
+      "proof": [
+        "automated validations pass in a scratch clone of main with the change",
+        "owner-dispatched postmerge-ci.yml on preview/b0-stack (run 43248693428): green on ubuntu, macOS and Windows, Python 3.11 and 3.13",
+        "V-REL release parity: 1.1.8 and 9.9.9 SHA256SUMS identical, no Bazel or lock files, manifest count matches, release symbols untouched, release tests unskipped under TACHIKOMA_STRICT_DEPS=1"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "The post-merge run covered the stack on its earlier base (27c0331); the rebased stack re-passed locally on main."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-12T15:39:12Z"
+}
