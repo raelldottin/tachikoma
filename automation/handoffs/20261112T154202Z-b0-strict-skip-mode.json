@@ -1,0 +1,49 @@
+{
+  "slice_id": "b0-strict-skip-mode",
+  "status": "done",
+  "summary": "A skipped test still reports green, so a runner without yaml, git or make would silently run fewer tests. With TACHIKOMA_STRICT_DEPS=1 these now fail instead of skipping: missing yaml (WorkflowPolicyTests), a missing git binary (SourceReleaseTests, ReleasePackageDataTests, RepositoryReleaseSelectionTests), a missing PvP shim in tests/test_pvp_safety.py, and missing make or git in tests/test_build_hygiene.py. A test that does not apply still skips: RepositoryReleaseSelectionTests when only .git is missing, and the build hygiene classes on a non-POSIX host, without the Makefile, or outside this checkout. Unset (or any value but 1), every decorator is plain unittest.skipUnless and behaviour is unchanged.  tests/test_strict_mode.py holds skip_unless_dependency and simulates each case with unittest.mock.patch, loading fresh copies of the affected modules so their import-time decorators see the patched environment. Built by a B0 subagent in an isolated worktree, stacked with the other dispatch-gated B0 slices on preview/b0-stack; re-validated by the parent agent.",
+  "files_touched": [
+    "tests/test_build_hygiene.py",
+    "tests/test_ci.py",
+    "tests/test_pvp_safety.py",
+    "tests/test_strict_mode.py"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "make lint",
+    "git diff --check",
+    "manual owner dispatch of postmerge-ci.yml on the branch is green"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "Turn dependency skips into failures under TACHIKOMA_STRICT_DEPS=1",
+      "before": "see commit",
+      "after": "test: turn dependency skips into failures under TACHIKOMA_STRICT_DEPS=1",
+      "proof": [
+        "automated validations pass in a scratch clone of main with the change",
+        "owner-dispatched postmerge-ci.yml on preview/b0-stack (run 43248693428): green on ubuntu, macOS and Windows, Python 3.11 and 3.13",
+        "TACHIKOMA_STRICT_DEPS=1 full suite passes (1288 tests, 1 skip: the live-auth opt-in)"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "The post-merge run covered the stack on its earlier base (27c0331); the rebased stack re-passed locally on main."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-12T15:42:23Z"
+}
