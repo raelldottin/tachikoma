@@ -11,6 +11,8 @@ import textwrap
 import unittest
 from pathlib import Path
 
+from tests.test_strict_mode import strict_dependency_failure, strict_deps_enabled
+
 REPO = Path(os.path.abspath(__file__)).parents[1]
 PVP_DIR = REPO / "sdk" / "pvp"
 SHIMS = [
@@ -35,6 +37,8 @@ def _module_sources():
         p = REPO / "sdk" / name
         if p.exists():
             sources[str(p.relative_to(REPO))] = p.read_text()
+        elif strict_deps_enabled():
+            raise strict_dependency_failure(f"PvP shim {p.relative_to(REPO).as_posix()} is missing")
     return sources
 
 

@@ -19,6 +19,7 @@ from unittest.mock import patch
 
 from scripts import ci
 from tests.synthetic_fixtures import SYNTHETIC_ACCESS_TOKEN, SYNTHETIC_DEVICE_KEY_IOS
+from tests.test_strict_mode import skip_unless_dependency
 
 try:
     import yaml
@@ -257,7 +258,7 @@ class LintRatchetTests(unittest.TestCase):
                 ci.check_lint(ci.ROOT)
 
 
-@unittest.skipUnless(yaml, "install .github/requirements-ci.txt for workflow checks")
+@skip_unless_dependency(yaml, "install .github/requirements-ci.txt for workflow checks")
 class WorkflowPolicyTests(unittest.TestCase):
     def setUp(self):
         self.documents = ci.workflow_documents(ci.ROOT)
@@ -375,7 +376,7 @@ class WorkflowPolicyTests(unittest.TestCase):
                 self.assertNotIn(forbidden, text)
 
 
-@unittest.skipUnless(shutil.which("git"), "release provenance tests require Git")
+@skip_unless_dependency(shutil.which("git"), "release provenance tests require Git")
 class SourceReleaseTests(unittest.TestCase):
     def setUp(self):
         self.temporary = TemporaryDirectory()
@@ -485,7 +486,7 @@ class SourceReleaseTests(unittest.TestCase):
                 ci.check_repository(self.root)
 
 
-@unittest.skipUnless(shutil.which("git"), "release provenance tests require Git")
+@skip_unless_dependency(shutil.which("git"), "release provenance tests require Git")
 class ReleasePackageDataTests(unittest.TestCase):
     """Package data under sdk/ ships in the archive; tests, captures and secrets do not."""
 
@@ -664,7 +665,10 @@ class ReleasePackageDataTests(unittest.TestCase):
                 self.assertIs(ci.release_includes(path), expected)
 
 
-@unittest.skipUnless(shutil.which("git") and (ci.ROOT / ".git").exists(), "requires the tachikoma Git checkout")
+# Without a .git checkout this test does not apply, so it skips even under TACHIKOMA_STRICT_DEPS=1.
+@skip_unless_dependency(
+    shutil.which("git"), "requires the tachikoma Git checkout", applicable=(ci.ROOT / ".git").exists()
+)
 class RepositoryReleaseSelectionTests(unittest.TestCase):
     def test_tracked_scenarios_are_selected_and_no_tracked_sdk_file_is_refused(self):
         tracked = [os.fsdecode(name) for name in ci.git(ci.ROOT, "ls-files", "-z").split(b"\0") if name]
