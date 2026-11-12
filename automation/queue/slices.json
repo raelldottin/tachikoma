@@ -2477,7 +2477,7 @@
     {
       "slice_id": "spec13-q3-gas-collector",
       "title": "Record the owner's change of SPEC-13's room to a Gas Collector Lv1",
-      "status": "queued",
+      "status": "done",
       "priority": 425,
       "domain": "fleet",
       "allowed_paths": [

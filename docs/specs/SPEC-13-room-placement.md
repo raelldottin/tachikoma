@@ -134,13 +134,23 @@ Fixtures are the sanitized captures from R1 plus synthetic layouts. All game tra
 | --- | --- | --- | --- |
 | S13-Q1 | Approve this spec? | any code | **Answered 2026-11-12: yes** |
 | S13-Q2 | Can you capture and sanitize one room purchase (R1)? | `spec13-client-call` | **Answered 2026-11-12: yes**, on any account the owner can log into; the design records come from the agents' read-only capture |
-| S13-Q3 | Which account, room design, row and column for the live placement? | the authorization | **Answered 2026-11-12:** a level-1 mineral collector on `pss5` at `first-free`, outside SPEC-07 trial blocks or logged as an intervention |
-| S13-Q4 | The cap for the placement's mineral or gas price | the authorization | **Answered 2026-11-12:** the design's price, nothing more |
+| S13-Q3 | Which account, room design, row and column for the live placement? | the authorization | **Answered 2026-11-12, then changed the same day:** a **Gas Collector Lv1** (room design 42) on `pss5` at `first-free`, outside SPEC-07 trial blocks or logged as an intervention. The first answer was a level-1 mineral collector, but capture run 43314838395 showed that Mineral Extractor Lv1 costs 25 gas and pss5 has no gas above its reserve. The Gas Collector costs 10 minerals |
+| S13-Q4 | The cap for the placement's mineral or gas price | the authorization | **Answered 2026-11-12:** the design's price, nothing more: 10 minerals for the Gas Collector Lv1 |
 | S13-Q5 | Should a future policy version build rooms on its own? | a later spec | **Answered 2026-11-12: no** |
 
 ## Evidence
 
-Pending.
+**Design records (S13-R1, read-only):** capture run 43314838395 (2026-11-12) recorded `ListRoomDesigns2` and the `ShipDesigns` and `RoomDesignPurchases` parts of `ListAllDesigns4`. The capture artifact is not committed. It confirmed these fields:
+
+- **Hull:** pss5's ship is `ShipDesign` 6, ship level 2, with `@Rows` 9 and `@Columns` 17.
+- **Rooms:** each placed room has `@Row` and `@Column`.
+- **Room designs:** each gives its footprint as `@Rows` × `@Columns`, plus `@PriceString`, `@MinShipLevel`, `@MaxCount` and `@ConstructionTime`.
+- **Purchase limits:** each `RoomDesignPurchase` gives `@RoomDesignId`, `@Level` and `@Quantity`.
+- **The chosen room:** Gas Collector Lv1 (room design 42) is 2×2, costs `mineral:10` and builds in 10 seconds.
+
+The interior `@Mask` was redacted in that run. `spec13-capture-mask` keeps it from the next capture run.
+
+The live placement is pending.
 
 ## Open questions and risks
 
