@@ -2234,6 +2234,33 @@
         "make test",
         "git diff --check"
       ]
+    },
+    {
+      "slice_id": "collect-room-fill-evidence",
+      "title": "Journal each room's fill before and after a collection",
+      "status": "queued",
+      "priority": 415,
+      "domain": "fleet",
+      "allowed_paths": [
+        "sdk/actions/catalog.py",
+        "tests/test_action_catalog.py",
+        "tests/test_action_runner.py",
+        "docs/experiments/live/g2-evidence.md",
+        "docs/experiments/live/RUNBOOK.md",
+        "README.template",
+        "README.md"
+      ],
+      "depends_on": [
+        "spec07-verified-canary-precondition"
+      ],
+      "max_files_changed": 7,
+      "notes": "Supports S07-R2 (owner request 2026-11-12). Three G2 canaries reconciled not-observed and the journal cannot tell 'nothing to collect' from 'a collection not seen'. Give collect_all_resources an evidence probe and builder: read the ship's room records the snapshots already fetched (client.rooms, no extra game call) and the room designs (client.roomDesigns), and journal per room design the CapacityUsed before and after, with the design's name, RoomType, ManufactureType and Capacity, plus totals. Room instance ids never reach the journal. Evidence never changes the reconciled outcome and the probe never raises. Record canary 43284132171 (not-observed) in g2-evidence.md; runbook and README say what the evidence shows. No gate on collector fill until live data confirms what CapacityUsed means.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "make lint",
+        "git diff --check"
+      ]
     }
   ]
 }
