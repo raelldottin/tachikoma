@@ -2089,6 +2089,31 @@
         "make test",
         "git diff --check"
       ]
+    },
+    {
+      "slice_id": "spec06-policy-coverage",
+      "title": "Cover daily-run.yml and live-trial.yml in the workflow policy check",
+      "status": "blocked",
+      "priority": 408,
+      "domain": "ci",
+      "entry_condition": "The owner merges #209 (daily-run.yml hardening); then a chore(queue) PR sets this to queued.",
+      "allowed_paths": [
+        "scripts/ci.py",
+        "tests/test_ci.py",
+        "docs/specs/SPEC-06-legacy-daily-run.md",
+        "docs/specs/README.md"
+      ],
+      "depends_on": [
+        "spec03-ledger-evidence"
+      ],
+      "max_files_changed": 4,
+      "notes": "Implements S06-R5 (AC3). Add daily-run.yml and live-trial.yml to scripts/ci.py WORKFLOWS so check_repository covers them; a test plants an unpinned action or missing timeout in each and sees it refused. Record S06-R1 (#181), R2 (#169), R5 (#209 + this) and the AC2 evidence (a scheduled daily run whose log shows account 5's step skipped) in SPEC-06; set its status to Verified offline. AC4 (trial interventions) waits for SPEC-07.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "make lint",
+        "git diff --check"
+      ]
     }
   ]
 }
