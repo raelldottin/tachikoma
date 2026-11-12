@@ -11,7 +11,7 @@ import textwrap
 import unittest
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parents[1]
+REPO = Path(os.path.abspath(__file__)).parents[1]
 PVP_DIR = REPO / "sdk" / "pvp"
 SHIMS = [
     "account_progression.py",
@@ -157,7 +157,8 @@ class TestPvpSafety(unittest.TestCase):
             print("OK", len(rr))
         """)
         env = dict(os.environ)
-        env["PYTHONPATH"] = str(REPO) + (":" + env.get("PYTHONPATH", "") if env.get("PYTHONPATH") else "")
+        existing = env.get("PYTHONPATH")
+        env["PYTHONPATH"] = os.pathsep.join([str(REPO), existing]) if existing else str(REPO)
         r = subprocess.run([sys.executable, "-c", code], cwd=str(REPO), env=env,
                            capture_output=True, text=True, timeout=120)
         self.assertEqual(r.returncode, 0, f"probe failed: {r.stderr}")

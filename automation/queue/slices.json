@@ -1943,7 +1943,7 @@
     {
       "slice_id": "b0-test-repo-root-b",
       "title": "Fix the last resolve() escapes in tests and add the AST guard",
-      "status": "queued",
+      "status": "done",
       "priority": 351,
       "domain": "tests",
       "allowed_paths": [

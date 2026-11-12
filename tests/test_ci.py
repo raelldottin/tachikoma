@@ -38,6 +38,50 @@ def child_env(**extra):
     return env
 
 
+# Path(__file__).resolve() and os.path.realpath(__file__) follow symlinks, so under Bazel's runfiles tree they
+# escape to the source checkout. Every test module and each file listed here must use os.path.abspath instead.
+FILE_RESOLUTION_GUARDED_FILES = ("scripts/ci.py",)
+# The one known runtime exception: sdk/simulation/game.py sets SCENARIO_DIR with Path(__file__).resolve() so the
+# bundled scenarios are found next to the installed module. It is outside the guard and recorded by a test below.
+FILE_RESOLUTION_RUNTIME_EXCEPTION = "sdk/simulation/game.py"
+
+
+def file_resolution_calls(source):
+    """Line numbers of Path(__file__).resolve() and os.path.realpath(__file__) calls; string literals do not count."""
+    lines = []
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.Call):
+            continue
+        function = node.func
+        if (
+            isinstance(function, ast.Attribute)
+            and function.attr == "resolve"
+            and isinstance(function.value, ast.Call)
+            and ast.unparse(function.value.func) in {"Path", "pathlib.Path"}
+            and [ast.unparse(argument) for argument in function.value.args] == ["__file__"]
+        ) or (
+            ast.unparse(function) == "os.path.realpath"
+            and [ast.unparse(argument) for argument in node.args] == ["__file__"]
+        ):
+            lines.append(node.lineno)
+    return sorted(lines)
+
+
+def file_resolution_violations(root, listed=FILE_RESOLUTION_GUARDED_FILES):
+    """Guard findings for tests/**/*.py and the listed files under root; a listed file that is missing is one."""
+    violations = []
+    paths = sorted((root / "tests").rglob("*.py"))
+    for name in listed:
+        if (root / name).is_file():
+            paths.append(root / name)
+        else:
+            violations.append(f"{name}: listed for the __file__ guard but missing")
+    for path in paths:
+        for line in file_resolution_calls(path.read_text(encoding="utf-8")):
+            violations.append(f"{path.relative_to(root).as_posix()}:{line}: resolves __file__ through symlinks")
+    return violations
+
+
 class RequiredGateTests(unittest.TestCase):
     def test_all_success_is_required(self):
         ci.require_success({"checks": {"result": "success"}, "tests": {"result": "success"}}, ["checks", "tests"])
@@ -84,6 +128,48 @@ class TestIsolationTests(unittest.TestCase):
                         if isinstance(argument, ast.Constant) and isinstance(argument.value, str):
                             self.assertFalse(PurePosixPath(argument.value).is_absolute(), path.name)
                             self.assertFalse(PureWindowsPath(argument.value).is_absolute(), path.name)
+
+    def test_no_guarded_file_resolves_file_through_symlinks(self):
+        self.assertEqual(file_resolution_violations(ci.ROOT), [])
+
+    def test_file_resolution_guard_catches_planted_calls_and_missing_listed_files(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "tests" / "nested").mkdir(parents=True)
+            (root / "scripts").mkdir()
+            (root / "scripts" / "ci.py").write_text("ROOT = Path(os.path.abspath(__file__)).parent\n", encoding="utf-8")
+            (root / "tests" / "test_clean.py").write_text(
+                "ROOT = Path(os.path.abspath(__file__)).parents[1]\nTEXT = 'Path(__file__).resolve()'\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(file_resolution_violations(root), [])
+
+            (root / "tests" / "test_planted.py").write_text(
+                "import os\nREPO = Path(__file__).resolve().parents[1]\n", encoding="utf-8"
+            )
+            (root / "tests" / "nested" / "helper.py").write_text(
+                "HERE = os.path.realpath(__file__)\n", encoding="utf-8"
+            )
+            (root / "scripts" / "ci.py").write_text(
+                "ROOT = pathlib.Path(__file__).resolve().parent\n", encoding="utf-8"
+            )
+            self.assertEqual(
+                file_resolution_violations(root),
+                [
+                    "tests/nested/helper.py:1: resolves __file__ through symlinks",
+                    "tests/test_planted.py:2: resolves __file__ through symlinks",
+                    "scripts/ci.py:1: resolves __file__ through symlinks",
+                ],
+            )
+            self.assertIn(
+                "scripts/missing.py: listed for the __file__ guard but missing",
+                file_resolution_violations(root, ("scripts/ci.py", "scripts/missing.py")),
+            )
+
+    def test_game_scenario_dir_is_the_one_known_runtime_resolve(self):
+        source = (ci.ROOT / FILE_RESOLUTION_RUNTIME_EXCEPTION).read_text(encoding="utf-8")
+        self.assertEqual(len(file_resolution_calls(source)), 1)
+        self.assertIn('SCENARIO_DIR = Path(__file__).resolve().parent / "scenarios"', source)
 
     def test_swallowed_network_attempt_still_fails_the_test_command(self):
         program = """
