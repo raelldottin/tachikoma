@@ -1868,7 +1868,7 @@
     {
       "slice_id": "b0-ci-root-and-runner",
       "title": "Make scripts/ci.py runfiles-safe and run every suite in a temporary CWD",
-      "status": "queued",
+      "status": "done",
       "priority": 347,
       "domain": "tests",
       "allowed_paths": [
