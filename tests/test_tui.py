@@ -2,13 +2,14 @@ from __future__ import annotations
 
 """Tests for the TUI module."""
 
+import os
 import sys
 from pathlib import Path
 import unittest
 from unittest.mock import patch, MagicMock, call
 
 # Add parent directory to path for imports
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(os.path.abspath(__file__)).parents[1]))
 
 from sdk.tui import TUI, run_tui
 from sdk.commands import create_command_registry
