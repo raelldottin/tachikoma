@@ -1,0 +1,47 @@
+{
+  "slice_id": "b0-test-repo-root-b",
+  "status": "done",
+  "summary": "Path(__file__).resolve() follows symlinks, so under Bazel's runfiles tree it escapes to the source checkout. tests/test_pvp_safety.py and tests/test_tui.py now use Path(os.path.abspath(__file__)), and the PvP probe joins PYTHONPATH with os.pathsep instead of \":\".  TestIsolationTests gains an AST guard (ast.Call nodes only, so string literals pass) that forbids Path(__file__).resolve() and os.path.realpath(__file__) in tests/**/*.py and in an explicit file list that starts as [scripts/ci.py]; a listed file that is missing fails the guard. A second test plants both calls in a temporary tree and checks the guard reports them and a missing listed file. sdk/simulation/game.py's SCENARIO_DIR is recorded as the one known runtime exception. Built by a B0 subagent in an isolated worktree, stacked with the other dispatch-gated B0 slices on preview/b0-stack; re-validated by the parent agent.",
+  "files_touched": [
+    "tests/test_ci.py",
+    "tests/test_pvp_safety.py",
+    "tests/test_tui.py"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "make lint",
+    "git diff --check",
+    "manual owner dispatch of postmerge-ci.yml on the branch is green"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "Fix the last resolve() escapes in tests and add the AST guard",
+      "before": "see commit",
+      "after": "test: keep the last two test modules inside the runfiles tree and guard __file__ resolution",
+      "proof": [
+        "automated validations pass in a scratch clone of main with the change",
+        "owner-dispatched postmerge-ci.yml on preview/b0-stack (run 43248693428): green on ubuntu, macOS and Windows, Python 3.11 and 3.13"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "The post-merge run covered the stack on its earlier base (27c0331); the rebased stack re-passed locally on main."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-12T15:40:47Z"
+}
