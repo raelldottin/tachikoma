@@ -2310,7 +2310,7 @@
     {
       "slice_id": "spec13-approval",
       "title": "Record the owner's approval of SPEC-13",
-      "status": "queued",
+      "status": "done",
       "priority": 418,
       "domain": "fleet",
       "allowed_paths": [

@@ -1,0 +1,44 @@
+{
+  "slice_id": "spec13-approval",
+  "status": "done",
+  "summary": "The owner approved SPEC-13 on 2026-11-12 with its safe defaults, capture included. The owner cannot tell which game account is pss5, so the bot will place pss5's collector. Recorded: Status Approved; Q1 and Q2 yes; Q3 a level-1 mineral collector on pss5 at first-free; Q4 the design's price; Q5 no. R1 is amended so that the design records come from the agents' read-only capture step and only the purchase request needs the owner's capture (from any account they can log into). R7 is amended so a placement may name first-free: the first position in a fixed scan order that the placement check accepts on a fresh read. G6 is given for the captures; the live placement needs its own authorization.",
+  "files_touched": [
+    "docs/specs/README.md",
+    "docs/specs/SPEC-13-room-placement.md"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "Record the owner's approval of SPEC-13",
+      "before": "SPEC-13 Draft",
+      "after": "SPEC-13 Approved with decisions recorded",
+      "proof": [
+        "owner message 'Approve SPEC-13' (2026-11-12)",
+        "scripts/spec_trace.py, make syntax-check, make test, git diff --check pass"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "The purchase request shape is still unknown until the owner's capture."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-12T21:47:04Z"
+}
