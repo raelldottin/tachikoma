@@ -21,3 +21,6 @@ frida_*.log
 cpp2il_output/
 scripts/*.pyc
 .worktrees/
+
+# Bazel output links at the repository root (personal flags go in ~/.bazelrc, not an ignored .bazelrc.user)
+/bazel-*

@@ -1895,7 +1895,7 @@
     {
       "slice_id": "b0-bazel-ignore-hygiene",
       "title": "Ignore Bazel outputs and personal rc files before any Bazel command runs",
-      "status": "queued",
+      "status": "done",
       "priority": 348,
       "domain": "build",
       "allowed_paths": [

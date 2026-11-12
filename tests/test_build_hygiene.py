@@ -1,7 +1,8 @@
-"""Checkout-level checks of the local build entry points (the Makefile).
+"""Checkout-level checks of the local build entry points (the Makefile) and of .gitignore.
 
-These tests read the repository checkout itself, so they are never a Bazel target. Every command runs from a
-fresh temporary working directory and only as a dry run (``make -n``), so nothing here touches ./.device.
+These tests read the repository checkout itself, so they are never a Bazel target. Every make command runs from
+a fresh temporary working directory and only as a dry run (``make -n``), and the git commands only read, so
+nothing here touches ./.device.
 """
 
 import os
@@ -138,6 +139,68 @@ class WorkingDirectoryIndependenceTests(unittest.TestCase):
             )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertRegex(result.stderr, r"Ran [1-9]\d* tests?")
+
+
+# Credential files, logs and captures that must never be committed.
+PRIVATE_PATHS = (".device", "config.secrets", "passwords.txt", ".profiles/x", "tachikoma.log", "x.har", "x.pcap")
+# Each of these would change which Bazel binary or flags run, so none may be tracked. A stray .bazelrc.user is
+# deliberately left visible as untracked dirt: personal Bazel flags belong in ~/.bazelrc.
+BAZEL_LAUNCHER_FILES = ("tools/bazel", ".bazeliskrc", ".bazelrc.user")
+# Git variables a hook or a calling git command may set; they would point the commands at another repository.
+GIT_ENVIRONMENT = {"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_COMMON_DIR"}
+
+
+def _is_git_checkout():
+    if not shutil.which("git"):
+        return False
+    result = subprocess.run(
+        ["git", "-C", str(ROOT), "rev-parse", "--show-toplevel"],
+        env={key: value for key, value in os.environ.items() if key not in GIT_ENVIRONMENT},
+        capture_output=True,
+        text=True,
+    )
+    return result.returncode == 0 and os.path.samefile(result.stdout.strip(), ROOT)
+
+
+@unittest.skipUnless(_is_git_checkout(), "requires git and a repository checkout")
+class GitIgnoreHygieneTests(unittest.TestCase):
+    def git(self, *arguments):
+        return subprocess.run(
+            ["git", "-C", str(ROOT), *arguments],
+            env={key: value for key, value in os.environ.items() if key not in GIT_ENVIRONMENT},
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+
+    def is_ignored(self, path):
+        result = self.git("check-ignore", "-q", path)
+        self.assertIn(result.returncode, (0, 1), result.stderr)
+        return result.returncode == 0
+
+    def test_bazel_output_links_are_ignored(self):
+        for path in ("bazel-bin", "bazel-out", "bazel-testlogs", "bazel-tachikoma"):
+            with self.subTest(path=path):
+                self.assertTrue(self.is_ignored(path))
+        # Only the convenience links at the repository root, not files elsewhere that happen to start with bazel-.
+        self.assertFalse(self.is_ignored("docs/bazel-notes.md"))
+
+    def test_private_files_are_ignored(self):
+        for path in PRIVATE_PATHS:
+            with self.subTest(path=path):
+                self.assertTrue(self.is_ignored(path))
+
+    def test_personal_bazelrc_is_not_ignored(self):
+        self.assertFalse(self.is_ignored(".bazelrc.user"))
+
+    def test_no_bazel_launcher_or_personal_rc_file_is_tracked(self):
+        result = self.git("ls-files", "-z")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        tracked = set(filter(None, result.stdout.split("\0")))
+        for path in BAZEL_LAUNCHER_FILES:
+            with self.subTest(path=path):
+                self.assertNotIn(path, tracked)
+        self.assertEqual([path for path in tracked if path.startswith("tools/bazel.")], [])
 
 
 if __name__ == "__main__":

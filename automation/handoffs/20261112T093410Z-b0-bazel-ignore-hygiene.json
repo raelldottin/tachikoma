@@ -1,0 +1,45 @@
+{
+  "slice_id": "b0-bazel-ignore-hygiene",
+  "status": "done",
+  "summary": "Ignore /bazel-* (bazel-bin, bazel-out, bazel-testlogs and the workspace link) at the repository root. .bazelrc.user is deliberately not ignored: personal Bazel flags belong in ~/.bazelrc, so a stray .bazelrc.user stays visible as untracked dirt.  Extend tests/test_build_hygiene.py: the Bazel output links are ignored; git check-ignore succeeds for .device, config.secrets, passwords.txt, .profiles/x, tachikoma.log, x.har and x.pcap; .bazelrc.user is not ignored; and git ls-files tracks none of tools/bazel, tools/bazel.*, .bazeliskrc or .bazelrc.user, each of which would change which Bazel binary or flags run. Built by a B0 subagent in an isolated worktree; re-validated by the parent agent.",
+  "files_touched": [
+    ".gitignore",
+    "tests/test_build_hygiene.py"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "make lint",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "Ignore Bazel outputs and personal rc files before any Bazel command runs",
+      "before": "Bazel output links would show as untracked dirt",
+      "after": "/bazel-* ignored; hygiene tests pin ignore rules and untracked Bazel launchers",
+      "proof": [
+        "make syntax-check, make test, make lint and git diff --check pass in a scratch clone of main with the change",
+        "the new tests fail before the .gitignore rule"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "None known; .gitignore only."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-12T09:34:29Z"
+}
