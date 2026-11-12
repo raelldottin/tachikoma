@@ -1,0 +1,46 @@
+{
+  "slice_id": "spec13-grid-model",
+  "status": "done",
+  "summary": "The grid model, built from the design records capture run 43316397906 recorded: - sdk/policy/placement.py: ShipLayout parses hull masks (Rows x Columns digits,   row-major; 1 buildable, 0 outside, 2 unconfirmed so refused), room footprints,   prices, minimum ship levels, root designs and purchase limits (the stricter   reading; mixed availability masks refused); - placement_refusal refuses on any unobserved input, a cell off the grid or not   buildable, an overlap, a price other than minerals or gas, too low a ship level,   or a full purchase limit; first_free scans from the top-left; - snapshots gain Room.row/column and ship_design_id. They are left out of equality,   and the baseline format is unchanged, so existing baselines still load equal. Tests use pss5's real hull and room layout: the Gas Collector Lv1 first fits at row 1, column 1. Every policy plans identically for every bundled scenario with or without room positions (S13-R9).",
+  "files_touched": [
+    "sdk/policy/placement.py",
+    "sdk/state/snapshot.py",
+    "tests/test_room_placement.py"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "make lint",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "SPEC-13 grid model and placement check",
+      "before": "no placement check",
+      "after": "placement_refusal and first_free from captured layouts",
+      "proof": [
+        "tests: pss5's rooms all on buildable cells; gas collector first fits at (1,1); refusals for off-grid, outside hull, overlap, type-2 cells, starbux/supply prices, ship level, purchase limits, mixed availability, and every unobserved input; policy parity over all bundled scenarios",
+        "make syntax-check, make test (1332 OK), make lint, git diff --check pass"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "Purchase-limit semantics use the stricter reading; cell type 2 is refused until understood."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-12T22:14:41Z"
+}

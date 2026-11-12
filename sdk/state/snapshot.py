@@ -114,6 +114,11 @@ class Room:
     room_id: str
     design_id: Optional[str]
     status: Optional[str]
+    # Top-left cell of the room on the ship's grid (0-based); None when the record has no @Row/@Column.
+    # Only room placement (SPEC-13) reads them, explicitly. The baseline format keeps only id, design and status,
+    # so they are left out of equality: a snapshot loaded from a baseline still equals the one it was written from.
+    row: Optional[int] = field(default=None, compare=False)
+    column: Optional[int] = field(default=None, compare=False)
 
     @property
     def upgrading(self) -> bool:
@@ -149,6 +154,9 @@ class AccountSnapshot:
     notes: tuple[str, ...] = ()
     # Fingerprint of the logged-in game user id; None when not observed.
     game_identity: Optional[str] = None
+    # The ship's @ShipDesignId (its hull design, which gives the interior grid); None when not observed. Like
+    # Room.row/column, it is read only by room placement and is not kept in baselines, so it is left out of equality.
+    ship_design_id: Optional[str] = field(default=None, compare=False)
 
     def section(self, name: str) -> Completeness:
         return self.completeness.get(name, Completeness.MISSING)
@@ -172,6 +180,7 @@ class AccountSnapshot:
             "source": self.source,
             "game_version": self.game_version,
             "hull_level": self.hull_level,
+            "ship_design_id": self.ship_design_id,
             "trophies": self.trophies,
             "resources": {
                 "minerals": self.resources.minerals,
@@ -289,10 +298,12 @@ def build_snapshot(
         builder.completeness["profile"] = Completeness.COMPLETE if trophies is not None else Completeness.PARTIAL
 
     hull_level = None
+    ship_design_id = None
     if ship is None:
         builder.completeness["ship"] = Completeness.MISSING
     else:
         hull_level = _int_or_none(ship.get("@ShipLevel"))
+        ship_design_id = _clean_text(ship.get("@ShipDesignId"), "ship.design_id") or None
         builder.completeness["ship"] = Completeness.COMPLETE if hull_level is not None else Completeness.PARTIAL
 
     if resources is None:
@@ -333,6 +344,8 @@ def build_snapshot(
             room_id=identifier,
             design_id=_clean_text(record.get("@RoomDesignId"), "rooms.design_id"),
             status=_clean_text(record.get("@RoomStatus"), "rooms.status"),
+            row=_int_or_none(record.get("@Row")),
+            column=_int_or_none(record.get("@Column")),
         ),
     )
     research_records = builder.parse_section(
@@ -367,6 +380,7 @@ def build_snapshot(
         completeness=dict(builder.completeness),
         notes=tuple(builder.notes),
         game_identity=game_identity,
+        ship_design_id=ship_design_id,
     )
 
 
