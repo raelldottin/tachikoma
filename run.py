@@ -439,6 +439,188 @@ def baseline_summary(directory):
     return "\n".join(lines) + "\n"
 
 
+CAPTURE_FIXTURES_DIR = Path(__file__).resolve().parent / "tests" / "fixtures"
+
+
+def run_capture_reads(registry_path, output_dir, identity_salt_env=None, out=None, environ=None, client_cls=None,
+                      device_cls=None, clock=None):
+    """Write sanitized captures of read-only responses for every enabled registry account (SPEC-03, S03-R1).
+
+    Each enabled account logs in with the credentials its ``credentials_secret``
+    names in the environment (``sdk.fleet.factory``), then makes only the
+    read-only calls in ``sdk.state.capture.CAPTURE_READS``; the profile and the
+    server settings are the responses the login already holds. Every response
+    is sanitized and scanned with the S03-R2 rules before anything is written
+    (``sdk.state.capture``); one that does not scan clean is withheld and only
+    the rule is reported. Files go to ``<output_dir>/<alias>/<endpoint>.xml``
+    (or ``.json``) with ``manifest.json`` beside them. ``output_dir`` must be
+    new or empty and outside ``tests/fixtures/``: the owner reviews the files
+    and copies them there. With ``identity_salt_env``, two aliases logged in
+    to the same game account, or an identity that differs from the profile's
+    ``expected_game_identity``, are refused before any read.
+
+    Returns 0 when every endpoint of every enabled account was written, 1 when
+    any was not, and 2 when the registry, the identity salt or the output
+    directory is missing or invalid.
+    """
+    import json
+    from dataclasses import replace
+    from datetime import datetime, timezone
+
+    from sdk.fleet.accounts import RegistryError, game_identity_refusal, load_registry
+    from sdk.fleet.factory import EnvironmentAccountFactory, LogScrubber
+    from sdk.fleet.orchestrator import error_reason
+    from sdk.state.capture import (
+        CAPTURE_SOURCE, MANIFEST_NAME, README_COLUMNS, build_manifest, capture_account, describe_findings,
+        scan_capture_text, table_row, write_capture,
+    )
+    from sdk.state.snapshot import SnapshotInputError, identity_salt_key
+
+    out = out or sys.stdout
+    environ = os.environ if environ is None else environ
+    clock = clock or (lambda: datetime.now(timezone.utc))
+    output_dir = Path(output_dir)
+
+    if not Path(registry_path).is_file():
+        print(f"error: registry not found: {registry_path}", file=sys.stderr)
+        return 2
+    try:
+        registry = load_registry(registry_path)
+    except RegistryError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 2
+
+    identity_salt = None
+    if identity_salt_env:
+        identity_salt = environ.get(identity_salt_env) or None
+        if identity_salt is None:
+            print(f"error: identity salt variable {identity_salt_env} is not set", file=sys.stderr)
+            return 2
+        try:
+            identity_salt_key(identity_salt)
+        except SnapshotInputError as error:  # the message never repeats the salt
+            print(f"error: {identity_salt_env}: {error}", file=sys.stderr)
+            return 2
+
+    resolved = output_dir.resolve()
+    if resolved == CAPTURE_FIXTURES_DIR or CAPTURE_FIXTURES_DIR in resolved.parents:
+        print("error: --output must be outside tests/fixtures/; review the captures, then copy them there",
+              file=sys.stderr)
+        return 2
+    if output_dir.exists() and (not output_dir.is_dir() or any(output_dir.iterdir())):
+        print(f"error: --output {output_dir} must be a new or empty directory; captures are never overwritten",
+              file=sys.stderr)
+        return 2
+    try:
+        output_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as error:
+        print(f"error: cannot create capture directory {output_dir}: {error.strerror}", file=sys.stderr)
+        return 2
+
+    scrubber = LogScrubber()
+    scrubber.add_secrets([identity_salt])
+    factory_options = {"device_cls": device_cls} if device_cls is not None else {}
+    factory = EnvironmentAccountFactory(
+        output_dir, client_cls=client_cls or Client, environ=environ,
+        client_settings=CLIENT_CHECKSUM_SETTINGS, identity_salt=identity_salt, log_scrubber=scrubber,
+        source=CAPTURE_SOURCE, **factory_options,
+    )
+
+    enabled = registry.enabled()
+    accounts = {}  # alias -> {"status", "game_version", "reason"}
+    results = []
+    seen = {}  # accepted game identity -> alias: accounts never mix
+    declared = registry.declared_identities()
+    with scrubber.installed():
+        for profile in enabled:  # one at a time, in alias order: the first alias wins a contested identity
+            try:
+                session = factory.open_reads(profile)
+            except Exception as error:  # one account's failure must not stop the others
+                accounts[profile.alias] = {"status": "error", "game_version": None,
+                                           "reason": scrubber.scrub(error_reason(error))}
+                continue
+            refusal = game_identity_refusal(profile.alias, profile.expected_game_identity, session.game_identity,
+                                            seen, declared)
+            if refusal is not None:
+                accounts[profile.alias] = {"status": "refused", "game_version": session.game_version,
+                                           "reason": refusal}
+                continue
+            if session.game_identity is not None:
+                seen[session.game_identity] = profile.alias
+            captured = capture_account(profile.alias, session.client, game_version=session.game_version,
+                                       scrub_text=scrubber.scrub, clock=clock)
+            for result in captured:
+                if result.status == "captured":
+                    try:
+                        write_capture(output_dir, result)
+                    except OSError as error:
+                        result = replace(result, status="error", text=None,
+                                         reason=f"not written: {type(error).__name__}")
+                    else:
+                        result = replace(result, status="written")
+                results.append(result)
+            accounts[profile.alias] = {"status": "logged in", "game_version": session.game_version, "reason": None}
+
+    # Scrub every reason again now that the scrubber knows every account's credential values.
+    results = [replace(result, reason=result.reason and scrubber.scrub(result.reason)) for result in results]
+    for account in accounts.values():
+        account["reason"] = account["reason"] and scrubber.scrub(account["reason"])
+    notes = factory.notes()
+    lines = [
+        "# Read captures",
+        "",
+        f"Registry: {registry_path} ({len(enabled)} of {len(registry)} accounts enabled). Captures: {output_dir}. "
+        "Read-only: no action was executed. Every file was sanitized and scanned before it was written.",
+        "",
+        "## Accounts",
+        "",
+        "| Account | Login | Game version | Written | Not written | Notes |",
+        "| --- | --- | --- | --- | --- | --- |",
+    ]
+    for alias in registry.aliases():
+        account = accounts.get(alias, {"status": "disabled", "game_version": None, "reason": None})
+        mine = [result for result in results if result.alias == alias]
+        written = sum(1 for result in mine if result.status == "written")
+        reason = "; ".join(filter(None, [account["reason"], *notes.get(alias, ())]))
+        lines.append(f"| {alias} | {account['status']} | {_md_cell(account['game_version'])} | {written} | "
+                     f"{len(mine) - written} | {_md_cell(reason or None)} |")
+    lines += ["", "## Endpoints", "", "| Account | Endpoint | Status | File | Scan | Reason |",
+              "| --- | --- | --- | --- | --- | --- |"]
+    for result in results:
+        lines.append(f"| {result.alias} | {result.read.endpoint} | {result.status} | "
+                     f"{_md_cell(result.relative_path if result.status == 'written' else None)} | "
+                     f"{_md_cell(result.scan)} | {_md_cell(result.reason)} |")
+    if not results:
+        lines.append("| n/a | n/a | n/a | n/a | n/a | n/a |")
+
+    code = 0 if (all(accounts.get(profile.alias, {}).get("status") == "logged in" for profile in enabled)
+                 and all(result.status == "written" for result in results)) else 1
+    manifest = build_manifest(results, clock(), accounts)
+    manifest_text = json.dumps(manifest, indent=2, ensure_ascii=False) + "\n"
+    findings = scan_capture_text(manifest_text, MANIFEST_NAME)
+    if findings:
+        lines += ["", f"Manifest not written: it fails the scan ({describe_findings(findings)})."]
+        code = 1
+    else:
+        try:
+            with (output_dir / MANIFEST_NAME).open("x", encoding="utf-8") as handle:
+                handle.write(manifest_text)
+        except OSError as error:
+            lines += ["", f"Manifest not written: {type(error).__name__}."]
+            code = 1
+        else:
+            lines += ["", f"Manifest written: {output_dir / MANIFEST_NAME}"]
+    rows = [table_row(result) for result in results if result.status == "written"]
+    if rows:
+        lines += ["", "## Rows for tests/fixtures/live_sanitized/README.md", "",
+                  "Review each file (names the scan cannot recognise, ids such as ShipId or BattleId), copy it into "
+                  "tests/fixtures/live_sanitized/, run the S03-R2 scan, and fill in Reviewed by.", "",
+                  "| " + " | ".join(README_COLUMNS) + " |", "| " + " | ".join("---" for _ in README_COLUMNS) + " |",
+                  *rows]
+    out.write("\n".join(lines) + "\n")
+    return code
+
+
 def _read_fleet_journals(registry, factory):
     """Every registered alias's journal that exists, or ``None`` after printing why one is unreadable."""
     from sdk.journal import JournalError, read_events
@@ -1106,8 +1288,8 @@ def main():
         dest="registry",
         default=None,
         metavar="PATH",
-        help="account registry JSON: required by --fleet-dry-run, --fleet-execute and --baseline; adds the "
-        "isolation audit to --report fleet",
+        help="account registry JSON: required by --fleet-dry-run, --fleet-execute, --baseline and "
+        "--capture-reads; adds the isolation audit to --report fleet",
     )
     parser.add_argument(
         "--report-format",
@@ -1122,7 +1304,8 @@ def main():
         default=None,
         metavar="PATH",
         help="HTML file to write for --report dashboard (required there; replaced atomically), or the "
-        "directory --baseline writes <alias>-<UTC time>.json files to (required there; never overwritten)",
+        "directory --baseline writes <alias>-<UTC time>.json files to (required there; never overwritten), or "
+        "the new or empty directory --capture-reads writes its captures and manifest to (required there)",
     )
     parser.add_argument(
         "--fleet-dry-run",
@@ -1199,6 +1382,17 @@ def main():
         help="with --baseline: also write the Markdown summary table of every baseline in --output to PATH",
     )
     parser.add_argument(
+        "--capture-reads",
+        dest="capture_reads",
+        action="store_true",
+        default=False,
+        help="log in to every enabled --registry account (credentials from the environment variables its "
+        "credentials_secret names), make only read-only calls (profile, server settings, ship, crew, items, "
+        "FindUserRanking, ListPvPBattles2), sanitize and scan each response, write the clean ones and a "
+        "manifest to --output DIR (new or empty, outside tests/fixtures/), then exit; never changes an account "
+        "(SPEC-03 captures)",
+    )
+    parser.add_argument(
         "--concurrent",
         dest="concurrent",
         type=positive_int,
@@ -1220,8 +1414,8 @@ def main():
         dest="identity_salt_env",
         default=None,
         metavar="NAME",
-        help="with --fleet-dry-run, --baseline or --fleet-execute (required there): environment variable holding "
-        "the game identity salt",
+        help="with --fleet-dry-run, --baseline, --capture-reads or --fleet-execute (required there): environment "
+        "variable holding the game identity salt",
     )
     args = parser.parse_args()
 
@@ -1237,6 +1431,22 @@ def main():
         ("--smtp-email", args.smtp_email), ("--smtp-password-file", args.smtp_password_file),
         ("--recipient", args.recipient),
     )
+    if args.capture_reads:
+        # Read-only: only --registry, --output and --identity-salt-env apply (SPEC-03, S03-R1).
+        other_flags = (
+            ("--baseline", args.baseline), ("--baseline-summary", args.baseline_summary),
+            ("--fleet-dry-run", args.fleet_dry_run), ("--fleet-execute", args.fleet_execute),
+            ("--authorization", args.authorization), ("--mode", args.mode), ("--plan-only", args.plan_only),
+            ("--halt-share", args.halt_share is not None), ("--dashboard-out", args.dashboard_out),
+            ("--fleet-journal-dir", args.fleet_journal_dir), ("--concurrent", args.concurrent is not None),
+            *(item for item in single_account_flags if item[0] != "--output"), *smtp_flags,
+        )
+        conflicting = [flag for flag, value in other_flags if value]
+        if conflicting:
+            parser.error(f"--capture-reads cannot be combined with {', '.join(conflicting)}")
+        if not args.registry or not args.output:
+            parser.error("--capture-reads needs --registry PATH and --output DIR")
+        sys.exit(run_capture_reads(args.registry, args.output, args.identity_salt_env))
     if args.baseline:
         # Read-only: none of the execute, dry-run, report or single-account flags apply (SPEC-04, S04-R1).
         other_flags = (
@@ -1283,7 +1493,8 @@ def main():
                                    args.identity_salt_env))
     if args.concurrent is not None or args.fleet_journal_dir or args.identity_salt_env:
         parser.error("--concurrent, --fleet-journal-dir and --identity-salt-env are only used with --fleet-dry-run "
-                     "or --fleet-execute (--concurrent and --identity-salt-env also with --baseline)")
+                     "or --fleet-execute (--concurrent and --identity-salt-env also with --baseline, "
+                     "--identity-salt-env also with --capture-reads)")
 
     # Offline reports read local journals only: handled before any SMTP setup,
     # Device/Client construction, credential prompt, login or network access.
@@ -1293,7 +1504,7 @@ def main():
         if args.report == "dashboard" and not args.output:
             parser.error("--report dashboard needs --output PATH")
         if args.output and args.report != "dashboard":
-            parser.error("--output is only used with --report dashboard or --baseline")
+            parser.error("--output is only used with --report dashboard, --baseline or --capture-reads")
         sys.exit(run_offline_report(args.report, args.journals, args.registry, args.report_format,
                                     output_path=args.output))
     if args.journals or args.registry or args.output:

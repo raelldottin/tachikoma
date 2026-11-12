@@ -68,6 +68,10 @@ with the provider's read-only calls and returns it with
 ``server_game_version``: the version in the server's latest-version setting
 (``GetLatestVersion3``, which ``Client.login`` reads into ``latestVersion``),
 never the client's declared ``ClientVersion``. ``run.py --baseline`` writes it.
+
+Captures (SPEC-03, S03-R1). ``EnvironmentAccountFactory.open_reads`` logs one
+account in the same way and makes no other call; ``run.py --capture-reads``
+then makes only the read-only calls in ``sdk.state.capture.CAPTURE_READS``.
 """
 
 from __future__ import annotations
@@ -108,6 +112,7 @@ from sdk.policy import DesignData, Plan, PolicyConfig, ProgressionPolicy, Reject
 from sdk.redaction import redact_secrets
 from sdk.scheduler import DailyScheduler, ScheduleReport, SchedulerConfig
 from sdk.state import AccountSnapshot, ClientSnapshotProvider
+from sdk.state.snapshot import SnapshotInputError, game_identity_fingerprint
 
 EMAIL_SUFFIX = "_EMAIL"
 PASSWORD_SUFFIX = "_PASSWORD"
@@ -477,6 +482,24 @@ class EnvironmentAccountFactory:
         snapshot = provider()
         return BaselineObservation(snapshot, server_game_version(client), provider.failed_reads)
 
+    def open_reads(self, profile: AccountProfile) -> "ReadSession":
+        """Log ``profile`` in and make no other call (SPEC-03 captures, ``run.py --capture-reads``).
+
+        Returns the logged-in client, its game identity (``None`` without an
+        identity salt or for an unknown id) and ``server_game_version``.
+        Reads no design data, takes no snapshot and opens no journal. Errors
+        are raised as for ``__call__``.
+        """
+        client, _, _ = self._open(profile, read_designs=False)
+        identity = None
+        if self._identity_salt is not None:
+            try:
+                identity = game_identity_fingerprint(getattr(getattr(client, "user", None), "id", None),
+                                                     self._identity_salt)
+            except SnapshotInputError:  # unknown id: identity stays unobserved
+                identity = None
+        return ReadSession(client, identity, server_game_version(client))
+
     def _journal(self, profile: AccountProfile) -> GameplayJournal:
         path = self.journal_path(profile.alias)
         if self.dry_run_registry_stamp is None:
@@ -506,6 +529,15 @@ class EnvironmentAccountFactory:
 SERVER_VERSION_ATTRIBUTES = ("@LatestVersion", "@LatestClientVersion", "@LatestVersionIOS")
 # A version string such as ``0.999.60``; anything else from the server is not recorded.
 GAME_VERSION_PATTERN = re.compile(r"^[0-9]+(?:\.[0-9]+){1,3}[A-Za-z0-9]{0,4}$")
+
+
+@dataclass(frozen=True)
+class ReadSession:
+    """A logged-in client for read-only captures, its game identity and the server's game version."""
+
+    client: Any
+    game_identity: Optional[str]
+    game_version: Optional[str]
 
 
 @dataclass(frozen=True)

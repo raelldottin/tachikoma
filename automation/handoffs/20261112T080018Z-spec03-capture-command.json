@@ -1,0 +1,50 @@
+{
+  "slice_id": "spec03-capture-command",
+  "status": "done",
+  "summary": "SPEC-03 is blocked on the owner's sanitized captures (G1), and sanitizing by hand is slow and easy to get wrong. This adds one read-only command that produces them: it logs each enabled registry account in through the fleet factory (same credential handling and LogScrubber as --baseline), calls only read-only Client methods (getShipByUserId, listAllCharactersOfUser, listItemsOfAShip, findUserRanking, listPvPBattles2 take=25) and keeps the profile and GetLatestVersion3 settings that login already holds. An expired session raises instead of logging in again.  sdk/state/capture.py sanitizes every response before anything is written: secret fields become ***REDACTED***, Id/AccountId/*UserId values become stable per-account USER-* placeholders, player/ship/alliance names become PLAYER-*/SHIP-*/ALLIANCE-*, and any value redact_secrets, the account's credential values or the scan would flag is redacted. It then applies the S03-R2 scan (duplicated as scan_capture_text, kept in step with tests/test_profile_reads.py by a parity test); a response that does not scan clean is withheld and only the rule is reported. Output is <alias>/<endpoint>.xml plus a manifest with README-ready rows; the output directory must be new and outside tests/fixtures/, so the owner reviews and copies files in. Implemented by the capture builder specialist subagent in an isolated worktree, independently reviewed by the verifier subagent (tests cite S03-R1, S03-R2; parent re-validated in a scratch clone), and re-validated by the parent.",
+  "files_touched": [
+    "README.md",
+    "README.template",
+    "docs/baseline/capability-inventory.json",
+    "run.py",
+    "sdk/fleet/factory.py",
+    "sdk/state/capture.py",
+    "tests/fixtures/live_sanitized/README.md",
+    "tests/test_capture_reads.py"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "SPEC-03: read-only, sanitizing capture command for the owner's G1 run",
+      "before": "Roadmap item not implemented",
+      "after": "SPEC-03: read-only, sanitizing capture command for the owner's G1 run (offline)",
+      "proof": [
+        "make syntax-check, make test, scripts/ci.py lint and git diff --check pass on current main",
+        "verifier verdict: tests cite S03-R1, S03-R2; parent re-validated in a scratch clone"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "Offline only; no live game verification."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-12T08:00:35Z"
+}
