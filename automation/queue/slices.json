@@ -2170,7 +2170,7 @@
     {
       "slice_id": "spec07-trial-plan-draft",
       "title": "Draft the R2 progression trial plan for the owner to approve",
-      "status": "queued",
+      "status": "done",
       "priority": 411,
       "domain": "experiments",
       "allowed_paths": [

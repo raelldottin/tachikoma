@@ -75,6 +75,8 @@
 
 **Offline verification:** every MUST with an offline acceptance criterion is covered by a test that cites it (checked by `scripts/spec_trace.py`). Implemented in #167.
 
+**Trial plan (S07-R1):** a draft for the owner to approve is in [r2-progression-trial.md](../experiments/r2-progression-trial.md): `pss5`, a baseline window from 2026-11-16, then four 7-day ABBA blocks (14 account-days per arm, enough for a 1.5 sd effect). It is not approved, so the trial has not started: the owner writes the manual routine, confirms the windows and stop thresholds, and writes the full-mode authorization. The canary (S07-R2) must also succeed and reconcile first.
+
 Pending.
 
 ## Open questions and risks
