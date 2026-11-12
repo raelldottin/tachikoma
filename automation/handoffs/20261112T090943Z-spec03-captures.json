@@ -1,0 +1,50 @@
+{
+  "slice_id": "spec03-captures",
+  "status": "done",
+  "summary": "Six sanitized responses from the owner-dispatched live-trial.yml capture run of 2026-11-12 (pss1 and pss5, read-only): pss5's profile (DeviceLogin17), FindUserRanking for both, ListPvPBattles2 for pss1 (10 battles) and pss5 (none), and pss1's server settings field summary. Each was written by run.py --capture-reads, re-downloaded, re-scanned and read in full; no value was edited by hand. pss1's profile is left out because its creation date and lifetime PvP totals could identify it.  The README rows record date, game version and sanitization steps. The owner reviews and merges this slice.",
+  "files_touched": [
+    "tests/fixtures/live_sanitized/README.md",
+    "tests/fixtures/live_sanitized/pss1/find_user_ranking.xml",
+    "tests/fixtures/live_sanitized/pss1/list_pvp_battles2.xml",
+    "tests/fixtures/live_sanitized/pss1/server_settings_fields.json",
+    "tests/fixtures/live_sanitized/pss5/find_user_ranking.xml",
+    "tests/fixtures/live_sanitized/pss5/list_pvp_battles2.xml",
+    "tests/fixtures/live_sanitized/pss5/user_login.xml"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "Add the reviewed G1 captures to tests/fixtures/live_sanitized/",
+      "before": "tests/fixtures/live_sanitized/ holds only its README",
+      "after": "Six reviewed captures with README rows; owner review pending",
+      "proof": [
+        "make syntax-check, make test, scripts/ci.py lint and git diff --check pass on current main",
+        "S03-R2 fixture scan passes on the real captures",
+        "every file re-downloaded, re-scanned and read in full"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "Player-chosen names the scan cannot recognise are checked by the reviewer; the owner should read the files before merging."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-12T09:10:00Z"
+}
