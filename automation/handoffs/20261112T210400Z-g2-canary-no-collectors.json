@@ -1,0 +1,46 @@
+{
+  "slice_id": "g2-canary-no-collectors",
+  "status": "done",
+  "summary": "Canary 43305786623 (2026-11-12, main 286818a) was the first run with room-fill evidence. It reconciled not-observed again, and every room reported CapacityUsed 0 before and after. pss5's nine rooms are a bridge, a bedroom, a bolter, three lifts, an engine, a small reactor and a mineral mining laser: no mineral or gas collector and no storage room. So collect_all_resources has nothing to collect, and S07-R2's verified canary cannot be met on pss5 as it stands. This is not a defect in the check. Gas is 0 above the reserve, so baseline-v1 refused every research and room upgrade too. The G2 evidence, the runbook's verified-canary steps (the owner builds a collector by hand first), the trial plan's starting state and SPEC-07 now say so.",
+  "files_touched": [
+    "docs/experiments/live/RUNBOOK.md",
+    "docs/experiments/live/g2-evidence.md",
+    "docs/experiments/r2-progression-trial.md",
+    "docs/specs/SPEC-07-progression-trial.md"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "Record that pss5 has no collectors",
+      "before": "cause of not-observed canaries unknown",
+      "after": "cause recorded: pss5 has no collector or storage room",
+      "proof": [
+        "room fill read from the downloaded artifact of run 43305786623 after a leak re-scan (11 expected id and hash hits, none committed)",
+        "make syntax-check, make test, scripts/spec_trace.py and git diff --check pass"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "The trial cannot start until the owner builds a collector on pss5."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-12T21:04:19Z"
+}

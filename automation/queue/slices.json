@@ -2265,7 +2265,7 @@
     {
       "slice_id": "g2-canary-no-collectors",
       "title": "Record that pss5 has no collectors, so its canary cannot verify a collection",
-      "status": "queued",
+      "status": "done",
       "priority": 416,
       "domain": "fleet",
       "allowed_paths": [
