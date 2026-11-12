@@ -2187,6 +2187,30 @@
         "make test",
         "git diff --check"
       ]
+    },
+    {
+      "slice_id": "g2-canary-evidence",
+      "title": "Record the G2 canary evidence and mark SPEC-05 done",
+      "status": "queued",
+      "priority": 412,
+      "domain": "fleet",
+      "allowed_paths": [
+        "docs/experiments/live/g2-evidence.md",
+        "docs/experiments/live/RUNBOOK.md",
+        "docs/specs/SPEC-05-live-execution-gate.md",
+        "docs/specs/SPEC-11-alert-delivery.md",
+        "docs/specs/README.md"
+      ],
+      "depends_on": [
+        "spec07-trial-plan-draft"
+      ],
+      "max_files_changed": 5,
+      "notes": "Implements S05-AC6 (and records S11-AC3's evidence). Owner-dispatched G2 runs of 2026-11-12: enrol 43247933379 and 43251373229 (same fingerprint), canary 43256792025 (executed nothing; fixed by #214), canary 43261519416 and 43262412245 (each executed one collect_all_resources on pss5, reconciled not-observed because minerals and gas were unchanged; no spend; server version 1.0+settings.3307714 recorded; one no-verified-action warning; dashboard written). Summarise without raw ids; SPEC-05 Done; SPEC-11 evidence noted, owner confirmation of seeing alerts and dashboard pending.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
     }
   ]
 }
