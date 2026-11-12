@@ -1767,7 +1767,7 @@
     {
       "slice_id": "spec03-captures",
       "title": "Add the reviewed G1 captures to tests/fixtures/live_sanitized/",
-      "status": "queued",
+      "status": "done",
       "priority": 403,
       "domain": "safety",
       "allowed_paths": [
