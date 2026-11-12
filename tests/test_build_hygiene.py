@@ -14,6 +14,8 @@ import sys
 from tempfile import TemporaryDirectory
 import unittest
 
+from tests.test_strict_mode import skip_unless_dependency
+
 ROOT = Path(os.path.abspath(__file__)).parent.parent
 CONTRACT_TARGETS = (
     "automation-check",
@@ -29,9 +31,11 @@ PYTHON_311_GUARD = "this target needs Python >= 3.11"
 # A test recipe ends with: "<interpreter>" "<root>/scripts/ci.py" test [--names ...]
 CI_TEST_COMMAND = re.compile(r'"([^"]+)" "([^"]+)" test(?: --names (\S+))?$', re.MULTILINE)
 
-REQUIRES_POSIX_MAKE = unittest.skipUnless(
-    os.name == "posix" and shutil.which("make") and (ROOT / "Makefile").is_file(),
+# A missing make fails under TACHIKOMA_STRICT_DEPS=1; a non-POSIX host or a copy without the Makefile still skips.
+REQUIRES_POSIX_MAKE = skip_unless_dependency(
+    shutil.which("make"),
     "requires make, a POSIX shell and the repository Makefile",
+    applicable=os.name == "posix" and (ROOT / "Makefile").is_file(),
 )
 
 
@@ -162,7 +166,12 @@ def _is_git_checkout():
     return result.returncode == 0 and os.path.samefile(result.stdout.strip(), ROOT)
 
 
-@unittest.skipUnless(_is_git_checkout(), "requires git and a repository checkout")
+# A missing git fails under TACHIKOMA_STRICT_DEPS=1; with git present, a tree that is not this checkout still skips.
+@skip_unless_dependency(
+    shutil.which("git"),
+    "requires git and a repository checkout",
+    applicable=not shutil.which("git") or _is_git_checkout(),
+)
 class GitIgnoreHygieneTests(unittest.TestCase):
     def git(self, *arguments):
         return subprocess.run(
