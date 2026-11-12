@@ -1,9 +1,10 @@
 # SPEC-13: Automated room placement
 
-**Status:** Draft
-**Drafted:** 2026-11-12, at the owner's request ("automate placing the room on the ship", then "draft the spec"), and revised after an agent review the same day. Nothing here is approved, and no code may be written until the owner sets `Status: Approved` and answers the owner decisions.
+**Status:** Approved
+**Drafted:** 2026-11-12, at the owner's request ("automate placing the room on the ship", then "draft the spec"), and revised after an agent review the same day.
+**Approval:** owner, 2026-11-12 ("Approve SPEC-13", with its safe defaults and the capture included). The owner cannot tell which game account is pss5, so placement on pss5 is automated rather than done by hand. The owner decisions below are recorded, and R1 and R7 are amended accordingly. G6 is given for the captures; the live placement still needs its own authorization.
 **Release:** operations (supports R2; not a roadmap exit)
-**Owner gate:** G6 (new): sanitized captures of the room-purchase request, and one live placement on the trial account
+**Owner gate:** G6: sanitized captures of the room-purchase request, and one live placement on the trial account
 **Depends on:** SPEC-03 (capture scanning), SPEC-05 (authorized execution)
 **Implements roadmap item:** none directly. It came out of the G2 canaries: pss5 has no mineral or gas collector and no storage room ([G2 evidence](../experiments/live/g2-evidence.md#why-the-collections-had-nothing-to-collect)), and the client can only upgrade rooms that already exist.
 
@@ -31,13 +32,9 @@ Placing a room means choosing a free cell range inside the ship's interior grid.
 
 ## Requirements
 
-- **S13-R1 (MUST)** The owner supplies, on the current game version, sanitized captures of:
-  - the request and response that buy and place one room, including how any checksum is formed;
-  - `GetShipByUserId` before and after;
-  - the `RoomDesign` and `ShipDesign` records for the ship and the room, including their size and interior-grid fields;
-  - the `RoomDesignPurchase` records, if the game states per-ship-level room limits there.
-
-  They are stored under `tests/fixtures/live_sanitized/rooms/` and pass the S03-R2 capture scan.
+- **S13-R1 (MUST)** Sanitized captures on the current game version, stored under `tests/fixtures/live_sanitized/rooms/` and passing the S03-R2 capture scan:
+  - **From the owner:** the request and response that buy and place one room, including how any checksum is formed, and `GetShipByUserId` before and after. Any account the owner can log into will do; it need not be the trial account.
+  - **From the agents' read-only capture step (G1, amended 2026-11-12):** the `RoomDesign`, `ShipDesign` and `RoomDesignPurchase` records, which give room sizes, the ship's interior grid and any per-ship-level limits. These are game data, read with `ListRoomDesigns2` and `ListAllDesigns4`, and need no write access.
 - **S13-R2 (MUST)** `Client.placeRoom(room_design_id, row, column)` reproduces the captured request shape exactly. No existing code path calls it. It does no eligibility or cost checks of its own. Its return value follows what the captures allow: it returns `True` or `False` only for a response shape the captures show to mean success or refusal, and otherwise the raw response, which the runner treats as ambiguous.
 - **S13-R3 (MUST)** A pure function `placement_refusal(snapshot, layout, room_design_id, row, column)` returns `None` only when all of the following hold:
   - the room design is known and priced in minerals or gas, never starbux;
@@ -61,7 +58,7 @@ Placing a room means choosing a free cell range inside the ship's interior grid.
 - **S13-R7 (MUST)** Placement runs only as an explicit one-off, never from a policy plan. `--fleet-execute --mode place` takes one account, one `room_design_id`, one `row` and one `column`, and runs at most one placement per run. Anything outside the authorization is refused before login. The authorization must have:
   - `place` in `modes`;
   - `place_room` in `actions`;
-  - a `placements` entry for that account naming that design and position.
+  - a `placements` entry for that account naming that design and either a row and column or `first-free` (amended 2026-11-12). `first-free` means the first position, in a fixed top-left scan order, that `placement_refusal` accepts on a fresh ship read in the same run. The run record shows the position used.
 - **S13-R8 (MUST)** Starbux is never spent: a design priced in starbux is refused whatever the authorization says. The authorization's mineral and gas caps apply.
 - **S13-R9 (MUST)** `baseline-v1` and every existing policy are unchanged. A test proves their plans for every bundled scenario are identical before and after this spec.
 - **S13-R10 (SHOULD)** `--plan-only --mode place` prints, without logging in, whether the authorization would refuse the requested placement (mode, action, account, design, position, caps). The layout check needs a fresh ship read, so it runs only in the live run.
@@ -122,8 +119,9 @@ Fixtures are the sanitized captures from R1 plus synthetic layouts. All game tra
 
 | Slice id | Requirements | Files | Kind |
 | --- | --- | --- | --- |
-| `spec13-captures` | R1 | `tests/fixtures/live_sanitized/rooms/*` | **owner** |
-| `spec13-grid-model` | R3, R9 | `sdk/policy/placement.py`, `sdk/state/snapshot.py` (`Room.row`, `Room.column`, ship design id), tests | agent, after `spec13-captures` (the grid encoding comes from them) |
+| `spec13-captures` | R1 | `tests/fixtures/live_sanitized/rooms/*` | **owner** (the purchase request) |
+| `spec13-capture-designs` | R1 | `sdk/state/capture.py`, `tests/test_capture_reads.py`, `docs/experiments/live/RUNBOOK.md` | agent (the design records, read-only) |
+| `spec13-grid-model` | R3, R9 | `sdk/policy/placement.py`, `sdk/state/snapshot.py` (`Room.row`, `Room.column`, ship design id), tests | agent, after `spec13-capture-designs` and an owner `step=capture` run (the grid encoding comes from the captured design records) |
 | `spec13-client-call` | R2 | `sdk/client.py`, tests | agent, after `spec13-captures` |
 | `spec13-place-action` | R4–R6, R8 | `sdk/actions/catalog.py`, `sdk/execution/runner.py`, tests | agent, after `spec13-grid-model` and `spec13-client-call` |
 | `spec13-place-mode` | R7, R10 | `run.py`, `sdk/fleet/authorization.py`, `sdk/fleet/factory.py`, `README.template`, `README.md`, tests | agent, after `spec13-place-action` |
@@ -134,11 +132,11 @@ Fixtures are the sanitized captures from R1 plus synthetic layouts. All game tra
 
 | Id | Question | Needed before | Safe default |
 | --- | --- | --- | --- |
-| S13-Q1 | Approve this spec? | any code | No; it stays a draft |
-| S13-Q2 | Can you capture and sanitize one room purchase, with the ship and design records (R1)? | `spec13-captures` | No; everything after it stays blocked |
-| S13-Q3 | Which account, room design, row and column for the live placement? | the authorization | A level-1 mineral collector on the trial account, at a position you choose in the game, outside SPEC-07 trial blocks |
-| S13-Q4 | The cap for the placement's mineral or gas price | the authorization | The design's price, nothing more |
-| S13-Q5 | Should a future policy version build rooms on its own? | a later spec | No |
+| S13-Q1 | Approve this spec? | any code | **Answered 2026-11-12: yes** |
+| S13-Q2 | Can you capture and sanitize one room purchase (R1)? | `spec13-client-call` | **Answered 2026-11-12: yes**, on any account the owner can log into; the design records come from the agents' read-only capture |
+| S13-Q3 | Which account, room design, row and column for the live placement? | the authorization | **Answered 2026-11-12:** a level-1 mineral collector on `pss5` at `first-free`, outside SPEC-07 trial blocks or logged as an intervention |
+| S13-Q4 | The cap for the placement's mineral or gas price | the authorization | **Answered 2026-11-12:** the design's price, nothing more |
+| S13-Q5 | Should a future policy version build rooms on its own? | a later spec | **Answered 2026-11-12: no** |
 
 ## Evidence
 
