@@ -1,0 +1,51 @@
+{
+  "slice_id": "collect-room-fill-evidence",
+  "status": "done",
+  "summary": "Three G2 canaries reconciled collect_all_resources as not-observed, and the journal could not tell 'nothing to collect' from 'a collection not seen'. The collection now has an evidence probe and builder. They read the ship's room records the snapshots already fetched (client.rooms, no extra game call) and the room designs, and journal per room design the CapacityUsed before and after, with the design's name, RoomType, ManufactureType and Capacity, plus totals and a note when nothing was stored before a not-observed collection. Room ids never reach the journal. A failed or stale ship read on either side leaves the fill unobserved, never a leftover value. The evidence never changes the reconciled outcome, and the probe and builder never raise.  Canary 43284132171 (not-observed, about two hours after the last one) is added to the G2 evidence; the runbook and README say what the new evidence shows and what it does not yet prove.",
+  "files_touched": [
+    "README.md",
+    "README.template",
+    "docs/experiments/live/RUNBOOK.md",
+    "docs/experiments/live/g2-evidence.md",
+    "sdk/actions/catalog.py",
+    "tests/test_action_catalog.py",
+    "tests/test_action_runner.py"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "make lint",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "Journal each room's fill before and after a collection",
+      "before": "collection journaled no evidence",
+      "after": "collection journals per-design room fill before and after, unobserved after a failed ship read",
+      "proof": [
+        "tests: verified collection shows the collector emptied; empty note only for not-observed with 0 stored; no room ids in the journal; failed ship read before or after leaves the fill unobserved; malformed probes never raise",
+        "independent review: no blockers; its stale-read, id-less room, design-failure and doc findings were fixed",
+        "make syntax-check, make test (1314 OK), make lint, git diff --check, scripts/spec_trace.py pass"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "What CapacityUsed counts per room type is unconfirmed live; the evidence is diagnostic only and gates nothing."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-12T20:56:06Z"
+}

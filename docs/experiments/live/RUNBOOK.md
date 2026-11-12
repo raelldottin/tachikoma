@@ -64,7 +64,7 @@ SPEC-07 needs a canary whose collection reconciles `verified` before trial block
 2. If pss5's mineral or gas storage is full, spend some by hand in the game first, for example on an upgrade. Log it as an intervention if a trial window is open.
 3. Dispatch `gh workflow run live-trial.yml -f step=canary`. It runs a fresh dry run first. The canary authorization runs until 2026-11-26.
 
-An agent reads the artifact and records the result in [G2 evidence](g2-evidence.md). A further `not-observed` result with free storage and time for production points to a defect in the before-and-after check. That gets investigated before block 1 opens.
+An agent reads the artifact and records the result in [G2 evidence](g2-evidence.md). The collection's journal entry (`journals/pss5.log`) lists each room design's `CapacityUsed` before and after the call. A `room_fill_note` means no room held anything, so there was nothing to collect: check pss5's collectors and power in the game. If a collector design held resources before the call and minerals and gas still did not change, either storage was full or the before-and-after check has a defect. Compare with pss5's storage in the game, and investigate before block 1 opens if storage had room. The totals add up every room, storage included, and what `CapacityUsed` counts for each room type is not yet confirmed live. If the ship's rooms were not read fresh on both sides, the fill is left unobserved (`room_fill_unobserved_reason`).
 
 ## What still needs the owner before the progression trial
 
