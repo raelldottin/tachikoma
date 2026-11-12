@@ -73,7 +73,9 @@
 
 ## Evidence
 
-Pending.
+**Captures (S03-R1):** six sanitized responses from the owner-dispatched G1 capture run of 2026-11-12, in `tests/fixtures/live_sanitized/` (`spec03-captures`, reviewed by the owner).
+
+**Implementation note on S03-R3 (for owner review):** no read-only call in the client returns the current user's trophies and starbux; the login response's `User` record (`@Trophy`, `@Credits`) is the only server response that holds them, and `FindUserRanking` holds only the ladder position. `spec03-profile-read` therefore treats the login response as the profile read, but only through a `ProfileObservation` that carries when the server sent it: it is used for one snapshot, and only while it is at most 5 minutes old. A snapshot after an action never reuses it, so reconciliation sees `None` (unknown), not a stale "no change". Only the baseline path passes one. If a fresher read-only profile call is found, it replaces the login record without changing the snapshot contract.
 
 ## Open questions and risks
 

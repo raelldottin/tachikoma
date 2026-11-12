@@ -84,7 +84,7 @@ import re
 import threading
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Optional, Sequence
 from urllib.parse import quote, quote_plus
@@ -112,6 +112,7 @@ from sdk.policy import DesignData, Plan, PolicyConfig, ProgressionPolicy, Reject
 from sdk.redaction import redact_secrets
 from sdk.scheduler import DailyScheduler, ScheduleReport, SchedulerConfig
 from sdk.state import AccountSnapshot, ClientSnapshotProvider
+from sdk.state.profile_reads import ProfileObservation, user_record
 from sdk.state.snapshot import SnapshotInputError, game_identity_fingerprint
 
 EMAIL_SUFFIX = "_EMAIL"
@@ -443,8 +444,13 @@ class EnvironmentAccountFactory:
         return client
 
     def _open(self, profile: AccountProfile, read_designs: bool,
-              clock: Optional[Callable[[], datetime]] = None) -> tuple[Any, ClientSnapshotProvider, Any]:
-        """Log ``profile`` in; return its client, snapshot provider and (if read) design data."""
+              clock: Optional[Callable[[], datetime]] = None,
+              profile_observed_at: Optional[datetime] = None) -> tuple[Any, ClientSnapshotProvider, Any]:
+        """Log ``profile`` in; return its client, snapshot provider and (if read) design data.
+
+        With ``profile_observed_at``, the provider's first snapshot may use the login ``User`` record
+        (``client.info``) as the profile, observed at that time (S03-R3).
+        """
         credentials = resolve_credentials(profile.credentials_secret, self.environ)
         if self.log_scrubber is not None:
             self.log_scrubber.add_secrets(credentials.values())
@@ -462,6 +468,9 @@ class EnvironmentAccountFactory:
                 f"{type(error).__name__}: {scrub(str(error), credentials.values())}") from None
         self._note(profile.alias, notes)
         options = {"clock": clock} if clock is not None else {}
+        record = user_record(getattr(client, "info", None)) if profile_observed_at is not None else None
+        if record is not None:
+            options["profile_observation"] = ProfileObservation(record, profile_observed_at)
         provider = ClientSnapshotProvider(client, profile.alias, source=self.source,
                                           identity_salt=self._identity_salt, **options)
         return client, provider, design
@@ -478,7 +487,10 @@ class EnvironmentAccountFactory:
         ``server_game_version`` (S04-R3). Errors are raised as for ``__call__``;
         reads that returned no data are listed in ``failed_reads``.
         """
-        client, provider, _ = self._open(profile, read_designs=False, clock=clock)
+        # The login response holds the profile (S03-R3); it was sent no earlier than this.
+        login_started = (clock or (lambda: datetime.now(timezone.utc)))()
+        client, provider, _ = self._open(profile, read_designs=False, clock=clock,
+                                         profile_observed_at=login_started)
         snapshot = provider()
         return BaselineObservation(snapshot, server_game_version(client), provider.failed_reads)
 
