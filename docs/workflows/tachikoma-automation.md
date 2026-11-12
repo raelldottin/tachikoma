@@ -93,20 +93,31 @@ The `Makefile` provides:
 
 | Target | Runtime | Purpose |
 |--------|---------|---------|
-| `automation-check` | Python 3.11 | Run framework harness tests |
-| `automation-dry-run` | Python 3.11 | Supervisor dry run (selects next slice) |
-| `syntax-check` | Python 3.9 | Compile Tachikoma source |
-| `test` | Python 3.9 | Run Tachikoma unit tests |
+| `automation-check` | Python 3.11+ | Run framework harness tests |
+| `automation-dry-run` | Python 3.11+ | Supervisor dry run (selects next slice) |
+| `syntax-check` | Python 3.11+ | Compile Tachikoma source |
+| `test` | Python 3.11+ (checked) | Run Tachikoma unit tests through `scripts/ci.py test` from a temporary directory |
+| `test-security` | Python 3.11+ (checked) | Run `tests.test_security` the same way |
+| `lint` | Python 3.11+ (checked) | Mirror the CI lint job: pinned ruff, `scripts/ci.py lint`, the format check, advisory `ty` |
 | `git-check` | — | Check for whitespace issues |
+| `pre-commit` | Python 3.11+ | `lint`, `syntax-check`, `test` and `git-check` |
+
+`PYTHON` defaults to `.venv/bin/python` (absolute) when it exists, else `python3` from `PATH`. `test`,
+`test-security` and `lint` stop with a clear message on Python older than 3.11. `make lint` also requires the ruff
+version pinned in `.github/requirements-ci.txt`.
 
 ## CI Workflow
 
-`.github/workflows/automation-check.yml` runs on PRs and pushes to main:
+`.github/workflows/blocking-ci.yml` gates pull requests and the merge queue, and `.github/workflows/postmerge-ci.yml`
+reruns the same jobs after each push to main. Both call:
 
-1. Python 3.11: `make automation-check`
-2. Python 3.9: `make syntax-check` + `make git-check`
+1. `.github/workflows/automation-check.yml` (Python 3.13): `scripts/ci.py repository`, actionlint, the automation
+   harness tests, and the lint ratchet with the format check.
+2. `.github/workflows/python-tests.yml`: `scripts/ci.py test` on Ubuntu / Python 3.13 for pull requests, and on
+   Ubuntu and macOS with Python 3.11 and 3.13 after merge, where Windows runs a portable smoke subset.
 
-**No account secrets are used.** The scheduled account workflow (`.github/workflows/hourly-run.yml`) remains separate.
+**No account secrets are used.** The scheduled account workflows (`.github/workflows/daily-run.yml` and
+`.github/workflows/daily-run-langgraph.yml`) remain separate.
 
 ## Initial Queue
 

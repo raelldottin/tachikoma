@@ -1840,7 +1840,7 @@
     {
       "slice_id": "b0-make-hermetic-local",
       "title": "Run local tests from a temporary CWD and make make lint mirror CI",
-      "status": "queued",
+      "status": "done",
       "priority": 346,
       "domain": "tests",
       "allowed_paths": [
