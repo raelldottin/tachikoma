@@ -2306,6 +2306,151 @@
         "make test",
         "git diff --check"
       ]
+    },
+    {
+      "slice_id": "spec13-approval",
+      "title": "Record the owner's approval of SPEC-13",
+      "status": "queued",
+      "priority": 418,
+      "domain": "fleet",
+      "allowed_paths": [
+        "docs/specs/SPEC-13-room-placement.md",
+        "docs/specs/README.md"
+      ],
+      "depends_on": [
+        "spec13-room-placement-draft"
+      ],
+      "max_files_changed": 2,
+      "notes": "Owner approved SPEC-13 on 2026-11-12 ('Approve SPEC-13', with its safe defaults, capture included). Record it: Status Approved; Q1 yes; Q2 yes; Q3 a level-1 mineral collector on pss5 at the first free position the placement check finds, since the owner cannot identify pss5 in the game; Q4 the design's price; Q5 no. Amend R1 so the design records come from the agents' read-only capture step (G1) and only the purchase request needs the owner's capture; amend R7 so an authorization may name a placement position as first-free. Update G6's status in docs/specs/README.md.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
+    },
+    {
+      "slice_id": "spec13-capture-designs",
+      "title": "Capture room designs, ship designs and room purchase limits read-only",
+      "status": "queued",
+      "priority": 419,
+      "domain": "fleet",
+      "allowed_paths": [
+        "sdk/state/capture.py",
+        "tests/test_capture_reads.py",
+        "docs/experiments/live/RUNBOOK.md"
+      ],
+      "depends_on": [
+        "spec13-approval"
+      ],
+      "max_files_changed": 3,
+      "notes": "Implements S13-R1 (design records, as amended). Add read-only CaptureReads for ListRoomDesigns2 (client.roomDesigns) and ListAllDesigns4's ShipDesigns and RoomDesignPurchases (client.shipDesigns, client.roomDesignPurchases) so the owner's existing step=capture run records them sanitized and scanned. No workflow change. Tests keep the read-only method guard.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "make lint",
+        "git diff --check"
+      ]
+    },
+    {
+      "slice_id": "spec13-grid-model",
+      "title": "SPEC-13 grid model and placement check",
+      "status": "blocked",
+      "priority": 420,
+      "domain": "fleet",
+      "allowed_paths": [
+        "sdk/policy/placement.py",
+        "sdk/state/snapshot.py",
+        "tests/test_room_placement.py"
+      ],
+      "depends_on": [
+        "spec13-capture-designs"
+      ],
+      "max_files_changed": 3,
+      "notes": "Implements S13-R3, R9. Needs the design records from a step=capture run after spec13-capture-designs, so the grid encoding is read from real data.",
+      "entry_condition": "The owner dispatches step=capture after spec13-capture-designs merges and an agent confirms the room, ship design and purchase records were captured; then a chore(queue) PR sets this to queued.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "make lint",
+        "git diff --check"
+      ]
+    },
+    {
+      "slice_id": "spec13-client-call",
+      "title": "SPEC-13 placeRoom client call",
+      "status": "blocked",
+      "priority": 421,
+      "domain": "fleet",
+      "allowed_paths": [
+        "sdk/client.py",
+        "tests/test_room_placement.py",
+        "tests/fixtures/live_sanitized/rooms/"
+      ],
+      "depends_on": [
+        "spec13-capture-designs"
+      ],
+      "max_files_changed": 4,
+      "notes": "Implements S13-R2. Written from the captured purchase request only.",
+      "entry_condition": "The owner supplies a sanitized capture of one room purchase (S13-R1), or approves an R1 amendment to build from verified research findings; then a chore(queue) PR sets this to queued.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "make lint",
+        "git diff --check"
+      ]
+    },
+    {
+      "slice_id": "spec13-place-action",
+      "title": "SPEC-13 place_room action",
+      "status": "blocked",
+      "priority": 422,
+      "domain": "fleet",
+      "allowed_paths": [
+        "sdk/actions/catalog.py",
+        "sdk/execution/runner.py",
+        "tests/test_action_catalog.py",
+        "tests/test_action_runner.py"
+      ],
+      "depends_on": [
+        "spec13-capture-designs"
+      ],
+      "max_files_changed": 4,
+      "notes": "Implements S13-R4, R5, R6, R8.",
+      "entry_condition": "spec13-grid-model and spec13-client-call are done; then a chore(queue) PR sets this to queued.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "make lint",
+        "git diff --check"
+      ]
+    },
+    {
+      "slice_id": "spec13-place-mode",
+      "title": "SPEC-13 --mode place",
+      "status": "blocked",
+      "priority": 423,
+      "domain": "fleet",
+      "allowed_paths": [
+        "run.py",
+        "sdk/fleet/authorization.py",
+        "sdk/fleet/factory.py",
+        "README.template",
+        "README.md",
+        "tests/test_fleet_authorization.py",
+        "tests/test_fleet_execute.py"
+      ],
+      "depends_on": [
+        "spec13-capture-designs"
+      ],
+      "max_files_changed": 7,
+      "notes": "Implements S13-R7, R10.",
+      "entry_condition": "spec13-place-action is done; then a chore(queue) PR sets this to queued.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "make lint",
+        "git diff --check"
+      ]
     }
   ]
 }
