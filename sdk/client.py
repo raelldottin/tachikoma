@@ -537,12 +537,11 @@ class Client(object):
                 logging.error("ShipService data not avaialble.")
                 return False
 
-            self.rooms = self.shipByUserId["ShipService"]["GetShipByUserId"]["Ship"][
-                "Rooms"
-            ]["Room"]
-            self.researches = self.shipByUserId["ShipService"]["GetShipByUserId"][
-                "Ship"
-            ]["Researches"]["Research"]
+            ship = self.shipByUserId["ShipService"]["GetShipByUserId"]["Ship"]
+            # A new ship can return an empty <Rooms/> or <Researches/>, which parses to
+            # None: treat it as no records instead of failing the whole read.
+            self.rooms = (ship.get("Rooms") or {}).get("Room") or []
+            self.researches = (ship.get("Researches") or {}).get("Research") or []
             return True
         return False
 

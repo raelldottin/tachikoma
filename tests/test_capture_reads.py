@@ -31,6 +31,7 @@ import run  # imported here so run.py's log file opens in the repository, not a 
 from sdk.state.capture import (
     CAPTURE_METHODS,
     CAPTURE_READS,
+    SETTINGS_SUMMARY,
     MANIFEST_NAME,
     README_COLUMNS,
     REDACTED,
@@ -267,29 +268,30 @@ class CaptureCommandTests(unittest.TestCase):
         code, out, err, _ = self.run_main()
         self.assertEqual(code, 0, err + out)
         expected = sorted([f"{alias}/{read.stem}.xml" for alias in ("alpha", "bravo") for read in CAPTURE_READS]
+                          + [f"{alias}/{SETTINGS_SUMMARY.stem}.json" for alias in ("alpha", "bravo")]
                           + [MANIFEST_NAME])
         self.assertEqual(self.files(), expected)  # charlie is disabled: nothing for it
         manifest = self.manifest()
         self.assertEqual(manifest["source"], "run.py --capture-reads")
         self.assertEqual(manifest["readme_columns"], list(README_COLUMNS))
-        self.assertEqual(len(manifest["captures"]), 2 * len(CAPTURE_READS))
+        self.assertEqual(len(manifest["captures"]), 2 * (len(CAPTURE_READS) + 1))
         for entry in manifest["captures"]:
             with self.subTest(entry=entry["file"]):
                 self.assertEqual(entry["status"], "written")
                 self.assertEqual(entry["scan"], "clean")
                 self.assertEqual(entry["game_version"], SERVER_VERSION)  # the server's setting, not ClientVersion
                 self.assertEqual(entry["captured_at"], "2026-11-12T09:30:00Z")
-                self.assertTrue(entry["sanitization_steps"][0].startswith("2: response body only"))
+                self.assertTrue(entry["sanitization_steps"][0].startswith("2: "))
                 row = entry["table_row"]
                 self.assertEqual(row.count(" | ") + 1, len(README_COLUMNS))
                 self.assertTrue(row.startswith(f"| {entry['file']} | {entry['endpoint']} | 2026-11-12 | "
                                                f"{SERVER_VERSION} | "))
                 self.assertTrue(row.endswith("| pending |"))
         endpoints = {entry["endpoint"] for entry in manifest["captures"]}
-        self.assertEqual(endpoints, {read.endpoint for read in CAPTURE_READS})
+        self.assertEqual(endpoints, {read.endpoint for read in CAPTURE_READS} | {SETTINGS_SUMMARY.endpoint})
         self.assertIn("FindUserRanking", endpoints)
         self.assertIn("ListPvPBattles2", endpoints)
-        self.assertIn("| alpha | logged in | 0.999.60 | 7 | 0 |", out)
+        self.assertIn("| alpha | logged in | 0.999.60 | 8 | 0 |", out)
         self.assertIn("| charlie | disabled |", out)
         self.assertIn("## Rows for tests/fixtures/live_sanitized/README.md", out)
 
@@ -391,7 +393,7 @@ class CaptureCommandTests(unittest.TestCase):
         self.assertEqual((battles["status"], battles["scan"]),
                          ("withheld", "withheld: response is not well-formed XML"))
         self.assertIn("| alpha | FindUserRanking | withheld |", out)
-        self.assertIn("| alpha | logged in | 0.999.60 | 5 | 2 |", out)
+        self.assertIn("| alpha | logged in | 0.999.60 | 6 | 2 |", out)
         # The rule is reported, never the value.
         self.assertNotIn(UNSANITIZABLE_KEY, out + err + log + self.everything_written())
         self.assert_no_planted_value(out, err, log, self.everything_written())
@@ -657,3 +659,31 @@ class RealClientCaptureTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SettingsFieldsTests(unittest.TestCase):
+    """The server settings summary names fields and keeps only version-like values."""
+
+    # Verifies: S03-R1, S03-R2
+    def test_summary_keeps_version_values_and_hides_everything_else(self):
+        from datetime import datetime, timezone
+        from sdk.state.capture import scan_capture_text, settings_fields
+        secret_like = "A" * 48
+        settings = {"SettingService": {"GetLatestSetting": {"Setting": {
+            "@LatestVersion": "0.999.60", "@ProductionServer": "api.example.invalid",
+            "@FileHash": secret_like, "@MinimumClientVersion": "0.999.55"}}}}
+        result = settings_fields("pss1", settings, None, lambda: datetime(2026, 11, 12, tzinfo=timezone.utc))
+        self.assertEqual((result.status, result.scan), ("captured", "clean"))
+        self.assertIn('"LatestVersion": "0.999.60"', result.text)
+        self.assertIn('"MinimumClientVersion": "0.999.55"', result.text)
+        self.assertIn('"FileHash": "<48 characters>"', result.text)
+        self.assertNotIn("@", result.text)
+        self.assertNotIn(secret_like, result.text)
+        self.assertNotIn("api.example.invalid", result.text)
+        self.assertEqual(scan_capture_text(result.text), [])
+
+    def test_no_settings_is_no_data(self):
+        from datetime import datetime, timezone
+        from sdk.state.capture import settings_fields
+        result = settings_fields("pss1", None, None, lambda: datetime(2026, 11, 12, tzinfo=timezone.utc))
+        self.assertEqual(result.status, "no data")
