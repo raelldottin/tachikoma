@@ -2114,6 +2114,56 @@
         "make lint",
         "git diff --check"
       ]
+    },
+    {
+      "slice_id": "spec04-baseline-evidence",
+      "title": "Commit the G1 baseline summary and mark SPEC-04 done",
+      "status": "queued",
+      "priority": 409,
+      "domain": "state",
+      "allowed_paths": [
+        "docs/experiments/baselines/",
+        "docs/specs/SPEC-04-account-baselines.md",
+        "docs/specs/README.md",
+        "docs/experiments/live/g1-evidence.md"
+      ],
+      "depends_on": [
+        "g2-enrol-pss5"
+      ],
+      "max_files_changed": 5,
+      "notes": "Implements S04-AC4 (S04-R1-R3, R6, R7). The owner-dispatched baseline run 43256802775 (2026-11-12) took a read-only baseline of pss1-pss5 with game version 1.0+settings.3307714, every section present and the profile observed; minerals and gas stay None (not observed live, see g2-canary-fixes). Per S04-Q2's safe default only the summary table is committed (the per-account files stay private); it passes the S04-R7 scan. Mark SPEC-04 Done with that evidence.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
+    },
+    {
+      "slice_id": "g2-canary-fixes",
+      "title": "Fix what the first G2 canary found: unobserved minerals and gas, an empty canary, and no server version",
+      "status": "queued",
+      "priority": 410,
+      "domain": "fleet",
+      "allowed_paths": [
+        "sdk/state/client_provider.py",
+        "sdk/fleet/factory.py",
+        "run.py",
+        "tests/test_fleet_execute.py",
+        "tests/test_client_snapshot_provider.py",
+        "docs/baseline/account-snapshot.md",
+        "docs/baseline/fleet-accounts.md",
+        "docs/specs/SPEC-05-live-execution-gate.md"
+      ],
+      "depends_on": [
+        "g2-enrol-pss5"
+      ],
+      "max_files_changed": 8,
+      "notes": "Implements S05-R4/R6 follow-ups from the owner-dispatched canary run 43256792025 (2026-11-12): it executed nothing. (1) ListItemsOfAShip items carry only @ItemDesignId and @Quantity (no @Type), so minerals and gas were never observed and every cost-bearing action was refused; map items to resources through the server's own item designs (client.itemDesigns from listAllDesigns4, which the dry-run and execute paths already read), by each design's ItemType naming mineral or gas; anything else stays None. (2) baseline-v1 plans collect_all_resources only after a room upgrade, so the canary had no safe-to-retry request and rejected collect_daily_reward with a misleading reason: in canary mode, when no safe-to-retry request remains and the authorization allows collect_all_resources, plan that one; and give the correct reason. Policy strategy is unchanged outside canary mode. (3) The run record hard-codes game_version.server None: record server_game_version per account at login and report it. Regression tests for each.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
     }
   ]
 }
