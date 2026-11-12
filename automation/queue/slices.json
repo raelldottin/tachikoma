@@ -1742,7 +1742,7 @@
     {
       "slice_id": "g1-game-version",
       "title": "Read the game version from the server settings fields the live server returns",
-      "status": "queued",
+      "status": "done",
       "priority": 402,
       "domain": "safety",
       "allowed_paths": [
