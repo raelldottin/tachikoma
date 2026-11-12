@@ -60,8 +60,10 @@ The canary runs a fresh dry run, then at most one safe-to-retry action (`collect
 
 SPEC-07 needs a canary whose collection reconciles `verified` before trial block 1 opens on 2026-11-23 (S07-R2). The canaries of 2026-11-12 were `not-observed`: minerals and gas did not change. Either storage was full or nothing had been produced since the last collection. To get a verified one:
 
-1. Give production time. The legacy daily run skips pss5, so nothing else collects from it. Wait several hours after the last canary.
-2. If pss5's mineral or gas storage is full, spend some by hand in the game first, for example on an upgrade. Log it as an intervention if a trial window is open.
+Canary 43305786623 settled which: pss5 has no mineral or gas collector and no storage room ([G2 evidence](g2-evidence.md#why-the-collections-had-nothing-to-collect)), so there is nothing to collect. To get a verified one:
+
+1. In the game, build a mineral or gas collector on pss5 by hand (and storage if the game needs it), and power it. This is manual play before any trial window, so it is not an intervention, but note the date and what was built in the trial plan's starting state.
+2. Give it time to produce. The legacy daily run skips pss5, so nothing else collects from it. Wait several hours.
 3. Dispatch `gh workflow run live-trial.yml -f step=canary`. It runs a fresh dry run first. The canary authorization runs until 2026-11-26.
 
 An agent reads the artifact and records the result in [G2 evidence](g2-evidence.md). The collection's journal entry (`journals/pss5.log`) lists each room design's `CapacityUsed` before and after the call. A `room_fill_note` means no room held anything, so there was nothing to collect: check pss5's collectors and power in the game. If a collector design held resources before the call and minerals and gas still did not change, either storage was full or the before-and-after check has a defect. Compare with pss5's storage in the game, and investigate before block 1 opens if storage had room. The totals add up every room, storage included, and what `CapacityUsed` counts for each room type is not yet confirmed live. If the ship's rooms were not read fresh on both sides, the fill is left unobserved (`room_fill_unobserved_reason`).
