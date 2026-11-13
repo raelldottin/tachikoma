@@ -2593,6 +2593,26 @@
         "make test",
         "git diff --check"
       ]
+    },
+    {
+      "slice_id": "spec07-trial-decisions",
+      "title": "Record the owner's trial-plan decisions",
+      "status": "queued",
+      "priority": 430,
+      "domain": "fleet",
+      "allowed_paths": [
+        "docs/experiments/r2-progression-trial.md"
+      ],
+      "depends_on": [
+        "g2-canary-verified"
+      ],
+      "max_files_changed": 1,
+      "notes": "Owner decisions 2026-11-13 for SPEC-07's trial plan (S07-Q1): the owner finds and plays pss5 by hand on manual days (routine still to be written by the owner); a scheduled workflow (live-trial-schedule.yml, an owner patch) runs the 23:30 UTC snapshots and the 00:30 UTC automated days; mineral and gas caps have no practical limit (the authorization needs a number, so 1,000,000,000 each), starbux 0; windows and stop thresholds kept as drafted. A committed STOP file stops the automated arm. Status stays DRAFT until the routine is written.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
     }
   ]
 }
