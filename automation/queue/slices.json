@@ -2573,7 +2573,7 @@
     {
       "slice_id": "g2-canary-verified",
       "title": "Record the first verified canary (S07-R2 met)",
-      "status": "queued",
+      "status": "done",
       "priority": 429,
       "domain": "fleet",
       "allowed_paths": [
