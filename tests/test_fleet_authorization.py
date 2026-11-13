@@ -12,6 +12,9 @@ from sdk.fleet import registry_from_dict
 from sdk.fleet.authorization import (
     Authorization,
     AuthorizationError,
+    Placement,
+    parse_placement,
+    placement_refusal_reason,
     TradeRecord,
     authorization_from_dict,
     authorization_hash,
@@ -526,6 +529,81 @@ class MarketTests(unittest.TestCase):
         self.assertIn("not valid yet", check_trade(self.auth, 101, 10, [], now=NOT_BEFORE - timedelta(seconds=1))[0])
         self.assertIn("timezone", check_trade(self.auth, 101, 10, [], now=datetime(2026, 11, 13))[0])
         self.assertEqual(self.auth.cap("alpha", "starbux"), 0)
+
+
+def placement_payload(**overrides):
+    fields = dict(accounts=["alpha"], actions=["place_room"], modes=["place"],
+                  caps={"alpha": {"minerals": 10, "gas": 0}},
+                  placements={"alpha": [{"room_design_id": 42, "position": "first-free"}]})
+    fields.update(overrides)
+    return payload(**fields)
+
+
+class PlacementTests(unittest.TestCase):
+    """The authorization's place mode and placements section (SPEC-13, S13-R7)."""
+
+    # Verifies: S13-R7
+    def test_a_placement_authorization_loads(self):
+        auth = authorization_from_dict(placement_payload())
+        self.assertEqual(auth.placements, {"alpha": (Placement(42),)})
+        self.assertIn("place", auth.modes)
+        self.assertEqual(auth.to_dict()["placements"], {"alpha": [{"room_design_id": 42, "position": "first-free"}]})
+        explicit = authorization_from_dict(placement_payload(
+            placements={"alpha": [{"room_design_id": 42, "row": 1, "column": 1}]}))
+        self.assertEqual(explicit.placements["alpha"], (Placement(42, 1, 1),))
+
+    # Verifies: S13-R7
+    def test_placements_go_with_place_room_only(self):
+        with self.assertRaisesRegex(AuthorizationError, "placements section is required"):
+            authorization_from_dict(placement_payload(actions=["collect_all_resources"]))
+        bare = placement_payload()
+        del bare["placements"]
+        with self.assertRaisesRegex(AuthorizationError, "placements section is required"):
+            authorization_from_dict(bare)
+
+    # Verifies: S13-R7, S13-R8
+    def test_malformed_placements_are_refused(self):
+        bad = {
+            "another position word": [{"room_design_id": 42, "position": "anywhere"}],
+            "a negative row": [{"room_design_id": 42, "row": -1, "column": 1}],
+            "a row without a column": [{"room_design_id": 42, "row": 1}],
+            "both forms": [{"room_design_id": 42, "position": "first-free", "row": 1, "column": 1}],
+            "a starbux field": [{"room_design_id": 42, "position": "first-free", "starbux": 1}],
+            "no design": [{"position": "first-free"}],
+            "a boolean column": [{"room_design_id": 42, "row": 1, "column": True}],
+            "duplicates": [{"room_design_id": 42, "position": "first-free"}] * 2,
+            "an empty list": [],
+        }
+        for name, entries in bad.items():
+            with self.subTest(case=name), self.assertRaises(AuthorizationError):
+                authorization_from_dict(placement_payload(placements={"alpha": entries}))
+        with self.assertRaisesRegex(AuthorizationError, "not in accounts"):
+            authorization_from_dict(placement_payload(placements={"bravo": [{"room_design_id": 42,
+                                                                             "position": "first-free"}]}))
+        with self.assertRaises(AuthorizationError):
+            authorization_from_dict(placement_payload(modes=["yolo"]))
+
+    # Verifies: S13-R7
+    def test_a_file_without_placements_hashes_as_before(self):
+        auth = authorization_from_dict(payload())
+        self.assertNotIn("placements", auth.to_dict())
+        self.assertEqual(auth.placements, {})
+        # The hash main's code gave this file before placements existed (commit a089f0e).
+        self.assertEqual(authorization_hash(auth),
+                         "sha256:381f11eb7553c04cd2abffd0a958da204e59f434349ab80abce06f9831efb5db")
+
+    # Verifies: S13-R7
+    def test_a_placement_must_match_an_entry_exactly(self):
+        auth = authorization_from_dict(placement_payload())
+        self.assertIsNone(placement_refusal_reason(auth, "alpha", Placement(42)))
+        for name, alias, placement in (("a row and column", "alpha", Placement(42, 1, 1)),
+                                       ("another design", "alpha", Placement(26)),
+                                       ("another account", "bravo", Placement(42))):
+            with self.subTest(case=name):
+                self.assertIn("not named", placement_refusal_reason(auth, alias, placement))
+        no_action = authorization_from_dict(payload())
+        self.assertIn("not allowed", placement_refusal_reason(no_action, "alpha", Placement(42)))
+        self.assertEqual(parse_placement({"room_design_id": 42, "row": 0, "column": 3}), Placement(42, 0, 3))
 
 
 if __name__ == "__main__":

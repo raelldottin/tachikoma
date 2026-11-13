@@ -103,7 +103,14 @@ from sdk.device import Device
 from sdk.execution import ActionRunner, UncertainPriorAttemptError
 from sdk.execution.runner import planned_cost
 from sdk.fleet.accounts import REGISTRY_VERSION, AccountProfile, AccountRegistry
-from sdk.fleet.authorization import BATTLE_ACTION_ID, Authorization, check_authorization
+from sdk.fleet.authorization import (
+    BATTLE_ACTION_ID,
+    PLACE_ACTION_ID,
+    Authorization,
+    Placement,
+    check_authorization,
+    placement_refusal_reason,
+)
 from sdk.fleet.concurrent import ConcurrentFleetOrchestrator
 from sdk.fleet.orchestrator import (
     AccountContext,
@@ -117,9 +124,10 @@ from sdk.fleet.orchestrator import (
 )
 from sdk.journal import GameplayEvent, GameplayJournal, new_attempt_id
 from sdk.policy import ActionRequest, DesignData, Plan, PolicyConfig, ProgressionPolicy, Rejection, get_policy
+from sdk.policy.placement import ShipLayout, first_free, placement_refusal
 from sdk.redaction import redact_secrets
 from sdk.scheduler import DailyScheduler, ScheduleReport, SchedulerConfig
-from sdk.state import AccountSnapshot, ClientSnapshotProvider
+from sdk.state import AccountSnapshot, ClientSnapshotProvider, Completeness
 from sdk.state.client_provider import item_resource_kinds
 from sdk.state.profile_reads import ProfileObservation, user_record
 from sdk.state.snapshot import SnapshotInputError, game_identity_fingerprint
@@ -742,7 +750,7 @@ def latest_dry_run(events: Iterable[GameplayEvent], profile: AccountProfile, sta
 # --- Execute gate (SPEC-05, S05-R1, S05-R4 to S05-R6) -------------------------------------------
 
 EXECUTE_SOURCE = "run.py --fleet-execute"
-CANARY, FULL = "canary", "full"
+CANARY, FULL, PLACE = "canary", "full", "place"
 CAP_KINDS = ("minerals", "gas")
 DEFAULT_HALT_SHARE = 0.0  # any stopped account halts the fleet (S05-Q2 safe default)
 # A battle rearms first (RebuildAmmo3) at a cost the repo does not record, so it may only start while at least
@@ -762,17 +770,24 @@ class ExecutionGate:
     """What an authorized execute run may do: actions, time, mode and per-account budgets."""
 
     def __init__(self, authorization: Authorization, registry: AccountRegistry, mode: str,
-                 clock: Callable[[], datetime]) -> None:
-        if mode not in (CANARY, FULL):
-            raise ValueError("mode must be canary or full")
+                 clock: Callable[[], datetime], placement: Optional[Placement] = None) -> None:
+        if mode not in (CANARY, FULL, PLACE):
+            raise ValueError("mode must be canary, full or place")
+        if (mode == PLACE) != (placement is not None):
+            raise ValueError("a placement is given when, and only when, the mode is place")
         self.authorization = authorization
         self.registry = registry
         self.mode = mode
         self.clock = clock
+        self.placement = placement
 
     @property
     def canary(self) -> bool:
         return self.mode == CANARY
+
+    @property
+    def placing(self) -> bool:
+        return self.mode == PLACE
 
     def refusal(self, alias: str, action_id: str,
                 events: Optional[Callable[[], Iterable[GameplayEvent]]] = None) -> Optional[str]:
@@ -792,7 +807,31 @@ class ExecutionGate:
                 return f"cannot read the journal to check the battle cap ({type(error).__name__}); refusing"
         reasons = check_authorization(self.authorization, self.registry, self.clock(), [alias], [action_id],
                                       self.mode, battle_events=battle_events)
+        if self.placing:  # place mode runs only the one placement the authorization names (S13-R7)
+            if action_id != PLACE_ACTION_ID:
+                reasons.append(f"place mode runs only {PLACE_ACTION_ID}")
+            else:
+                reason = placement_refusal_reason(self.authorization, alias, self.placement)
+                if reason is not None:
+                    reasons.append(reason)
+        elif action_id == PLACE_ACTION_ID:  # never from a policy plan, whatever the actions list says
+            reasons.append(f"{PLACE_ACTION_ID} runs only in place mode")
         return "; ".join(reasons) if reasons else None
+
+    def params_refusal(self, action_id: str, params: Mapping[str, Any]) -> Optional[str]:
+        """In place mode, why ``params`` of a ``place_room`` request are not the authorized placement, or ``None``.
+
+        The design must be the placement's; for a row-and-column placement the position must be too. A
+        ``first-free`` placement's position is the one the placement check chose on this run's snapshot.
+        """
+        if not self.placing or action_id != PLACE_ACTION_ID:
+            return None
+        placement = self.placement
+        if str(params.get("room_design_id")) != str(placement.room_design_id):
+            return "the request's room design is not the authorized placement's"
+        if not placement.first_free and (params.get("row"), params.get("column")) != (placement.row, placement.column):
+            return "the request's position is not the authorized placement's"
+        return None
 
     def budgets(self, profile: AccountProfile) -> dict[str, int]:
         """Per-period budgets: the tighter of the registry's and the authorization's, starbux always 0."""
@@ -808,12 +847,12 @@ class ExecutionGate:
         return replace(profile, budgets=self.budgets(profile))
 
     def max_actions(self, profile: AccountProfile) -> int:
-        """Actions the scheduler may execute: one in canary mode, else the profile's ``max_actions``.
+        """Actions the scheduler may execute: one in canary and place mode, else the profile's ``max_actions``.
 
         The policy still plans up to ``max_actions`` requests, so that the
         canary is chosen from the whole plan, not from its first request.
         """
-        return 1 if self.canary else profile.max_actions
+        return 1 if self.canary or self.placing else profile.max_actions
 
 
 def _candidate(action_id: str, params: Mapping[str, Any]) -> str:
@@ -897,6 +936,68 @@ class AuthorizedPolicy:
         return ActionRequest(action_id, {}, "canary: the plan kept no safe-to-retry action, so collect resources")
 
 
+def ship_layout(client: Any) -> ShipLayout:
+    """The hull, room and purchase records ``read_design_data`` left on ``client``, as a ``ShipLayout``."""
+    return ShipLayout.from_records(
+        _extract_collection(getattr(client, "shipDesigns", None), "ShipDesign"),
+        _extract_collection(getattr(client, "roomDesigns", None), "RoomDesign"),
+        _extract_collection(getattr(client, "roomDesignPurchases", None), "RoomDesignPurchase"),
+    )
+
+
+class PlacementPolicy:
+    """Place mode's plan (SPEC-13): at most one ``place_room`` request, for the authorized placement only.
+
+    It never comes from the account's progression policy, so no policy can place a room (S13-R7). The
+    position is the authorized row and column, or for ``first-free`` the first position the placement check
+    accepts on this fresh snapshot. The request carries the room's mineral or gas price as its planned cost,
+    so the gated runner checks it against the caps; a starbux or other price is refused by the check.
+    """
+
+    name = "placement"
+
+    def __init__(self, gate: ExecutionGate, layout: ShipLayout) -> None:
+        if not gate.placing:
+            raise ValueError("PlacementPolicy needs a gate in place mode")
+        self.gate = gate
+        self.layout = layout
+
+    def plan(self, snapshot: AccountSnapshot, design: DesignData, config: PolicyConfig) -> Plan:
+        placement = self.gate.placement
+        label = placement.describe()
+
+        def rejected(reason: str) -> Plan:
+            return Plan(self.name, snapshot.account_alias, snapshot.observed_at.isoformat(), (),
+                        (Rejection(label, reason),))
+
+        refusal = self.gate.refusal(snapshot.account_alias, PLACE_ACTION_ID)
+        if refusal is not None:
+            return rejected(f"not authorized: {refusal}")
+        # Every placed room must be observed: a room record the snapshot had to skip (one without @RoomId)
+        # would leave its cells looking free. A partial room list is refused, never placed around.
+        if snapshot.section("rooms") is not Completeness.COMPLETE:
+            return rejected("the ship's rooms were not all observed, so free cells cannot be told apart")
+        design_id = str(placement.room_design_id)
+        if placement.first_free:
+            position = first_free(snapshot, self.layout, design_id)
+            if position is None:
+                reason = placement_refusal(snapshot, self.layout, design_id, 0, 0) or "no free position fits"
+                return rejected(f"no position accepted: {reason}")
+        else:
+            position = (placement.row, placement.column)
+        reason = placement_refusal(snapshot, self.layout, design_id, *position)
+        if reason is not None:
+            return rejected(reason)
+        spec = self.layout.rooms[design_id]
+        row, column = position
+        request = ActionRequest(
+            PLACE_ACTION_ID, {"room_design_id": design_id, "row": row, "column": column},
+            f"place: {label}" + (f", resolved to row {row}, column {column}" if placement.first_free else ""),
+            expected_cost={spec.price_kind: spec.price_amount},
+        )
+        return Plan(self.name, snapshot.account_alias, snapshot.observed_at.isoformat(), (request,), ())
+
+
 class GatedActionRunner(ActionRunner):
     """``ActionRunner`` that refuses, before any call, what the gate does not allow.
 
@@ -953,7 +1054,8 @@ class GatedActionRunner(ActionRunner):
 
     def run(self, action_id: str, params: Optional[Mapping[str, Any]] = None, *, dry_run: bool = False,
             allow_after_uncertain: bool = False, expected_cost: Optional[Mapping[str, Any]] = None):
-        refusal = self._refusal(action_id, planned_cost(expected_cost))
+        refusal = self._refusal(action_id, planned_cost(expected_cost)) or self.gate.params_refusal(
+            action_id, dict(params or {}))
         if refusal is not None:
             self._record(get_spec(action_id), self.clock(), dict(params or {}), outcome="skipped",
                          reason=f"execute gate refused: {refusal}", attempted=False,
@@ -1020,8 +1122,10 @@ class _ExecuteGateMixin:
                         else context.snapshot_provider)
             runner = GatedActionRunner(self.gate, gated.budgets, self.period, profile.alias, context.client,
                                        provider, context.journal, clock=self.clock, halted=self._halted)
+            policy = (PlacementPolicy(self.gate, ship_layout(context.client)) if self.gate.placing
+                      else AuthorizedPolicy(get_policy(profile.policy_id), self.gate, context.journal))
             scheduler = DailyScheduler(
-                runner, AuthorizedPolicy(get_policy(profile.policy_id), self.gate, context.journal), context.design,
+                runner, policy, context.design,
                 policy_config,
                 SchedulerConfig(max_actions=self.gate.max_actions(gated), period=self.period,
                                 stop_file=self.stop_file),
