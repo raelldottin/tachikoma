@@ -14,7 +14,8 @@ Exceptions, timeouts and ambiguous responses are journaled as ``unknown``
 action's evidence says this call cannot account for (``outcome_supported``
 is ``False``) is also ``unknown``, never ``verified``. A non-idempotent
 action whose previous attempt is still uncertain is refused until an
-operator reconciles it.
+operator reconciles it; for ``place_room`` any uncertain placement on the
+account blocks every later one, at any position.
 
 An attempt's journaled ``cost`` holds the signed observed resource deltas
 (``<kind>_delta``, ``None`` when unobserved). When the caller passes the
@@ -50,10 +51,15 @@ CALL_ARGUMENTS: dict[str, Callable[[Mapping[str, Any]], tuple]] = {
     "collect_daily_reward": lambda params: (),
     "add_training": lambda params: (params["training_design_id"], params["character_id"]),
     "upgrade_room": lambda params: (params["room_id"], params["upgrade_room_design_id"]),
+    "place_room": lambda params: (params["room_design_id"], params["row"], params["column"]),
     "add_research": lambda params: (params["research_design_id"],),
     "run_pvp_battle": lambda params: (),
 }
 
+
+# Actions whose uncertain outcome blocks every later attempt on the account, whatever its params (S13-R6):
+# a placement whose room was not seen may still exist, so a second room at another position could be bought too.
+ACCOUNT_WIDE_UNCERTAINTY = frozenset({"place_room"})
 
 # Planned-cost kinds (policy requests use "mineral") -> journal resource names.
 COST_KINDS = {"mineral": "minerals", "minerals": "minerals", "gas": "gas", "starbux": "starbux"}
@@ -150,13 +156,14 @@ class ActionRunner:
 
     def _last_attempt_uncertain(self, spec: ActionSpec, params: Mapping[str, Any]) -> bool:
         key = _params_key(params)
+        account_wide = spec.action_id in ACCOUNT_WIDE_UNCERTAINTY
         attempts = [
             event
             for event in self.journal.read()
             if event.account_alias == self.account_alias
             and event.action_id == spec.action_id
             and event.attempted
-            and _params_key(event.params) == key
+            and (account_wide or _params_key(event.params) == key)
         ]
         return bool(attempts) and attempts[-1].outcome == ReconciliationStatus.UNKNOWN.value
 
@@ -195,7 +202,9 @@ class ActionRunner:
             and self._last_attempt_uncertain(spec, params)
         ):
             self._record(spec, started, params, outcome="skipped",
-                         reason="previous attempt is still uncertain; reconcile it before retrying",
+                         reason=("a previous placement on this account is still uncertain; reconcile it before "
+                                 "placing another room" if spec.action_id in ACCOUNT_WIDE_UNCERTAINTY
+                                 else "previous attempt is still uncertain; reconcile it before retrying"),
                          attempted=False, error_class="UncertainPriorAttemptError", dry_run=dry_run)
             raise UncertainPriorAttemptError(f"{spec.action_id} has an uncertain prior attempt")
 

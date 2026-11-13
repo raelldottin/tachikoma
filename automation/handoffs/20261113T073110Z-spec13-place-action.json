@@ -1,0 +1,47 @@
+{
+  "slice_id": "spec13-place-action",
+  "status": "done",
+  "summary": "The place_room action calls Client.placeRoom with a room design id, a row and a column. It is not idempotent. Its params must be a numeric design id and non-negative integers, and the rooms must be observed first.  Reconciliation uses the ship's rooms alone: - verified: a room of that design is at that position afterwards and was not   there before, in any status (a new room is Building); - contradicted: a room present before has gone; - unknown: the rooms were not observed (and the runner already turns an   ambiguous response with no room into unknown); - not-observed: otherwise. A room changing design between the reads is not contradicted, because a finishing upgrade does that too. Reasons never name a room instance id.  An uncertain place_room now blocks every later placement on the account, at any position (S13-R6). Other actions keep their per-params block.",
+  "files_touched": [
+    "sdk/actions/catalog.py",
+    "sdk/execution/runner.py",
+    "tests/test_action_catalog.py",
+    "tests/test_action_runner.py"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "make lint",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "SPEC-13 place_room action",
+      "before": "no place_room action",
+      "after": "place_room reconciled from rooms; account-wide uncertainty block",
+      "proof": [
+        "tests: spec shape; bad params refused; verified/not-observed/contradicted/unknown cases incl. a finished upgrade and a pre-existing room; no room ids in reasons or the journal; an ambiguous placement blocks placements at any position; a definite success without a room does not block; upgrade_room keeps per-params blocking",
+        "make syntax-check, make test (1345 OK), make lint, git diff --check pass"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "Nothing calls place_room until spec13-place-mode lands."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-13T07:31:29Z"
+}

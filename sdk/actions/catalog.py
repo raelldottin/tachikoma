@@ -98,6 +98,17 @@ def _room_idle(snapshot: AccountSnapshot, params: Params) -> Optional[str]:
     return None
 
 
+def _placement_params_valid(snapshot: AccountSnapshot, params: Params) -> Optional[str]:
+    """``place_room`` needs a numeric room design id and a non-negative integer row and column."""
+    if not str(params.get("room_design_id") or "").strip().isdigit():
+        return "room_design_id must be a numeric room design id"
+    for name in ("row", "column"):
+        value = params.get(name)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            return f"{name} must be a non-negative integer"
+    return None
+
+
 def _research_not_started(snapshot: AccountSnapshot, params: Params) -> Optional[str]:
     state = snapshot.research_state(str(params["research_design_id"]))
     if state in ("Researching", "Completed"):
@@ -157,6 +168,30 @@ def _training_started(delta, before, after, params):
     ):
         return ReconciliationStatus.CONTRADICTED, f"{character_id} started different training {new.training_design_id}"
     return ReconciliationStatus.NOT_OBSERVED, f"training of {character_id} unchanged"
+
+
+def _room_placed(delta, before, after, params):
+    """A room placement, decided from the ship's rooms alone (S13-R5); never names a room instance id.
+
+    Verified only when a room of the requested design is at the requested row
+    and column after the call and was not there before, in any status (a new
+    room is first ``Building``). A room present before that is gone after is
+    contradicted. A room changing design between the reads is not, since an
+    upgrade finishing changes it too.
+    """
+    if "rooms" in delta.unknown_sections:
+        return ReconciliationStatus.UNKNOWN, "rooms were not observed on both sides"
+    design, row, column = str(params["room_design_id"]), int(params["row"]), int(params["column"])
+    before_ids = {room.room_id for room in before.rooms}
+    gone = before_ids - {room.room_id for room in after.rooms}
+    if gone:
+        return ReconciliationStatus.CONTRADICTED, f"{len(gone)} room(s) present before the placement are gone"
+    placed = [room for room in after.rooms if room.room_id not in before_ids and room.design_id == design
+              and room.row == row and room.column == column]
+    if placed:
+        status = placed[0].status or "status not observed"
+        return ReconciliationStatus.VERIFIED, f"a room of design {design} appeared at row {row}, column {column} ({status})"
+    return ReconciliationStatus.NOT_OBSERVED, f"no new room of design {design} at row {row}, column {column}"
 
 
 def _room_upgrade_started(delta, before, after, params):
@@ -522,6 +557,18 @@ CATALOG: dict[str, ActionSpec] = {
             preconditions=(_section_observed("rooms"), _room_idle),
             postcondition=_room_upgrade_started,
             expected_effect="the room status becomes Upgrading or its design advances",
+        ),
+        # SPEC-13. Placement mode checks the layout (sdk.policy.placement) before the runner is called; a
+        # catalog precondition sees only the snapshot and the params.
+        ActionSpec(
+            action_id="place_room",
+            client_method="placeRoom",
+            mutating=True,
+            idempotency=Idempotency.NOT_IDEMPOTENT,
+            required_params=("room_design_id", "row", "column"),
+            preconditions=(_section_observed("rooms"), _placement_params_valid),
+            postcondition=_room_placed,
+            expected_effect="a room of the requested design appears at the requested row and column",
         ),
         ActionSpec(
             action_id="add_research",

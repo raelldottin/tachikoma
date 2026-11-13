@@ -196,6 +196,69 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual((summary["attempted"], summary["verified"], summary["skipped"]), (1, 1, 1))
 
 
+def place_gas_collector(state):
+    state["rooms"] = BASE["rooms"] + [{"@RoomId": "room-instance-5512", "@RoomDesignId": "42",
+                                       "@RoomStatus": "Building", "@Row": "1", "@Column": "1"}]
+    state["resources"] = {"minerals": "90", "gas": "100", "starbux": "5"}
+
+
+class PlaceRoomRunnerTests(unittest.TestCase):
+    """``place_room`` through the runner (SPEC-13, S13-R4 to R6)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.path = Path(self.tmp.name) / "events.jsonl"
+        self.journal = GameplayJournal(self.path)
+        self.clock = FakeClock()
+        self.world = FakeWorld(self.clock)
+        self.runner = ActionRunner("alpha", self.world, self.world.snapshot, self.journal, clock=self.clock)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    # Verifies: S13-R4, S13-R5
+    def test_a_placement_is_verified_by_the_room_appearing_and_journals_no_room_id(self):
+        self.world.effect = place_gas_collector
+        result = self.runner.run("place_room", {"room_design_id": "42", "row": 1, "column": 1},
+                                 expected_cost={"mineral": 10})
+        self.assertEqual(result.outcome, "verified")
+        self.assertEqual(self.world.calls, [("placeRoom", ("42", 1, 1))])
+        self.assertEqual(result.event.cost["minerals_delta"], -10)
+        self.assertNotIn("room-instance-5512", self.path.read_text(encoding="utf-8"))
+
+    # Verifies: S13-R5, S13-R6
+    def test_an_ambiguous_placement_blocks_every_later_placement_on_the_account(self):
+        self.world.result = object()  # the raw response: not the captured success shape
+        first = self.runner.run("place_room", {"room_design_id": "42", "row": 1, "column": 1})
+        self.assertEqual(first.outcome, "unknown")
+        for params in ({"room_design_id": "42", "row": 1, "column": 1},
+                       {"room_design_id": "42", "row": 6, "column": 4},
+                       {"room_design_id": "26", "row": 6, "column": 4}):
+            with self.subTest(params=params), self.assertRaises(UncertainPriorAttemptError):
+                self.runner.run("place_room", params)
+        self.assertEqual(len(self.world.calls), 1)  # nothing after the uncertain call reached the game
+        self.assertIn("a previous placement on this account is still uncertain", self.journal.read()[-1].reason)
+
+    # Verifies: S13-R6
+    def test_a_definite_success_without_a_room_is_not_observed_and_does_not_block(self):
+        self.world.result = True
+        self.assertEqual(self.runner.run("place_room", {"room_design_id": "42", "row": 1, "column": 1}).outcome,
+                         "not-observed")
+        self.world.effect = place_gas_collector
+        self.assertEqual(self.runner.run("place_room", {"room_design_id": "42", "row": 1, "column": 1}).outcome,
+                         "verified")
+
+    def test_other_actions_keep_their_per_params_uncertainty(self):
+        self.world.result = object()
+        self.assertEqual(self.runner.run("upgrade_room", {"room_id": "r1", "upgrade_room_design_id": "12"}).outcome,
+                         "unknown")
+        self.world.state["rooms"] = BASE["rooms"] + [{"@RoomId": "r2", "@RoomDesignId": "11", "@RoomStatus": "Normal"}]
+        self.world.result = True
+        self.runner.run("upgrade_room", {"room_id": "r2", "upgrade_room_design_id": "12"})  # not blocked
+        with self.assertRaises(UncertainPriorAttemptError):
+            self.runner.run("upgrade_room", {"room_id": "r1", "upgrade_room_design_id": "12"})
+
+
 # Room instance ids that must never reach the journal.
 COLLECTOR_ROOM_ID = "room-instance-7731"
 SILO_ROOM_ID = "room-instance-7732"
