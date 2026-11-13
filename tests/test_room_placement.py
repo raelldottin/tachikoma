@@ -280,8 +280,11 @@ class PlaceRoomRequestTests(unittest.TestCase):
         (url, method, args, kwargs), = self.sent
         parts = urlsplit(url)
         query = parse_qsl(parts.query, keep_blank_values=True)
+        # The capture records a GET, but the live server answered HTTP 405 to a GET in placement runs 43389706745
+        # and 43391935925 (2026-11-13), so the request is a POST, like UpgradeRoom2 and CollectAllResources.
+        self.assertEqual(self.capture["method"], "GET")
         self.assertEqual((method, parts.scheme, parts.netloc, parts.path),
-                         (self.capture["method"], "https", "api.pixelstarships.com", self.capture["path"]))
+                         ("POST", "https", "api.pixelstarships.com", self.capture["path"]))
         self.assertEqual([name for name, _ in query], list(self.capture["query"]))  # the same names, in order
         values = dict(query)
         self.assertEqual((values["roomDesignId"], values["column"], values["row"]), ("42", "1", "1"))

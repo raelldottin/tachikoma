@@ -2526,7 +2526,7 @@
     {
       "slice_id": "spec13-place-post",
       "title": "Send BuyRoom2 as a POST",
-      "status": "queued",
+      "status": "done",
       "priority": 427,
       "domain": "fleet",
       "allowed_paths": [
