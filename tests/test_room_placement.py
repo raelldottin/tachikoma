@@ -236,5 +236,98 @@ class PolicyParityTests(unittest.TestCase):
         self.assertFalse(diff_snapshots(before, replace(after, observed_at=T0)).room_design)
 
 
+FIXTURE = REPO_ROOT / "tests/fixtures/live_sanitized/rooms/buy_room2.json"
+
+
+class FakeResponse:
+    def __init__(self, text):
+        self.content = text.encode("utf-8") if isinstance(text, str) else text
+        self.text = text if isinstance(text, str) else ""
+
+
+class PlaceRoomRequestTests(unittest.TestCase):
+    """``Client.placeRoom`` reproduces the owner's sanitized BuyRoom2 capture (S13-R1, S13-R2)."""
+
+    def setUp(self):
+        from sdk.client import Client
+
+        self.capture = json.loads(FIXTURE.read_text(encoding="utf-8"))
+        self.client = object.__new__(Client)  # no login, no device, no network
+        self.client.accessToken = "synthetic-access-token-0001"
+        self.sent = []
+        self.response = FakeResponse(self.capture["response"])
+
+        def request(url, method, *args, **kwargs):
+            self.sent.append((url, method, args, kwargs))
+            return self.response
+
+        self.client.request = request
+
+    # Verifies: S13-R1
+    def test_the_capture_is_sanitized_and_recorded(self):
+        from sdk.state.capture import scan_capture_text
+
+        self.assertEqual(scan_capture_text(FIXTURE.read_text(encoding="utf-8"), "buy_room2.json"), [])
+        self.assertEqual(self.capture["query"]["accessToken"], "***REDACTED***")
+        readme = (REPO_ROOT / "tests/fixtures/live_sanitized/README.md").read_text(encoding="utf-8")
+        self.assertIn("| rooms/buy_room2.json | BuyRoom2", readme)
+
+    # Verifies: S13-R2
+    def test_the_request_matches_the_captured_shape(self):
+        from urllib.parse import parse_qsl, urlsplit
+
+        self.client.placeRoom("42", 1, 1)
+        (url, method, args, kwargs), = self.sent
+        parts = urlsplit(url)
+        query = parse_qsl(parts.query, keep_blank_values=True)
+        self.assertEqual((method, parts.scheme, parts.netloc, parts.path),
+                         (self.capture["method"], "https", "api.pixelstarships.com", self.capture["path"]))
+        self.assertEqual([name for name, _ in query], list(self.capture["query"]))  # the same names, in order
+        values = dict(query)
+        self.assertEqual((values["roomDesignId"], values["column"], values["row"]), ("42", "1", "1"))
+        self.assertEqual(values["accessToken"], "synthetic-access-token-0001")
+        captured_date = self.capture["query"]["constructionStartDate"]
+        self.assertRegex(captured_date, r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d$")
+        self.assertRegex(values["constructionStartDate"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d$")
+        self.assertEqual((args, kwargs, self.capture["body"]), ((), {}, ""))  # no body, no checksum
+
+    # Verifies: S13-R2
+    def test_only_the_captured_success_shape_returns_true(self):
+        self.assertIs(self.client.placeRoom("6", 2, 11), True)  # the captured purchase
+        for call in (("6", 2, 12), ("42", 2, 11)):  # a room, but not the one asked for
+            with self.subTest(call=call):
+                self.assertIs(self.client.placeRoom(*call), self.response)
+        for body in ("<RoomService><BuyRoom2 errorMessage=\"Not enough minerals.\"/></RoomService>", "not xml", ""):
+            with self.subTest(body=body):
+                self.response = FakeResponse(body)
+                self.assertIs(self.client.placeRoom("6", 2, 11), self.response)
+        self.response = None
+        self.assertIsNone(self.client.placeRoom("6", 2, 11))
+
+    # Verifies: S13-R2, S13-R3
+    def test_the_after_read_shows_the_bought_room_where_it_was_placed(self):
+        import xmltodict
+
+        self.assertIsNone(self.capture["ship_before"])
+        ship = xmltodict.parse(self.capture["ship_after"])["ShipService"]["GetShipByUserId"]["Ship"]
+        rooms = ship["Rooms"]["Room"]
+        snapshot = build_snapshot("tutorial", T0, "capture", ship={key: value for key, value in ship.items()
+                                                                     if key.startswith("@")},
+                                  rooms=rooms if isinstance(rooms, list) else [rooms], crew=[], research=[],
+                                  inventory=[])
+        (room,) = snapshot.rooms
+        self.assertEqual((room.design_id, room.status, room.row, room.column), ("6", "Building", 2, 11))
+
+    # Verifies: S13-R2
+    def test_no_existing_code_path_calls_place_room(self):
+        callers = []
+        for path in [REPO_ROOT / "run.py", *sorted((REPO_ROOT / "sdk").rglob("*.py"))]:
+            text = path.read_text(encoding="utf-8")
+            calls = text.count("placeRoom(") - text.count("def placeRoom(")
+            if calls:
+                callers.append(path.relative_to(REPO_ROOT).as_posix())
+        self.assertEqual(callers, [])
+
+
 if __name__ == "__main__":
     unittest.main()
