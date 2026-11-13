@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "accounts": [
+    {
+      "alias": "pss5",
+      "objective": "SPEC-13 G6 room placement on pss5 (the G2 trial account)",
+      "policy_id": "baseline-v1",
+      "budgets": {
+        "minerals": 10,
+        "gas": 0,
+        "starbux": 0
+      },
+      "max_actions": 5,
+      "enabled": true,
+      "credentials_secret": "PSS_ACCOUNT_5",
+      "expected_game_identity": "gid1-c2fc0631d4ec45f76dc7c64f316ccb6b",
+      "legacy_run_account": 5
+    }
+  ]
+}
