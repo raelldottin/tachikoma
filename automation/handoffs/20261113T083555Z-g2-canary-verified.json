@@ -1,0 +1,47 @@
+{
+  "slice_id": "g2-canary-verified",
+  "status": "done",
+  "summary": "Owner-dispatched canary 43394041693 (2026-11-13, main 7d68240) ran about five minutes after SPEC-13 placed a Gas Collector Lv1 on pss5. Its collect_all_resources reconciled verified: minerals +10, gas unchanged. Nothing was spent and there were no alerts. Every room, the new collector included, read CapacityUsed 0 before and after, so the journal cannot say which room the minerals came from; the Mineral Mining Laser is the likely source. The collector is still there, so this is not a refund. This is the first live verified effect, and it meets S07-R2.  Recorded in the G2 evidence (which also adds the earlier not-observed canary 43308552399), SPEC-07, the runbook, the trial plan and the spec plan.",
+  "files_touched": [
+    "docs/experiments/live/RUNBOOK.md",
+    "docs/experiments/live/g2-evidence.md",
+    "docs/experiments/r2-progression-trial.md",
+    "docs/specs/README.md",
+    "docs/specs/SPEC-07-progression-trial.md"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "Record the first verified canary",
+      "before": "S07-R2 not met",
+      "after": "S07-R2 met by canary 43394041693",
+      "proof": [
+        "journal of run 43394041693 read after a leak re-scan (10 expected id and hash hits, none committed): collect_all_resources verified, minerals +10",
+        "scripts/spec_trace.py, make syntax-check, make test, git diff --check pass"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "The minerals' source room is not attributable; gas from the new collector is not shown yet."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-13T08:36:17Z"
+}
