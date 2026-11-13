@@ -2440,13 +2440,14 @@
         "README.template",
         "README.md",
         "tests/test_fleet_authorization.py",
-        "tests/test_fleet_execute.py"
+        "tests/test_fleet_execute.py",
+        "docs/baseline/capability-inventory.json"
       ],
       "depends_on": [
         "spec13-place-action"
       ],
-      "max_files_changed": 7,
-      "notes": "Implements S13-R7, R10.",
+      "max_files_changed": 8,
+      "notes": "Implements S13-R7, R10. The new --place-room run flag must be listed in docs/baseline/capability-inventory.json (test_every_run_flag_is_inventoried).",
       "entry_condition": "Met once spec13-place-action is done (depends_on); the owner asked to build both remaining slices (2026-11-13).",
       "required_validations": [
         "make syntax-check",
