@@ -11,7 +11,7 @@ It follows the [study design](study-design.md): one account, a within-account AB
 | Alias | `pss5` (the only G2 account; [registry](live/registry-g2-pss5.json), `expected_game_identity` recorded) |
 | Starting state | [G1 baseline, 2026-11-12](baselines/2026-11-12-g1.md): hull 1-4, game version `1.0+settings.3307714` |
 | Legacy run | skipped (`LEGACY_RUN_SKIP=5`; scheduled run 43260995664 showed the step skipped) |
-| Ship rooms | Bridge, Bedroom, Bolter, three Lifts, Engine, Small Reactor and a Mineral Mining Laser (canary 43305786623). There is no mineral or gas collector and no storage room, and gas is 0 above the reserve. As it stands, `baseline-v1` can collect nothing and refuses every research and room upgrade, so the automated arm would do nothing. The owner builds a collector before the canary (S07-R2) and records the change here. |
+| Ship rooms | Bridge, Bedroom, Bolter, three Lifts, Engine, Small Reactor and a Mineral Mining Laser (canary 43305786623). There was no mineral or gas collector and no storage room, and gas was 0 above the reserve, so `baseline-v1` could collect nothing and refused every research and room upgrade. On 2026-11-13, SPEC-13's placement run 43393262041 added a Gas Collector Lv1 at row 1, column 1 (verified, 10 minerals), before any trial window. Gas production lets `baseline-v1` collect, and later research and upgrade. |
 
 ## Manual routine (owner)
 

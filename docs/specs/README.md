@@ -43,7 +43,7 @@ A spec that needs no live evidence goes from stage 6 straight to `Done`.
 | [SPEC-10](SPEC-10-fleet-trial.md) | Live fleet trial on two accounts | R5 exit | G5 | 05, 06, 07 | Verified offline |
 | [SPEC-11](SPEC-11-alert-delivery.md) | Scheduled reports and alert delivery | R6 | G2 | 05 | Verified offline |
 | [SPEC-12](SPEC-12-study-report.md) | Automation effectiveness study report | R6 exit | — | 07, 08, 09, 10 | Verified offline |
-| [SPEC-13](SPEC-13-room-placement.md) | Automated room placement | ops (supports R2) | G6 | 03, 05 | Approved |
+| [SPEC-13](SPEC-13-room-placement.md) | Automated room placement | ops (supports R2) | G6 | 03, 05 | Done ([evidence](SPEC-13-room-placement.md#evidence)) |
 
 ## Owner gates
 
@@ -57,7 +57,7 @@ The roadmap cannot be completed without these decisions. Each is asked once, rec
 | **G3** | Live PvP on the trial account; the two strategies; whether a strategy is applied by the bot or by hand | M3 (PvP) | Not given |
 | **G4** | Sanitized current captures of `SellItem3` and `Purchase4`; live trades on the test account with a value cap | M3 (market) | Not given |
 | **G5** | A second owned test account; operator-minute logging; live fleet runs | M4 | Not given |
-| **G6** | Sanitized captures of one room purchase with the ship and design records; one live room placement on the trial account | SPEC-13 | Approved 2026-11-12 for the captures (any owned account for the purchase request; design records read-only by the agents). The live placement on `pss5` needs its own authorization |
+| **G6** | Sanitized captures of one room purchase with the ship and design records; one live room placement on the trial account | SPEC-13 | Approved 2026-11-12 for the captures, and used on 2026-11-13: run 43393262041 placed a verified Gas Collector Lv1 on `pss5` under [authorization-g6-pss5-place.json](../experiments/live/authorization-g6-pss5-place.json) |
 
 ## Milestones
 
@@ -80,7 +80,7 @@ Every offline slice in the plan is merged (#157–#176). What remains needs the 
 - **G2 (open):** the SPEC-05 canary ran ([evidence](../experiments/live/g2-evidence.md)); SPEC-06 is verified offline (#209 merged) and its last criterion follows the SPEC-07 trial; SPEC-07 needs the owner to approve its [draft trial plan](../experiments/r2-progression-trial.md) and a canary that reconciles `verified` (S07-R2); SPEC-11 needs the owner to confirm seeing the canary's alerts and dashboard.
 - **G3, G4, G5:** PvP, market captures, and a second account, for SPEC-08, SPEC-09 and SPEC-10.
 - SPEC-12's written report follows the trials.
-- SPEC-13 (automated room placement) was approved on 2026-11-12. The owner cannot tell which account is pss5, so the bot will place pss5's collector. The design records come from the read-only capture step; the purchase request needs the owner's capture. SPEC-07's block 1 waits on it.
+- SPEC-13 (automated room placement) is done. Run 43393262041 placed a verified Gas Collector Lv1 on pss5 (2026-11-13). SPEC-07's verified canary (S07-R2) can now be attempted.
 
 ## What "roadmap complete" means
 
