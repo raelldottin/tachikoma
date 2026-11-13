@@ -2404,7 +2404,7 @@
     {
       "slice_id": "spec13-place-action",
       "title": "SPEC-13 place_room action",
-      "status": "blocked",
+      "status": "queued",
       "priority": 422,
       "domain": "fleet",
       "allowed_paths": [
@@ -2414,11 +2414,12 @@
         "tests/test_action_runner.py"
       ],
       "depends_on": [
-        "spec13-capture-designs"
+        "spec13-grid-model",
+        "spec13-client-call"
       ],
       "max_files_changed": 4,
       "notes": "Implements S13-R4, R5, R6, R8.",
-      "entry_condition": "spec13-grid-model and spec13-client-call are done; then a chore(queue) PR sets this to queued.",
+      "entry_condition": "Met: spec13-grid-model (#238) and spec13-client-call (#241) are done; the owner asked to build both remaining slices (2026-11-13).",
       "required_validations": [
         "make syntax-check",
         "make test",
@@ -2429,7 +2430,7 @@
     {
       "slice_id": "spec13-place-mode",
       "title": "SPEC-13 --mode place",
-      "status": "blocked",
+      "status": "queued",
       "priority": 423,
       "domain": "fleet",
       "allowed_paths": [
@@ -2442,11 +2443,11 @@
         "tests/test_fleet_execute.py"
       ],
       "depends_on": [
-        "spec13-capture-designs"
+        "spec13-place-action"
       ],
       "max_files_changed": 7,
       "notes": "Implements S13-R7, R10.",
-      "entry_condition": "spec13-place-action is done; then a chore(queue) PR sets this to queued.",
+      "entry_condition": "Met once spec13-place-action is done (depends_on); the owner asked to build both remaining slices (2026-11-13).",
       "required_validations": [
         "make syntax-check",
         "make test",
