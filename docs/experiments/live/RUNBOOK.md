@@ -70,7 +70,7 @@ SPEC-07 needs a canary whose collection reconciles `verified` before trial block
 
 Canary 43305786623 settled which: pss5 has no mineral or gas collector and no storage room ([G2 evidence](g2-evidence.md#why-the-collections-had-nothing-to-collect)), so there is nothing to collect. To get a verified one:
 
-1. In the game, build a mineral or gas collector on pss5 by hand (and storage if the game needs it), and power it. This is manual play before any trial window, so it is not an intervention, but note the date and what was built in the trial plan's starting state.
+1. Give pss5 a collector. Done on 2026-11-13: the owner cannot tell which game account is pss5, so SPEC-13's `step=place` placed a Gas Collector Lv1 at row 1, column 1 (run 43393262041, verified, 10 minerals).
 2. Give it time to produce. The legacy daily run skips pss5, so nothing else collects from it. Wait several hours.
 3. Dispatch `gh workflow run live-trial.yml -f step=canary`. It runs a fresh dry run first. The canary authorization runs until 2026-11-26.
 
