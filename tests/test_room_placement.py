@@ -331,6 +331,20 @@ class PlaceRoomRequestTests(unittest.TestCase):
         self.assertEqual(len(self.client.placeRoomReply["messages"][0]["text"]), 300)
 
     # Verifies: S13-R2
+    def test_the_live_buyroom_reply_is_a_success_too(self):
+        # Run 43393262041 journaled the live POST reply's elements as RoomService/BuyRoom/Room, then Items.
+        live = self.capture["response"].replace("<BuyRoom2>", "<BuyRoom>").replace("</BuyRoom2>", "<Items/></BuyRoom>")
+        self.assertIn("<BuyRoom>", live)
+        self.response = FakeResponse(live)
+        self.assertIs(self.client.placeRoom("6", 2, 11), True)
+        self.assertTrue(self.client.placeRoomReply["success_shape"])
+        self.assertEqual(self.client.placeRoomReply["elements"][:3], ["RoomService", "BuyRoom", "Room"])
+        self.assertIs(self.client.placeRoom("6", 2, 12), self.response)  # a room, but not where it was asked for
+        self.response = FakeResponse("<RoomService><BuyRoom3><Room RoomDesignId=\"6\" Row=\"2\" Column=\"11\"/>"
+                                     "</BuyRoom3></RoomService>")
+        self.assertIs(self.client.placeRoom("6", 2, 11), self.response)  # an element nobody has seen is not success
+
+    # Verifies: S13-R2
     def test_a_request_that_raises_leaves_no_reply(self):
         def boom(*args, **kwargs):
             raise ConnectionError("synthetic")

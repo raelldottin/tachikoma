@@ -47,6 +47,9 @@ class ConfigurationError(RuntimeError):
     pass
 
 
+# The element a BuyRoom2 success reply puts its Room under: the live server's reply to the POST (run 43393262041,
+# 2026-11-13), then the owner's 2026-10-19 capture.
+PLACE_ROOM_REPLY_ELEMENTS = ("BuyRoom", "BuyRoom2")
 PLACE_REPLY_TEXT_LIMIT = 300
 PLACE_REPLY_ELEMENT_LIMIT = 12
 PLACE_REPLY_MESSAGE_LIMIT = 3
@@ -2382,8 +2385,10 @@ class Client(object):
         placement runs of 2026-11-13 (43389706745, 43391935925). No existing
         code path calls it, and it makes no eligibility or cost checks of its own.
 
-        Returns ``True`` only for the captured success shape: a ``BuyRoom2``
-        ``Room`` of that design at that row and column. Any other response,
+        Returns ``True`` only for a success reply: a ``Room`` of that design at
+        that row and column, under ``RoomService/BuyRoom`` (what the live server
+        sends to the POST, run 43393262041) or ``RoomService/BuyRoom2`` (the
+        owner's capture). Any other response,
         including an error, is returned raw. No refusal response has been
         captured, so the runner treats it as ambiguous and a later ship read
         decides.
@@ -2396,7 +2401,9 @@ class Client(object):
         r = self.request(url, "POST")
         self.placeRoomReply = place_room_reply(r)
         try:
-            room = xmltodict.parse(r.content, xml_attribs=True)["RoomService"]["BuyRoom2"]["Room"]
+            service = xmltodict.parse(r.content, xml_attribs=True)["RoomService"]
+            reply = next(service[name] for name in PLACE_ROOM_REPLY_ELEMENTS if name in service)
+            room = reply["Room"]
         except Exception:
             return r
         if (
