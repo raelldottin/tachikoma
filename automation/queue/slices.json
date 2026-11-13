@@ -2681,6 +2681,29 @@
         "make lint",
         "git diff --check"
       ]
+    },
+    {
+      "slice_id": "spec13-buyroom-success-shape",
+      "title": "Recognise the live BuyRoom reply as a placement success",
+      "status": "queued",
+      "priority": 434,
+      "domain": "fleet",
+      "allowed_paths": [
+        "sdk/client.py",
+        "tests/test_room_placement.py",
+        "docs/specs/SPEC-13-room-placement.md"
+      ],
+      "depends_on": [
+        "spec13-live-evidence"
+      ],
+      "max_files_changed": 3,
+      "notes": "Owner request 2026-11-13. The verified placement run 43393262041 journaled the POST reply's elements as RoomService/BuyRoom/Room (not the captured BuyRoom2), so placeRoom did not recognise the success and returned the raw reply. Accept RoomService/BuyRoom/Room as well as BuyRoom2, with the same design, row and column check. Outcomes still come from the ship read.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "make lint",
+        "git diff --check"
+      ]
     }
   ]
 }
