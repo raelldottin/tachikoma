@@ -2378,20 +2378,22 @@
     {
       "slice_id": "spec13-client-call",
       "title": "SPEC-13 placeRoom client call",
-      "status": "blocked",
+      "status": "queued",
       "priority": 421,
       "domain": "fleet",
       "allowed_paths": [
         "sdk/client.py",
         "tests/test_room_placement.py",
-        "tests/fixtures/live_sanitized/rooms/"
+        "tests/fixtures/live_sanitized/rooms/buy_room2.json",
+        "tests/fixtures/live_sanitized/README.md",
+        "docs/baseline/capability-inventory.json"
       ],
       "depends_on": [
         "spec13-capture-designs"
       ],
-      "max_files_changed": 4,
-      "notes": "Implements S13-R2. Written from the captured purchase request only.",
-      "entry_condition": "The owner supplies a sanitized capture of one room purchase (S13-R1), or approves an R1 amendment to build from verified research findings; then a chore(queue) PR sets this to queued.",
+      "max_files_changed": 5,
+      "notes": "Implements S13-R2. Written from the captured purchase request only. The fixture from #239, corrected: the accessToken placeholder becomes ***REDACTED*** (the scan flags any other value), and the read labelled ship_before is moved to ship_after because it already holds the bought room. Add its row to the fixtures README and placeRoom to the capability inventory. #239 is closed in favour of this slice.",
+      "entry_condition": "Met: the owner supplied a sanitized BuyRoom2 capture in draft PR #239 (2026-11-13) and asked for it to be folded into this slice.",
       "required_validations": [
         "make syntax-check",
         "make test",
