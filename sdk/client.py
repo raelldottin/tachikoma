@@ -2319,6 +2319,40 @@ class Client(object):
         url = f"https://api.pixelstarships.com/RoomService/UpgradeRoom2?roomId={roomId}&upgradeRoomDesignId={upgradeRoomDesignId}&accessToken={self.accessToken}"
         return self.request(url, "POST")
 
+    def placeRoom(self, roomDesignId, row, column):
+        """Buy one room and place its top-left cell at ``row``, ``column`` (BuyRoom2; SPEC-13, S13-R2).
+
+        The request reproduces the owner's sanitized capture in
+        ``tests/fixtures/live_sanitized/rooms/buy_room2.json``: a GET with
+        ``roomDesignId``, ``column``, ``row``, ``constructionStartDate`` (the
+        client's time) and ``accessToken``, no body and no checksum. No
+        existing code path calls it, and it makes no eligibility or cost checks
+        of its own.
+
+        Returns ``True`` only for the captured success shape: a ``BuyRoom2``
+        ``Room`` of that design at that row and column. Any other response,
+        including an error, is returned raw. No refusal response has been
+        captured, so the runner treats it as ambiguous and a later ship read
+        decides.
+        """
+        url = (
+            f"{self.baseUrl}/RoomService/BuyRoom2?roomDesignId={roomDesignId}&column={column}&row={row}"
+            f"&constructionStartDate={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}&accessToken={self.accessToken}"
+        )
+        r = self.request(url, "GET")
+        try:
+            room = xmltodict.parse(r.content, xml_attribs=True)["RoomService"]["BuyRoom2"]["Room"]
+        except Exception:
+            return r
+        if (
+            isinstance(room, dict)
+            and room.get("@RoomDesignId") == str(roomDesignId)
+            and room.get("@Row") == str(row)
+            and room.get("@Column") == str(column)
+        ):
+            return True
+        return r
+
     def upgradeRooms(self):
         try:
             if not hasattr(self, "roomDesigns"):

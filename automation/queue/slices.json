@@ -2378,7 +2378,7 @@
     {
       "slice_id": "spec13-client-call",
       "title": "SPEC-13 placeRoom client call",
-      "status": "queued",
+      "status": "done",
       "priority": 421,
       "domain": "fleet",
       "allowed_paths": [

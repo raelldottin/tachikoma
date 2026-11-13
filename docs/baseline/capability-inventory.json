@@ -618,6 +618,15 @@
       ]
     },
     {
+      "name": "placeRoom",
+      "pillar": "B",
+      "kind": "mutating",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_room_placement.py"
+      ]
+    },
+    {
       "name": "upgradeRooms",
       "pillar": "B",
       "kind": "mutating",
