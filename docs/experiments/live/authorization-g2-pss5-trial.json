@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "owner": "owner",
+  "purpose": "SPEC-07 R2 progression trial on pss5, automated blocks 2 and 3 (2026-11-30 to 2026-12-13): baseline-v1 in full mode; owner chose no practical mineral or gas limit (approved 2026-11-13); starbux never",
+  "accounts": [
+    "pss5"
+  ],
+  "actions": [
+    "add_research",
+    "upgrade_room",
+    "collect_all_resources",
+    "collect_daily_reward"
+  ],
+  "not_before": "2026-11-30T00:00:00Z",
+  "expires": "2026-12-14T00:00:00Z",
+  "caps": {
+    "pss5": {
+      "minerals": 1000000000,
+      "gas": 1000000000
+    }
+  },
+  "modes": [
+    "full"
+  ],
+  "legacy_run_skipped": [
+    5
+  ]
+}
