@@ -1,0 +1,48 @@
+{
+  "slice_id": "spec07-daily-changes",
+  "status": "done",
+  "summary": "The owner asked for a summary of what was done each day on the trial account. It comes from the trial's evening snapshots rather than OCR of screenshots, since pixel fonts OCR badly and only the snapshots feed the trial's measure.  scripts/daily_changes.py reads baseline snapshot files (or the downloaded trial-snapshot artifacts), pairs consecutive snapshots per account, and prints one section per day: - the block and arm, from docs/experiments/r2-progression-trial/schedule.json; - the trial's growth measure, using trial_report.growth_units so it matches the   exit report; - rooms upgraded, added and removed (by design, never by room id), and room   upgrades started; - research completed and started; - the change in minerals, gas, starbux, trophies and ship level, and crew level-ups; - the sections a snapshot did not observe, as 'not observed', never 0. A pair outside the report's one-day window is flagged. It reads files only.",
+  "files_touched": [
+    "docs/experiments/r2-progression-trial.md",
+    "docs/experiments/r2-progression-trial/schedule.json",
+    "scripts/daily_changes.py",
+    "tests/test_daily_changes.py"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "make lint",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "Daily change summary from the trial snapshots",
+      "before": "no per-day summary",
+      "after": "scripts/daily_changes.py",
+      "proof": [
+        "tests: a day's changes and growth measure; the growth figure equals growth_units; no room ids printed; unobserved sections shown as not observed; schedule labels, skipped non-snapshot JSON, non-one-day pairs, alias and date filters; bad inputs; schedule.json matches the approved plan",
+        "end to end on the two real pss5 baseline artifacts of 2026-11-12",
+        "make syntax-check, make test (1377 OK), make lint, git diff --check pass"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "Room and research names are design ids; names are not in the snapshots."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-13T09:17:32Z"
+}
