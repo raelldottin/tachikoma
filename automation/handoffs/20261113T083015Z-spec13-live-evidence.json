@@ -1,0 +1,46 @@
+{
+  "slice_id": "spec13-live-evidence",
+  "status": "done",
+  "summary": "Owner-dispatched run 43393262041 (2026-11-13, main 7aefe06) placed a Gas Collector Lv1 (room design 42) on pss5 at row 1, column 1, the position first-free chose. place_room reconciled verified from the ship read: the room was there in Building status. It cost exactly 10 minerals, nothing else was spent, and there were no alerts. The POST reply's element is RoomService/BuyRoom, not the captured BuyRoom2, so the client did not recognise the success shape; the outcome came from the ship read, as S13-R5 requires.  SPEC-13 is Done. The spec plan, G6's status, the runbook's verified-canary steps and the trial plan's starting state now record that pss5 has a gas collector.",
+  "files_touched": [
+    "docs/experiments/live/RUNBOOK.md",
+    "docs/experiments/r2-progression-trial.md",
+    "docs/specs/README.md",
+    "docs/specs/SPEC-13-room-placement.md"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "Record the verified live placement",
+      "before": "SPEC-13 Approved; no live placement",
+      "after": "SPEC-13 Done with a verified live placement",
+      "proof": [
+        "journal of run 43393262041 read after a leak re-scan (8 expected id and hash hits, none committed): place_room verified, minerals -10",
+        "scripts/spec_trace.py passes with SPEC-13 Done; make syntax-check, make test, git diff --check pass"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "The client does not yet recognise the BuyRoom reply element as success; outcomes still come from the ship read."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-13T08:30:33Z"
+}

@@ -2550,7 +2550,7 @@
     {
       "slice_id": "spec13-live-evidence",
       "title": "Record the verified live placement and mark SPEC-13 done",
-      "status": "queued",
+      "status": "done",
       "priority": 428,
       "domain": "fleet",
       "allowed_paths": [
