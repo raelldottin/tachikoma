@@ -2704,6 +2704,28 @@
         "make lint",
         "git diff --check"
       ]
+    },
+    {
+      "slice_id": "spec07-starting-state",
+      "title": "Record the owner's pre-trial play and the second verified canary",
+      "status": "queued",
+      "priority": 435,
+      "domain": "fleet",
+      "allowed_paths": [
+        "docs/experiments/live/g2-evidence.md",
+        "docs/experiments/r2-progression-trial.md",
+        "docs/specs/SPEC-13-room-placement.md"
+      ],
+      "depends_on": [
+        "spec13-buyroom-success-shape"
+      ],
+      "max_files_changed": 3,
+      "notes": "Owner confirmed 2026-11-13 that they found and played pss5 by hand that morning, before the trial. Canary 43401277661 (main 56c411d) reconciled verified (minerals +51), no spend, no alerts. Its room-fill evidence shows the new ship: Bridge Lv1, Bedroom Lv2, Armor Lv1 x2, Armor Lv2 x3, Bolter Lv2, Small Reactor Lv2, Gym Lv1, Lift Lv1 x6, Mineral Mining Laser Lv1, Mineral Storage Lv1, Gas Storage Lv1, Shield Generator Lv1; the Engine Lv1 and the placed Gas Collector Lv1 are gone; gas 1517 above the reserve. Record the canary in the G2 evidence, the new starting state in the trial plan (pre-trial play is not an intervention), and in SPEC-13 that the placed collector was later removed by the owner (its verification stands).",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
     }
   ]
 }
