@@ -1,0 +1,104 @@
+name: Live trial schedule (SPEC-07)
+
+# Runs the owner-approved R2 progression trial on pss5
+# (docs/experiments/r2-progression-trial.md) on a schedule, so nobody has to
+# dispatch it twice a day:
+#   23:30 UTC, 2026-11-16 to 2026-12-20: a read-only snapshot of pss5
+#   00:30 UTC, 2026-11-30 to 2026-12-13: a dry run, then --fleet-execute --mode full
+# Outside those dates, and on any day the stop file below exists, it does nothing.
+# The owner stops the automated arm by committing
+# docs/experiments/r2-progression-trial/STOP, or by disabling this workflow.
+# Output is uploaded as an artifact kept 90 days, for the exit report.
+
+on:
+  schedule:
+    - cron: '30 23 * * *'
+    - cron: '30 0 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live-trial
+  cancel-in-progress: false
+
+jobs:
+  trial:
+    name: Trial day
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      OUT: ${{ github.workspace }}/live-out
+      SNAPSHOT_REGISTRY: docs/experiments/live/registry-g2-pss5.json
+      TRIAL_REGISTRY: docs/experiments/live/registry-g2-pss5-trial.json
+      TRIAL_AUTHORIZATION: docs/experiments/live/authorization-g2-pss5-trial.json
+      STOP_FILE: docs/experiments/r2-progression-trial/STOP
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+
+      - name: Decide today's step
+        id: day
+        env:
+          SCHEDULE: ${{ github.event.schedule }}
+        run: |
+          set -euo pipefail
+          today=$(date -u +%F)
+          step=none
+          if [ "$SCHEDULE" = '30 23 * * *' ] && [[ "$today" > "2026-11-15" && "$today" < "2026-12-21" ]]; then
+            step=snapshot
+          elif [ "$SCHEDULE" = '30 0 * * *' ] && [[ "$today" > "2026-11-29" && "$today" < "2026-12-14" ]]; then
+            step=execute
+            if [ -e "$STOP_FILE" ]; then step=stopped; fi
+          fi
+          echo "$today: $step"
+          echo "step=$step" >> "$GITHUB_OUTPUT"
+
+      - name: Install dependencies
+        if: steps.day.outputs.step == 'snapshot' || steps.day.outputs.step == 'execute'
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Read-only snapshot of pss5
+        if: steps.day.outputs.step == 'snapshot'
+        env:
+          PSS_ACCOUNT_5_EMAIL: ${{ secrets.PSS_ACCOUNT_5_EMAIL }}
+          PSS_ACCOUNT_5_PASSWORD: ${{ secrets.PSS_ACCOUNT_5_PASSWORD }}
+          TACHIKOMA_FLEET_SALT: ${{ secrets.TACHIKOMA_FLEET_SALT }}
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p "$OUT/baselines"
+          python run.py --baseline --registry "$SNAPSHOT_REGISTRY" --output "$OUT/baselines" \
+            --identity-salt-env TACHIKOMA_FLEET_SALT --baseline-summary "$OUT/baselines/SUMMARY.md"
+
+      - name: Automated day (baseline-v1, full mode)
+        if: steps.day.outputs.step == 'execute'
+        env:
+          PSS_ACCOUNT_5_EMAIL: ${{ secrets.PSS_ACCOUNT_5_EMAIL }}
+          PSS_ACCOUNT_5_PASSWORD: ${{ secrets.PSS_ACCOUNT_5_PASSWORD }}
+          TACHIKOMA_FLEET_SALT: ${{ secrets.TACHIKOMA_FLEET_SALT }}
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p "$OUT/journals"
+          python run.py --fleet-dry-run --registry "$TRIAL_REGISTRY" --fleet-journal-dir "$OUT/journals" \
+            --identity-salt-env TACHIKOMA_FLEET_SALT
+          python run.py --fleet-execute --registry "$TRIAL_REGISTRY" --authorization "$TRIAL_AUTHORIZATION" \
+            --mode full --identity-salt-env TACHIKOMA_FLEET_SALT --fleet-journal-dir "$OUT/journals"
+
+      - name: Upload sanitized output
+        if: always() && (steps.day.outputs.step == 'snapshot' || steps.day.outputs.step == 'execute')
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: trial-${{ steps.day.outputs.step }}-${{ github.run_id }}
+          path: ${{ env.OUT }}
+          retention-days: 90
+          if-no-files-found: ignore
