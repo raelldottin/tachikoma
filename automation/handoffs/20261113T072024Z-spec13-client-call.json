@@ -1,0 +1,48 @@
+{
+  "slice_id": "spec13-client-call",
+  "status": "done",
+  "summary": "The owner supplied a sanitized capture of the game's own BuyRoom2 request in draft PR #239. This folds it in, corrected: - the access-token placeholder becomes ***REDACTED*** (the scan flags any other value); - the ship read labelled ship_before already holds the bought room, so it is stored   as ship_after; - the stray README.md version-line change is dropped. It is recorded in the fixtures README (the request is kept on purpose: S13-R2 reproduces it) and re-scans clean.  Client.placeRoom sends GET /RoomService/BuyRoom2 with roomDesignId, column, row, constructionStartDate and accessToken, in the captured order, with no body and no checksum. It returns True only for the captured success shape (a BuyRoom2 Room of that design at that row and column) and the raw response otherwise, which the runner treats as ambiguous. Nothing calls it yet. The capability inventory lists it as mutating.",
+  "files_touched": [
+    "docs/baseline/capability-inventory.json",
+    "sdk/client.py",
+    "tests/fixtures/live_sanitized/README.md",
+    "tests/fixtures/live_sanitized/rooms/buy_room2.json",
+    "tests/test_room_placement.py"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "make lint",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "SPEC-13 placeRoom client call",
+      "before": "no room purchase call",
+      "after": "Client.placeRoom reproduces the captured BuyRoom2 request",
+      "proof": [
+        "tests: request method, host, path and query names in order match the fixture; values and date format; no body; True only for the captured success; raw for mismatch, error, unparseable or None; the after-read shows the bought room at its row and column; nothing calls placeRoom; the fixture scans clean and has its README row",
+        "make syntax-check, make test (1337 OK), make lint, scripts/ci.py repository, git diff --check pass"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "No refusal response has been captured; any non-success response is ambiguous and a later ship read decides."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-13T07:20:43Z"
+}
