@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "owner": "owner",
+  "purpose": "SPEC-13 G6, approved 2026-11-13: place one Gas Collector Lv1 (room design 42) on pss5 at the first free position, so the SPEC-07 canary has something to collect; at most 10 minerals",
+  "accounts": [
+    "pss5"
+  ],
+  "actions": [
+    "place_room"
+  ],
+  "not_before": "2026-11-13T00:00:00Z",
+  "expires": "2026-11-20T00:00:00Z",
+  "caps": {
+    "pss5": {
+      "minerals": 10,
+      "gas": 0
+    }
+  },
+  "modes": [
+    "place"
+  ],
+  "legacy_run_skipped": [
+    5
+  ],
+  "placements": {
+    "pss5": [
+      {
+        "room_design_id": 42,
+        "position": "first-free"
+      }
+    ]
+  }
+}
