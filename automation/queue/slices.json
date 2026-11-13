@@ -2639,7 +2639,7 @@
     {
       "slice_id": "spec07-trial-plan-approval",
       "title": "Record the owner's manual routine and approval of the SPEC-07 trial plan",
-      "status": "queued",
+      "status": "done",
       "priority": 432,
       "domain": "fleet",
       "allowed_paths": [
