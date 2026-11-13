@@ -4,6 +4,17 @@
 
 It follows the [study design](study-design.md): one account, a within-account ABBA crossover, the primary metric from snapshot diffs.
 
+## Owner decisions (2026-11-13)
+
+| Question | Decision |
+| --- | --- |
+| Manual arm | The owner finds pss5 in the game and plays it by hand on manual days, following the routine below. pss5 is the ship with a Gas Collector Lv1 in the top-left corner, about 931 trophies, a level-2 ship and a Bedroom Lv2 |
+| Who runs each day | A scheduled workflow, `live-trial-schedule.yml`, added by the owner (it holds secrets). It runs the 23:30 UTC snapshot every day and the 00:30 UTC automated run on automated days, keeps each day's artifact for 90 days, and does nothing outside the trial dates |
+| Daily caps | No practical limit on minerals or gas. The authorization needs a number for each, so both are 1,000,000,000; pss5's balance above its reserve is the real limit. Starbux is always 0 |
+| Windows and stop thresholds | Kept as drafted below |
+
+Still needed before approval: the owner's manual routine.
+
 ## Account
 
 | Field | Value |
@@ -31,8 +42,9 @@ Before block 1 opens (2026-11-23), a canary run must succeed (S07-R2). Success m
 
 ## Snapshots and runs
 
-- **Every day, both arms:** one read-only snapshot of `pss5` at 23:30 UTC (`live-trial.yml`, `baseline` step, or `run.py --baseline` with the G2 registry). The primary metric comes only from consecutive snapshot diffs (S07-R4).
-- **Automated days:** `run.py --fleet-execute --mode full` once at 00:30 UTC under the trial authorization, then the 23:30 snapshot.
+- **Every day, both arms:** one read-only snapshot of `pss5` at 23:30 UTC, run by `live-trial-schedule.yml` (`run.py --baseline` with the G2 registry). The primary metric comes only from consecutive snapshot diffs (S07-R4).
+- **Automated days:** at 00:30 UTC the same workflow runs a dry run, then `run.py --fleet-execute --mode full` under the trial authorization with the trial registry ([registry-g2-pss5-trial.json](live/registry-g2-pss5-trial.json), which leaves mineral and gas budgets to the authorization). Then the 23:30 snapshot.
+- **Stopping the automated arm:** commit `docs/experiments/r2-progression-trial/STOP`, or disable the workflow. Agents report a crossed threshold; the owner stops the arm.
 - **Manual days:** no execute run; the owner follows the manual routine.
 
 ## Primary metric and sample
@@ -72,7 +84,7 @@ A game update during a block splits the block (study design §Interventions).
 
 ## Authorization
 
-*To be written by the owner* as `docs/experiments/live/authorization-g2-pss5-trial.json`: account `pss5`; `modes` `["full"]`; the actions `baseline-v1` plans (`add_research`, `upgrade_room`, `collect_all_resources`, `collect_daily_reward`); mineral and gas caps per day; starbux cap 0; valid 2026-11-30 to 2026-12-14 (the automated blocks only); `legacy_run_skipped` `[5]`. The canary authorization ([authorization-g2-pss5-canary.json](live/authorization-g2-pss5-canary.json)) expires 2026-11-26 and allows canary mode only.
+`docs/experiments/live/authorization-g2-pss5-trial.json`, drafted for the owner to review in the same patch as the workflow: account `pss5`; `modes` `["full"]`; the actions `baseline-v1` plans (`add_research`, `upgrade_room`, `collect_all_resources`, `collect_daily_reward`); mineral and gas caps of 1,000,000,000 each (no practical limit); starbux cap 0; valid 2026-11-30T00:00Z to 2026-12-14T00:00Z (the automated blocks only); `legacy_run_skipped` `[5]`. The canary authorization ([authorization-g2-pss5-canary.json](live/authorization-g2-pss5-canary.json)) expires 2026-11-26 and allows canary mode only.
 
 ## Exit report
 

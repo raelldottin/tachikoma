@@ -1,0 +1,43 @@
+{
+  "slice_id": "spec07-trial-decisions",
+  "status": "done",
+  "summary": "The owner answered the trial plan's open questions on 2026-11-13: - the owner finds and plays pss5 by hand on manual days; the routine is still to   be written; - a scheduled workflow, live-trial-schedule.yml (an owner patch, since it holds   secrets), runs the 23:30 UTC snapshots and the 00:30 UTC automated days; - there is no practical cap on minerals or gas: 1,000,000,000 each, because the   authorization needs a number; starbux stays at 0; - the windows and stop thresholds are kept. The plan records how to stop the automated arm (a committed STOP file, or disabling the workflow) and the drafted trial authorization. Its status stays DRAFT until the manual routine is in.",
+  "files_touched": [
+    "docs/experiments/r2-progression-trial.md"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "Record the owner's trial-plan decisions",
+      "before": "trial plan with open owner questions",
+      "after": "decisions recorded; routine pending",
+      "proof": [
+        "owner answers 2026-11-13",
+        "make syntax-check, make test, git diff --check pass"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "The trial cannot be approved until the owner writes the manual routine and merges the scheduled workflow."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-13T08:44:34Z"
+}
