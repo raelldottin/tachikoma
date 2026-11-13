@@ -2522,6 +2522,30 @@
         "make lint",
         "git diff --check"
       ]
+    },
+    {
+      "slice_id": "spec13-place-post",
+      "title": "Send BuyRoom2 as a POST",
+      "status": "queued",
+      "priority": 427,
+      "domain": "fleet",
+      "allowed_paths": [
+        "sdk/client.py",
+        "tests/test_room_placement.py",
+        "tests/fixtures/live_sanitized/README.md",
+        "docs/specs/SPEC-13-room-placement.md"
+      ],
+      "depends_on": [
+        "spec13-place-diagnostics"
+      ],
+      "max_files_changed": 4,
+      "notes": "Owner decision 2026-11-13 ('switch to POST'). Placement run 43391935925 journaled the server's reply to BuyRoom2 as a GET: HTTP 405 with an empty body, no room, no spend. The client's other room-changing calls (UpgradeRoom2, CollectAllResources) are POSTs with query parameters. Send the same BuyRoom2 query as a POST; keep the capture file unedited and note the deviation in its README row, the test and SPEC-13.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "make lint",
+        "git diff --check"
+      ]
     }
   ]
 }
