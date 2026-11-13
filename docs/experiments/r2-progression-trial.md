@@ -61,6 +61,26 @@ Before block 1 opens (2026-11-23), a canary run must succeed (S07-R2). Success m
 - **Sample size:** `per_arm_min_sample` gives 14 account-days per arm for a 1.5 sd effect (29 for 1.0 sd), at alpha 0.05 and power 0.80. Four 7-day blocks give exactly 14 per arm.
 - **Decisions:** only at block ends, with `decide_and_record`; no decision before the minimum sample.
 
+## What changed each day
+
+`scripts/daily_changes.py` summarises each day from the evening snapshots. It shows:
+
+- the day's block and arm, from [schedule.json](r2-progression-trial/schedule.json);
+- the trial's growth measure, computed as the exit report computes it;
+- rooms upgraded, added and removed (by design, never by room id), and room upgrades started;
+- research completed and started;
+- the change in resources, trophies and ship level, and crew level-ups;
+- anything a snapshot did not observe.
+
+It reads files only. Point it at downloaded `trial-snapshot-*` artifacts:
+
+```bash
+gh run download <run id> -D trial-artifacts/<run id>
+python scripts/daily_changes.py trial-artifacts --alias pss5 --schedule docs/experiments/r2-progression-trial/schedule.json
+```
+
+It helps check the minutes and interventions logs, and it replaces reading screenshots. The output describes the account, so it is not committed.
+
 ## Operator time (S07-R5)
 
 One row per account-day in both arms, in `docs/experiments/r2-progression-trial/operator-minutes.csv`:

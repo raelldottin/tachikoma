@@ -2661,7 +2661,7 @@
     {
       "slice_id": "spec07-daily-changes",
       "title": "Summarise what changed on the trial account each day, from the snapshots",
-      "status": "queued",
+      "status": "done",
       "priority": 433,
       "domain": "reports",
       "allowed_paths": [

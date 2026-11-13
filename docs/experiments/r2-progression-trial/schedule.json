@@ -1,0 +1,12 @@
+{
+  "trial_id": "r2-progression",
+  "account_alias": "pss5",
+  "source": "docs/experiments/r2-progression-trial.md, approved by the owner on 2026-11-13",
+  "blocks": [
+    {"name": "baseline window", "start": "2026-11-16", "end": "2026-11-22", "arm": "manual"},
+    {"name": "block 1", "start": "2026-11-23", "end": "2026-11-29", "arm": "manual"},
+    {"name": "block 2", "start": "2026-11-30", "end": "2026-12-06", "arm": "baseline-v1"},
+    {"name": "block 3", "start": "2026-12-07", "end": "2026-12-13", "arm": "baseline-v1"},
+    {"name": "block 4", "start": "2026-12-14", "end": "2026-12-20", "arm": "manual"}
+  ]
+}
