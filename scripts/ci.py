@@ -31,6 +31,7 @@ WORKFLOWS = (
     "release.yml",
     "daily-run.yml",
     "live-trial.yml",
+    "live-trial-schedule.yml",
 )
 MAX_BLOB_BYTES = 1024 * 1024
 RELEASE_ROOT_FILES = ("run.py", "requirements.txt", "LICENSE", "README.md")
@@ -158,6 +159,9 @@ def check_workflows(documents: dict) -> None:
     # live-trial.yml touches real accounts, so only an owner's manual dispatch may start it.
     if set(documents["live-trial.yml"]["on"]) != {"workflow_dispatch"}:
         raise ValueError("the live trial workflow must run only on a manual dispatch")
+    # live-trial-schedule.yml runs the SPEC-07 trial with secrets: only its schedule may start it.
+    if set(documents["live-trial-schedule.yml"]["on"]) != {"schedule"}:
+        raise ValueError("the trial schedule workflow must run only on its schedule")
     release = documents["release.yml"]
     jobs = release["jobs"]
     if "workflow_dispatch" not in release["on"]:

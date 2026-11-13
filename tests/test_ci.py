@@ -298,7 +298,8 @@ class WorkflowPolicyTests(unittest.TestCase):
     def test_policy_covers_the_secret_holding_workflows(self):
         self.assertIn("daily-run.yml", ci.WORKFLOWS)
         self.assertIn("live-trial.yml", ci.WORKFLOWS)
-        for filename in ("daily-run.yml", "live-trial.yml"):
+        self.assertIn("live-trial-schedule.yml", ci.WORKFLOWS)
+        for filename in ("daily-run.yml", "live-trial.yml", "live-trial-schedule.yml"):
             job_name, job = next(iter(self.documents[filename]["jobs"].items()))
             checkout = next(i for i, step in enumerate(job["steps"]) if "checkout@" in step.get("uses", ""))
             for mutation in ("unpinned", "timeout", "token", "permissions", "job_permissions"):
@@ -335,6 +336,14 @@ class WorkflowPolicyTests(unittest.TestCase):
                 for index in reversed(steps):
                     del target[index]
             with self.subTest(mutation=mutation), self.assertRaises(ValueError):
+                ci.check_workflows(docs)
+
+    def test_trial_schedule_runs_only_on_its_schedule(self):
+        self.assertEqual(set(self.documents["live-trial-schedule.yml"]["on"]), {"schedule"})
+        for trigger in ("push", "pull_request", "workflow_dispatch", "workflow_run"):
+            docs = copy.deepcopy(self.documents)
+            docs["live-trial-schedule.yml"]["on"][trigger] = {}
+            with self.subTest(trigger=trigger), self.assertRaisesRegex(ValueError, "only on its schedule"):
                 ci.check_workflows(docs)
 
     def test_live_trial_runs_only_on_manual_dispatch(self):
