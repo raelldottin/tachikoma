@@ -723,7 +723,7 @@ def _alert_summary(mode, fleet_run, alerts, record_path, dashboard_path, post_ru
 FLEET_STOP_FILE = "STOP"  # <journal dir>/STOP halts --fleet-execute between actions and accounts
 RUN_RECORD_DIR = "runs"  # <journal dir>/runs/<UTC time>.json: one record per --fleet-execute run
 RUN_RECORD_VERSION = 1
-EXECUTE_MODES = ("canary", "full")
+EXECUTE_MODES = ("canary", "full", "place")
 DASHBOARD_DEFAULT = "dashboard.html"  # <journal dir>/dashboard.html: written after each --fleet-execute run
 
 
@@ -791,10 +791,30 @@ def _write_run_record(directory, started_at, record):
     return target
 
 
+def parse_place_room(text):
+    """``DESIGN@ROW,COLUMN`` or ``DESIGN@first-free`` as an authorization ``Placement`` (SPEC-13)."""
+    from sdk.fleet.authorization import FIRST_FREE, AuthorizationError, parse_placement
+
+    design, separator, where = str(text).partition("@")
+    if not separator:
+        raise ValueError(f"--place-room must be DESIGN@ROW,COLUMN or DESIGN@{FIRST_FREE}")
+    try:
+        if where == FIRST_FREE:
+            return parse_placement({"room_design_id": int(design), "position": FIRST_FREE}, "--place-room")
+        row, comma, column = where.partition(",")
+        if not comma:
+            raise ValueError(f"--place-room must be DESIGN@ROW,COLUMN or DESIGN@{FIRST_FREE}")
+        return parse_placement({"room_design_id": int(design), "row": int(row), "column": int(column)},
+                               "--place-room")
+    except (AuthorizationError, ValueError) as error:
+        raise ValueError(str(error) if isinstance(error, AuthorizationError) else
+                         f"--place-room must be DESIGN@ROW,COLUMN or DESIGN@{FIRST_FREE} with whole numbers") from None
+
+
 def run_fleet_execute(registry_path, authorization_path, mode=None, journal_dir=None, concurrent=None,
                       identity_salt_env=None, plan_only=False, out=None, environ=None, client_cls=None,
                       device_cls=None, clock=None, halt_share=None, dashboard_out=None, smtp_email=None,
-                      smtp_password_file=None, recipient=None):
+                      smtp_password_file=None, recipient=None, place_room=None):
     """Execute every enabled registry account's plan under an owner-written authorization (SPEC-05).
 
     This is the only code path that calls a fleet orchestrator's
@@ -813,7 +833,12 @@ def run_fleet_execute(registry_path, authorization_path, mode=None, journal_dir=
     Otherwise each account runs under ``sdk.fleet.factory.ExecutionGate``:
     ``canary`` mode (the default) executes at most one action per account,
     the first authorized safe-to-retry action of its plan; ``full`` executes
-    the authorized part of the plan. Starbux is never spent. Once every
+    the authorized part of the plan. ``place`` mode (SPEC-13) needs
+    ``place_room`` (``DESIGN@ROW,COLUMN`` or ``DESIGN@first-free``), exactly
+    one enabled account, and an authorization whose ``placements`` name that
+    account, design and position; it skips the dry-run requirement, plans no
+    progression policy, and runs at most that one ``place_room``, checked
+    against a fresh snapshot. Starbux is never spent. Once every
     account has finished (SPEC-11), the alerts are evaluated over the
     journals and the isolation audit, the dashboard is written to
     ``dashboard_out`` (default ``<journal dir>/dashboard.html``), and both go
@@ -829,7 +854,13 @@ def run_fleet_execute(registry_path, authorization_path, mode=None, journal_dir=
 
     from sdk.compat import DECLARED_CLIENT_VERSION
     from sdk.fleet.accounts import RegistryError, load_registry
-    from sdk.fleet.authorization import AuthorizationError, authorization_hash, check_authorization, load_authorization
+    from sdk.fleet.authorization import (
+        AuthorizationError,
+        authorization_hash,
+        check_authorization,
+        load_authorization,
+        placement_refusal_reason,
+    )
     from sdk.fleet.factory import (
         DEFAULT_HALT_SHARE,
         EXECUTE_SOURCE,
@@ -861,6 +892,14 @@ def run_fleet_execute(registry_path, authorization_path, mode=None, journal_dir=
 
     if mode not in EXECUTE_MODES:
         return refuse([f"mode must be one of: {', '.join(EXECUTE_MODES)}"])
+    placement = None
+    if (mode == "place") != (place_room is not None):
+        return refuse(["--place-room is required with --mode place, and only used with it"])
+    if place_room is not None:
+        try:
+            placement = parse_place_room(place_room)
+        except ValueError as error:
+            return refuse([str(error)])
     if isinstance(halt_share, bool) or not isinstance(halt_share, (int, float)) or not 0 <= halt_share < 1:
         return refuse(["halt share must be at least 0 and below 1"])
     if not Path(registry_path).is_file():
@@ -888,8 +927,15 @@ def run_fleet_execute(registry_path, authorization_path, mode=None, journal_dir=
 
     now = clock()
     enabled = registry.enabled()
-    reasons = list(check_authorization(authorization, registry, now, [profile.alias for profile in enabled], (),
-                                       mode))
+    reasons = list(check_authorization(authorization, registry, now, [profile.alias for profile in enabled],
+                                       ["place_room"] if placement else (), mode))
+    if placement is not None:
+        if len(enabled) != 1:
+            reasons.append(f"place mode needs exactly one enabled account; the registry enables {len(enabled)}")
+        for profile in enabled:
+            why = placement_refusal_reason(authorization, profile.alias, placement)
+            if why is not None:
+                reasons.append(why)
     stamp = registry_stamp(registry)
     plans, journal_events = {}, {}
     for profile in enabled:
@@ -902,6 +948,8 @@ def run_fleet_execute(registry_path, authorization_path, mode=None, journal_dir=
             reasons.append(f"account {profile.alias!r}: {error}")
             continue
         journal_events[profile.alias] = events
+        if placement is not None:
+            continue  # a placement is checked against the run's own fresh snapshot, not a dry-run plan
         plan, why = latest_dry_run(events, profile, stamp, now)
         if plan is None:
             reasons.append(f"account {profile.alias!r}: {why}; run --fleet-dry-run with this registry first")
@@ -919,7 +967,24 @@ def run_fleet_execute(registry_path, authorization_path, mode=None, journal_dir=
     if reasons:
         return refuse(reasons)
 
-    gate = ExecutionGate(authorization, registry, mode, clock)
+    gate = ExecutionGate(authorization, registry, mode, clock, placement=placement)
+    if plan_only and placement is not None:
+        out.write("\n".join([
+            "# Fleet execute plan (place), plan only",
+            "",
+            f"Registry: {registry_path} ({len(enabled)} of {len(registry)} accounts enabled). "
+            f"Authorization by {authorization.owner!r}, valid until {authorization.expires.isoformat()}. "
+            "Plan only: nothing was logged in and no action was executed.",
+            "",
+            "The authorization allows this placement. Whether the room fits is checked by the live run against "
+            "a fresh read of the ship.",
+            "",
+            "| Account | Placement | Minerals cap | Gas cap |",
+            "| --- | --- | --- | --- |",
+            *(f"| {profile.alias} | {placement.describe()} | {gate.budgets(profile)['minerals']} | "
+              f"{gate.budgets(profile)['gas']} |" for profile in enabled),
+        ]) + "\n")
+        return 0
     if plan_only:
         lines = [
             f"# Fleet execute plan ({mode}), plan only",
@@ -1037,6 +1102,8 @@ def run_fleet_execute(registry_path, authorization_path, mode=None, journal_dir=
         "authorization_hash": authorization_hash(authorization),
         "authorization": {"owner": authorization.owner, "not_before": authorization.not_before.isoformat(),
                           "expires": authorization.expires.isoformat(), "actions": list(authorization.actions)},
+        # SPEC-13: the requested placement (place mode only); each result's reason gives the position used.
+        "placement": placement.to_dict() if placement is not None else None,
         "registry_hash": registry_hash(registry),
         "policy_versions": {profile.alias: profile.policy_id for profile in enabled},
         # The client version this build identifies as, and the server's game version when every account
@@ -1344,7 +1411,16 @@ def main():
         dest="mode",
         choices=EXECUTE_MODES,
         default=None,
-        help="with --fleet-execute: canary (default; at most one safe-to-retry action per account) or full",
+        help="with --fleet-execute: canary (default; at most one safe-to-retry action per account), full, "
+        "or place (one authorized room placement; needs --place-room)",
+    )
+    parser.add_argument(
+        "--place-room",
+        dest="place_room",
+        default=None,
+        metavar="DESIGN@ROW,COLUMN",
+        help="with --fleet-execute --mode place: the room design and position to place, as DESIGN@ROW,COLUMN or "
+        "DESIGN@first-free; the authorization's placements must name it",
     )
     parser.add_argument(
         "--plan-only",
@@ -1443,6 +1519,7 @@ def main():
             ("--baseline", args.baseline), ("--baseline-summary", args.baseline_summary),
             ("--fleet-dry-run", args.fleet_dry_run), ("--fleet-execute", args.fleet_execute),
             ("--authorization", args.authorization), ("--mode", args.mode), ("--plan-only", args.plan_only),
+            ("--place-room", args.place_room),
             ("--halt-share", args.halt_share is not None), ("--dashboard-out", args.dashboard_out),
             ("--fleet-journal-dir", args.fleet_journal_dir), ("--concurrent", args.concurrent is not None),
             *(item for item in single_account_flags if item[0] != "--output"), *smtp_flags,
@@ -1458,6 +1535,7 @@ def main():
         other_flags = (
             ("--fleet-dry-run", args.fleet_dry_run), ("--fleet-execute", args.fleet_execute),
             ("--authorization", args.authorization), ("--mode", args.mode), ("--plan-only", args.plan_only),
+            ("--place-room", args.place_room),
             ("--halt-share", args.halt_share is not None), ("--dashboard-out", args.dashboard_out),
             ("--fleet-journal-dir", args.fleet_journal_dir),
             *(item for item in single_account_flags if item[0] != "--output"), *smtp_flags,
@@ -1484,9 +1562,10 @@ def main():
                                    args.concurrent, args.identity_salt_env, args.plan_only,
                                    halt_share=args.halt_share, dashboard_out=args.dashboard_out,
                                    smtp_email=args.smtp_email, smtp_password_file=args.smtp_password_file,
-                                   recipient=args.recipient))
-    if args.authorization or args.mode or args.plan_only or args.halt_share is not None:
-        parser.error("--authorization, --mode, --plan-only and --halt-share are only used with --fleet-execute")
+                                   recipient=args.recipient, place_room=args.place_room))
+    if args.authorization or args.mode or args.plan_only or args.halt_share is not None or args.place_room:
+        parser.error("--authorization, --mode, --plan-only, --place-room and --halt-share are only used with "
+                     "--fleet-execute")
     if args.dashboard_out:
         parser.error("--dashboard-out is only used with --fleet-execute")
     if args.fleet_dry_run:

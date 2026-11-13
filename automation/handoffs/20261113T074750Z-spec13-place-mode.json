@@ -1,0 +1,52 @@
+{
+  "slice_id": "spec13-place-mode",
+  "status": "done",
+  "summary": "run.py --fleet-execute --mode place --place-room DESIGN@ROW,COLUMN (or DESIGN@first-free) places one room and nothing else.  Before login it refuses unless: - exactly one account is enabled; - the authorization lists place in modes and place_room in actions; - its new placements section names that account, design and position exactly. A file without placements hashes as before; the hash is pinned in a test.  No dry run is needed. The identity check and caps are unchanged.  PlacementPolicy replaces the account's progression policy in this mode, so no policy ever places a room. It refuses a partial room list. It resolves first-free with the placement check on the run's fresh snapshot, and plans the room's mineral or gas price as the request's planned cost. The gate refuses place_room outside place mode, and checks the request's design and position against the authorized placement. --plan-only shows the authorized placement without logging in. The run record holds the placement, and the result's reason gives the position used.  An independent review found no blocker. Its findings are fixed with tests: - partial room lists are refused; - place_room is gated by mode and params; - the authorization hash is pinned; - the mode-level cases are covered: an uncertain placement blocks the next run at   another position, and missing design data or a partial room list refuses; - the README's dry-run bullets give the place-mode exception.",
+  "files_touched": [
+    "README.md",
+    "README.template",
+    "docs/baseline/capability-inventory.json",
+    "run.py",
+    "sdk/fleet/authorization.py",
+    "sdk/fleet/factory.py",
+    "tests/test_fleet_authorization.py",
+    "tests/test_fleet_execute.py"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "make lint",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "SPEC-13 --mode place",
+      "before": "no way to place a room",
+      "after": "one authorized placement per run via --mode place",
+      "proof": [
+        "tests: first-free places the gas collector at row 1, column 1 and verifies it; refusals before login (missing/extra --place-room, unnamed position or design, malformed or negative placement, two accounts, mode not allowed); a non-fitting position, a starbux price and a cap below the price place nothing; an uncertain placement blocks the next run at another position; no design data or a partial room list refuses; gate mode and params checks; plan-only; placements parsing, iff rule, exact matching and a pinned hash",
+        "independent review: no blockers; should-fix findings fixed",
+        "make syntax-check, make test (1363 OK), make lint, scripts/ci.py repository, git diff --check pass"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "A live placement needs the owner's live-trial.yml place step and authorization. A first-free entry can be reused within the authorization window, bounded by the cap and the room's purchase limit."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-13T07:48:10Z"
+}
