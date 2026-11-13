@@ -2708,7 +2708,7 @@
     {
       "slice_id": "spec07-starting-state",
       "title": "Record the owner's pre-trial play and the second verified canary",
-      "status": "queued",
+      "status": "done",
       "priority": 435,
       "domain": "fleet",
       "allowed_paths": [
