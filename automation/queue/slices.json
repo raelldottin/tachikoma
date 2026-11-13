@@ -2657,6 +2657,30 @@
         "make test",
         "git diff --check"
       ]
+    },
+    {
+      "slice_id": "spec07-daily-changes",
+      "title": "Summarise what changed on the trial account each day, from the snapshots",
+      "status": "queued",
+      "priority": 433,
+      "domain": "reports",
+      "allowed_paths": [
+        "scripts/daily_changes.py",
+        "tests/test_daily_changes.py",
+        "docs/experiments/r2-progression-trial/schedule.json",
+        "docs/experiments/r2-progression-trial.md"
+      ],
+      "depends_on": [
+        "spec07-trial-plan-approval"
+      ],
+      "max_files_changed": 4,
+      "notes": "Owner request 2026-11-13: a summary of what was done each day, from the trial's evening snapshots instead of OCR of screenshots. scripts/daily_changes.py reads baseline snapshot files (as the trial artifacts hold them), pairs consecutive snapshots per account, and prints per day: the day's block and arm from schedule.json, the trial's growth measure (reusing trial_report.growth_units), room upgrades, rooms added and removed (by design, never room ids), upgrades started, research completed and started, mineral, gas and starbux change, trophies, ship level and crew level-ups, and which sections were not observed. Read-only, offline, no game traffic.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "make lint",
+        "git diff --check"
+      ]
     }
   ]
 }
