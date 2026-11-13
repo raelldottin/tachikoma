@@ -2569,6 +2569,30 @@
         "make test",
         "git diff --check"
       ]
+    },
+    {
+      "slice_id": "g2-canary-verified",
+      "title": "Record the first verified canary (S07-R2 met)",
+      "status": "queued",
+      "priority": 429,
+      "domain": "fleet",
+      "allowed_paths": [
+        "docs/experiments/live/g2-evidence.md",
+        "docs/specs/SPEC-07-progression-trial.md",
+        "docs/experiments/live/RUNBOOK.md",
+        "docs/specs/README.md",
+        "docs/experiments/r2-progression-trial.md"
+      ],
+      "depends_on": [
+        "spec13-live-evidence"
+      ],
+      "max_files_changed": 5,
+      "notes": "Owner-dispatched canary 43394041693 (2026-11-13, main 7d68240), about five minutes after the Gas Collector Lv1 was placed: collect_all_resources reconciled verified (minerals +10, gas +0), no spend, no alerts. Room fill showed every room, the new gas collector included, at CapacityUsed 0 before and after, so the source of the minerals is not attributable per room (likely the Mineral Mining Laser). S07-R2 is met; record it in the G2 evidence, SPEC-07, the runbook, the trial plan and the spec plan.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
     }
   ]
 }
