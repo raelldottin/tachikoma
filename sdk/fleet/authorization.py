@@ -37,7 +37,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Optional
@@ -51,22 +51,24 @@ from sdk.state.snapshot import ACCOUNT_ALIAS_PATTERN
 AUTHORIZATION_VERSION = 1
 MAX_WINDOW = timedelta(days=14)
 MAX_WINDOW_HOURS = int(MAX_WINDOW.total_seconds() // 3600)
-RUN_MODES = ("canary", "full")
+RUN_MODES = ("canary", "full", "place")
 CAP_CURRENCIES = ("minerals", "gas")
 MAX_PURPOSE_LENGTH = 500
 OWNER_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._-]{0,63}$")
 ACTION_ID_PATTERN = re.compile(r"^[a-z0-9_]{1,64}$")
-MODE_PATTERN = re.compile(r"^(canary|full)$")
+MODE_PATTERN = re.compile(r"^(canary|full|place)$")
 # Device keys and access tokens are UUID-shaped; an owner label never is.
 UUID_PATTERN = re.compile(r"[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}")
 AUTHORIZATION_FIELDS = frozenset({
     "version", "owner", "purpose", "accounts", "actions", "not_before", "expires", "caps", "modes",
 })
-OPTIONAL_AUTHORIZATION_FIELDS = frozenset({"legacy_run_skipped", "battles", "market"})
+OPTIONAL_AUTHORIZATION_FIELDS = frozenset({"legacy_run_skipped", "battles", "market", "placements"})
 BATTLE_ACTION_ID = "run_pvp_battle"
 # SPEC-09 market actions the catalog does not hold yet; valid only next to a market section.
 MARKET_ACTION_IDS = frozenset({"sell_item", "purchase_item"})
 BATTLE_FIELDS = ("max_per_window", "window_hours")
+PLACE_ACTION_ID = "place_room"
+FIRST_FREE = "first-free"
 MARKET_FIELDS = ("item_design_ids", "max_value_per_trade", "max_value_per_window", "window_hours")
 
 
@@ -202,6 +204,72 @@ def _parse_market(value: Any) -> MarketLimits:
     )
 
 
+@dataclass(frozen=True)
+class Placement:
+    """One room placement the owner allows (SPEC-13, S13-R7): a room design at a row and column, or first-free.
+
+    ``row`` and ``column`` are ``None`` for ``first-free``: the first position, in the placement check's
+    top-left scan, that a fresh ship read accepts.
+    """
+
+    room_design_id: int
+    row: Optional[int] = None
+    column: Optional[int] = None
+
+    @property
+    def first_free(self) -> bool:
+        return self.row is None
+
+    def describe(self) -> str:
+        where = FIRST_FREE if self.first_free else f"row {self.row}, column {self.column}"
+        return f"room design {self.room_design_id} at {where}"
+
+    def to_dict(self) -> dict:
+        if self.first_free:
+            return {"room_design_id": self.room_design_id, "position": FIRST_FREE}
+        return {"room_design_id": self.room_design_id, "row": self.row, "column": self.column}
+
+
+def _non_negative_int(value: Any, name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise AuthorizationError(f"{name} must be a non-negative integer")
+    return value
+
+
+def parse_placement(value: Any, name: str = "placement") -> Placement:
+    """A placement entry: ``{room_design_id, position: "first-free"}`` or ``{room_design_id, row, column}``."""
+    if not isinstance(value, Mapping):
+        raise AuthorizationError(f"{name} must be an object with room_design_id and a position")
+    if "starbux" in value:
+        raise AuthorizationError(f"{name}: starbux is never authorizable")
+    design = _positive_int(value.get("room_design_id"), f"{name}.room_design_id")
+    if set(value) == {"room_design_id", "position"}:
+        if value["position"] != FIRST_FREE:
+            raise AuthorizationError(f"{name}.position may only be {FIRST_FREE!r}; give row and column otherwise")
+        return Placement(design)
+    if set(value) == {"room_design_id", "row", "column"}:
+        return Placement(design, _non_negative_int(value["row"], f"{name}.row"),
+                         _non_negative_int(value["column"], f"{name}.column"))
+    raise AuthorizationError(f"{name} needs room_design_id with either position {FIRST_FREE!r} or row and column")
+
+
+def _parse_placements(value: Any, accounts: tuple[str, ...]) -> dict[str, tuple[Placement, ...]]:
+    if not isinstance(value, Mapping) or not value:
+        raise AuthorizationError("placements must be an object keyed by account alias")
+    if set(value) - set(accounts):
+        raise AuthorizationError("placements names an account that is not in accounts")
+    placements = {}
+    for alias in sorted(value):
+        entries = value[alias]
+        if not isinstance(entries, list) or not entries:
+            raise AuthorizationError(f"placements.{alias} must be a non-empty list")
+        parsed = tuple(parse_placement(entry, f"placements.{alias} entry") for entry in entries)
+        if len(set(parsed)) != len(parsed):
+            raise AuthorizationError(f"placements.{alias} has duplicate entries")
+        placements[alias] = parsed
+    return placements
+
+
 def _parse_legacy_run_skipped(value: Any) -> tuple[int, ...]:
     if not isinstance(value, list):
         raise AuthorizationError("legacy_run_skipped must be a list of PSS_ACCOUNT_N numbers")
@@ -225,6 +293,7 @@ class Authorization:
     legacy_run_skipped: tuple[int, ...] = ()
     battles: Optional[BattleLimits] = None
     market: Optional[MarketLimits] = None
+    placements: Mapping[str, tuple[Placement, ...]] = field(default_factory=dict)
 
     def cap(self, alias: str, currency: str) -> int:
         """The per-period cap for ``alias``; starbux is always 0, whatever the file says."""
@@ -254,6 +323,9 @@ class Authorization:
             payload["battles"] = self.battles.to_dict()
         if self.market is not None:
             payload["market"] = self.market.to_dict()
+        if self.placements:
+            payload["placements"] = {alias: [entry.to_dict() for entry in self.placements[alias]]
+                                     for alias in sorted(self.placements)}
         return payload
 
 
@@ -320,6 +392,8 @@ def authorization_from_dict(payload: Mapping[str, Any]) -> Authorization:
     if bool(MARKET_ACTION_IDS & set(actions)) != has_market:
         raise AuthorizationError(
             "a market section is required when, and only when, actions include sell_item or purchase_item")
+    if (PLACE_ACTION_ID in actions) != ("placements" in payload):
+        raise AuthorizationError("a placements section is required when, and only when, actions include place_room")
     battles = _parse_battles(payload["battles"]) if "battles" in payload else None
     market = _parse_market(payload["market"]) if has_market else None
     legacy_run_skipped = (
@@ -338,10 +412,11 @@ def authorization_from_dict(payload: Mapping[str, Any]) -> Authorization:
         raise AuthorizationError("not_before and expires may be at most 14 days apart")
 
     caps = _parse_caps(payload["caps"], accounts)
+    placements = _parse_placements(payload["placements"], accounts) if "placements" in payload else {}
     return Authorization(
         owner=owner, purpose=purpose, accounts=accounts, actions=actions,
         not_before=not_before, expires=expires, caps=caps, modes=modes,
-        legacy_run_skipped=legacy_run_skipped, battles=battles, market=market,
+        legacy_run_skipped=legacy_run_skipped, battles=battles, market=market, placements=placements,
     )
 
 
@@ -428,6 +503,17 @@ def check_authorization(auth: Authorization, registry: AccountRegistry, now: dat
                 if refusal is not None:
                     reasons.append(refusal)
     return reasons
+
+
+def placement_refusal_reason(auth: Authorization, alias: str, placement: Placement) -> Optional[str]:
+    """Why ``placement`` on ``alias`` is outside ``auth`` (S13-R7), or ``None``. The design and position must
+    match an entry exactly: an entry for a row and column does not allow first-free, nor the reverse."""
+    if PLACE_ACTION_ID not in auth.actions:
+        return "action 'place_room' is not allowed by the authorization"
+    if placement not in auth.placements.get(alias, ()):
+        return (f"{placement.describe()} on account {_label(alias, ACCOUNT_ALIAS_PATTERN)} is not named in the "
+                "authorization's placements")
+    return None
 
 
 def _moment(value: Any) -> Optional[datetime]:

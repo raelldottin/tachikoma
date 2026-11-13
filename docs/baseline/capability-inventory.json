@@ -1125,6 +1125,15 @@
       ]
     },
     {
+      "flag": "--place-room",
+      "pillar": "E",
+      "kind": "read-only",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_fleet_execute.py"
+      ]
+    },
+    {
       "flag": "--plan-only",
       "pillar": "E",
       "kind": "read-only",

@@ -25,7 +25,7 @@ from urllib.parse import urlsplit
 
 import run  # imported here so run.py's log file opens in the repository, not a test tmpdir
 from sdk.fleet.accounts import load_registry
-from sdk.fleet.authorization import authorization_from_dict, authorization_hash, load_authorization
+from sdk.fleet.authorization import Placement, authorization_from_dict, authorization_hash, load_authorization
 from sdk.fleet.concurrent import ConcurrentFleetOrchestrator
 from sdk.fleet.factory import (
     DRY_RUN_ID,
@@ -64,6 +64,7 @@ from tests.test_fleet_dry_run import (
     xml_response,
 )
 from tests.test_fleet_dry_run import ENV as CREDENTIALS
+from tests import test_room_placement as placement_tests  # a module import: its test cases are not rerun here
 
 REPO_ROOT = Path(os.path.abspath(__file__)).parents[1]
 SALT_ENV = "FLEET_SALT"
@@ -437,7 +438,7 @@ class AuthorizationRefusalTests(FleetExecuteTestCase):
               "--identity-salt-env", SALT_ENV), "--fleet-execute cannot be combined with --fleet-dry-run"),
             (("--fleet-execute", "--registry", "x", "--authorization", "a"), "--identity-salt-env NAME"),
             (("--fleet-dry-run", "--registry", "x", "--authorization", "a"),
-             "--authorization, --mode, --plan-only and --halt-share are only used with --fleet-execute"),
+             "--authorization, --mode, --plan-only, --place-room and --halt-share are only used with "),
             (("--plan-only",), "only used with --fleet-execute"),
             (("--halt-share", "0.5"), "only used with --fleet-execute"),
             (("--fleet-execute", "--mode", "yolo"), "invalid choice"),
@@ -1155,6 +1156,232 @@ class RealClientExecuteLeakTests(unittest.TestCase):
         leaked = [value for value in self.FORBIDDEN if value in combined]
         self.assertEqual(leaked, [], combined)
         self.assertNotRegex(combined, r"(?i)user_?id['\"]?\s*[=:]\s*['\"]?\d")
+
+
+class PlaceClient(ExecClient):
+    """pss5's hull, rooms and room designs as captured live (2026-11-12); ``placeRoom`` buys on its ship.
+
+    Bought rooms live in ``ships`` (by user id), so a later run's login sees them, as on the real server.
+    ``drop_room_id`` leaves one placed room without ``@RoomId``.
+    """
+
+    ships = {}
+    drop_room_id = False
+
+    def __init__(self, device=None, settings=None):
+        super().__init__(device, settings)
+
+    @property
+    def placed(self):
+        return PlaceClient.ships.setdefault(self.user.id, [])
+
+    def listAllDesigns4(self):
+        self.calls.append("listAllDesigns4")
+        if not FakeClient.designs4_ok:
+            return False
+        self.shipDesigns = {"ShipDesign": placement_tests.SHIP_DESIGNS}
+        self.roomDesignPurchases = {"RoomDesignPurchase": placement_tests.PURCHASES}
+        self.roomDesigns = {"stale": "overwritten by listRoomDesigns2"}
+        return True
+
+    def listRoomDesigns2(self):
+        self.calls.append("listRoomDesigns2")
+        self.roomDesigns = {"RoomDesigns": {"RoomDesign": placement_tests.ROOM_DESIGNS}}
+
+    def getShipByUserId(self):
+        self.calls.append("getShipByUserId")
+        rooms = placement_tests.room_records() + self.placed
+        if PlaceClient.drop_room_id:
+            rooms = [{key: value for key, value in rooms[0].items() if key != "@RoomId"}] + rooms[1:]
+        self.shipByUserId = {"Ship": {"@ShipLevel": "2", "@ShipDesignId": "6", "Rooms": {"Room": rooms},
+                                      "Researches": None}}
+        return True
+
+    def _buy(self, design_id, row, column):
+        self.placed.append({"@RoomId": f"room-instance-{len(self.placed) + 7000}", "@RoomDesignId": str(design_id),
+                            "@RoomStatus": "Building", "@Row": str(row), "@Column": str(column)})
+        self.minerals -= 10
+        return True
+
+    def placeRoom(self, room_design_id, row, column):
+        return self._mutate("placeRoom", self._buy, room_design_id, row, column)
+
+
+class PlaceModeTests(FleetExecuteTestCase):
+    """``--fleet-execute --mode place`` (SPEC-13, S13-R7, R8, R10) with pss5's real layout; no game traffic."""
+
+    def setUp(self):
+        super().setUp()
+        PlaceClient.ships = {}
+        PlaceClient.drop_room_id = False
+        self.write_registry(bravo={"enabled": False})
+        self.write_placement_authorization()
+
+    def write_placement_authorization(self, **overrides):
+        fields = dict(accounts=["alpha"], actions=["place_room"], modes=["place"],
+                      caps={"alpha": {"minerals": 10, "gas": 0}},
+                      placements={"alpha": [{"room_design_id": 42, "position": "first-free"}]})
+        fields.update(overrides)
+        self.write_authorization(**fields)
+
+    def place(self, spec="42@first-free", *extra):
+        return self.execute("--mode", "place", "--place-room", spec, *extra, client=PlaceClient)
+
+    # Verifies: S13-R7
+    def test_first_free_places_the_gas_collector_and_verifies_it(self):
+        code, out, err = self.place()
+        self.assertEqual(code, 0, err + out)
+        self.assertEqual(ExecClient.executed, [("1001", "placeRoom")])
+        (event,) = self.attempted("alpha")
+        self.assertEqual((event.action_id, dict(event.params), event.outcome),
+                         ("place_room", {"room_design_id": "42", "row": 1, "column": 1}, "verified"))
+        self.assertEqual(event.cost["minerals_delta"], -10)
+        (record,) = self.records()
+        self.assertEqual((record["mode"], record["placement"]), ("place", {"room_design_id": 42,
+                                                                           "position": "first-free"}))
+        self.assertIn("row 1, column 1", record["accounts"][0]["results"][0]["reason"])
+        self.assertNotIn("room-instance-7000", (self.journal_dir / "alpha.log").read_text(encoding="utf-8"))
+        self.assertFalse(any(call == "collectAllResources" for _, call in ExecClient.executed))
+
+    # Verifies: S13-R7
+    def test_place_mode_needs_no_dry_run_but_still_checks_identity(self):
+        code, out, err = self.place()  # no --fleet-dry-run first
+        self.assertEqual(code, 0, err + out)
+        self.write_registry(alpha={"expected_game_identity": BRAVO_ID}, bravo={"enabled": False})
+        code, out, err = self.place()
+        self.assertNotEqual(code, 0)
+        self.assertEqual(ExecClient.executed, [("1001", "placeRoom")])  # the second run placed nothing
+
+    # Verifies: S13-R7
+    def test_requests_outside_the_authorization_are_refused_before_login(self):
+        cases = {
+            "--mode place without --place-room": (("--mode", "place"), "--place-room is required"),
+            "--place-room in canary mode": (("--mode", "canary", "--place-room", "42@first-free"),
+                                            "--place-room is required with --mode place"),
+            "a position the file does not name": (("--mode", "place", "--place-room", "42@1,1"), "not named"),
+            "another design": (("--mode", "place", "--place-room", "26@first-free"), "not named"),
+            "a malformed placement": (("--mode", "place", "--place-room", "42-first-free"), "--place-room must be"),
+            "a negative row": (("--mode", "place", "--place-room", "42@-1,1"), "non-negative integer"),
+        }
+        for name, (args, message) in cases.items():
+            with self.subTest(case=name):
+                code, _, err = self.execute(*args, client=PlaceClient)
+                self.assert_refused_before_login(code, err, message)
+
+    # Verifies: S13-R7
+    def test_place_mode_needs_exactly_one_enabled_account_and_the_mode_allowed(self):
+        self.write_registry()
+        self.write_placement_authorization(accounts=["alpha", "bravo"],
+                                           caps={"alpha": {"minerals": 10, "gas": 0}, "bravo": {"minerals": 0,
+                                                                                               "gas": 0}})
+        code, _, err = self.place()
+        self.assert_refused_before_login(code, err, "exactly one enabled account")
+        self.write_registry(bravo={"enabled": False})
+        self.write_placement_authorization(modes=["canary"])
+        code, _, err = self.place()
+        self.assert_refused_before_login(code, err, "mode 'place' is not allowed")
+
+    # Verifies: S13-R3, S13-R7
+    def test_an_authorized_position_that_does_not_fit_is_not_attempted(self):
+        self.write_placement_authorization(placements={"alpha": [{"room_design_id": 42, "row": 2, "column": 8}]})
+        code, out, err = self.place("42@2,8")
+        self.assertEqual(ExecClient.executed, [])
+        (record,) = self.records()
+        self.assertIn("occupied by a placed room", record["accounts"][0]["rejected"][0]["reason"])
+
+    # Verifies: S13-R8
+    def test_the_cap_is_checked_against_the_rooms_price(self):
+        self.write_placement_authorization(caps={"alpha": {"minerals": 5, "gas": 0}})
+        code, out, err = self.place()
+        self.assertEqual(ExecClient.executed, [])
+        refused = [event for event in read_events(self.journal_dir / "alpha.log") if event.action_id == "place_room"]
+        self.assertIn("minerals cap would be exceeded", refused[-1].reason)
+
+    # Verifies: S13-R8
+    def test_a_room_priced_in_starbux_is_never_placed(self):
+        self.write_placement_authorization(placements={"alpha": [{"room_design_id": 900, "position": "first-free"}]})
+        code, out, err = self.place("900@first-free")
+        self.assertEqual(ExecClient.executed, [])
+        (record,) = self.records()
+        self.assertIn("not priced in minerals or gas", record["accounts"][0]["rejected"][0]["reason"])
+
+    # Verifies: S13-R10
+    def test_plan_only_shows_the_authorized_placement_without_logging_in(self):
+        code, out, err = self.place("42@first-free", "--plan-only")
+        self.assertEqual(code, 0, err)
+        self.assertIn("| alpha | room design 42 at first-free | 10 | 0 |", out)
+        self.assertEqual(self.exec_logins(), [])
+        code, _, err = self.place("42@1,1", "--plan-only")
+        self.assert_refused_before_login(code, err, "not named")
+
+    def test_the_gate_holds_a_placement_only_in_place_mode(self):
+        auth = load_authorization(self.authorization)
+        reg = load_registry(self.registry)
+        with self.assertRaises(ValueError):
+            ExecutionGate(auth, reg, "place", lambda: datetime.now(timezone.utc))
+        with self.assertRaises(ValueError):
+            ExecutionGate(auth, reg, "canary", lambda: datetime.now(timezone.utc), placement=Placement(42))
+        gate = ExecutionGate(auth, reg, "place", lambda: datetime.now(timezone.utc), placement=Placement(42))
+        self.assertIsNone(gate.refusal("alpha", "place_room"))
+        self.assertIn("place mode runs only place_room", gate.refusal("alpha", "collect_all_resources"))
+        self.assertEqual(gate.max_actions(reg.get("alpha")), 1)
+
+    # Verifies: S13-R6
+    def test_an_uncertain_placement_blocks_the_next_run(self):
+        ExecClient.effects = {"placeRoom": lambda client, *args: object()}  # not the captured success shape
+        self.place()
+        (first,) = self.attempted("alpha")
+        self.assertEqual(first.outcome, "unknown")
+        ExecClient.effects = {}
+        # A different, authorized position: only the account-wide block (not a same-params match) stops it.
+        self.write_placement_authorization(placements={"alpha": [{"room_design_id": 42, "position": "first-free"},
+                                                                 {"room_design_id": 42, "row": 6, "column": 4}]})
+        code, out, err = self.place("42@6,4")
+        self.assertEqual(ExecClient.executed, [("1001", "placeRoom")])  # the second run reached no game call
+        last = read_events(self.journal_dir / "alpha.log")[-1]
+        self.assertEqual((last.action_id, last.attempted), ("place_room", False))
+        self.assertIn("still uncertain", last.reason)
+
+    # Verifies: S13-R3
+    def test_unknown_design_data_or_a_partial_room_list_refuses_the_placement(self):
+        for name, setup, reason in (
+                ("no hull or purchase records", lambda: setattr(FakeClient, "designs4_ok", False),
+                 "interior grid of hull design 6 is not known"),
+                ("a room without an id", lambda: setattr(PlaceClient, "drop_room_id", True),
+                 "rooms were not all observed")):
+            with self.subTest(case=name):
+                FakeClient.designs4_ok, PlaceClient.drop_room_id = True, False
+                for path in (self.journal_dir / "runs").glob("*.json") if (self.journal_dir / "runs").exists() else ():
+                    path.unlink()
+                setup()
+                self.place()
+                self.assertEqual(ExecClient.executed, [])
+                (record,) = self.records()
+                self.assertIn(reason, record["accounts"][0]["rejected"][0]["reason"])
+        FakeClient.designs4_ok = True
+
+    # Verifies: S13-R7
+    def test_the_gate_checks_place_room_mode_and_params(self):
+        auth = load_authorization(self.authorization)
+        reg = load_registry(self.registry)
+        now = lambda: datetime.now(timezone.utc)  # noqa: E731
+        canary = ExecutionGate(auth, reg, "canary", now)
+        self.assertIn("runs only in place mode", canary.refusal("alpha", "place_room"))
+        first_free = ExecutionGate(auth, reg, "place", now, placement=Placement(42))
+        self.assertIsNone(first_free.params_refusal("place_room", {"room_design_id": "42", "row": 5, "column": 9}))
+        self.assertIn("room design", first_free.params_refusal("place_room", {"room_design_id": "26", "row": 1,
+                                                                              "column": 1}))
+        fixed = ExecutionGate(auth, reg, "place", now, placement=Placement(42, 1, 1))
+        self.assertIsNone(fixed.params_refusal("place_room", {"room_design_id": "42", "row": 1, "column": 1}))
+        self.assertIn("position", fixed.params_refusal("place_room", {"room_design_id": "42", "row": 1, "column": 2}))
+        self.assertIsNone(canary.params_refusal("collect_all_resources", {}))
+
+    def test_parse_place_room(self):
+        self.assertEqual(run.parse_place_room("42@first-free"), Placement(42))
+        self.assertEqual(run.parse_place_room("42@3,4"), Placement(42, 3, 4))
+        for bad in ("42", "42@", "42@1", "x@first-free", "42@1,x", "0@first-free"):
+            with self.subTest(text=bad), self.assertRaises(ValueError):
+                run.parse_place_room(bad)
 
 
 if __name__ == "__main__":

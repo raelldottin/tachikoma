@@ -2430,7 +2430,7 @@
     {
       "slice_id": "spec13-place-mode",
       "title": "SPEC-13 --mode place",
-      "status": "queued",
+      "status": "done",
       "priority": 423,
       "domain": "fleet",
       "allowed_paths": [
