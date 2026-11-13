@@ -2613,6 +2613,28 @@
         "make test",
         "git diff --check"
       ]
+    },
+    {
+      "slice_id": "spec07-schedule-policy",
+      "title": "Cover live-trial-schedule.yml in the workflow policy check",
+      "status": "queued",
+      "priority": 431,
+      "domain": "ci",
+      "allowed_paths": [
+        "scripts/ci.py",
+        "tests/test_ci.py"
+      ],
+      "depends_on": [
+        "spec07-trial-decisions"
+      ],
+      "max_files_changed": 2,
+      "notes": "The owner merged live-trial-schedule.yml (#257), a scheduled workflow that holds secrets and runs the SPEC-07 trial. Add it to scripts/ci.py WORKFLOWS so the pinned-action, read-only-permission, timeout and checkout-token rules cover it, and require that it runs only on its schedule (no push, pull_request or other trigger). Tests plant violations and see them refused.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "make lint",
+        "git diff --check"
+      ]
     }
   ]
 }
