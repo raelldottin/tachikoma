@@ -1,0 +1,47 @@
+{
+  "slice_id": "spec13-place-post",
+  "status": "done",
+  "summary": "Placement run 43391935925 journaled the server's reply to BuyRoom2 sent as a GET: HTTP 405 (method not allowed), with an empty body. No room appeared and nothing was spent; the first run, 43389706745, failed the same way. The owner's capture records a GET, but the client's other room-changing calls (UpgradeRoom2, CollectAllResources) are POSTs with query parameters. placeRoom now sends the same query, in the same order, as a POST.  The capture file is left unedited. Its README row, the request-shape test and SPEC-13's evidence record the deviation and why.",
+  "files_touched": [
+    "docs/specs/SPEC-13-room-placement.md",
+    "sdk/client.py",
+    "tests/fixtures/live_sanitized/README.md",
+    "tests/test_room_placement.py"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "make lint",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "Send BuyRoom2 as a POST",
+      "before": "BuyRoom2 sent as GET (HTTP 405 live)",
+      "after": "BuyRoom2 sent as POST with the captured query",
+      "proof": [
+        "live evidence: runs 43389706745 and 43391935925 got HTTP 405 for GET (journaled server_reply in the second)",
+        "request-shape test asserts POST and that the capture still records GET; full suite 1369 OK; make lint, spec_trace, git diff --check pass"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "POST is inferred from the 405 and the client's other room calls; the next placement run confirms it."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-13T08:23:37Z"
+}
