@@ -14,8 +14,10 @@
 | 43262412245 | canary | one `collect_all_resources` | `not-observed`: minerals and gas unchanged | as above |
 | 43284132171 | canary | one `collect_all_resources` | `not-observed`: minerals and gas unchanged | about two hours after the previous canary, for SPEC-07's verified-canary precondition (S07-R2); as above |
 | 43305786623 | canary | one `collect_all_resources` | `not-observed`: minerals and gas unchanged | first run with room-fill evidence: every room at `CapacityUsed` 0 before and after, `room_fill_note` set; pss5 has no collector to collect from |
+| 43308552399 | canary | one `collect_all_resources` | `not-observed`: minerals and gas unchanged | the same nine rooms at `CapacityUsed` 0; no collector had been built yet |
+| 43394041693 | canary | one `collect_all_resources` | **`verified`: minerals +10**, gas unchanged | 2026-11-13, about five minutes after SPEC-13's run 43393262041 placed a Gas Collector Lv1 at row 1, column 1; no spend, no alerts |
 
-In all four executing runs:
+In all six executing runs:
 
 - exactly one action ran, the first safe-to-retry one (S05-R4); `collect_daily_reward` was held back as not safe to retry;
 - nothing was spent and starbux stayed disabled (S05-R6); every room upgrade and research was refused by the caps (0) or for its starbux cost;
@@ -24,7 +26,7 @@ In all four executing runs:
 
 ## Reconciliation
 
-All four collections reconciled to `not-observed`: the before and after snapshots showed the same mineral and gas balances. The plans reported minerals above the reserve and no gas above it. The likely cause is that nothing was waiting to be collected, or that storage was full. pss5's ship capture from earlier that day showed every room with `CapacityUsed` 0 and `PowerGenerated` 0. The runs cannot tell which, because the journal did not record room fill. Since `collect-room-fill-evidence`, a collection's journal evidence lists, per room design, the `CapacityUsed` before and after the call, with the design's name, room type, manufacture type and capacity. When the total was 0 before a `not-observed` collection, it says so. The next canary should therefore help tell the cases apart, although what `CapacityUsed` counts for each room type is still to be confirmed against live data. Nothing is claimed as verified.
+The first five collections reconciled to `not-observed`: the before and after snapshots showed the same mineral and gas balances. The plans reported minerals above the reserve and no gas above it. The likely cause is that nothing was waiting to be collected, or that storage was full. pss5's ship capture from earlier that day showed every room with `CapacityUsed` 0 and `PowerGenerated` 0. The runs cannot tell which, because the journal did not record room fill. Since `collect-room-fill-evidence`, a collection's journal evidence lists, per room design, the `CapacityUsed` before and after the call, with the design's name, room type, manufacture type and capacity. When the total was 0 before a `not-observed` collection, it says so. The next canary should therefore help tell the cases apart, although what `CapacityUsed` counts for each room type is still to be confirmed against live data. Nothing is claimed as verified.
 
 ## Why the collections had nothing to collect
 
@@ -42,7 +44,11 @@ Canary 43305786623 was the first run with room-fill evidence. It journaled every
 
 pss5 has no mineral or gas collector and no storage room, so `collect_all_resources` has nothing to collect, and no canary on pss5 can reconcile a collection as `verified` while the ship stays like this. That is why the four collections were `not-observed`. It is not a defect in the before-and-after check. Gas is also 0 above the reserve, so `baseline-v1` refused every research and room upgrade (108 rejected candidates in this run).
 
+## The verified canary
+
+Canary 43394041693 (2026-11-13, main 7d68240) reconciled its collection as `verified`: minerals rose by 10, and gas was unchanged. It ran about five minutes after SPEC-13's placement run 43393262041 added a Gas Collector Lv1 at row 1, column 1. Its room-fill evidence still listed that collector, but every room, the new collector included, read `CapacityUsed` 0 before and after the call. The journal therefore cannot say which room the minerals came from; the Mineral Mining Laser is the likely source. It is not a refund of the placement, because the collector is still on the ship. Nothing else touches pss5: the legacy daily run skips it. This is the first live verified effect, and it meets SPEC-07's precondition (S07-R2).
+
 ## What this does not show
 
-- A verified effect. SPEC-07 needs one before its block 1 opens (S07-R2), and pss5 first needs something to collect; see [Getting a verified canary](RUNBOOK.md#getting-a-verified-canary).
+- Gas from the new collector: it had produced nothing yet. A later canary or the trial's snapshots will show it.
 - That the owner has looked at the alerts and dashboard (S11-AC3); they are in each canary artifact (`journals/dashboard.html`), which expires after seven days.

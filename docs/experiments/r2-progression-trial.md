@@ -27,7 +27,7 @@ It follows the [study design](study-design.md): one account, a within-account AB
 | 3 | 2026-12-07 to 2026-12-13 | automated (`baseline-v1`) |
 | 4 | 2026-12-14 to 2026-12-20 | manual |
 
-Before block 1 opens (2026-11-23), a canary run must succeed (S07-R2). Success means its collection reconciles `verified`: a later observation shows minerals or gas increased. A `not-observed` result does not count, because it shows only that the call went through, not that the trial can measure an effect. Both canaries so far (2026-11-12) were `not-observed`. The [runbook](live/RUNBOOK.md#getting-a-verified-canary) says how to get a verified one. If no canary is verified by 2026-11-23, block 1 does not open and the schedule moves back. The plan is re-sized from the baseline window's measured sd.
+Before block 1 opens (2026-11-23), a canary run must succeed (S07-R2). Success means its collection reconciles `verified`: a later observation shows minerals or gas increased. A `not-observed` result does not count, because it shows only that the call went through, not that the trial can measure an effect. The 2026-11-12 canaries were `not-observed`, because pss5 had no collector. After SPEC-13 placed a Gas Collector Lv1, canary 43394041693 (2026-11-13) reconciled `verified` (minerals +10), so **this precondition is met**. If no canary is verified by 2026-11-23, block 1 does not open and the schedule moves back. The plan is re-sized from the baseline window's measured sd.
 
 ## Snapshots and runs
 
