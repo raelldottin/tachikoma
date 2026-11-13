@@ -2617,7 +2617,7 @@
     {
       "slice_id": "spec07-schedule-policy",
       "title": "Cover live-trial-schedule.yml in the workflow policy check",
-      "status": "queued",
+      "status": "done",
       "priority": 431,
       "domain": "ci",
       "allowed_paths": [

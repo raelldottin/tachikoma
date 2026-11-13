@@ -1,0 +1,45 @@
+{
+  "slice_id": "spec07-schedule-policy",
+  "status": "done",
+  "summary": "The owner merged live-trial-schedule.yml (#257): the scheduled workflow that runs the SPEC-07 trial on pss5 with secrets. scripts/ci.py now checks it like the other secret-holding workflows: pinned actions, read-only permissions, a timeout, and a checkout that does not keep its token. It must also run only on its schedule, with no push, pull_request, manual or other trigger. Tests plant each violation and see it refused.",
+  "files_touched": [
+    "scripts/ci.py",
+    "tests/test_ci.py"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "make lint",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "Cover live-trial-schedule.yml in the policy check",
+      "before": "trial schedule workflow unchecked",
+      "after": "checked, schedule-only",
+      "proof": [
+        "tests: unpinned action, missing timeout, persisted token and widened permissions refused for the schedule workflow; push, pull_request, workflow_dispatch and workflow_run triggers refused",
+        "make syntax-check, make test (1370 OK), make lint, scripts/ci.py repository, git diff --check pass"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "None."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-13T09:00:33Z"
+}
