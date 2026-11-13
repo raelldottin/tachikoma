@@ -7,6 +7,7 @@ name: Live trial (owner-dispatched)
 #   baseline  G1: read-only baseline snapshot of pss1..pss5
 #   enrol     G2: dry run of pss5 with the identity salt, to read its fingerprint
 #   canary    G2: dry run, then one authorized safe action on pss5
+#   place     G6: one authorized room placement on pss5 (SPEC-13); no dry run needed
 # Output (sanitized, scanned) is uploaded as a short-lived artifact.
 
 on:
@@ -21,6 +22,7 @@ on:
           - baseline
           - enrol
           - canary
+          - place
 
 permissions:
   contents: read
@@ -40,6 +42,8 @@ jobs:
       G1_REGISTRY: docs/experiments/live/registry-g1-readonly.json
       G2_REGISTRY: docs/experiments/live/registry-g2-pss5.json
       G2_AUTHORIZATION: docs/experiments/live/authorization-g2-pss5-canary.json
+      G6_REGISTRY: docs/experiments/live/registry-g6-pss5-place.json
+      G6_AUTHORIZATION: docs/experiments/live/authorization-g6-pss5-place.json
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -120,6 +124,20 @@ jobs:
             --identity-salt-env TACHIKOMA_FLEET_SALT
           python run.py --fleet-execute --registry "$G2_REGISTRY" --authorization "$G2_AUTHORIZATION" \
             --mode canary --identity-salt-env TACHIKOMA_FLEET_SALT --fleet-journal-dir "$OUT/journals"
+
+      - name: Place a room (G6)
+        if: inputs.step == 'place'
+        env:
+          PSS_ACCOUNT_5_EMAIL: ${{ secrets.PSS_ACCOUNT_5_EMAIL }}
+          PSS_ACCOUNT_5_PASSWORD: ${{ secrets.PSS_ACCOUNT_5_PASSWORD }}
+          TACHIKOMA_FLEET_SALT: ${{ secrets.TACHIKOMA_FLEET_SALT }}
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p "$OUT/journals"
+          python run.py --fleet-execute --registry "$G6_REGISTRY" --authorization "$G6_AUTHORIZATION" \
+            --mode place --place-room 42@first-free --identity-salt-env TACHIKOMA_FLEET_SALT \
+            --fleet-journal-dir "$OUT/journals"
 
       - name: Upload sanitized output
         if: always()
