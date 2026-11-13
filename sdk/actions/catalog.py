@@ -513,6 +513,55 @@ def _build_collection_evidence(before: Mapping[str, Any], after: Mapping[str, An
     return evidence
 
 
+# --- placement evidence ------------------------------------------------------------
+#
+# What the server said to a room placement (SPEC-13): ``Client.placeRoom`` keeps a
+# summary of the BuyRoom2 reply (``client.placeRoomReply``: HTTP status, element
+# names, error or message attribute text). The journal gets it only after each text
+# is redacted and leak-scanned; a text the scan flags is withheld, never journaled.
+# It explains an outcome; it never changes it.
+PLACE_REPLY_WITHHELD = "withheld: the leak scan flagged this text"
+
+
+def _placement_probe(client: Any) -> Mapping[str, Any]:
+    try:
+        return {"reply": getattr(client, "placeRoomReply", None)}
+    except Exception:  # the probe runs before and after the call and must not raise
+        return {_PROBE_FAILED: True}
+
+
+def _clean_reply_text(text: Any) -> str:
+    from sdk.redaction import redact_secrets
+    from sdk.state.capture import scan_capture_text
+
+    value = str(text)
+    if redact_secrets(value) != value or scan_capture_text(value):
+        return PLACE_REPLY_WITHHELD
+    return value
+
+
+def _placement_evidence(before: Mapping[str, Any], after: Mapping[str, Any], status: ReconciliationStatus,
+                        delta: Optional[SnapshotDelta]) -> Mapping[str, Any]:
+    try:
+        reply = after.get("reply")
+        if not isinstance(reply, Mapping) or reply is before.get("reply"):
+            return {"server_reply": None}  # this call left no reply (the request raised, say)
+        messages = [{"attribute": _clean_reply_text(entry.get("attribute")), "text": _clean_reply_text(entry.get("text"))}
+                    for entry in reply.get("messages") or () if isinstance(entry, Mapping)]
+        elements = [_clean_reply_text(name) for name in reply.get("elements") or ()]
+        status_code = reply.get("http_status")
+        return {"server_reply": {
+            "http_status": status_code if isinstance(status_code, int) and not isinstance(status_code, bool) else None,
+            "success_shape": reply.get("success_shape") is True,
+            "parsed": reply.get("parsed") is True,
+            "length": reply.get("length") if isinstance(reply.get("length"), int) else None,
+            "elements": elements,
+            "messages": messages,
+        }}
+    except Exception:  # evidence never breaks the journal entry
+        return {"server_reply": None}
+
+
 CATALOG: dict[str, ActionSpec] = {
     spec.action_id: spec
     for spec in (
@@ -569,6 +618,8 @@ CATALOG: dict[str, ActionSpec] = {
             preconditions=(_section_observed("rooms"), _placement_params_valid),
             postcondition=_room_placed,
             expected_effect="a room of the requested design appears at the requested row and column",
+            evidence_probe=_placement_probe,
+            evidence=_placement_evidence,
         ),
         ActionSpec(
             action_id="add_research",
