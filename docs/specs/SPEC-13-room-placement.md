@@ -150,7 +150,9 @@ Fixtures are the sanitized captures from R1 plus synthetic layouts. All game tra
 
 The interior `@Mask` was redacted in that run. `spec13-capture-mask` keeps it from the next capture run.
 
-The live placement is pending.
+**First live placement (S13-AC8), not verified:** owner-dispatched run 43389706745 (2026-11-13, main 996a9d3) under [authorization-g6-pss5-place.json](../experiments/live/authorization-g6-pss5-place.json). It read pss5's ship fresh, chose row 1, column 1 for room design 42 (`first-free`), and sent `BuyRoom2` once. The reply was not the captured success shape, and the ship read after it showed no new room, so the outcome is `unknown`. Minerals and gas were unchanged. The run stopped the account and the fleet, as it should after an uncertain outcome. Nothing recorded the server's reply, so the reason is not known. `spec13-place-diagnostics` now journals a sanitized summary of the reply (HTTP status, element names, leak-scanned error or message text) as the attempt's evidence.
+
+**A limit found by that run:** each `live-trial.yml` run starts with an empty journal folder. So the account-wide block after an uncertain placement (S13-R6) holds within a run, and wherever journals are kept between runs, but not across CI dispatches. Carrying journals from one dispatch to the next needs an owner change to the workflow.
 
 ## Open questions and risks
 

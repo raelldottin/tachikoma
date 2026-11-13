@@ -304,6 +304,40 @@ class PlaceRoomRequestTests(unittest.TestCase):
         self.response = None
         self.assertIsNone(self.client.placeRoom("6", 2, 11))
 
+    # Verifies: S13-R2
+    def test_the_reply_summary_keeps_status_elements_and_messages_never_the_body(self):
+        self.client.placeRoom("6", 2, 11)
+        reply = self.client.placeRoomReply
+        self.assertTrue(reply["success_shape"])
+        self.assertEqual(reply["elements"][:3], ["RoomService", "BuyRoom2", "Room"])
+        self.assertNotIn("ROOM-A", json.dumps(reply))  # attribute values other than messages are not kept
+        refusal = FakeResponse('<RoomService><BuyRoom2 errorMessage="Cell is occupied."/></RoomService>')
+        refusal.status_code = 200
+        self.response = refusal
+        self.client.placeRoom("42", 1, 1)
+        reply = self.client.placeRoomReply
+        self.assertEqual((reply["http_status"], reply["success_shape"], reply["parsed"]), (200, False, True))
+        self.assertEqual(reply["messages"], [{"attribute": "errorMessage", "text": "Cell is occupied."}])
+        body = "<html>Service Unavailable</html> not xml <"
+        self.response = FakeResponse(body)
+        self.client.placeRoom("42", 1, 1)
+        self.assertEqual((self.client.placeRoomReply["parsed"], self.client.placeRoomReply["length"]),
+                         (False, len(body)))
+        self.response = FakeResponse("<a message='" + "x" * 900 + "'/>")
+        self.client.placeRoom("42", 1, 1)
+        self.assertEqual(len(self.client.placeRoomReply["messages"][0]["text"]), 300)
+
+    # Verifies: S13-R2
+    def test_a_request_that_raises_leaves_no_reply(self):
+        def boom(*args, **kwargs):
+            raise ConnectionError("synthetic")
+
+        self.client.placeRoomReply = {"left": "over"}
+        self.client.request = boom
+        with self.assertRaises(ConnectionError):
+            self.client.placeRoom("42", 1, 1)
+        self.assertIsNone(self.client.placeRoomReply)
+
     # Verifies: S13-R2, S13-R3
     def test_the_after_read_shows_the_bought_room_where_it_was_placed(self):
         import xmltodict

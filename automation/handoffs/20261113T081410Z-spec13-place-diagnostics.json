@@ -1,0 +1,48 @@
+{
+  "slice_id": "spec13-place-diagnostics",
+  "status": "done",
+  "summary": "Placement run 43389706745 reconciled unknown: no room appeared and nothing was spent. Nothing recorded the server's reply, so the reason is unknown.  Client.placeRoom now keeps a summary of the BuyRoom2 reply: the HTTP status, element names, and the text of error or message attributes (at most three, 300 characters each). It never keeps the raw body or other attribute values, and the summary is cleared before each call. place_room gets an evidence probe and builder that journal it as server_reply after redacting and leak-scanning each text; anything the scan flags is withheld. It explains an outcome and never changes it.  SPEC-13's evidence records the run. It also notes that live-trial journals start empty on every run, so the account-wide block after an uncertain placement does not carry across CI dispatches.",
+  "files_touched": [
+    "docs/specs/SPEC-13-room-placement.md",
+    "sdk/actions/catalog.py",
+    "sdk/client.py",
+    "tests/test_action_catalog.py",
+    "tests/test_room_placement.py"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "make lint",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "Journal a placement's server reply",
+      "before": "placement replies unrecorded",
+      "after": "sanitized reply summary journaled as evidence",
+      "proof": [
+        "tests: the summary keeps status, elements and messages but not other attribute values; non-XML keeps status and length; text is truncated; a raising request leaves no reply; evidence journals scanned text, withholds secret-looking text, ignores a reply left from an earlier call and malformed probes, and never sets outcome_supported",
+        "make syntax-check, make test (1369 OK), make lint, scripts/spec_trace.py, git diff --check pass"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "The next placement run is needed to see the server's reason."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-13T08:14:31Z"
+}

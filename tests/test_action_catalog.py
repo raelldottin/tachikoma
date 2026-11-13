@@ -212,6 +212,54 @@ class PlaceRoomTests(unittest.TestCase):
         self.assertIs(result.status, N)
 
 
+class PlacementEvidenceTests(unittest.TestCase):
+    """What the journal keeps of a placement's server reply (SPEC-13): scanned text, never the outcome."""
+
+    def setUp(self):
+        spec = get_spec("place_room")
+        self.probe, self.evidence = spec.evidence_probe, spec.evidence
+
+    def reply(self, **fields):
+        base = {"http_status": 200, "success_shape": False, "parsed": True, "length": 60,
+                "elements": ["RoomService", "BuyRoom2"], "messages": [{"attribute": "errorMessage",
+                                                                       "text": "Cell is occupied."}]}
+        base.update(fields)
+        return base
+
+    # Verifies: S13-R5
+    def test_the_reply_is_journaled_after_scanning(self):
+        reply = self.reply()
+        evidence = self.evidence({"reply": None}, {"reply": reply}, U, None)
+        self.assertEqual(evidence["server_reply"]["messages"], [{"attribute": "errorMessage",
+                                                                 "text": "Cell is occupied."}])
+        self.assertEqual(evidence["server_reply"]["http_status"], 200)
+        self.assertNotIn("outcome_supported", evidence)
+
+    # Verifies: S13-R5
+    def test_secret_looking_text_is_withheld(self):
+        for text in ("token aaaaaaaa-1111-2222-3333-444444444444", "QUFB" * 11, "mail me at someone@example.com"):
+            with self.subTest(text=text):
+                evidence = self.evidence({}, {"reply": self.reply(messages=[{"attribute": "message", "text": text}])},
+                                         U, None)
+                self.assertEqual(evidence["server_reply"]["messages"][0]["text"],
+                                 "withheld: the leak scan flagged this text")
+
+    # Verifies: S13-R5
+    def test_no_new_reply_and_malformed_probes_journal_none(self):
+        reply = self.reply()
+        self.assertEqual(self.evidence({"reply": reply}, {"reply": reply}, U, None), {"server_reply": None})
+        self.assertEqual(self.evidence({}, {"reply": None}, U, None), {"server_reply": None})
+        self.assertEqual(self.evidence({}, {"probe_failed": True}, U, None), {"server_reply": None})
+        odd = self.evidence({}, {"reply": self.reply(http_status=True, length="x", messages=["bad"])}, U, None)
+        self.assertEqual((odd["server_reply"]["http_status"], odd["server_reply"]["length"],
+                          odd["server_reply"]["messages"]), (None, None, []))
+
+    def test_probe_reads_only_the_client_attribute(self):
+        self.assertEqual(self.probe(object()), {"reply": None})
+        holder = type("Holder", (), {"placeRoomReply": {"http_status": 200}})()
+        self.assertEqual(self.probe(holder), {"reply": {"http_status": 200}})
+
+
 class CollectionEvidenceTests(unittest.TestCase):
     """The collection's room-fill probe and evidence never raise and never invent a fill."""
 

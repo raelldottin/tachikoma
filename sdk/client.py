@@ -47,6 +47,57 @@ class ConfigurationError(RuntimeError):
     pass
 
 
+PLACE_REPLY_TEXT_LIMIT = 300
+PLACE_REPLY_ELEMENT_LIMIT = 12
+PLACE_REPLY_MESSAGE_LIMIT = 3
+
+
+def place_room_reply(response) -> dict:
+    """What ``placeRoom`` keeps of a ``BuyRoom2`` reply, for the journal (SPEC-13): never the raw body.
+
+    The HTTP status, the element names in document order, and the text of attributes whose name says
+    error or message (at most three, each cut to ``PLACE_REPLY_TEXT_LIMIT`` characters). The catalog
+    leak-scans and redacts that text before it is journaled. A reply that is not XML keeps only its
+    status and length.
+    """
+    summary = {"http_status": getattr(response, "status_code", None), "success_shape": False,
+               "elements": [], "messages": [], "parsed": False, "length": None}
+    if response is None:
+        return summary
+    content = getattr(response, "content", None) or b""
+    summary["length"] = len(content)
+    try:
+        parsed = xmltodict.parse(content, xml_attribs=True)
+    except Exception:
+        return summary
+    summary["parsed"] = True
+
+    def walk(node, name):
+        if len(summary["elements"]) < PLACE_REPLY_ELEMENT_LIMIT:
+            summary["elements"].append(name)
+        if isinstance(node, list):
+            for item in node:
+                walk(item, name)
+            return
+        if not isinstance(node, dict):
+            return
+        for key, value in node.items():
+            if key.startswith("@"):
+                lowered = key.lower()
+                if ("error" in lowered or "message" in lowered) and len(summary["messages"]) < PLACE_REPLY_MESSAGE_LIMIT:
+                    summary["messages"].append({"attribute": key[1:], "text": str(value)[:PLACE_REPLY_TEXT_LIMIT]})
+            elif key == "#text":
+                if len(summary["messages"]) < PLACE_REPLY_MESSAGE_LIMIT:
+                    summary["messages"].append({"attribute": f"{name} text", "text": str(value)[:PLACE_REPLY_TEXT_LIMIT]})
+            else:
+                walk(value, key)
+
+    if isinstance(parsed, dict):
+        for key, value in parsed.items():
+            walk(value, key)
+    return summary
+
+
 def _extract_collection(data, item_key: str) -> list[dict]:
     """Extract and normalize an item collection from raw parsed dict into a list of dicts.
 
@@ -2339,7 +2390,9 @@ class Client(object):
             f"{self.baseUrl}/RoomService/BuyRoom2?roomDesignId={roomDesignId}&column={column}&row={row}"
             f"&constructionStartDate={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}&accessToken={self.accessToken}"
         )
+        self.placeRoomReply = None  # never left over from an earlier call
         r = self.request(url, "GET")
+        self.placeRoomReply = place_room_reply(r)
         try:
             room = xmltodict.parse(r.content, xml_attribs=True)["RoomService"]["BuyRoom2"]["Room"]
         except Exception:
@@ -2350,6 +2403,7 @@ class Client(object):
             and room.get("@Row") == str(row)
             and room.get("@Column") == str(column)
         ):
+            self.placeRoomReply["success_shape"] = True
             return True
         return r
 
