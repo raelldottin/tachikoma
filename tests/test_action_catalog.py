@@ -61,7 +61,7 @@ class CatalogShapeTests(unittest.TestCase):
         self.assertEqual(
             set(CATALOG),
             {"collect_all_resources", "collect_daily_reward", "add_training", "upgrade_room", "add_research",
-             "run_pvp_battle"},
+             "run_pvp_battle", "place_room"},
         )
         self.assertIs(CATALOG["add_research"].idempotency, Idempotency.NOT_IDEMPOTENT)
         self.assertIs(CATALOG["collect_all_resources"].idempotency, Idempotency.SAFE_TO_RETRY)
@@ -158,6 +158,58 @@ class ReconcileTests(unittest.TestCase):
     def test_cross_account_reconciliation_is_refused(self):
         with self.assertRaises(AccountMismatchError):
             reconcile(get_spec("collect_all_resources"), snap(), snap(seconds=1, alias="bravo"))
+
+
+NEW_ROOM = {"@RoomId": "room-instance-9911", "@RoomDesignId": "42", "@RoomStatus": "Building", "@Row": "1",
+            "@Column": "1"}
+PLACE = {"room_design_id": "42", "row": 1, "column": 1}
+
+
+class PlaceRoomTests(unittest.TestCase):
+    """``place_room`` (SPEC-13): reconciled from the ship's rooms alone, never from the response."""
+
+    # Verifies: S13-R4
+    def test_spec_shape(self):
+        spec = get_spec("place_room")
+        self.assertEqual((spec.client_method, spec.idempotency, spec.required_params, spec.mutating),
+                         ("placeRoom", Idempotency.NOT_IDEMPOTENT, ("room_design_id", "row", "column"), True))
+
+    # Verifies: S13-R4
+    def test_bad_parameters_are_refused_before_the_call(self):
+        spec = get_spec("place_room")
+        for params in ({**PLACE, "row": -1}, {**PLACE, "column": True}, {**PLACE, "row": "1"},
+                       {**PLACE, "room_design_id": "gas"}, {**PLACE, "room_design_id": " "}):
+            with self.subTest(params=params):
+                self.assertTrue(check_preconditions(spec, snap(), params))
+        with self.assertRaises(ActionSpecError):  # an empty id is a missing parameter
+            check_preconditions(spec, snap(), {**PLACE, "room_design_id": ""})
+        self.assertEqual(check_preconditions(spec, snap(), PLACE), [])
+        self.assertTrue(check_preconditions(spec, snap(rooms=None), PLACE))
+
+    # Verifies: S13-R5
+    def test_outcomes(self):
+        rooms = BASE["rooms"]
+        cases = {
+            "the room appears where asked": ({"rooms": rooms + [NEW_ROOM]}, V),
+            "no new room": ({}, N),
+            "a new room elsewhere": ({"rooms": rooms + [{**NEW_ROOM, "@Column": "2"}]}, N),
+            "a new room of another design": ({"rooms": rooms + [{**NEW_ROOM, "@RoomDesignId": "26"}]}, N),
+            "a new room whose position is not observed": ({"rooms": rooms + [
+                {key: value for key, value in NEW_ROOM.items() if key != "@Row"}]}, N),
+            "a room that was there is gone": ({"rooms": [NEW_ROOM]}, C),
+            "an existing room finished upgrading": ({"rooms": [{**rooms[0], "@RoomDesignId": "12"}, NEW_ROOM]}, V),
+            "rooms not observed after": ({"rooms": None}, U),
+        }
+        for name, (after, expected) in cases.items():
+            with self.subTest(case=name):
+                result = outcome("place_room", after, PLACE)
+                self.assertIs(result.status, expected, result.reason)
+                self.assertNotIn("room-instance-9911", result.reason)
+
+    # Verifies: S13-R5
+    def test_a_room_already_at_that_position_before_the_call_is_not_this_placement(self):
+        result = outcome("place_room", {}, PLACE, before_overrides={"rooms": BASE["rooms"] + [NEW_ROOM]})
+        self.assertIs(result.status, N)
 
 
 class CollectionEvidenceTests(unittest.TestCase):

@@ -2404,7 +2404,7 @@
     {
       "slice_id": "spec13-place-action",
       "title": "SPEC-13 place_room action",
-      "status": "queued",
+      "status": "done",
       "priority": 422,
       "domain": "fleet",
       "allowed_paths": [
