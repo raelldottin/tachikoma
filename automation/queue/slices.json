@@ -2685,7 +2685,7 @@
     {
       "slice_id": "spec13-buyroom-success-shape",
       "title": "Recognise the live BuyRoom reply as a placement success",
-      "status": "queued",
+      "status": "done",
       "priority": 434,
       "domain": "fleet",
       "allowed_paths": [

@@ -1,0 +1,46 @@
+{
+  "slice_id": "spec13-buyroom-success-shape",
+  "status": "done",
+  "summary": "The verified placement run 43393262041 journaled the POST reply's elements as RoomService/BuyRoom/Room. The owner's capture had BuyRoom2, so placeRoom did not recognise the success and returned the raw reply. It now accepts a Room under RoomService/BuyRoom or RoomService/BuyRoom2, still requiring the requested design, row and column; any other element is not a success. Outcomes still come from the ship read. SPEC-13's evidence notes the change.",
+  "files_touched": [
+    "docs/specs/SPEC-13-room-placement.md",
+    "sdk/client.py",
+    "tests/test_room_placement.py"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "make lint",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "Recognise the live BuyRoom reply",
+      "before": "only BuyRoom2 recognised",
+      "after": "BuyRoom and BuyRoom2 recognised",
+      "proof": [
+        "tests: a live-shaped BuyRoom reply returns True and records success_shape; a room at another position and an unknown element stay raw; the captured BuyRoom2 still returns True",
+        "make syntax-check, make test (1378 OK), make lint, scripts/spec_trace.py, git diff --check pass"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "The live reply's Room attributes are assumed to match the capture's; if not, the reply stays ambiguous and the ship read decides."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-13T09:22:52Z"
+}
