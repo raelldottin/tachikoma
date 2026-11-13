@@ -22,7 +22,7 @@ The manual routine below completed the plan on 2026-11-13.
 | Alias | `pss5` (the only G2 account; [registry](live/registry-g2-pss5.json), `expected_game_identity` recorded) |
 | Starting state | [G1 baseline, 2026-11-12](baselines/2026-11-12-g1.md): hull 1-4, game version `1.0+settings.3307714` |
 | Legacy run | skipped (`LEGACY_RUN_SKIP=5`; scheduled run 43260995664 showed the step skipped) |
-| Ship rooms | Bridge, Bedroom, Bolter, three Lifts, Engine, Small Reactor and a Mineral Mining Laser (canary 43305786623). There was no mineral or gas collector and no storage room, and gas was 0 above the reserve, so `baseline-v1` could collect nothing and refused every research and room upgrade. On 2026-11-13, SPEC-13's placement run 43393262041 added a Gas Collector Lv1 at row 1, column 1 (verified, 10 minerals), before any trial window. Gas production lets `baseline-v1` collect, and later research and upgrade. |
+| Ship rooms | On 2026-11-12 pss5 had a Bridge, a Bedroom, a Bolter, three Lifts, an Engine, a Small Reactor and a Mineral Mining Laser, with no collector, no storage and no gas above the reserve. On 2026-11-13 SPEC-13 placed a Gas Collector Lv1 (run 43393262041). Then the owner found pss5 and played it by hand, before the trial (not an intervention). After that play (canary 43401277661) the ship has a Bridge Lv1, a Bedroom Lv2, five Armor rooms, a Bolter Lv2, a Small Reactor Lv2, a Gym, six Lifts, a Mineral Mining Laser, a Mineral Storage, a Gas Storage and a Shield Generator. The Engine and the Gas Collector are gone, and gas is 1,517 above the reserve. The first evening snapshot (2026-11-16, 23:30 UTC) records the exact starting state. |
 
 ## Manual routine (owner)
 

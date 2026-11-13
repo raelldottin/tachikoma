@@ -16,8 +16,9 @@
 | 43305786623 | canary | one `collect_all_resources` | `not-observed`: minerals and gas unchanged | first run with room-fill evidence: every room at `CapacityUsed` 0 before and after, `room_fill_note` set; pss5 has no collector to collect from |
 | 43308552399 | canary | one `collect_all_resources` | `not-observed`: minerals and gas unchanged | the same nine rooms at `CapacityUsed` 0; no collector had been built yet |
 | 43394041693 | canary | one `collect_all_resources` | **`verified`: minerals +10**, gas unchanged | 2026-11-13, about five minutes after SPEC-13's run 43393262041 placed a Gas Collector Lv1 at row 1, column 1; no spend, no alerts |
+| 43401277661 | canary | one `collect_all_resources` | **`verified`: minerals +51**, gas unchanged | 2026-11-13, after the owner played pss5 by hand that morning (see below); no spend, no alerts |
 
-In all six executing runs:
+In all seven executing runs:
 
 - exactly one action ran, the first safe-to-retry one (S05-R4); `collect_daily_reward` was held back as not safe to retry;
 - nothing was spent and starbux stayed disabled (S05-R6); every room upgrade and research was refused by the caps (0) or for its starbux cost;
@@ -47,6 +48,27 @@ pss5 has no mineral or gas collector and no storage room, so `collect_all_resour
 ## The verified canary
 
 Canary 43394041693 (2026-11-13, main 7d68240) reconciled its collection as `verified`: minerals rose by 10, and gas was unchanged. It ran about five minutes after SPEC-13's placement run 43393262041 added a Gas Collector Lv1 at row 1, column 1. Its room-fill evidence still listed that collector, but every room, the new collector included, read `CapacityUsed` 0 before and after the call. The journal therefore cannot say which room the minerals came from; the Mineral Mining Laser is the likely source. It is not a refund of the placement, because the collector is still on the ship. Nothing else touches pss5: the legacy daily run skips it. This is the first live verified effect, and it meets SPEC-07's precondition (S07-R2).
+
+## The owner's pre-trial play
+
+The owner found pss5 in the game and played it by hand on the morning of 2026-11-13, before the trial (confirmed by the owner). Canary 43401277661 reconciled `verified` again (minerals +51). Its room-fill evidence shows the ship after that play:
+
+| Room design | Rooms |
+| --- | --- |
+| Bridge Lv1 | 1 |
+| Bedroom Lv2 | 1 |
+| Armor Lv1 | 2 |
+| Armor Lv2 | 3 |
+| Bolter Lv2 | 1 |
+| Small Reactor Lv2 | 1 |
+| Gym Lv1 | 1 |
+| Lift Lv1 | 6 |
+| Mineral Mining Laser Lv1 | 1 |
+| Mineral Storage Lv1 | 1 |
+| Gas Storage Lv1 | 1 |
+| Shield Generator Lv1 | 1 |
+
+The Engine Lv1 and the Gas Collector Lv1 that SPEC-13 placed are no longer on the ship, and gas is 1,517 above the reserve. This play is before the trial, so it is not an intervention.
 
 ## What this does not show
 

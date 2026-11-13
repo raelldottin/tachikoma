@@ -1,0 +1,46 @@
+{
+  "slice_id": "spec07-starting-state",
+  "status": "done",
+  "summary": "The owner found pss5 and played it by hand on the morning of 2026-11-13, before the trial. Canary 43401277661 (main 56c411d) then reconciled verified: minerals +51, no spend, no alerts. Its room-fill evidence shows the ship after that play: - five Armor rooms, six Lifts, a Gym, a Shield Generator, and Mineral and Gas Storage; - a Bolter Lv2 and a Small Reactor Lv2; - the Engine and SPEC-13's Gas Collector gone; - gas at 1,517 above the reserve.  Recorded: - in the G2 evidence: the run and the room table; - in the trial plan: the new starting state, which is pre-trial and so not an   intervention; - in SPEC-13: that the placed collector was later removed by the owner, while the   placement's verification stands.",
+  "files_touched": [
+    "docs/experiments/live/g2-evidence.md",
+    "docs/experiments/r2-progression-trial.md",
+    "docs/specs/SPEC-13-room-placement.md"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "Record the pre-trial play and second verified canary",
+      "before": "starting state from 2026-11-12",
+      "after": "starting state after the owner's 2026-11-13 play",
+      "proof": [
+        "owner confirmation 2026-11-13",
+        "journal of run 43401277661 read after a leak re-scan (10 expected id and hash hits, none committed): collect_all_resources verified, minerals +51",
+        "scripts/spec_trace.py, make syntax-check, make test, git diff --check pass"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "The exact starting state is the first trial snapshot on 2026-11-16."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-13T09:43:59Z"
+}
