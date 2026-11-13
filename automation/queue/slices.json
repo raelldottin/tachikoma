@@ -2546,6 +2546,29 @@
         "make lint",
         "git diff --check"
       ]
+    },
+    {
+      "slice_id": "spec13-live-evidence",
+      "title": "Record the verified live placement and mark SPEC-13 done",
+      "status": "queued",
+      "priority": 428,
+      "domain": "fleet",
+      "allowed_paths": [
+        "docs/specs/SPEC-13-room-placement.md",
+        "docs/specs/README.md",
+        "docs/experiments/live/RUNBOOK.md",
+        "docs/experiments/r2-progression-trial.md"
+      ],
+      "depends_on": [
+        "spec13-place-post"
+      ],
+      "max_files_changed": 4,
+      "notes": "Implements S13-AC8 (R11). Owner-dispatched run 43393262041 (2026-11-13, main 7aefe06): place_room verified, a Gas Collector Lv1 (room design 42) appeared at row 1, column 1 in Building status, minerals -10, nothing else spent, no alerts. The POST reply's element is RoomService/BuyRoom (not BuyRoom2 as captured), so the client did not recognise the success shape; the outcome came from the ship read. SPEC-13 Done; the runbook's verified-canary steps and the trial plan's starting state record that pss5 now has a gas collector.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
     }
   ]
 }
