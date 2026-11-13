@@ -1,6 +1,6 @@
 # R2 progression trial plan (study A, pss5)
 
-**Status: DRAFT, not approved.** This is an agent-drafted proposal for [SPEC-07](../specs/SPEC-07-progression-trial.md) S07-R1. Its safe default (S07-Q1) is that the trial does not start. It starts only when the owner fills in the manual routine, changes or confirms every value below, sets this line to `Approved by the owner on <date>`, and writes the full-mode authorization in [Authorization](#authorization). Nothing here authorizes a live run.
+**Status: Approved by the owner on 2026-11-13.** This is the plan for [SPEC-07](../specs/SPEC-07-progression-trial.md) S07-R1, drafted by an agent. The owner answered its questions and chose the manual routine (regular play under the rules below) on 2026-11-13. The full-mode authorization is [authorization-g2-pss5-trial.json](live/authorization-g2-pss5-trial.json), merged by the owner in #257, and the trial runs from [live-trial-schedule.yml](../../.github/workflows/live-trial-schedule.yml).
 
 It follows the [study design](study-design.md): one account, a within-account ABBA crossover, the primary metric from snapshot diffs.
 
@@ -13,7 +13,7 @@ It follows the [study design](study-design.md): one account, a within-account AB
 | Daily caps | No practical limit on minerals or gas. The authorization needs a number for each, so both are 1,000,000,000; pss5's balance above its reserve is the real limit. Starbux is always 0 |
 | Windows and stop thresholds | Kept as drafted below |
 
-Still needed before approval: the owner's manual routine.
+The manual routine below completed the plan on 2026-11-13.
 
 ## Account
 
@@ -26,7 +26,14 @@ Still needed before approval: the owner's manual routine.
 
 ## Manual routine (owner)
 
-*To be written by the owner.* A list of what is done in the game each day of a manual block, in order and at what times, so the manual arm is a defined treatment. For example: collect resources at about 08:00 and 20:00 UTC, start the cheapest affordable research, upgrade one room when affordable, collect the daily reward, no starbux spending, no PvP.
+**The owner plays pss5 the way they normally play** (owner decision, 2026-11-13). Collecting, research, room upgrades, new rooms and PvP are all as they usually would be. The study then asks whether `baseline-v1` does better than the owner's real play, not a scripted routine. Four rules hold on every manual day (the baseline window and blocks 1 and 4):
+
+1. **No starbux on pss5.** The automated arm can never spend starbux. Any starbux spent is logged as an intervention (S07-R6), and that day is excluded or flagged in the report.
+2. **No play on pss5 during the automated blocks** (2026-11-30 to 2026-12-13). Manual play there mixes the arms; if it happens, it is logged as an intervention.
+3. **Minutes are logged each manual day** in `operator-minutes.csv` (`manual_minutes`), to compare with the operator time of automated days (S07-R5).
+4. **Anything out of the ordinary is noted** in `interventions.md`: a long break, a game event, a big purchase.
+
+The primary metric (completed research plus room upgrades per account-day, from the evening snapshots) is the same in both arms (S07-R4). Anything else the owner does on pss5 shows up in the resource figures.
 
 ## Arms and schedule
 
