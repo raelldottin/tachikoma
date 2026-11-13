@@ -2597,7 +2597,7 @@
     {
       "slice_id": "spec07-trial-decisions",
       "title": "Record the owner's trial-plan decisions",
-      "status": "queued",
+      "status": "done",
       "priority": 430,
       "domain": "fleet",
       "allowed_paths": [
