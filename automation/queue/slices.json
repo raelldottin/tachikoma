@@ -2635,6 +2635,28 @@
         "make lint",
         "git diff --check"
       ]
+    },
+    {
+      "slice_id": "spec07-trial-plan-approval",
+      "title": "Record the owner's manual routine and approval of the SPEC-07 trial plan",
+      "status": "queued",
+      "priority": 432,
+      "domain": "fleet",
+      "allowed_paths": [
+        "docs/experiments/r2-progression-trial.md",
+        "docs/specs/SPEC-07-progression-trial.md",
+        "docs/specs/README.md"
+      ],
+      "depends_on": [
+        "spec07-schedule-policy"
+      ],
+      "max_files_changed": 3,
+      "notes": "Owner decision 2026-11-13 ('Use the suggestion'): the manual routine is the suggested one (collect about 08:00 and 20:00 UTC; claim the daily reward; start the cheapest affordable research when none runs; upgrade one room when affordable, cheapest first; no starbux, no PvP; log minutes). With the earlier decisions (#256), the trial plan is approved: set its status line, and record S07-R1/S07-AC3 (plan committed before the window opens) in SPEC-07 and the spec plan.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
     }
   ]
 }
