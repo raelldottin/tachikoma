@@ -2373,12 +2373,14 @@ class Client(object):
     def placeRoom(self, roomDesignId, row, column):
         """Buy one room and place its top-left cell at ``row``, ``column`` (BuyRoom2; SPEC-13, S13-R2).
 
-        The request reproduces the owner's sanitized capture in
-        ``tests/fixtures/live_sanitized/rooms/buy_room2.json``: a GET with
-        ``roomDesignId``, ``column``, ``row``, ``constructionStartDate`` (the
-        client's time) and ``accessToken``, no body and no checksum. No
-        existing code path calls it, and it makes no eligibility or cost checks
-        of its own.
+        The query reproduces the owner's sanitized capture in
+        ``tests/fixtures/live_sanitized/rooms/buy_room2.json``: ``roomDesignId``,
+        ``column``, ``row``, ``constructionStartDate`` (the client's time) and
+        ``accessToken``, in that order, with no body and no checksum. It is sent
+        as a POST, like the client's other room-changing calls: the capture
+        records a GET, but the live server answered HTTP 405 to a GET in both
+        placement runs of 2026-11-13 (43389706745, 43391935925). No existing
+        code path calls it, and it makes no eligibility or cost checks of its own.
 
         Returns ``True`` only for the captured success shape: a ``BuyRoom2``
         ``Room`` of that design at that row and column. Any other response,
@@ -2391,7 +2393,7 @@ class Client(object):
             f"&constructionStartDate={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}&accessToken={self.accessToken}"
         )
         self.placeRoomReply = None  # never left over from an earlier call
-        r = self.request(url, "GET")
+        r = self.request(url, "POST")
         self.placeRoomReply = place_room_reply(r)
         try:
             room = xmltodict.parse(r.content, xml_attribs=True)["RoomService"]["BuyRoom2"]["Room"]
