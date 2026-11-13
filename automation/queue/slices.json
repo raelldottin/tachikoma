@@ -2501,7 +2501,7 @@
     {
       "slice_id": "spec13-place-diagnostics",
       "title": "Journal a sanitized summary of a placement's server reply",
-      "status": "queued",
+      "status": "done",
       "priority": 426,
       "domain": "fleet",
       "allowed_paths": [
