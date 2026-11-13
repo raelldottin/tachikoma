@@ -1,0 +1,45 @@
+{
+  "slice_id": "spec07-trial-plan-approval",
+  "status": "done",
+  "summary": "On 2026-11-13 the owner chose regular play as the manual routine, replacing the suggested script: they play pss5 as they normally would on manual days. Four rules hold: - no starbux; - no play during the automated blocks; - minutes are logged; - unusual events are noted. With the earlier decisions (#256), the trial plan is approved before its baseline window opens on 2026-11-16 (S07-R1, S07-AC3). SPEC-07's evidence now records the approved plan, the verified canary (S07-R2) and the trial as pending. The spec plan is updated.",
+  "files_touched": [
+    "docs/experiments/r2-progression-trial.md",
+    "docs/specs/README.md",
+    "docs/specs/SPEC-07-progression-trial.md"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "Approve the SPEC-07 trial plan",
+      "before": "trial plan DRAFT",
+      "after": "trial plan approved; manual arm = regular play",
+      "proof": [
+        "owner messages 2026-11-13: 'Use the suggestion', then 'Yes, regular play'",
+        "scripts/spec_trace.py, make syntax-check, make test, git diff --check pass"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "The trial's live criteria (S07-AC4, AC5) are still to run."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-13T09:07:46Z"
+}

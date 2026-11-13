@@ -75,9 +75,11 @@
 
 **Offline verification:** every MUST with an offline acceptance criterion is covered by a test that cites it (checked by `scripts/spec_trace.py`). Implemented in #167.
 
-**Trial plan (S07-R1):** a draft for the owner to approve is in [r2-progression-trial.md](../experiments/r2-progression-trial.md): `pss5`, a baseline window from 2026-11-16, then four 7-day ABBA blocks (14 account-days per arm, enough for a 1.5 sd effect). It is not approved, so the trial has not started: the owner writes the manual routine, confirms the windows and stop thresholds, and writes the full-mode authorization. The canary (S07-R2) must also reconcile `verified` first. The two G2 canaries of 2026-11-12 reconciled `not-observed` ([G2 evidence](../experiments/live/g2-evidence.md)), Canary 43305786623's room-fill evidence showed why: pss5 had no mineral or gas collector and no storage room, so it had nothing to collect. SPEC-13 then placed a Gas Collector Lv1 on pss5 (run 43393262041, 2026-11-13), and **canary 43394041693 reconciled `verified` (minerals +10), so S07-R2 is met** ([G2 evidence](../experiments/live/g2-evidence.md#the-verified-canary)).
+**Trial plan (S07-R1, S07-AC3):** [r2-progression-trial.md](../experiments/r2-progression-trial.md) was approved by the owner on 2026-11-13, before the baseline window opens on 2026-11-16. It covers `pss5`, a baseline window of 2026-11-16 to 2026-11-22, then four 7-day ABBA blocks to 2026-12-20 (14 account-days per arm, enough for a 1.5 sd effect). The manual arm is the owner's regular play under four rules: no starbux, no play during automated blocks, minutes logged, unusual events noted. A scheduled workflow (#257) runs the snapshots and the automated days under the full-mode trial authorization. S07-R2 is met: canary 43394041693 reconciled `verified` (see below).
 
-Pending.
+**Verified canary (S07-R2):** the 2026-11-12 canaries reconciled `not-observed` because pss5 had no collector ([G2 evidence](../experiments/live/g2-evidence.md#why-the-collections-had-nothing-to-collect)). SPEC-13 placed a Gas Collector Lv1 on pss5 (run 43393262041, 2026-11-13), and canary 43394041693 then reconciled `verified` with minerals +10 ([G2 evidence](../experiments/live/g2-evidence.md#the-verified-canary)).
+
+**The trial itself (S07-AC4, S07-AC5):** pending. It runs from 2026-11-16 to 2026-12-20, and the exit report follows.
 
 ## Open questions and risks
 
