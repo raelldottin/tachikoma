@@ -2497,6 +2497,31 @@
         "make test",
         "git diff --check"
       ]
+    },
+    {
+      "slice_id": "spec13-place-diagnostics",
+      "title": "Journal a sanitized summary of a placement's server reply",
+      "status": "queued",
+      "priority": 426,
+      "domain": "fleet",
+      "allowed_paths": [
+        "sdk/client.py",
+        "sdk/actions/catalog.py",
+        "tests/test_room_placement.py",
+        "tests/test_action_catalog.py",
+        "docs/specs/SPEC-13-room-placement.md"
+      ],
+      "depends_on": [
+        "spec13-place-mode"
+      ],
+      "max_files_changed": 5,
+      "notes": "Owner request 2026-11-13 after placement run 43389706745 reconciled unknown (no room appeared, nothing spent) with no record of the server's reply. Client.placeRoom keeps a minimal reply summary (HTTP status, element names, error or message attribute text); place_room gets an evidence probe and builder that journal it after leak-scanning and redacting the text (withheld if flagged), truncated. Evidence never changes the outcome. Record run 43389706745 in SPEC-13's evidence, and note that live-trial journals start empty each run, so the account-wide uncertainty block does not carry across CI dispatches.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "make lint",
+        "git diff --check"
+      ]
     }
   ]
 }
