@@ -1,0 +1,45 @@
+{
+  "slice_id": "drop-unused-psycopg2",
+  "status": "done",
+  "summary": "Canary 43476718839 and the 15:58 UTC legacy daily run 43457952318 (2026-11-13) failed at 'Install dependencies'. pip built psycopg2-binary==2.9.9 from source on the runner's Python 3.13 and the build failed (implicit declaration of _PyInterpreterState_Get), though the same build passed that morning. Nothing in the repo imports psycopg2; the LangGraph script checkpoints with MemorySaver. The requirement is removed. That fixes the install step of daily-run.yml, daily-run-langgraph.yml, live-trial.yml and live-trial-schedule.yml, whose first trial snapshot is due 2026-11-16 23:30 UTC.  Regression test: every requirements.txt package must be imported somewhere in the repo, unless it is named as a pin of a dependency's own requirement or a test tool. Against the old requirements.txt it fails and names psycopg2-binary.",
+  "files_touched": [
+    "requirements.txt",
+    "tests/test_build_hygiene.py"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "make lint",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "Drop the unused psycopg2-binary",
+      "before": "requirements.txt installs an unused package that no longer builds",
+      "after": "psycopg2-binary removed; unused requirements are caught by a test",
+      "proof": [
+        "live: runs 43476718839 and 43457952318 failed building psycopg2-binary; no Python file imports psycopg2",
+        "the new test fails against the old requirements.txt and passes now; full suite 1381 OK; make lint and git diff --check pass"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "Confirmed live only when the next workflow run installs cleanly."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-13T17:58:54Z"
+}

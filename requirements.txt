@@ -12,8 +12,6 @@ langchain-core==1.5.4
 langchain-nvidia-ai-endpoints==1.4.3
 langchain-openai==1.5.0
 
-# Database for checkpointing
-psycopg2-binary==2.9.9
 
 # Testing
 pytest==8.3.0

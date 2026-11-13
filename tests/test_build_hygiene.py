@@ -5,6 +5,7 @@ a fresh temporary working directory and only as a dry run (``make -n``), and the
 nothing here touches ./.device.
 """
 
+import ast
 import os
 from pathlib import Path
 import re
@@ -211,6 +212,67 @@ class GitIgnoreHygieneTests(unittest.TestCase):
                 self.assertNotIn(path, tracked)
         self.assertEqual([path for path in tracked if path.startswith("tools/bazel.")], [])
 
+
+
+# Requirements the code does not import itself: pins of requests' own dependencies, and test tools.
+NOT_IMPORTED_REQUIREMENTS = frozenset({"certifi", "charset-normalizer", "idna", "urllib3", "pytest", "pytest-asyncio"})
+# Distribution name -> the module the code imports, where they differ beyond "-" -> "_".
+REQUIREMENT_MODULES = {}
+SKIPPED_DIRS = {".git", ".venv", ".claude", "node_modules", "__pycache__"}
+
+
+def requirement_names(text):
+    names = []
+    for line in text.splitlines():
+        line = line.split("#", 1)[0].strip()
+        if line:
+            names.append(re.split(r"[\[<>=!~ ;]", line, maxsplit=1)[0].lower())
+    return names
+
+
+def imported_top_modules(root):
+    modules = set()
+    for path in root.rglob("*.py"):
+        if SKIPPED_DIRS.intersection(path.relative_to(root).parts) or path.relative_to(root).parts[0].startswith("bazel-"):
+            continue
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+        except (SyntaxError, UnicodeDecodeError):
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                modules.update(alias.name.split(".")[0] for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
+                modules.add(node.module.split(".")[0])
+    return modules
+
+
+class RequirementsHygieneTests(unittest.TestCase):
+    """Every runtime requirement is imported somewhere (regression: psycopg2-binary, 2026-11-13).
+
+    psycopg2-binary==2.9.9 was in requirements.txt but imported nowhere. On 2026-11-13 it stopped building on the
+    GitHub runner (canary run 43476718839, daily run 43457952318), which broke the install step of every live
+    workflow. A requirement nothing imports must be removed or named in NOT_IMPORTED_REQUIREMENTS with a reason.
+    """
+
+    def test_every_requirement_is_imported_or_named_as_not_imported(self):
+        names = requirement_names((ROOT / "requirements.txt").read_text(encoding="utf-8"))
+        self.assertTrue(names)
+        imported = imported_top_modules(ROOT)
+        unused = [name for name in names if name not in NOT_IMPORTED_REQUIREMENTS
+                  and REQUIREMENT_MODULES.get(name, name.replace("-", "_")) not in imported]
+        self.assertEqual(unused, [], "requirements.txt lists packages nothing imports")
+
+    def test_psycopg2_is_not_required(self):
+        self.assertNotIn("psycopg2-binary", requirement_names((ROOT / "requirements.txt").read_text(encoding="utf-8")))
+
+    def test_the_check_flags_an_unused_requirement(self):
+        names = requirement_names("requests==2.28.2\n# comment\npsycopg2-binary==2.9.9  # unused\nx[extra]>=1\n")
+        self.assertEqual(names, ["requests", "psycopg2-binary", "x"])
+        imported = imported_top_modules(ROOT)
+        self.assertIn("requests", imported)
+        self.assertNotIn("psycopg2_binary", imported)
+        self.assertNotIn("psycopg2", imported)
 
 if __name__ == "__main__":
     unittest.main()
