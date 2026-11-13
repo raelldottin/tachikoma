@@ -2726,6 +2726,26 @@
         "make test",
         "git diff --check"
       ]
+    },
+    {
+      "slice_id": "drop-unused-psycopg2",
+      "title": "Drop the unused psycopg2-binary that breaks every live workflow install",
+      "status": "queued",
+      "priority": 436,
+      "domain": "build",
+      "allowed_paths": [
+        "requirements.txt",
+        "tests/test_build_hygiene.py"
+      ],
+      "depends_on": [],
+      "max_files_changed": 2,
+      "notes": "Owner decision 2026-11-13 ('Yes, remove it'). Canary 43476718839 and the 15:58 UTC legacy daily run 43457952318 failed at 'Install dependencies': psycopg2-binary==2.9.9 is built from source on the runner's Python 3.13 and the build now fails (implicit declaration of _PyInterpreterState_Get), though it built that morning. Nothing in the repo imports psycopg2; the LangGraph script uses MemorySaver. Remove the line. Regression test: every requirements.txt package is imported somewhere in the repo, except a named list of transitive pins and test tools.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "make lint",
+        "git diff --check"
+      ]
     }
   ]
 }
