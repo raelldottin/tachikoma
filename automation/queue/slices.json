@@ -2746,6 +2746,27 @@
         "make lint",
         "git diff --check"
       ]
+    },
+    {
+      "slice_id": "g2-third-verified-canary",
+      "title": "Record the third verified canary, the first after the psycopg2 fix",
+      "status": "queued",
+      "priority": 437,
+      "domain": "fleet",
+      "allowed_paths": [
+        "docs/experiments/live/g2-evidence.md",
+        "docs/experiments/r2-progression-trial.md"
+      ],
+      "depends_on": [
+        "drop-unused-psycopg2"
+      ],
+      "max_files_changed": 2,
+      "notes": "Owner decision 2026-11-14 ('Yes, record it'). Canary 43581425387 (main 033dd32, 2026-11-14 09:37 UTC) installed dependencies cleanly, confirming #269 live, and reconciled collect_all_resources verified: gas +11289, minerals +11382; no spend, no alerts. Its room-fill evidence shows the owner kept playing pss5 before the trial (Small Reactor Lv5/Lv6, Gas Collector Lv1/Lv6, Shield Generator Lv6, Mineral Extractor Lv1/Lv5, Mineral and Gas Storage Lv5, Bridge Lv3, Bedroom Lv3 x2, Laboratory, Command Center, missile rooms). Record the run in the G2 evidence (first verified gas collection) and update the trial plan's ship-rooms row: pre-trial play is not an intervention and the 2026-11-16 snapshot remains the exact starting state.",
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ]
     }
   ]
 }
