@@ -2750,7 +2750,7 @@
     {
       "slice_id": "g2-third-verified-canary",
       "title": "Record the third verified canary, the first after the psycopg2 fix",
-      "status": "queued",
+      "status": "done",
       "priority": 437,
       "domain": "fleet",
       "allowed_paths": [

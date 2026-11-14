@@ -1,0 +1,45 @@
+{
+  "slice_id": "g2-third-verified-canary",
+  "status": "done",
+  "summary": "Canary 43581425387 (main 033dd32, 2026-11-14) is the first live run since #269 removed the unused psycopg2-binary. Its dependencies installed cleanly, and its collection reconciled verified: gas +11,289, minerals +11,382, pss5's first verified gas collection. No spend, no alerts. Recorded: - in the G2 evidence: the run, a section with the ship's rooms on 2026-11-14, and the corrected note on SPEC-13's collector (removed by the owner before producing); - in the trial plan: the owner's further pre-trial play, which is not an intervention; the 2026-11-16 snapshot stays the exact starting state.",
+  "files_touched": [
+    "docs/experiments/live/g2-evidence.md",
+    "docs/experiments/r2-progression-trial.md"
+  ],
+  "validations_passed": [
+    "make syntax-check",
+    "make test",
+    "git diff --check"
+  ],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "Record the third verified canary and the owner's further pre-trial play",
+      "before": "G2 evidence ends at canary 43401277661; no verified gas collection",
+      "after": "canary 43581425387 recorded: install fixed, gas and minerals verified",
+      "proof": [
+        "run 43581425387: Install dependencies passed; conclusion success",
+        "journal read after a leak re-scan (10 expected id, hash and path hits, none committed): collect_all_resources verified, gas +11289, minerals +11382; alerts empty",
+        "make syntax-check, make test, git diff --check pass"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "The exact starting state is the first trial snapshot on 2026-11-16."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-14T10:33:38Z"
+}
