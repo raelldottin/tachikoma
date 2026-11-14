@@ -17,8 +17,9 @@
 | 43308552399 | canary | one `collect_all_resources` | `not-observed`: minerals and gas unchanged | the same nine rooms at `CapacityUsed` 0; no collector had been built yet |
 | 43394041693 | canary | one `collect_all_resources` | **`verified`: minerals +10**, gas unchanged | 2026-11-13, about five minutes after SPEC-13's run 43393262041 placed a Gas Collector Lv1 at row 1, column 1; no spend, no alerts |
 | 43401277661 | canary | one `collect_all_resources` | **`verified`: minerals +51**, gas unchanged | 2026-11-13, after the owner played pss5 by hand that morning (see below); no spend, no alerts |
+| 43581425387 | canary | one `collect_all_resources` | **`verified`: gas +11,289, minerals +11,382** | 2026-11-14, main 033dd32, the first run after #269 removed `psycopg2-binary` (canary 43476718839 had failed installing it); the owner had kept playing pss5 (see below); no spend, no alerts |
 
-In all seven executing runs:
+In all eight executing runs:
 
 - exactly one action ran, the first safe-to-retry one (S05-R4); `collect_daily_reward` was held back as not safe to retry;
 - nothing was spent and starbux stayed disabled (S05-R6); every room upgrade and research was refused by the caps (0) or for its starbux cost;
@@ -70,7 +71,34 @@ The owner found pss5 in the game and played it by hand on the morning of 2026-11
 
 The Engine Lv1 and the Gas Collector Lv1 that SPEC-13 placed are no longer on the ship, and gas is 1,517 above the reserve. This play is before the trial, so it is not an intervention.
 
+## The third verified canary
+
+Canary 43581425387 (2026-11-14, main 033dd32) is the first live run since #269 removed the unused `psycopg2-binary`, which no longer built on the runner and had failed the install step of canary 43476718839. Its dependencies installed cleanly. Its collection reconciled `verified`: gas rose by 11,289 and minerals by 11,382. This is pss5's first verified gas collection. Nothing was spent, and no alert fired.
+
+The owner had kept playing pss5 by hand since 2026-11-13, still before the trial. The room-fill evidence shows the ship on 2026-11-14:
+
+| Room design | Rooms |
+| --- | --- |
+| Bridge Lv3 | 1 |
+| Command Center Lv1 | 1 |
+| Bedroom Lv3 | 2 |
+| Laboratory Lv1 | 1 |
+| Armor Lv1, Lv2, Lv3 | 2, 7, 6 |
+| Bolter Lv3 | 1 |
+| Missile Launcher Lv2 | 1 |
+| Missile Pod Lv1 | 1 |
+| Shield Generator Lv6 | 1 |
+| Small Reactor Lv5, Lv6 | 1, 1 |
+| Gas Collector Lv1, Lv6 | 1, 1 |
+| Mineral Extractor Lv1, Lv5 | 1, 1 |
+| Mineral Mining Laser Lv4 | 2 |
+| Mineral Storage Lv5 | 1 |
+| Gas Storage Lv5 | 1 |
+| Lift Lv1 | 7 |
+
+Every room's `CapacityUsed` was the same before and after the collection: 70 in the Bolter Lv3 (full) and 0 elsewhere.
+
 ## What this does not show
 
-- Gas from the new collector: it had produced nothing yet. A later canary or the trial's snapshots will show it.
+- Gas from SPEC-13's collector: the owner removed it before it produced anything. Gas collection itself was verified by canary 43581425387, from collectors the owner built.
 - That the owner has looked at the alerts and dashboard (S11-AC3); they are in each canary artifact (`journals/dashboard.html`), which expires after seven days.
