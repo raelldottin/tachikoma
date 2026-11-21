@@ -564,18 +564,30 @@ class Client(object):
             self.todayLiveOps = xmltodict.parse(r.content, xml_attribs=True)
 
     def listRoomDesigns2(self):
+        if not getattr(self, 'latestVersion', None):
+            self.getLatestVersion3()
+        if not getattr(self, 'latestVersion', None):
+            return False
         url = f"https://api.pixelstarships.com/RoomService/ListRoomDesigns2?languageKey={self.device.languageKey}&designVersion={self.latestVersion['SettingService']['GetLatestSetting']['Setting']['@RoomDesignVersion']}"
         r = self.request(url, "GET")
         if r:
             self.roomDesigns = xmltodict.parse(r.content, xml_attribs=True)
 
     def listAllTaskDesigns2(self):
+        if not getattr(self, 'latestVersion', None):
+            self.getLatestVersion3()
+        if not getattr(self, 'latestVersion', None):
+            return False
         url = f"https://api.pixelstarships.com/TaskService/ListAllTaskDesigns2?languageKey={self.device.languageKey}&designVersion={self.latestVersion['SettingService']['GetLatestSetting']['Setting']['@RoomDesignVersion']}"
         r = self.request(url, "GET")
         if r:
             self.allTaskDesigns = xmltodict.parse(r.content, xml_attribs=True)
 
     def listAllTrainingDesigns2(self):
+        if not getattr(self, 'latestVersion', None):
+            self.getLatestVersion3()
+        if not getattr(self, 'latestVersion', None):
+            return False
         url = f"https://api.pixelstarships.com/TrainingService/ListAllTrainingDesigns2?languageKey={self.device.languageKey}&designVersion={self.latestVersion['SettingService']['GetLatestSetting']['Setting']['@RoomDesignVersion']}"
         r = self.request(url, "GET")
         if r:
@@ -587,11 +599,19 @@ class Client(object):
         if r:
             self.shipByUserId = xmltodict.parse(r.content, xml_attribs=True)
 
-            if "ShipService" not in self.shipByUserId:
+            if not self.shipByUserId or "ShipService" not in self.shipByUserId:
                 logging.error("ShipService data not avaialble.")
                 return False
 
-            ship = self.shipByUserId["ShipService"]["GetShipByUserId"]["Ship"]
+            get_ship = self.shipByUserId["ShipService"].get("GetShipByUserId")
+            if not get_ship:
+                logging.error("GetShipByUserId data not available.")
+                return False
+
+            ship = get_ship.get("Ship")
+            if not ship:
+                logging.error("Ship data not available.")
+                return False
             # A new ship can return an empty <Rooms/> or <Researches/>, which parses to
             # None: treat it as no records instead of failing the whole read.
             self.rooms = (ship.get("Rooms") or {}).get("Room") or []
@@ -717,6 +737,10 @@ class Client(object):
         return False
 
     def listActionTypes2(self):
+        if not getattr(self, 'latestVersion', None):
+            self.getLatestVersion3()
+        if not getattr(self, 'latestVersion', None):
+            return False
         if self.user.isAuthorized:
             url = f"https://api.pixelstarships.com/RoomService/ListActionTypes2?languageKey={self.device.languageKey}&designVersion={self.latestVersion['SettingService']['GetLatestSetting']['Setting']['@ResearchDesignVersion']}"
             r = self.request(url, "GET")
@@ -726,6 +750,10 @@ class Client(object):
         return False
 
     def listConditionTypes2(self):
+        if not getattr(self, 'latestVersion', None):
+            self.getLatestVersion3()
+        if not getattr(self, 'latestVersion', None):
+            return False
         if self.user.isAuthorized:
             url = f"https://api.pixelstarships.com/RoomService/ListConditionTypes2?languageKey={self.device.languageKey}&designVersion={self.latestVersion['SettingService']['GetLatestSetting']['Setting']['@ResearchDesignVersion']}"
             r = self.request(url, "GET")
@@ -801,9 +829,9 @@ class Client(object):
         ListAllDesigns4 has been deprecated
         The design data will be fetched individually
         """
-        if not self.latestVersion:
+        if not getattr(self, 'latestVersion', None):
             self.getLatestVersion3()
-        if "SettingService" not in self.latestVersion:
+        if not getattr(self, 'latestVersion', None) or "SettingService" not in self.latestVersion:
             return False
         versions = self.latestVersion["SettingService"]["GetLatestSetting"]["Setting"]
         url = f"{self.baseUrl}/DesignService/ListAllDesigns4?LanguageKey=en&ListFileVersion={versions['@FileVersion']}&ListSpriteVersion={versions['@SpriteVersion']}&ListBackgroundVersion={versions['@BackgroundVersion']}&ListAllShipDesignVersion={versions['@ShipDesignVersion']}&ListRoomDesignVersion={versions['@RoomDesignVersion']}&ListAllCharacterDesignVersion={versions['@CharacterDesignVersion']}&ListAllCharacterDesignActionVersion={versions['@CharacterDesignActionVersion']}&ListItemDesignVersion={versions['@ItemDesignVersion']}&ListCraftDesignVersion={versions['@CraftDesignVersion']}&ListMissileDesignVersion={versions['@MissileDesignVersion']}&ListStarSystemVersion={versions['@StarSystemVersion']}&ListStarSystemLinkVersion={versions['@StarSystemLinkVersion']}&ListAllNewsDesignVersion={versions['@NewsDesignVersion']}&ListLeagueVersion={versions['@LeagueVersion']}&ListAchievementDesignVersion={versions['@AchievementDesignVersion']}&ListRoomDesignPurchaseVersion={versions['@RoomDesignPurchaseVersion']}&ListRoomDesignSpriteVersion={versions['@RoomDesignSpriteVersion']}&ListAllMissionDesignVersion={versions['@MissionDesignVersion']}&ListAnimationVersion={versions['@AnimationVersion']}&ListAllResearchDesignVersion={versions['@ResearchDesignVersion']}&ListAllTrainingDesignVersion={versions['@TrainingDesignVersion']}&ListAllChallengeDesignVersion={versions['@ChallengeDesignVersion']}&ListAllRewardDesignVersion={versions['@RewardDesignVersion']}&ListAllDivisionDesignVersion={versions['@DivisionDesignVersion']}&ListAllCollectionDesignVersion={versions['@CollectionDesignVersion']}&ListAllDrawDesignVersion={versions['@DrawDesignVersion']}&ListAllPromotionDesignVersion={versions['@PromotionDesignVersion']}&ListAllSituationDesignVersion={versions['@SituationDesignVersion']}&ListAllTaskDesignVersion={versions['@TaskDesignVersion']}&ListActionTypeVersion={versions['@ActionTypeVersion']}&ListConditionTypeVersion={versions['@ConditionTypeVersion']}&ListItemDesignActionVersion={versions['@ItemDesignActionVersion']}&ListSeasonDesignVersion={versions['@SeasonDesignVersion']}&ListAssetVersion={versions['@AssetVersion']}&ListMarkerGeneratorDesignVersion={versions['@MarkerGeneratorDesignVersion']}"
@@ -949,11 +977,14 @@ class Client(object):
         return True
 
     def listAllCharacterDesigns2(self):
-        if self.latestVersion:
-            url = f"{self.baseUrl}/CharacterService/ListAllCharacterDesigns2?languageKey={self.device.languageKey}&designVersion={self.latestVersion['SettingService']['GetLatestSetting']['Setting']['@CharacterDesignVersion']}"
-            r = self.request(url, "GET")
-            if r:
-                self.allCharacterDesigns = xmltodict.parse(r.content, xml_attribs=True)
+        if not getattr(self, 'latestVersion', None):
+            self.getLatestVersion3()
+        if not getattr(self, 'latestVersion', None):
+            return False
+        url = f"{self.baseUrl}/CharacterService/ListAllCharacterDesigns2?languageKey={self.device.languageKey}&designVersion={self.latestVersion['SettingService']['GetLatestSetting']['Setting']['@CharacterDesignVersion']}"
+        r = self.request(url, "GET")
+        if r:
+            self.allCharacterDesigns = xmltodict.parse(r.content, xml_attribs=True)
 
             if "CharacterService" not in self.allCharacterDesigns:
                 logging.error(
@@ -2503,14 +2534,17 @@ class Client(object):
                             )
 
     def listAllResearchDesigns2(self):
-        if self.latestVersion:
-            url = f"https://api.pixelstarships.com/ResearchService/ListAllResearchDesigns2?languageKey={self.device.languageKey}&designVersion={self.latestVersion['SettingService']['GetLatestSetting']['Setting']['@ResearchDesignVersion']}"
-            r = self.request(url, "GET")
-            self.allResearchDesigns = xmltodict.parse(r.content, xml_attribs=True)
-            if "ResearchService" not in self.allResearchDesigns:
-                return False
+        if not getattr(self, 'latestVersion', None):
+            self.getLatestVersion3()
+        if not getattr(self, 'latestVersion', None):
+            return False
+        url = f"https://api.pixelstarships.com/ResearchService/ListAllResearchDesigns2?languageKey={self.device.languageKey}&designVersion={self.latestVersion['SettingService']['GetLatestSetting']['Setting']['@ResearchDesignVersion']}"
+        r = self.request(url, "GET")
+        self.allResearchDesigns = xmltodict.parse(r.content, xml_attribs=True)
+        if "ResearchService" not in self.allResearchDesigns:
+            return False
 
-            return True
+        return True
 
     def addResearch(self, researchDesignId):
         url = f"https://api.pixelstarships.com/ResearchService/AddResearch?researchDesignId={researchDesignId}&researchStartDate={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}&accessToken={self.accessToken}"
@@ -3063,7 +3097,15 @@ class Client(object):
                     return False
 
             # Extract ship data
-            ship = self.shipByUserId["ShipService"]["GetShipByUserId"]["Ship"]
+            get_ship = self.shipByUserId.get("ShipService", {}).get("GetShipByUserId")
+            if not get_ship:
+                logging.warning(f"[{self.info.get('@Name', '')}] Cannot analyze layout: GetShipByUserId data unavailable")
+                return False
+
+            ship = get_ship.get("Ship")
+            if not ship:
+                logging.warning(f"[{self.info.get('@Name', '')}] Cannot analyze layout: Ship data unavailable")
+                return False
             ship_name = ship.get("@ShipName", "")
             ship_level = int(ship.get("@ShipLevel", 0))
             ship_design_id = ship.get("@ShipDesignId", "")
@@ -3688,3 +3730,38 @@ class Client(object):
 
             logging.info(f'[{self.info.get("@Name", "")}] End-to-end battle flow completed')
             return battle_created or battle_accepted or battle_finalised
+
+    # --- Fleet coordination methods (Option C) ---
+    # These are fleet-level actions that coordinate across multiple accounts.
+    # They are called by the fleet orchestrator, not by individual account runs.
+
+    def fleetPoolResources(self, action: str, resource_type: str, amount: int) -> bool:
+        """Contribute to or withdraw from the fleet resource pool.
+
+        Args:
+            action: "contribute" or "withdraw"
+            resource_type: "minerals", "gas", "starbux"
+            amount: Amount to contribute/withdraw
+        """
+        # TODO: Implement fleet resource pooling
+        # This will coordinate with the fleet state store
+        logging.info(f"[Fleet] Pool resources: {action} {amount} {resource_type}")
+        return True
+
+    def fleetMarketplaceSync(self) -> bool:
+        """Coordinate marketplace buy/sell across fleet accounts."""
+        # TODO: Implement fleet marketplace synchronization
+        logging.info("[Fleet] Marketplace sync")
+        return True
+
+    def fleetBattleCoordinate(self, target_fleet: str, battle_type: str) -> bool:
+        """Schedule and coordinate a fleet battle."""
+        # TODO: Implement fleet battle coordination
+        logging.info(f"[Fleet] Battle coordinate: {battle_type} vs {target_fleet}")
+        return True
+
+    def fleetShareCrewXp(self, source_account: str, target_account: str, character_id: str) -> bool:
+        """Share crew training XP across fleet accounts."""
+        # TODO: Implement crew XP sharing
+        logging.info(f"[Fleet] Share crew XP: {source_account} -> {target_account} for {character_id}")
+        return True

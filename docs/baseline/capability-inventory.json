@@ -879,6 +879,34 @@
       "tests": [
         "tests/test_battle_flow.py"
       ]
+    },
+    {
+      "name": "fleetPoolResources",
+      "pillar": "E",
+      "kind": "mutating",
+      "evidence": "untested",
+      "tests": []
+    },
+    {
+      "name": "fleetMarketplaceSync",
+      "pillar": "E",
+      "kind": "mutating",
+      "evidence": "untested",
+      "tests": []
+    },
+    {
+      "name": "fleetBattleCoordinate",
+      "pillar": "E",
+      "kind": "mutating",
+      "evidence": "untested",
+      "tests": []
+    },
+    {
+      "name": "fleetShareCrewXp",
+      "pillar": "E",
+      "kind": "mutating",
+      "evidence": "untested",
+      "tests": []
     }
   ],
   "run_flags": [
