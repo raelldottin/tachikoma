@@ -54,6 +54,16 @@ CALL_ARGUMENTS: dict[str, Callable[[Mapping[str, Any]], tuple]] = {
     "place_room": lambda params: (params["room_design_id"], params["row"], params["column"]),
     "add_research": lambda params: (params["research_design_id"],),
     "run_pvp_battle": lambda params: (),
+    # --- New mutating actions from run.py (Option B) ---
+    "grab_flying_starbux": lambda params: (),
+    "collect_task_reward": lambda params: (),
+    "collect_available_markers": lambda params: (),
+    "collect_mining_drones": lambda params: (),
+    # --- Inter-fleet actions (Option C) ---
+    "fleet_pool_resources": lambda params: (params["action"], params["resource_type"], params["amount"]),
+    "fleet_marketplace_sync": lambda params: (),
+    "fleet_battle_coordinate": lambda params: (params["target_fleet"], params["battle_type"]),
+    "fleet_share_crew_xp": lambda params: (params["source_account"], params["target_account"], params["character_id"]),
 }
 
 

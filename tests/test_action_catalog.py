@@ -61,7 +61,9 @@ class CatalogShapeTests(unittest.TestCase):
         self.assertEqual(
             set(CATALOG),
             {"collect_all_resources", "collect_daily_reward", "add_training", "upgrade_room", "add_research",
-             "run_pvp_battle", "place_room"},
+             "run_pvp_battle", "place_room",
+             "grab_flying_starbux", "collect_task_reward", "collect_available_markers", "collect_mining_drones",
+             "fleet_pool_resources", "fleet_marketplace_sync", "fleet_battle_coordinate", "fleet_share_crew_xp"},
         )
         self.assertIs(CATALOG["add_research"].idempotency, Idempotency.NOT_IDEMPOTENT)
         self.assertIs(CATALOG["collect_all_resources"].idempotency, Idempotency.SAFE_TO_RETRY)
