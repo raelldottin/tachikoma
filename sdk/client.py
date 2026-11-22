@@ -50,6 +50,12 @@ class ConfigurationError(RuntimeError):
 # The element a BuyRoom2 success reply puts its Room under: the live server's reply to the POST (run 43393262041,
 # 2026-11-13), then the owner's 2026-10-19 capture.
 PLACE_ROOM_REPLY_ELEMENTS = ("BuyRoom", "BuyRoom2")
+# UpgradeRoom2 replies that mean no further room can be upgraded this run.
+SHIP_UPGRADE_REQUIRED = "You need to upgrade your ship first."
+ROOM_UPGRADE_BLOCKERS = (
+    "You cannot build or upgrade more rooms. Please wait for other constructions to be completed.",
+    SHIP_UPGRADE_REQUIRED,
+)
 PLACE_REPLY_TEXT_LIMIT = 300
 PLACE_REPLY_ELEMENT_LIMIT = 12
 PLACE_REPLY_MESSAGE_LIMIT = 3
@@ -2529,20 +2535,22 @@ class Client(object):
                     return False
                 return True
 
-            # Loop until no more upgrades possible
+            # Pass after pass until a pass requests nothing: an upgrade's collection can fund another. Each room is
+            # requested at most once per run, so a rejected upgrade is never resent and the loop always ends.
+            requested_rooms: set = set()
+            ship_upgrade_tried = False
             while True:
-                self.listUpgradingRooms()
-                self.getShipByUserId()
+                self.listUpgradingRooms()  # reads the ship into shipByUserId
                 shipByUserId = getattr(self, "shipByUserId", None)
                 if not shipByUserId:
                     logging.info("Ship data unavailable; stopping room upgrades.")
                     break
 
-                rooms = _extract_collection(shipByUserId, "Room")
-                upgraded_any = False
-                hit_blocker = False
-
-                for room in rooms:
+                requested_this_pass = False
+                restart_scan = False
+                for room in _extract_collection(shipByUserId, "Room"):
+                    if restart_scan:
+                        break
                     roomId = room.get("@RoomId")
                     roomStatus = room.get("@RoomStatus")
                     roomDesignId = room.get("@RoomDesignId")
@@ -2573,56 +2581,36 @@ class Client(object):
                                 and upgradeRoomName
                                 and (roomStatus != "Upgrading")
                                 and upgradeRoomDesignId != "0"
+                                and roomId not in requested_rooms
                             ):
                                 logging.info(
                                     f'[{self.info["@Name"]}] Upgrading {roomName} to {upgradeRoomName}.'
                                 )
+                                requested_rooms.add(roomId)
                                 r = self.upgradeRoom(roomId, upgradeRoomDesignId)
                                 roomName = ""
                                 upgradeRoomName = ""
-                                if r:
-                                    if "You cannot build or upgrade more rooms. Please wait for other constructions to be completed." in r.text:
-                                        logging.info(
-                                            f'[{self.info["@Name"]}] Max concurrent constructions reached: cannot build or upgrade more rooms.'
-                                        )
-                                        self.max_room_upgrades = True
-                                        hit_blocker = True
+                                blocker = next((msg for msg in ROOM_UPGRADE_BLOCKERS if r and msg in r.text), None)
+                                if blocker == SHIP_UPGRADE_REQUIRED and not ship_upgrade_tried:
+                                    # At most one hull upgrade per run, so the loop stays bounded.
+                                    ship_upgrade_tried = True
+                                    logging.info(f'[{self.info["@Name"]}] Ship upgrade required for room upgrade.')
+                                    if self._tryUpgradeShip():
+                                        logging.info(f'[{self.info["@Name"]}] Ship upgraded, restarting room upgrade scan.')
+                                        requested_rooms.clear()  # rooms refused at the old hull level may now upgrade
+                                        restart_scan = True
                                         break
-                                    if "You need to upgrade your ship first." in r.text:
-                                        logging.info(
-                                            f'[{self.info["@Name"]}] Ship upgrade required for room upgrade.'
-                                        )
-                                        # Try to upgrade the ship if we have enough minerals
-                                        ship_upgraded = self._tryUpgradeShip()
-                                        if ship_upgraded:
-                                            # Ship upgraded successfully, restart the while loop to re-scan rooms with new ship level
-                                            logging.info(
-                                                f'[{self.info["@Name"]}] Ship upgraded, restarting room upgrade scan.'
-                                            )
-                                            upgraded_any = True  # Treat ship upgrade as progress to continue while loop
-                                            break  # Break inner for loop, while loop will restart
-                                        else:
-                                            # Cannot upgrade ship (insufficient minerals or other issue)
-                                            self.max_room_upgrades = True
-                                            hit_blocker = True
-                                            break
+                                if blocker:
+                                    logging.info(f'[{self.info["@Name"]}] Blocker encountered: {blocker}')
+                                    self.max_room_upgrades = True
+                                    return True
                                 self.collectAllResources()
-                                # Refresh ship data so the upgraded room shows as "Upgrading"
-                                self.getShipByUserId()
-                                shipByUserId = getattr(self, "shipByUserId", None)
-                                if not shipByUserId:
-                                    logging.info("Ship data unavailable after upgrade; stopping room upgrades.")
-                                    hit_blocker = True
-                                    break
-                                rooms = _extract_collection(shipByUserId, "Room")
-                                upgraded_any = True
-                    if hit_blocker:
-                        break
+                                requested_this_pass = True
 
-                # Stop if: no upgrades this pass, hit max concurrent, or no more resources
-                if not upgraded_any or hit_blocker:
-                    if not upgraded_any and not hit_blocker:
-                        logging.info("No more rooms to upgrade or insufficient resources.")
+                if restart_scan:
+                    continue
+                if not requested_this_pass:
+                    logging.info("No more rooms to upgrade or insufficient resources.")
                     break
 
             return True

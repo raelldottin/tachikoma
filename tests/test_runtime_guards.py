@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from sdk.client import Client, _extract_collection
+from sdk.client import ROOM_UPGRADE_BLOCKERS, SHIP_UPGRADE_REQUIRED, Client, _extract_collection
 from sdk.device import Device
 
 
@@ -257,35 +257,15 @@ class TestTargetedRoomUpgrade(unittest.TestCase):
         self.assertEqual(method, "POST")
         self.assertIn("RoomService/UpgradeRoom2?roomId=7&upgradeRoomDesignId=71&", url)
 
+    def test_upgrade_ship_issues_one_upgradeship_request(self):
+        self.client.request = MagicMock(return_value="raw")  # type: ignore
+        self.assertEqual(self.client.upgradeShip("2"), "raw")
+        url, method = self.client.request.call_args.args
+        self.assertEqual(method, "POST")
+        self.assertIn("ShipService/UpgradeShip?shipDesignId=2&", url)
+
     def test_upgrade_rooms_selection_is_unchanged(self):
         self.client.request = MagicMock(return_value=MagicMock(text="<UpgradeRoom2/>"))  # type: ignore
-        # Simulate ship data refresh after upgrade: first call returns room 1 as Normal,
-        # second call returns room 1 as Upgrading so it's not eligible again.
-        ship_data_first = {
-            "Ship": {"Rooms": {"Room": [
-                {"@RoomId": "1", "@RoomStatus": "Normal", "@RoomDesignId": "100"},
-                {"@RoomId": "2", "@RoomStatus": "Normal", "@RoomDesignId": "200"},
-                {"@RoomId": "3", "@RoomStatus": "Upgrading", "@RoomDesignId": "100"},
-            ]}}
-        }
-        ship_data_after = {
-            "Ship": {"Rooms": {"Room": [
-                {"@RoomId": "1", "@RoomStatus": "Upgrading", "@RoomDesignId": "100"},
-                {"@RoomId": "2", "@RoomStatus": "Normal", "@RoomDesignId": "200"},
-                {"@RoomId": "3", "@RoomStatus": "Upgrading", "@RoomDesignId": "100"},
-            ]}}
-        }
-        call_count = 0
-
-        def mock_get_ship():
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
-                self.client.shipByUserId = ship_data_first
-            else:
-                self.client.shipByUserId = ship_data_after
-
-        self.client.getShipByUserId = mock_get_ship
         with patch.object(self.client, "upgradeRoom", wraps=self.client.upgradeRoom) as targeted:
             self.assertTrue(self.client.upgradeRooms())
         # Room 2 is unaffordable (gas 900 > 500) and room 3 is already upgrading.
@@ -293,30 +273,43 @@ class TestTargetedRoomUpgrade(unittest.TestCase):
         self.assertEqual(self.client.request.call_count, 1)
         self.client.collectAllResources.assert_called_once()
 
-    def test_upgrade_rooms_still_stops_at_concurrency_limit(self):
+    def test_a_rejected_upgrade_is_not_resent(self):
+        # The ship never shows the upgrade (an unrecognised refusal): the loop must still end, asking once per room.
         self.client.gasTotal = 5000
-        self.client.request = MagicMock(
-            return_value=MagicMock(
-                text="You cannot build or upgrade more rooms. Please wait for other constructions to be completed."
-            )
-        )  # type: ignore
+        self.client.request = MagicMock(return_value=MagicMock(text='<UpgradeRoom2 errorMessage="Ship level too low."/>'))  # type: ignore
         with patch.object(self.client, "upgradeRoom", wraps=self.client.upgradeRoom) as targeted:
             self.assertTrue(self.client.upgradeRooms())
-        targeted.assert_called_once_with("1", "101")
-        self.assertTrue(self.client.max_room_upgrades)
-        self.client.collectAllResources.assert_not_called()
+        self.assertEqual(sorted(call.args for call in targeted.call_args_list), [("1", "101"), ("2", "201")])
+        self.assertEqual(self.client.listUpgradingRooms.call_count, 2)
 
-    def test_upgrade_rooms_stops_at_ship_upgrade_required(self):
-        self.client.gasTotal = 5000
-        self.client.mineralTotal = 100  # Not enough for ship upgrade
-        self.client.request = MagicMock(
-            return_value=MagicMock(text="You need to upgrade your ship first.")
-        )  # type: ignore
+    def test_a_collection_can_fund_another_upgrade(self):
+        self.client.request = MagicMock(return_value=MagicMock(text="<UpgradeRoom2/>"))  # type: ignore
+        self.client.collectAllResources = MagicMock(side_effect=lambda: setattr(self.client, "gasTotal", 1000))  # type: ignore
         with patch.object(self.client, "upgradeRoom", wraps=self.client.upgradeRoom) as targeted:
             self.assertTrue(self.client.upgradeRooms())
-        targeted.assert_called_once_with("1", "101")
+        self.assertEqual([call.args for call in targeted.call_args_list], [("1", "101"), ("2", "201")])
+
+    def test_upgrade_rooms_stops_at_a_blocker(self):
+        for blocker in ROOM_UPGRADE_BLOCKERS:
+            with self.subTest(blocker=blocker):
+                self.setUp()
+                self.client.gasTotal = 5000
+                self.client.request = MagicMock(return_value=MagicMock(text=blocker))  # type: ignore
+                with patch.object(self.client, "upgradeRoom", wraps=self.client.upgradeRoom) as targeted:
+                    self.assertTrue(self.client.upgradeRooms())
+                targeted.assert_called_once_with("1", "101")
+                self.assertTrue(self.client.max_room_upgrades)
+                self.client.collectAllResources.assert_not_called()
+
+    def test_a_ship_upgrade_that_does_not_help_still_ends_the_loop(self):
+        # The hull upgrade reports success but the room is still refused: one hull upgrade per run, then stop.
+        self.client.request = MagicMock(return_value=MagicMock(text=SHIP_UPGRADE_REQUIRED))  # type: ignore
+        self.client._tryUpgradeShip = MagicMock(return_value=True)  # type: ignore
+        with patch.object(self.client, "upgradeRoom", wraps=self.client.upgradeRoom) as targeted:
+            self.assertTrue(self.client.upgradeRooms())
+        self.assertEqual([call.args for call in targeted.call_args_list], [("1", "101"), ("1", "101")])
+        self.client._tryUpgradeShip.assert_called_once()
         self.assertTrue(self.client.max_room_upgrades)
-        self.client.collectAllResources.assert_not_called()
 
     def test_upgrade_rooms_triggers_ship_upgrade_when_minerals_sufficient(self):
         self.client.gasTotal = 5000

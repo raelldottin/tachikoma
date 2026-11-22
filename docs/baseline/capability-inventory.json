@@ -618,6 +618,15 @@
       ]
     },
     {
+      "name": "upgradeShip",
+      "pillar": "B",
+      "kind": "mutating",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_runtime_guards.py"
+      ]
+    },
+    {
       "name": "placeRoom",
       "pillar": "B",
       "kind": "mutating",

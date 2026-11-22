@@ -17,7 +17,7 @@ jobs:
   tests:
     name: ${{ matrix.os }} / Python ${{ matrix.python }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 90
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -37,7 +37,7 @@ jobs:
       - run: python -m pip install -r .github/requirements-ci.txt
       - name: Full mocked application suite
         if: runner.os != 'Windows'
-        run: python -u scripts/ci.py test --verbose --names tests.test_runtime_guards.TestTargetedRoomUpgrade tests.test_runtime_guards.TestRoomDesignShapeGuards
+        run: python scripts/ci.py test
       - name: Portable Windows smoke suite
         if: runner.os == 'Windows'
         run: >-
