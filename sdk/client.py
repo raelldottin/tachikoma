@@ -203,6 +203,7 @@ class Client(object):
     dailyRewardArgument = 0
     credits = 0
     max_room_upgrades = False
+    upgradeShipReply = None  # the sanitized summary of the last UpgradeShip reply
     info = {"@Name": ""}
     user: User
 
@@ -2400,83 +2401,139 @@ class Client(object):
         url = f"https://api.pixelstarships.com/RoomService/UpgradeRoom2?roomId={roomId}&upgradeRoomDesignId={upgradeRoomDesignId}&accessToken={self.accessToken}"
         return self.request(url, "POST")
 
-    def upgradeShip(self, nextShipDesignId):
-        """Request a ship/hull upgrade (UpgradeShip) and return the raw response.
+    def upgradeShip(self, design_id):
+        """Request a hull upgrade to ``design_id`` (ShipService/UpgradeShip) and return the raw response.
 
-        This upgrades the ship to the next hull design. Requires sufficient minerals.
-        It performs no eligibility or cost checks of its own; callers decide.
+        Sent as a POST, like the client's other ship-changing calls, with the client's time as
+        ``clientDateTime``. It makes no eligibility or cost checks of its own; callers decide.
+        ``self.upgradeShipReply`` keeps a sanitized summary of the reply for the log and for any
+        caller that journals it (HTTP status, element names, error or message text; never the raw
+        body), built the way ``place_room_reply`` builds one for BuyRoom2. Nothing here decides whether the
+        upgrade happened: no reply to this call has been captured, so only a later ship read can.
         """
-        url = f"https://api.pixelstarships.com/ShipService/UpgradeShip?shipDesignId={nextShipDesignId}&accessToken={self.accessToken}"
-        return self.request(url, "POST")
+        url = (
+            f"{self.baseUrl}/ShipService/UpgradeShip?shipDesignId={design_id}"
+            f"&accessToken={self.accessToken}&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
+        )
+        self.upgradeShipReply = None  # never left over from an earlier call
+        r = self.request(url, "POST")
+        summary = place_room_reply(r)
+        summary.pop("success_shape", None)  # a BuyRoom2 notion; a ship read decides a hull upgrade
+        self.upgradeShipReply = summary
+        return r
+
+    def nextHullDesign(self):
+        """The ``ShipDesign`` record the ship's hull upgrades to next, or None (the reason is logged).
+
+        Pixel Starships has one hull design per race per level, so the next hull is the design one
+        level above the ship's whose ``@RaceId`` (and ``@ShipType``, when the current design has one)
+        matches the ship's current design. Reads only the loaded ``shipByUserId`` and ``shipDesigns``;
+        it sends nothing. Returns None when the ship or its current design is unknown, the race or
+        level is unknown, the ship's level disagrees with its design's, or there is not exactly one
+        candidate.
+        """
+        name = self.info.get("@Name", "")
+        ship = self._shipRecord()
+        if not ship:
+            logging.info(f"[{name}] No next hull: ship data unavailable.")
+            return None
+        designs = _extract_collection(getattr(self, "shipDesigns", None), "ShipDesign")
+        current_id = ship.get("@ShipDesignId")
+        current = [design for design in designs if current_id and design.get("@ShipDesignId") == current_id]
+        if len(current) != 1:
+            logging.info(f"[{name}] No next hull: {len(current)} design records for the ship's design {current_id}.")
+            return None
+        race = (current[0].get("@RaceId") or "").strip()
+        if not race:
+            logging.info(f"[{name}] No next hull: the race of the ship's design {current_id} is unknown.")
+            return None
+
+        def as_level(value):
+            text = str(value).strip() if value is not None else ""
+            return int(text) if text.isdigit() else None
+
+        level = as_level(current[0].get("@ShipLevel"))
+        ship_level = as_level(ship.get("@ShipLevel"))
+        if level is None:
+            level = ship_level
+        if level is None:
+            logging.info(f"[{name}] No next hull: the ship's level is unknown.")
+            return None
+        if ship_level is not None and ship_level != level:
+            logging.info(f"[{name}] No next hull: the ship is level {ship_level} but its design {current_id} "
+                         f"is level {level}.")
+            return None
+        ship_type = (current[0].get("@ShipType") or "").strip()
+        candidates = [
+            design for design in designs
+            if as_level(design.get("@ShipLevel")) == level + 1
+            and (design.get("@RaceId") or "").strip() == race
+            and (not ship_type or (design.get("@ShipType") or "").strip() == ship_type)
+        ]
+        if len(candidates) != 1:
+            ids = ", ".join(str(design.get("@ShipDesignId")) for design in candidates)
+            logging.info(
+                f"[{name}] No next hull: {len(candidates)} level {level + 1} hull designs for race {race}"
+                + (f" ({ids})." if ids else ".")
+            )
+            return None
+        return candidates[0]
 
     def _tryUpgradeShip(self):
-        """Attempt to upgrade the ship to the next hull level if enough minerals available.
+        """Request one hull upgrade to the next hull of the ship's race, and confirm it with a ship read.
 
-        Returns True if ship was upgraded, False otherwise.
+        Returns True only when a ship read after the request shows the target design as the ship's
+        design (an instant upgrade) or as its ``@UpgradeShipDesignId`` (an upgrade under way). A
+        reply alone never counts: an unchanged ship means the upgrade did not happen.
         """
+        name = self.info.get("@Name", "")
         try:
-            # Get current ship data
-            if not hasattr(self, "shipByUserId") or not self.shipByUserId:
-                if not self.getShipByUserId():
-                    return False
+            if not getattr(self, "shipByUserId", None) and not self.getShipByUserId():
+                return False
             ship = self._shipRecord()
             if not ship:
                 return False
-
-            current_design_id = ship.get("@ShipDesignId", "")
-            current_level = int(ship.get("@ShipLevel", 0))
-
-            # Load ship designs if not already loaded
-            if not hasattr(self, "shipDesigns") or not self.shipDesigns:
-                if not self.listAllDesigns4():
-                    return False
-
-            designs = self.shipDesigns.get("ShipDesign", [])
-            if isinstance(designs, dict):
-                designs = [designs]
-
-            # Find next hull design (level + 1)
-            next_level = current_level + 1
-            next_design = None
-            for design in designs:
-                if int(design.get("@ShipLevel", 0)) == next_level:
-                    next_design = design
-                    break
-
-            if not next_design:
-                logging.warning(f'[{self.info["@Name"]}] No ship design found for level {next_level}')
+            if ship.get("@UpgradeShipDesignId") not in (None, "", "0"):
+                logging.info(f"[{name}] A hull upgrade is already under way; not requesting another.")
+                return False
+            if not _extract_collection(getattr(self, "shipDesigns", None), "ShipDesign") and not self.listAllDesigns4():
+                logging.info(f"[{name}] Hull designs unavailable; not upgrading the ship.")
                 return False
 
-            next_design_id = next_design.get("@ShipDesignId", "")
-            mineral_cost_str = next_design.get("@MineralCost", "0")
-            try:
-                mineral_cost = int(mineral_cost_str)
-            except (ValueError, TypeError):
-                logging.warning(f'[{self.info["@Name"]}] Invalid mineral cost for ship design {next_design_id}: {mineral_cost_str}')
+            design = self.nextHullDesign()
+            if design is None:
                 return False
-
-            # Check if we have enough minerals
+            target = design.get("@ShipDesignId")
+            if not target:
+                logging.warning(f"[{name}] The next hull design has no @ShipDesignId; not upgrading.")
+                return False
+            cost_text = str(design.get("@MineralCost") or "").strip()
+            if not cost_text.isdigit():
+                logging.warning(f"[{name}] Invalid mineral cost for hull design {target}; not upgrading.")
+                return False
+            mineral_cost = int(cost_text)
             current_minerals = int(self.mineralTotal) if self.mineralTotal else 0
             if current_minerals < mineral_cost:
                 logging.info(
-                    f'[{self.info["@Name"]}] Insufficient minerals for ship upgrade: need {mineral_cost}, have {current_minerals}'
+                    f"[{name}] Insufficient minerals for hull upgrade to design {target}: "
+                    f"need {mineral_cost}, have {current_minerals}."
                 )
                 return False
 
-            # Attempt ship upgrade
-            logging.info(
-                f'[{self.info["@Name"]}] Upgrading ship from level {current_level} to {next_level} (cost: {mineral_cost} minerals)'
-            )
-            r = self.upgradeShip(next_design_id)
-            if r and "errorMessage" not in r.text:
-                logging.info(f'[{self.info["@Name"]}] Ship upgrade successful!')
-                return True
-            else:
-                logging.warning(f'[{self.info["@Name"]}] Ship upgrade failed: {r.text if r else "No response"}')
+            logging.info(f"[{name}] Requesting hull upgrade to design {target} (cost: {mineral_cost} minerals).")
+            self.upgradeShip(target)
+            reply = redact_secrets(str(getattr(self, "upgradeShipReply", None)))
+            if not self.getShipByUserId():
+                logging.warning(f"[{name}] Could not read the ship after the hull upgrade request; reply {reply}.")
                 return False
-
+            ship = self._shipRecord() or {}
+            if target in (ship.get("@UpgradeShipDesignId"), ship.get("@ShipDesignId")):
+                logging.info(f"[{name}] Hull upgrade to design {target} confirmed by a ship read.")
+                return True
+            logging.warning(f"[{name}] Ship not upgraded to hull design {target}; reply {reply}.")
+            return False
         except Exception:
-            logging.exception(f'[{self.info["@Name"]}] Error attempting ship upgrade', exc_info=True)
+            logging.exception(f"[{name}] Error attempting ship upgrade", exc_info=True)
             return False
 
     def placeRoom(self, roomDesignId, row, column):

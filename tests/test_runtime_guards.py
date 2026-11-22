@@ -400,6 +400,223 @@ class TestTargetedRoomUpgrade(unittest.TestCase):
         self.client._tryUpgradeShip.assert_called_once()
 
 
+def _ship_reply(design_id="20", level="2", upgrade_design_id="0"):
+    """A GetShipByUserId reply in the live shape (see tests/fixtures/live_sanitized/rooms/buy_room2.json)."""
+    body = (
+        '<ShipService><GetShipByUserId><Ship ShipId="SHIP-A" ShipDesignId="{}" ShipLevel="{}" '
+        'UpgradeShipDesignId="{}" UpgradeStartDate="2026-10-19T19:15:13" OriginalRaceId="2">'
+        '<Rooms><Room RoomId="1" RoomDesignId="100" RoomStatus="Normal"/></Rooms></Ship>'
+        "</GetShipByUserId></ShipService>"
+    ).format(design_id, level, upgrade_design_id).encode()
+    return MagicMock(content=body, text=body.decode(), status_code=200)
+
+
+class TestShipUpgrade(unittest.TestCase):
+    """Regression: the hull upgrade picks the ship's race, and only a ship read counts it as done."""
+
+    # Two races, one hull design per race per level; the ship is the race-2 level-2 hull (design 20).
+    SHIP_DESIGNS = {"ShipDesign": [
+        {"@ShipDesignId": "10", "@ShipLevel": "1", "@RaceId": "2", "@MineralCost": "0"},
+        {"@ShipDesignId": "20", "@ShipLevel": "2", "@RaceId": "2", "@MineralCost": "1000"},
+        {"@ShipDesignId": "31", "@ShipLevel": "3", "@RaceId": "1", "@MineralCost": "4000"},
+        {"@ShipDesignId": "32", "@ShipLevel": "3", "@RaceId": "2", "@MineralCost": "5000"},
+        {"@ShipDesignId": "41", "@ShipLevel": "4", "@RaceId": "2", "@MineralCost": "9000"},
+    ]}
+
+    def setUp(self):
+        self.device = MagicMock(spec=Device)  # type: ignore
+        self.device.languageKey = "en"
+        self.client = Client(device=self.device)
+        self.client.accessToken = "00000000-1111-2222-3333-444444444444"
+        self.client.user = MagicMock(id="1")
+        self.client.info = {"@Name": ""}
+        self.client.shipDesigns = {"ShipDesign": [dict(d) for d in self.SHIP_DESIGNS["ShipDesign"]]}
+        self.client.listAllDesigns4 = MagicMock(return_value=True)  # type: ignore
+        self.client.mineralTotal = 6000
+        self.client.shipByUserId = None
+        self.sent = []
+        self.upgrade_reply = MagicMock(content=b"<ShipService><UpgradeShip/></ShipService>",
+                                       text="<ShipService><UpgradeShip/></ShipService>", status_code=200)
+        self.ship_after = _ship_reply()
+
+        def fake_request(url, method, data=None):
+            self.sent.append((method, url))
+            if "GetShipByUserId" in url:
+                ship = _ship_reply() if not any("UpgradeShip?" in u for _, u in self.sent) else self.ship_after
+                return ship
+            if "UpgradeShip?" in url:
+                return self.upgrade_reply
+            raise AssertionError(f"unexpected request {url.split('?')[0]}")
+
+        self.client.request = MagicMock(side_effect=fake_request)  # type: ignore
+
+    def upgrade_requests(self):
+        return [(method, url) for method, url in self.sent if "UpgradeShip?" in url]
+
+    # nextHullDesign
+
+    def test_next_hull_is_the_one_of_the_ships_race(self):
+        self.client.getShipByUserId()
+        self.assertEqual(self.client.nextHullDesign()["@ShipDesignId"], "32")  # not 31, the first level-3 record
+
+    def test_a_single_design_record_is_read_without_error(self):
+        self.client.getShipByUserId()
+        self.client.shipDesigns = {"ShipDesign": {"@ShipDesignId": "20", "@ShipLevel": "2", "@RaceId": "2"}}
+        self.assertIsNone(self.client.nextHullDesign())  # no level-3 design at all
+
+    def test_ambiguous_next_hull_is_not_picked(self):
+        self.client.getShipByUserId()
+        self.client.shipDesigns["ShipDesign"].append(
+            {"@ShipDesignId": "33", "@ShipLevel": "3", "@RaceId": "2", "@MineralCost": "5000"})
+        with self.assertLogs(level="INFO") as logs:
+            self.assertIsNone(self.client.nextHullDesign())
+        self.assertIn("2 level 3 hull designs for race 2", "\n".join(logs.output))
+
+    def test_unknown_race_is_not_guessed(self):
+        self.client.getShipByUserId()
+        del self.client.shipDesigns["ShipDesign"][1]["@RaceId"]
+        with self.assertLogs(level="INFO") as logs:
+            self.assertIsNone(self.client.nextHullDesign())
+        self.assertIn("race of the ship's design 20 is unknown", "\n".join(logs.output))
+
+    def test_missing_current_design_is_not_guessed(self):
+        self.client.getShipByUserId()
+        del self.client.shipDesigns["ShipDesign"][1]
+        self.assertIsNone(self.client.nextHullDesign())
+
+    def test_no_ship_no_pick(self):
+        self.assertIsNone(self.client.nextHullDesign())
+
+    def test_ship_level_that_disagrees_with_its_design_is_not_guessed(self):
+        self.client.shipByUserId = {"ShipService": {"GetShipByUserId": {"Ship": {
+            "@ShipDesignId": "20", "@ShipLevel": "3", "@UpgradeShipDesignId": "0"}}}}
+        self.assertIsNone(self.client.nextHullDesign())  # not design 41, a two-level jump
+
+    def test_other_ship_types_of_the_same_race_and_level_are_ignored(self):
+        self.client.getShipByUserId()
+        for design in self.client.shipDesigns["ShipDesign"]:
+            design["@ShipType"] = "Player"
+        self.client.shipDesigns["ShipDesign"].append(
+            {"@ShipDesignId": "90", "@ShipLevel": "3", "@RaceId": "2", "@ShipType": "Ai", "@MineralCost": "0"})
+        self.assertEqual(self.client.nextHullDesign()["@ShipDesignId"], "32")
+
+    # upgradeShip
+
+    def test_upgrade_ship_is_a_post_with_design_and_client_time(self):
+        self.assertIs(self.client.upgradeShip("32"), self.upgrade_reply)
+        (method, url), = self.sent
+        self.assertEqual(method, "POST")
+        path, _, query = url.partition("?")
+        self.assertTrue(path.endswith("/ShipService/UpgradeShip"))
+        params = dict(part.split("=", 1) for part in query.split("&"))
+        self.assertEqual(params["shipDesignId"], "32")
+        self.assertRegex(params["clientDateTime"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d$")
+        self.assertIn("accessToken", params)
+
+    def test_upgrade_ship_keeps_a_sanitized_reply_summary(self):
+        body = b'<ShipService><UpgradeShip errorMessage="Not enough minerals."/></ShipService>'
+        self.upgrade_reply = MagicMock(content=body, text=body.decode(), status_code=200)
+        self.client.upgradeShip("32")
+        summary = self.client.upgradeShipReply
+        self.assertEqual(summary["http_status"], 200)
+        self.assertEqual(summary["elements"][:2], ["ShipService", "UpgradeShip"])
+        self.assertEqual(summary["messages"], [{"attribute": "errorMessage", "text": "Not enough minerals."}])
+        self.assertNotIn("success_shape", summary)
+
+    # _tryUpgradeShip
+
+    def test_upgrade_started_counts(self):
+        self.ship_after = _ship_reply(upgrade_design_id="32")
+        self.assertTrue(self.client._tryUpgradeShip())
+        self.assertEqual(len(self.upgrade_requests()), 1)
+        self.assertIn("shipDesignId=32&", self.upgrade_requests()[0][1])
+
+    def test_instant_upgrade_counts(self):
+        self.ship_after = _ship_reply(design_id="32", level="3")
+        self.assertTrue(self.client._tryUpgradeShip())
+
+    def test_success_looking_reply_with_unchanged_ship_does_not_count(self):
+        # The #275 defect: any reply without errorMessage counted as an upgrade.
+        with self.assertLogs(level="WARNING") as logs:
+            self.assertFalse(self.client._tryUpgradeShip())
+        self.assertEqual(len(self.upgrade_requests()), 1)
+        self.assertIn("Ship not upgraded to hull design 32", "\n".join(logs.output))
+        self.assertIn("'elements': ['ShipService', 'UpgradeShip']", "\n".join(logs.output))
+        self.assertNotIn(self.client.accessToken, "\n".join(logs.output))  # the reply summary, never the URL
+        self.assertEqual(self.sent[-1][1].split("?")[0].rsplit("/", 1)[-1], "GetShipByUserId")
+
+    def test_an_upgrade_to_another_design_does_not_count(self):
+        self.ship_after = _ship_reply(upgrade_design_id="31")
+        self.assertFalse(self.client._tryUpgradeShip())
+
+    def test_unreadable_ship_after_request_does_not_count(self):
+        self.ship_after = MagicMock(content=b"<ShipService/>", text="<ShipService/>", status_code=200)
+        self.assertFalse(self.client._tryUpgradeShip())
+        self.assertEqual(len(self.upgrade_requests()), 1)
+
+    def test_insufficient_minerals_sends_nothing(self):
+        self.client.mineralTotal = 4999
+        self.assertFalse(self.client._tryUpgradeShip())
+        self.assertEqual(self.upgrade_requests(), [])
+
+    def test_wrong_race_cost_is_not_used(self):
+        # Enough for race 1's level-3 hull (4000) but not race 2's (5000): nothing is sent.
+        self.client.mineralTotal = 4500
+        self.assertFalse(self.client._tryUpgradeShip())
+        self.assertEqual(self.upgrade_requests(), [])
+
+    def test_ambiguous_or_unknown_race_sends_nothing(self):
+        del self.client.shipDesigns["ShipDesign"][1]["@RaceId"]
+        self.assertFalse(self.client._tryUpgradeShip())
+        self.assertEqual(self.upgrade_requests(), [])
+
+    def test_designs_without_ship_designs_are_reloaded(self):
+        self.client.shipDesigns = {"errorMessage": "stale"}
+        self.assertFalse(self.client._tryUpgradeShip())
+        self.client.listAllDesigns4.assert_called_once()
+        self.assertEqual(self.upgrade_requests(), [])
+
+    def test_unparseable_cost_sends_nothing(self):
+        for cost in ("-1", "", "5,000"):
+            with self.subTest(cost=cost):
+                self.sent.clear()
+                self.client.shipDesigns["ShipDesign"][3]["@MineralCost"] = cost
+                self.assertFalse(self.client._tryUpgradeShip())
+                self.assertEqual(self.upgrade_requests(), [])
+
+    def test_hull_upgrade_already_under_way_sends_nothing(self):
+        self.client.shipByUserId = {"ShipService": {"GetShipByUserId": {"Ship": {
+            "@ShipDesignId": "20", "@ShipLevel": "2", "@UpgradeShipDesignId": "32"}}}}
+        self.assertFalse(self.client._tryUpgradeShip())
+        self.assertEqual(self.upgrade_requests(), [])
+
+    # upgradeRooms with the real _tryUpgradeShip
+
+    def room_setup(self):
+        self.client.roomDesigns = {"RoomDesign": [
+            {"@RoomDesignId": "100", "@RoomName": "Engine"},
+            {"@RoomDesignId": "101", "@RoomName": "Engine II", "@UpgradeFromRoomDesignId": "100",
+             "@PriceString": "mineral:100"},
+        ]}
+        self.client.collectAllResources = MagicMock()  # type: ignore
+        self.client.upgradeRoom = MagicMock(return_value=MagicMock(text=SHIP_UPGRADE_REQUIRED))  # type: ignore
+
+    def test_upgrade_rooms_stops_when_the_hull_upgrade_is_not_confirmed(self):
+        self.room_setup()
+        self.assertTrue(self.client.upgradeRooms())
+        self.assertEqual(len(self.upgrade_requests()), 1)
+        self.client.upgradeRoom.assert_called_once_with("1", "101")  # no rescan
+        self.assertTrue(self.client.max_room_upgrades)
+
+    def test_upgrade_rooms_rescans_once_after_a_confirmed_hull_upgrade(self):
+        self.room_setup()
+        self.ship_after = _ship_reply(upgrade_design_id="32")
+        self.assertTrue(self.client.upgradeRooms())
+        self.assertEqual(len(self.upgrade_requests()), 1)  # one hull attempt per run
+        self.assertEqual(self.client.upgradeRoom.call_count, 2)
+        self.assertTrue(self.client.max_room_upgrades)
+
+
 class TestResearchOutcomeClassification(unittest.TestCase):
     """Test research lab upgrade skip vs failure classification (R4)."""
 
