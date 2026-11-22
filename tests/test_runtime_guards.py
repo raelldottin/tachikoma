@@ -308,6 +308,7 @@ class TestTargetedRoomUpgrade(unittest.TestCase):
 
     def test_upgrade_rooms_stops_at_ship_upgrade_required(self):
         self.client.gasTotal = 5000
+        self.client.mineralTotal = 100  # Not enough for ship upgrade
         self.client.request = MagicMock(
             return_value=MagicMock(text="You need to upgrade your ship first.")
         )  # type: ignore
@@ -316,6 +317,94 @@ class TestTargetedRoomUpgrade(unittest.TestCase):
         targeted.assert_called_once_with("1", "101")
         self.assertTrue(self.client.max_room_upgrades)
         self.client.collectAllResources.assert_not_called()
+
+    def test_upgrade_rooms_triggers_ship_upgrade_when_minerals_sufficient(self):
+        self.client.gasTotal = 5000
+        self.client.mineralTotal = 5000  # Enough for ship upgrade
+        # Set up room designs with ship upgrade cost
+        self.client.roomDesigns = {
+            "RoomDesign": [
+                {"@RoomDesignId": "100", "@RoomName": "Engine"},
+                {"@RoomDesignId": "101", "@RoomName": "Engine II", "@UpgradeFromRoomDesignId": "100",
+                 "@PriceString": "mineral:100"},
+            ]
+        }
+        # Set up ship designs with next hull level
+        self.client.shipDesigns = {
+            "ShipDesign": [
+                {"@ShipDesignId": "1", "@ShipLevel": "1", "@MineralCost": "0"},
+                {"@ShipDesignId": "2", "@ShipLevel": "2", "@MineralCost": "1000"},
+            ]
+        }
+        # Initial ship data (level 1)
+        ship_data_first = {
+            "ShipService": {
+                "GetShipByUserId": {
+                    "Ship": {
+                        "@ShipId": "SHIP-A",
+                        "@ShipDesignId": "1",
+                        "@ShipLevel": "1",
+                        "@MineralCost": "0",
+                        "Rooms": {"Room": [{"@RoomId": "1", "@RoomDesignId": "100", "@RoomStatus": "Normal"}]}
+                    }
+                }
+            }
+        }
+        # Ship data after ship upgrade but before room upgrade (room still Normal, ship level 2)
+        ship_data_after_ship_upgrade = {
+            "ShipService": {
+                "GetShipByUserId": {
+                    "Ship": {
+                        "@ShipId": "SHIP-A",
+                        "@ShipDesignId": "2",
+                        "@ShipLevel": "2",
+                        "@MineralCost": "1000",
+                        "Rooms": {"Room": [{"@RoomId": "1", "@RoomDesignId": "100", "@RoomStatus": "Normal"}]}
+                    }
+                }
+            }
+        }
+        # Ship data after room upgrade (room now Upgrading)
+        ship_data_after_room_upgrade = {
+            "ShipService": {
+                "GetShipByUserId": {
+                    "Ship": {
+                        "@ShipId": "SHIP-A",
+                        "@ShipDesignId": "2",
+                        "@ShipLevel": "2",
+                        "@MineralCost": "1000",
+                        "Rooms": {"Room": [{"@RoomId": "1", "@RoomDesignId": "101", "@RoomStatus": "Upgrading"}]}
+                    }
+                }
+            }
+        }
+        call_count = 0
+
+        def mock_get_ship():
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                self.client.shipByUserId = ship_data_first
+            elif call_count == 2:
+                self.client.shipByUserId = ship_data_after_ship_upgrade
+            else:
+                self.client.shipByUserId = ship_data_after_room_upgrade
+
+        self.client.getShipByUserId = mock_get_ship
+        self.client.listAllDesigns4 = MagicMock(return_value=True)  # type: ignore
+        # Mock _tryUpgradeShip to return True (successful ship upgrade)
+        self.client._tryUpgradeShip = MagicMock(return_value=True)  # type: ignore
+        # Mock upgradeRoom to return ship upgrade required on first call, success on second
+        upgrade_room_mock = MagicMock(side_effect=[
+            MagicMock(text="You need to upgrade your ship first."),
+            MagicMock(text="<RoomService><UpgradeRoom2><Room @RoomId=\"1\" @RoomDesignId=\"101\" @RoomStatus=\"Upgrading\"/></UpgradeRoom2></RoomService>"),
+        ])
+        self.client.upgradeRoom = upgrade_room_mock  # type: ignore
+        self.assertTrue(self.client.upgradeRooms())
+        # upgradeRoom should be called twice: once fails with ship upgrade required, once succeeds after ship upgrade
+        self.assertEqual(upgrade_room_mock.call_count, 2)
+        upgrade_room_mock.assert_any_call("1", "101")
+        self.client._tryUpgradeShip.assert_called_once()
 
 
 class TestResearchOutcomeClassification(unittest.TestCase):
