@@ -91,6 +91,7 @@ REVIEW_PENDING = "pending"
 
 # --- Reads -----------------------------------------------------------------------------------------
 
+
 @dataclass(frozen=True)
 class CaptureRead:
     """One response to capture: the file stem, the server endpoint, how it is read and where it is held.
@@ -113,30 +114,60 @@ class CaptureRead:
 
 
 CAPTURE_READS: tuple[CaptureRead, ...] = (
-    CaptureRead("user_login", "DeviceLogin17", None, "info", wrap="User",
-                note="the User record of the login response, as Client.login holds it (the UserLogin wrapper is not "
-                     "kept)"),
-    CaptureRead("get_latest_version3", "GetLatestVersion3", None, "latestVersion",
-                note="the server settings Client.login read"),
+    CaptureRead(
+        "user_login",
+        "DeviceLogin17",
+        None,
+        "info",
+        wrap="User",
+        note="the User record of the login response, as Client.login holds it (the UserLogin wrapper is not kept)",
+    ),
+    CaptureRead(
+        "get_latest_version3", "GetLatestVersion3", None, "latestVersion", note="the server settings Client.login read"
+    ),
     CaptureRead("get_ship_by_user_id", "GetShipByUserId", "getShipByUserId", "shipByUserId"),
-    CaptureRead("list_all_characters_of_user", "ListAllCharactersOfUser", "listAllCharactersOfUser",
-                "allCharactersOfUser"),
+    CaptureRead(
+        "list_all_characters_of_user", "ListAllCharactersOfUser", "listAllCharactersOfUser", "allCharactersOfUser"
+    ),
     CaptureRead("list_items_of_a_ship", "ListItemsOfAShip", "listItemsOfAShip", "itemsOfAShip"),
     CaptureRead("find_user_ranking", "FindUserRanking", "findUserRanking", "userRanking"),
     CaptureRead("list_pvp_battles2", "ListPvPBattles2", "listPvPBattles2", "pvpBattles", {"take": 25}),
+    CaptureRead(
+        "create_star_battle5",
+        "CreateStarBattle5",
+        "createStarBattle5Auto",
+        "createStarBattle5Result",
+        note="PvP matchmaking response with opponent details; uses current ship HP",
+    ),
     # Game data for room placement (SPEC-13, S13-R1): room sizes, the ship's interior grid and per-level limits.
     CaptureRead("list_room_designs2", "ListRoomDesigns2", "listRoomDesigns2", "roomDesigns"),
-    CaptureRead("ship_designs", "ListAllDesigns4 (ShipDesigns)", "listAllDesigns4", "shipDesigns", wrap="ShipDesigns",
-                note="the ShipDesigns part of ListAllDesigns4, as Client.listAllDesigns4 holds it"),
-    CaptureRead("room_design_purchases", "ListAllDesigns4 (RoomDesignPurchases)", None, "roomDesignPurchases",
-                wrap="RoomDesignPurchases", held_from="listAllDesigns4",
-                note="the RoomDesignPurchases part of the ListAllDesigns4 response read for ship_designs"),
+    CaptureRead(
+        "ship_designs",
+        "ListAllDesigns4 (ShipDesigns)",
+        "listAllDesigns4",
+        "shipDesigns",
+        wrap="ShipDesigns",
+        note="the ShipDesigns part of ListAllDesigns4, as Client.listAllDesigns4 holds it",
+    ),
+    CaptureRead(
+        "room_design_purchases",
+        "ListAllDesigns4 (RoomDesignPurchases)",
+        None,
+        "roomDesignPurchases",
+        wrap="RoomDesignPurchases",
+        held_from="listAllDesigns4",
+        note="the RoomDesignPurchases part of the ListAllDesigns4 response read for ship_designs",
+    ),
 )
 # A field value kept in the settings summary: a version number, nothing else.
 SETTINGS_VERSION_VALUE = re.compile(r"^[0-9]+(?:\.[0-9]+){1,3}[A-Za-z0-9]{0,4}$")
-SETTINGS_SUMMARY = CaptureRead("server_settings_fields", "GetLatestVersion3 (field names)", None, "latestVersion",
-                               note="field names of the server settings; values kept only when they look like a "
-                                    "version number")
+SETTINGS_SUMMARY = CaptureRead(
+    "server_settings_fields",
+    "GetLatestVersion3 (field names)",
+    None,
+    "latestVersion",
+    note="field names of the server settings; values kept only when they look like a version number",
+)
 # Every Client method the command calls after login, in call order.
 CAPTURE_METHODS: tuple[str, ...] = tuple(read.method for read in CAPTURE_READS if read.method)
 
@@ -213,8 +244,9 @@ def describe_findings(findings: Iterable[Finding]) -> str:
     lines: dict[str, list[int]] = {}
     for finding in findings:
         lines.setdefault(finding.kind, []).append(finding.line)
-    return "; ".join(f"{kind} (line {', '.join(str(n) for n in sorted(set(numbers)))})"
-                     for kind, numbers in sorted(lines.items()))
+    return "; ".join(
+        f"{kind} (line {', '.join(str(n) for n in sorted(set(numbers)))})" for kind, numbers in sorted(lines.items())
+    )
 
 
 # --- Sanitize (S03-R1) -----------------------------------------------------------------------------
@@ -232,8 +264,7 @@ STEP_LABELS = {
 }
 STEP_ORDER = ("body", "secret", USER, "name", "value", INSTANCE)
 # Id names that hold game data, kept as captured. Checked after USER and ``userstarsystemid``.
-GAME_DATA_ID_SUFFIXES = ("designid", "spriteid", "typeid", "raceid", "backgroundid", "missioneventid",
-                         "starsystemid")
+GAME_DATA_ID_SUFFIXES = ("designid", "spriteid", "typeid", "raceid", "backgroundid", "missioneventid", "starsystemid")
 # Instance ids whose role-prefixed forms (``AttackingShipId``, ``OwnerShipId``) share one set of labels.
 SHARED_INSTANCE_KINDS = ("ship", "alliance", "character", "item", "room")
 
@@ -322,7 +353,7 @@ def _flagged(value: str, scrub_text: Callable[[str], str]) -> bool:
 
 def split_mask(mask: str) -> str:
     """An all-digit interior mask in space-separated groups of ``MASK_GROUP`` digits (``join_mask`` undoes it)."""
-    return " ".join(mask[index:index + MASK_GROUP] for index in range(0, len(mask), MASK_GROUP))
+    return " ".join(mask[index : index + MASK_GROUP] for index in range(0, len(mask), MASK_GROUP))
 
 
 def join_mask(text: str) -> str:
@@ -330,8 +361,9 @@ def join_mask(text: str) -> str:
     return "".join(text.split())
 
 
-def sanitize_payload(payload: Any, placeholders: Placeholders,
-                     scrub_text: Callable[[str], str] = redact_secrets) -> tuple[Any, Counter]:
+def sanitize_payload(
+    payload: Any, placeholders: Placeholders, scrub_text: Callable[[str], str] = redact_secrets
+) -> tuple[Any, Counter]:
     """A sanitized copy of parsed ``payload`` and how many values each step replaced (see the module doc)."""
     counts: Counter = Counter()
 
@@ -419,9 +451,12 @@ class SanitizedCapture:
         return not self.findings
 
 
-def sanitize_capture(response: Any, placeholders: Placeholders,
-                     scrub_text: Callable[[str], str] = redact_secrets,
-                     path: str = "<capture>") -> SanitizedCapture:
+def sanitize_capture(
+    response: Any,
+    placeholders: Placeholders,
+    scrub_text: Callable[[str], str] = redact_secrets,
+    path: str = "<capture>",
+) -> SanitizedCapture:
     """Parse, sanitize, render and scan one response. Raises ``CaptureWithheld`` for an unparseable one."""
     parsed = parse_response(response)
     if not isinstance(parsed, Mapping) or not parsed:
@@ -429,12 +464,14 @@ def sanitize_capture(response: Any, placeholders: Placeholders,
     sanitized, counts = sanitize_payload(parsed, placeholders, scrub_text)
     text, extension = render(sanitized)
     counts["body"] = max(counts["body"], 1)
-    steps = tuple(STEP_LABELS[step] + (f" ({counts[step]})" if step != "body" else "")
-                  for step in STEP_ORDER if counts[step])
+    steps = tuple(
+        STEP_LABELS[step] + (f" ({counts[step]})" if step != "body" else "") for step in STEP_ORDER if counts[step]
+    )
     return SanitizedCapture(text, extension, steps, tuple(scan_capture_text(text, path)))
 
 
 # --- Capture one account ---------------------------------------------------------------------------
+
 
 @dataclass(frozen=True)
 class CaptureResult:
@@ -484,10 +521,15 @@ def _utc(clock: Callable[[], datetime]) -> datetime:
     return moment.astimezone(timezone.utc) if moment.tzinfo else moment.replace(tzinfo=timezone.utc)
 
 
-def capture_account(alias: str, client: Any, *, game_version: Optional[str],
-                    scrub_text: Callable[[str], str] = redact_secrets,
-                    clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
-                    reads: Sequence[CaptureRead] = CAPTURE_READS) -> list[CaptureResult]:
+def capture_account(
+    alias: str,
+    client: Any,
+    *,
+    game_version: Optional[str],
+    scrub_text: Callable[[str], str] = redact_secrets,
+    clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+    reads: Sequence[CaptureRead] = CAPTURE_READS,
+) -> list[CaptureResult]:
     """Capture every read in ``reads`` from a logged-in ``client``; one read's failure never stops the others.
 
     Error reasons go through ``scrub_text``; sanitizing and scanning happen
@@ -528,8 +570,9 @@ def _summary_name(name: str) -> str:
     return f"<name of {len(name)} characters>" if scan_capture_text(name) else name
 
 
-def settings_fields(alias: str, settings: Any, game_version: Optional[str],
-                    clock: Callable[[], datetime]) -> CaptureResult:
+def settings_fields(
+    alias: str, settings: Any, game_version: Optional[str], clock: Callable[[], datetime]
+) -> CaptureResult:
     """A summary of the server settings that is safe to share even when the settings are withheld.
 
     It lists each field's name and the length of its value; a value is kept
@@ -538,8 +581,9 @@ def settings_fields(alias: str, settings: Any, game_version: Optional[str],
     """
     captured_at = _utc(clock)
     if not isinstance(settings, Mapping) or not settings:
-        return CaptureResult(alias, SETTINGS_SUMMARY, "no data", captured_at, game_version,
-                             reason="login left no server settings")
+        return CaptureResult(
+            alias, SETTINGS_SUMMARY, "no data", captured_at, game_version, reason="login left no server settings"
+        )
     summary = {}
     for path, record in sorted(_setting_records(settings)):
         fields = {}
@@ -547,22 +591,44 @@ def settings_fields(alias: str, settings: Any, game_version: Optional[str],
             value = record[key]
             text = "" if value is None else str(value)
             fields[_summary_name(str(key).lstrip("@"))] = (
-                text if SETTINGS_VERSION_VALUE.match(text) else f"<{len(text)} characters>")
+                text if SETTINGS_VERSION_VALUE.match(text) else f"<{len(text)} characters>"
+            )
         summary[path] = fields
     text = json.dumps({"endpoint": "GetLatestVersion3", "fields": summary}, indent=2, sort_keys=True) + "\n"
     findings = scan_capture_text(text, f"{alias}/{SETTINGS_SUMMARY.stem}.json")
     if findings:
         rules = describe_findings(findings)
-        return CaptureResult(alias, SETTINGS_SUMMARY, "withheld", captured_at, game_version,
-                             scan=f"withheld: {rules}", reason=f"scan found {rules}")
-    return CaptureResult(alias, SETTINGS_SUMMARY, "captured", captured_at, game_version,
-                         steps=("2: field names only; values kept only when they look like a version number",),
-                         scan="clean", text=text, extension=".json")
+        return CaptureResult(
+            alias,
+            SETTINGS_SUMMARY,
+            "withheld",
+            captured_at,
+            game_version,
+            scan=f"withheld: {rules}",
+            reason=f"scan found {rules}",
+        )
+    return CaptureResult(
+        alias,
+        SETTINGS_SUMMARY,
+        "captured",
+        captured_at,
+        game_version,
+        steps=("2: field names only; values kept only when they look like a version number",),
+        scan="clean",
+        text=text,
+        extension=".json",
+    )
 
 
-def _capture_one(alias: str, client: Any, read: CaptureRead, placeholders: Placeholders,
-                 game_version: Optional[str], scrub_text: Callable[[str], str],
-                 clock: Callable[[], datetime]) -> CaptureResult:
+def _capture_one(
+    alias: str,
+    client: Any,
+    read: CaptureRead,
+    placeholders: Placeholders,
+    game_version: Optional[str],
+    scrub_text: Callable[[str], str],
+    clock: Callable[[], datetime],
+) -> CaptureResult:
     def result(status: str, **fields: Any) -> CaptureResult:
         return CaptureResult(alias, read, status, _utc(clock), game_version, **fields)
 
@@ -591,6 +657,7 @@ def _capture_one(alias: str, client: Any, read: CaptureRead, placeholders: Place
 
 # --- Output ----------------------------------------------------------------------------------------
 
+
 def write_capture(output_dir: Path | str, result: CaptureResult) -> Path:
     """Write a clean capture to ``<output_dir>/<alias>/<stem>.<ext>``; never overwrites a file."""
     if result.text is None or result.scan != "clean":
@@ -609,34 +676,39 @@ def _cell(value: Any) -> str:
 def table_row(result: CaptureResult) -> str:
     """The capture as a row of the README's "Record of captures" table (``README_COLUMNS``)."""
     steps = "; ".join([*result.steps, f"9: scan {result.scan}", f"by {CAPTURE_SOURCE}"])
-    return (f"| {_cell(result.relative_path)} | {_cell(result.read.endpoint)} | "
-            f"{result.captured_at.strftime('%Y-%m-%d')} | {_cell(result.game_version)} | {_cell(steps)} | "
-            f"{REVIEW_PENDING} |")
+    return (
+        f"| {_cell(result.relative_path)} | {_cell(result.read.endpoint)} | "
+        f"{result.captured_at.strftime('%Y-%m-%d')} | {_cell(result.game_version)} | {_cell(steps)} | "
+        f"{REVIEW_PENDING} |"
+    )
 
 
 def _timestamp(moment: datetime) -> str:
     return moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def build_manifest(results: Iterable[CaptureResult], created_at: datetime,
-                   accounts: Optional[Mapping[str, Mapping[str, Any]]] = None) -> dict[str, Any]:
+def build_manifest(
+    results: Iterable[CaptureResult], created_at: datetime, accounts: Optional[Mapping[str, Mapping[str, Any]]] = None
+) -> dict[str, Any]:
     """The manifest: one entry per alias and endpoint, plus each account's login outcome."""
     entries = []
     for result in results:
-        entries.append({
-            "file": result.relative_path if result.status == "written" else None,
-            "alias": result.alias,
-            "endpoint": result.read.endpoint,
-            "client_method": result.read.method or "login (held response)",
-            "status": result.status,
-            "captured_at": _timestamp(result.captured_at),
-            "game_version": result.game_version,
-            "sanitization_steps": list(result.steps),
-            "scan": result.scan,
-            "reason": result.reason,
-            "note": result.read.note,
-            "table_row": table_row(result) if result.status == "written" else None,
-        })
+        entries.append(
+            {
+                "file": result.relative_path if result.status == "written" else None,
+                "alias": result.alias,
+                "endpoint": result.read.endpoint,
+                "client_method": result.read.method or "login (held response)",
+                "status": result.status,
+                "captured_at": _timestamp(result.captured_at),
+                "game_version": result.game_version,
+                "sanitization_steps": list(result.steps),
+                "scan": result.scan,
+                "reason": result.reason,
+                "note": result.read.note,
+                "table_row": table_row(result) if result.status == "written" else None,
+            }
+        )
     return {
         "format": MANIFEST_FORMAT,
         "format_version": MANIFEST_FORMAT_VERSION,

@@ -66,99 +66,143 @@ ALPHA_REFRESH = "synthetic-refresh-alpha-0001"
 ALPHA_AUTH = f"capture|{SYNTHETIC_DEVICE_KEY_IOS}|{ALPHA_REFRESH}|en"
 BRAVO_EMAIL = SYNTHETIC_EMAIL
 BRAVO_PASSWORD = "synthetic-password-bravo-0002"
-REGISTRY = {"version": 1, "accounts": [
-    {"alias": "alpha", "objective": "grow", "policy_id": "baseline-v1", "credentials_secret": "ALPHA_AUTH"},
-    {"alias": "bravo", "objective": "grow", "policy_id": "baseline-v1", "credentials_secret": "BRAVO"},
-    {"alias": "charlie", "objective": "grow", "policy_id": "baseline-v1", "credentials_secret": "CHARLIE_AUTH",
-     "enabled": False},
-]}
+REGISTRY = {
+    "version": 1,
+    "accounts": [
+        {"alias": "alpha", "objective": "grow", "policy_id": "baseline-v1", "credentials_secret": "ALPHA_AUTH"},
+        {"alias": "bravo", "objective": "grow", "policy_id": "baseline-v1", "credentials_secret": "BRAVO"},
+        {
+            "alias": "charlie",
+            "objective": "grow",
+            "policy_id": "baseline-v1",
+            "credentials_secret": "CHARLIE_AUTH",
+            "enabled": False,
+        },
+    ],
+}
 ENV = {"ALPHA_AUTH": ALPHA_AUTH, "BRAVO_EMAIL": BRAVO_EMAIL, "BRAVO_PASSWORD": BRAVO_PASSWORD, "SYNTH_SALT": SALT}
 
 # Planted values: every one of them must be gone from every file the command writes.
 UIDS = {"alpha": "700000101", "bravo": "700000202"}
 RIVAL = "700000333"
-NAMES = {"700000101": "SyntheticCaptainAlpha", "700000202": "SyntheticCaptainBravo",
-         "700000333": "SyntheticRivalCharlie"}
+NAMES = {
+    "700000101": "SyntheticCaptainAlpha",
+    "700000202": "SyntheticCaptainBravo",
+    "700000333": "SyntheticRivalCharlie",
+}
 SHIP_NAME = "SyntheticVesselOne"
 ALLIANCE_NAME = "SyntheticAllianceOne"
 OWN_SECRET = {"alpha": ALPHA_REFRESH, "bravo": BRAVO_PASSWORD}  # echoed by a free-text field
 LONG_BLOB = "QUFB" * 11  # base64-shaped
-PLANTED = (*UIDS.values(), RIVAL, *NAMES.values(), SHIP_NAME, ALLIANCE_NAME, ALPHA_REFRESH, ALPHA_AUTH,
-           BRAVO_EMAIL, BRAVO_PASSWORD, SALT, SYNTHETIC_ACCESS_TOKEN, SYNTHETIC_DEVICE_KEY_IOS,
-           SYNTHETIC_DEVICE_KEY_MAC, SYNTHETIC_IOS_CHECKSUM_1, LONG_BLOB)
+PLANTED = (
+    *UIDS.values(),
+    RIVAL,
+    *NAMES.values(),
+    SHIP_NAME,
+    ALLIANCE_NAME,
+    ALPHA_REFRESH,
+    ALPHA_AUTH,
+    BRAVO_EMAIL,
+    BRAVO_PASSWORD,
+    SALT,
+    SYNTHETIC_ACCESS_TOKEN,
+    SYNTHETIC_DEVICE_KEY_IOS,
+    SYNTHETIC_DEVICE_KEY_MAC,
+    SYNTHETIC_IOS_CHECKSUM_1,
+    LONG_BLOB,
+)
 UNSANITIZABLE_KEY = "X" + "a" * 44  # an element name that is a long base64-shaped run
 
 
 def login_xml(uid, alias, access_token=SYNTHETIC_ACCESS_TOKEN):
-    return (f'<UserService><UserLogin UserId="{uid}" accessToken="{access_token}">'
-            f'<User Id="{uid}" Name="{NAMES[uid]}" Email="{SYNTHETIC_EMAIL}" Trophy="1534" Credits="250" '
-            f'AllianceName="{ALLIANCE_NAME}" DeviceKey="{SYNTHETIC_DEVICE_KEY_MAC}" '
-            f'StatusMessage="ping me at {SYNTHETIC_EMAIL}" LastLoginDate="2026-11-11T00:00:00"/>'
-            f'</UserLogin></UserService>')
+    return (
+        f'<UserService><UserLogin UserId="{uid}" accessToken="{access_token}">'
+        f'<User Id="{uid}" Name="{NAMES[uid]}" Email="{SYNTHETIC_EMAIL}" Trophy="1534" Credits="250" '
+        f'AllianceName="{ALLIANCE_NAME}" DeviceKey="{SYNTHETIC_DEVICE_KEY_MAC}" '
+        f'StatusMessage="ping me at {SYNTHETIC_EMAIL}" LastLoginDate="2026-11-11T00:00:00"/>'
+        f"</UserLogin></UserService>"
+    )
 
 
 def latest_xml():
-    return (f'<SettingService><GetLatestSetting><Setting RoomDesignVersion="1" ResearchDesignVersion="1" '
-            f'LatestVersion="{SERVER_VERSION}" MinimumClientVersion="0.998.0" '
-            f'Checksum="{SYNTHETIC_IOS_CHECKSUM_1}"/></GetLatestSetting></SettingService>')
+    return (
+        f'<SettingService><GetLatestSetting><Setting RoomDesignVersion="1" ResearchDesignVersion="1" '
+        f'LatestVersion="{SERVER_VERSION}" MinimumClientVersion="0.998.0" '
+        f'Checksum="{SYNTHETIC_IOS_CHECKSUM_1}"/></GetLatestSetting></SettingService>'
+    )
 
 
 def ship_xml(uid):
-    return (f'<ShipService><GetShipByUserId><Ship ShipId="88001" UserId="{uid}" ShipDesignId="17" '
-            f'ShipName="{SHIP_NAME}" ShipLevel="5"><Rooms><Room RoomId="1" RoomDesignId="100"/></Rooms>'
-            f'<Researches><Research ResearchDesignId="400"/></Researches></Ship></GetShipByUserId></ShipService>')
+    return (
+        f'<ShipService><GetShipByUserId><Ship ShipId="88001" UserId="{uid}" ShipDesignId="17" '
+        f'ShipName="{SHIP_NAME}" ShipLevel="5" Hp="100000"><Rooms><Room RoomId="1" RoomDesignId="100"/></Rooms>'
+        f'<Researches><Research ResearchDesignId="400"/></Researches></Ship></GetShipByUserId></ShipService>'
+    )
 
 
 def characters_xml(uid):
-    return (f'<CharacterService><ListAllCharactersOfUser><Characters><Character CharacterId="501" '
-            f'OwnerUserId="{uid}" CharacterDesignId="9" Level="3"/></Characters></ListAllCharactersOfUser>'
-            f'</CharacterService>')
+    return (
+        f'<CharacterService><ListAllCharactersOfUser><Characters><Character CharacterId="501" '
+        f'OwnerUserId="{uid}" CharacterDesignId="9" Level="3"/></Characters></ListAllCharactersOfUser>'
+        f"</CharacterService>"
+    )
 
 
 def items_xml():
-    return ('<ItemService><ListItemsOfAShip><Items><Item ItemId="61" ItemDesignId="1" Quantity="1000"/>'
-            '</Items></ListItemsOfAShip></ItemService>')
+    return (
+        '<ItemService><ListItemsOfAShip><Items><Item ItemId="61" ItemDesignId="1" Quantity="1000"/>'
+        "</Items></ListItemsOfAShip></ItemService>"
+    )
 
 
 def ranking_xml(uid):
-    return (f'<LadderService><FindUserRanking><Users>'
-            f'<User Id="{RIVAL}" Name="{NAMES[RIVAL]}" Trophy="1600" Ranking="10" AllianceName="{ALLIANCE_NAME}"/>'
-            f'<User Id="{uid}" Name="{NAMES[uid]}" Trophy="1534" Ranking="11"/>'
-            f'</Users></FindUserRanking></LadderService>')
+    return (
+        f"<LadderService><FindUserRanking><Users>"
+        f'<User Id="{RIVAL}" Name="{NAMES[RIVAL]}" Trophy="1600" Ranking="10" AllianceName="{ALLIANCE_NAME}"/>'
+        f'<User Id="{uid}" Name="{NAMES[uid]}" Trophy="1534" Ranking="11"/>'
+        f"</Users></FindUserRanking></LadderService>"
+    )
 
 
 def battles_xml(uid, alias):
-    return (f'<BattleService><ListPvPBattles2><Battles>'
-            f'<Battle BattleId="9001" AttackingUserId="{uid}" DefendingUserId="{RIVAL}" '
-            f'AttackingUserName="{NAMES[uid]}" DefendingUserName="{NAMES[RIVAL]}" AttackingShipName="{SHIP_NAME}" '
-            f'Status="Won" TrophyChange="12" HullLevel="10" ReplayToken="{SYNTHETIC_ACCESS_TOKEN}"/>'
-            f'<Battle BattleId="9002" AttackingUserId="{RIVAL}" DefendingUserId="{uid}" '
-            f'Note="session {OWN_SECRET[alias]}" Blob="{LONG_BLOB}" TrophyChange="-8">'
-            f'<UserId>{RIVAL}</UserId></Battle>'
-            f'</Battles></ListPvPBattles2></BattleService>')
+    return (
+        f"<BattleService><ListPvPBattles2><Battles>"
+        f'<Battle BattleId="9001" AttackingUserId="{uid}" DefendingUserId="{RIVAL}" '
+        f'AttackingUserName="{NAMES[uid]}" DefendingUserName="{NAMES[RIVAL]}" AttackingShipName="{SHIP_NAME}" '
+        f'Status="Won" TrophyChange="12" HullLevel="10" ReplayToken="{SYNTHETIC_ACCESS_TOKEN}"/>'
+        f'<Battle BattleId="9002" AttackingUserId="{RIVAL}" DefendingUserId="{uid}" '
+        f'Note="session {OWN_SECRET[alias]}" Blob="{LONG_BLOB}" TrophyChange="-8">'
+        f"<UserId>{RIVAL}</UserId></Battle>"
+        f"</Battles></ListPvPBattles2></BattleService>"
+    )
 
 
 LONG_MASK = ("0011111111111100" * 9)[:153]  # a 9 x 17 hull: one digit per cell, one long run as the server sends it
 
 
 def room_designs_xml():
-    return ('<RoomService><ListRoomDesigns2><RoomDesigns>'
-            '<RoomDesign RoomDesignId="6" RoomName="Mineral Mining Laser Lv1" RoomType="Laser" '
-            'ManufactureType="Mineral" Rows="2" Columns="2" PriceString="mineral:500" ImageSpriteId="1200" '
-            'RootRoomDesignId="6" UpgradeFromRoomDesignId="0" MinShipLevel="1"/>'
-            '</RoomDesigns></ListRoomDesigns2></RoomService>')
+    return (
+        "<RoomService><ListRoomDesigns2><RoomDesigns>"
+        '<RoomDesign RoomDesignId="6" RoomName="Mineral Mining Laser Lv1" RoomType="Laser" '
+        'ManufactureType="Mineral" Rows="2" Columns="2" PriceString="mineral:500" ImageSpriteId="1200" '
+        'RootRoomDesignId="6" UpgradeFromRoomDesignId="0" MinShipLevel="1"/>'
+        "</RoomDesigns></ListRoomDesigns2></RoomService>"
+    )
 
 
 def all_designs():
     """What ``Client.listAllDesigns4`` keeps: each design list under its own attribute."""
     return {
-        "shipDesigns": parse('<ShipDesigns><ShipDesign ShipDesignId="17" ShipDesignName="Hull 1" Rows="9" '
-                             f'Columns="17" Mask="{LONG_MASK}" ShipLevel="1"/>'
-                             '<ShipDesign ShipDesignId="18" ShipDesignName="Odd" Rows="1" Columns="1" '
-                             f'Mask="{LONG_BLOB}"/></ShipDesigns>')["ShipDesigns"],
-        "roomDesignPurchases": parse('<RoomDesignPurchases><RoomDesignPurchase RoomDesignPurchaseId="301" '
-                                     'RoomDesignId="6" Level="1" Quantity="1"/></RoomDesignPurchases>')[
-                                         "RoomDesignPurchases"],
+        "shipDesigns": parse(
+            '<ShipDesigns><ShipDesign ShipDesignId="17" ShipDesignName="Hull 1" Rows="9" '
+            f'Columns="17" Mask="{LONG_MASK}" ShipLevel="1"/>'
+            '<ShipDesign ShipDesignId="18" ShipDesignName="Odd" Rows="1" Columns="1" '
+            f'Mask="{LONG_BLOB}"/></ShipDesigns>'
+        )["ShipDesigns"],
+        "roomDesignPurchases": parse(
+            '<RoomDesignPurchases><RoomDesignPurchase RoomDesignPurchaseId="301" '
+            'RoomDesignId="6" Level="1" Quantity="1"/></RoomDesignPurchases>'
+        )["RoomDesignPurchases"],
     }
 
 
@@ -169,6 +213,7 @@ def parse(text):
 def forbidden(name):
     def _raise(*args, **kwargs):
         raise AssertionError(f"capture touched {name}")
+
     return _raise
 
 
@@ -245,6 +290,13 @@ class CaptureClient:
             setattr(self, attribute, value)
         return True
 
+    def createStarBattle5Auto(self):
+        return self._serve(
+            "createStarBattle5Auto",
+            "createStarBattle5Result",
+            '<BattleService><CreateStarBattle5 battleId="battle-12345" errorCode="0" /></BattleService>',
+        )
+
 
 class CaptureCommandTests(unittest.TestCase):
     def setUp(self):
@@ -272,14 +324,20 @@ class CaptureCommandTests(unittest.TestCase):
         stdout, stderr, log = io.StringIO(), io.StringIO(), io.StringIO()
         handler = logging.StreamHandler(log)
         clock = patch("run.run_capture_reads", partial(run.run_capture_reads, clock=lambda: OBSERVED))
-        with patch.object(sys, "argv", argv), patch.dict(os.environ, env, clear=True), \
-                patch("run.Client", CaptureClient), clock, \
-                patch.object(logging.getLogger(), "handlers", [handler]), \
-                patch("run.Device", side_effect=forbidden("run.Device")), \
-                patch("getpass.getpass", side_effect=forbidden("getpass")), \
-                patch.object(socket, "socket", side_effect=forbidden("socket.socket")), \
-                patch.object(socket, "create_connection", side_effect=forbidden("socket.create_connection")), \
-                redirect_stdout(stdout), redirect_stderr(stderr), self.assertRaises(SystemExit) as exit_info:
+        with (
+            patch.object(sys, "argv", argv),
+            patch.dict(os.environ, env, clear=True),
+            patch("run.Client", CaptureClient),
+            clock,
+            patch.object(logging.getLogger(), "handlers", [handler]),
+            patch("run.Device", side_effect=forbidden("run.Device")),
+            patch("getpass.getpass", side_effect=forbidden("getpass")),
+            patch.object(socket, "socket", side_effect=forbidden("socket.socket")),
+            patch.object(socket, "create_connection", side_effect=forbidden("socket.create_connection")),
+            redirect_stdout(stdout),
+            redirect_stderr(stderr),
+            self.assertRaises(SystemExit) as exit_info,
+        ):
             run.main()
         self.assertFalse((self.dir / ".device").exists())
         return exit_info.exception.code, stdout.getvalue(), stderr.getvalue(), log.getvalue()
@@ -306,9 +364,11 @@ class CaptureCommandTests(unittest.TestCase):
     def test_writes_one_file_per_alias_and_endpoint_and_a_manifest(self):
         code, out, err, _ = self.run_main()
         self.assertEqual(code, 0, err + out)
-        expected = sorted([f"{alias}/{read.stem}.xml" for alias in ("alpha", "bravo") for read in CAPTURE_READS]
-                          + [f"{alias}/{SETTINGS_SUMMARY.stem}.json" for alias in ("alpha", "bravo")]
-                          + [MANIFEST_NAME])
+        expected = sorted(
+            [f"{alias}/{read.stem}.xml" for alias in ("alpha", "bravo") for read in CAPTURE_READS]
+            + [f"{alias}/{SETTINGS_SUMMARY.stem}.json" for alias in ("alpha", "bravo")]
+            + [MANIFEST_NAME]
+        )
         self.assertEqual(self.files(), expected)  # charlie is disabled: nothing for it
         manifest = self.manifest()
         self.assertEqual(manifest["source"], "run.py --capture-reads")
@@ -323,14 +383,15 @@ class CaptureCommandTests(unittest.TestCase):
                 self.assertTrue(entry["sanitization_steps"][0].startswith("2: "))
                 row = entry["table_row"]
                 self.assertEqual(row.count(" | ") + 1, len(README_COLUMNS))
-                self.assertTrue(row.startswith(f"| {entry['file']} | {entry['endpoint']} | 2026-11-12 | "
-                                               f"{SERVER_VERSION} | "))
+                self.assertTrue(
+                    row.startswith(f"| {entry['file']} | {entry['endpoint']} | 2026-11-12 | {SERVER_VERSION} | ")
+                )
                 self.assertTrue(row.endswith("| pending |"))
         endpoints = {entry["endpoint"] for entry in manifest["captures"]}
         self.assertEqual(endpoints, {read.endpoint for read in CAPTURE_READS} | {SETTINGS_SUMMARY.endpoint})
         self.assertIn("FindUserRanking", endpoints)
         self.assertIn("ListPvPBattles2", endpoints)
-        self.assertIn("| alpha | logged in | 0.999.60 | 11 | 0 |", out)
+        self.assertIn("| alpha | logged in | 0.999.60 | 12 | 0 |", out)
         self.assertIn("| charlie | disabled |", out)
         self.assertIn("## Rows for tests/fixtures/live_sanitized/README.md", out)
 
@@ -339,8 +400,15 @@ class CaptureCommandTests(unittest.TestCase):
         code, out, err, _ = self.run_main()
         self.assertEqual(code, 0, err)
         rooms = (self.output / "alpha/list_room_designs2.xml").read_text(encoding="utf-8")
-        for kept in ('RoomDesignId="6"', 'RoomType="Laser"', 'ManufactureType="Mineral"', 'Rows="2"', 'Columns="2"',
-                     'PriceString="mineral:500"', 'MinShipLevel="1"'):
+        for kept in (
+            'RoomDesignId="6"',
+            'RoomType="Laser"',
+            'ManufactureType="Mineral"',
+            'Rows="2"',
+            'Columns="2"',
+            'PriceString="mineral:500"',
+            'MinShipLevel="1"',
+        ):
             self.assertIn(kept, rooms)
         ships = (self.output / "alpha/ship_designs.xml").read_text(encoding="utf-8")
         for kept in ('ShipDesignId="17"', 'Rows="9"', 'Columns="17"'):
@@ -411,11 +479,14 @@ class CaptureCommandTests(unittest.TestCase):
         self.assertEqual((user["@Trophy"], user["@Credits"]), ("1534", "250"))  # game data stays
         setting = self.capture("alpha", "get_latest_version3")["SettingService"]["GetLatestSetting"]["Setting"]
         self.assertEqual((setting["@Checksum"], setting["@LatestVersion"]), (REDACTED, SERVER_VERSION))
-        battle, defense = self.capture("alpha", "list_pvp_battles2")["BattleService"]["ListPvPBattles2"][
-            "Battles"]["Battle"]
+        battle, defense = self.capture("alpha", "list_pvp_battles2")["BattleService"]["ListPvPBattles2"]["Battles"][
+            "Battle"
+        ]
         self.assertEqual(battle["@ReplayToken"], REDACTED)
         self.assertEqual((defense["@Note"], defense["@Blob"]), (REDACTED, REDACTED))
-        self.assertEqual((battle["@BattleId"], battle["@TrophyChange"], battle["@HullLevel"]), ("BATTLEID-A", "12", "10"))
+        self.assertEqual(
+            (battle["@BattleId"], battle["@TrophyChange"], battle["@HullLevel"]), ("BATTLEID-A", "12", "10")
+        )
 
     # Verifies: S03-R1
     def test_placeholders_are_stable_and_consistent_across_files(self):
@@ -426,24 +497,39 @@ class CaptureCommandTests(unittest.TestCase):
                 user = self.capture(alias, "user_login")["User"]
                 ship = self.capture(alias, "get_ship_by_user_id")["ShipService"]["GetShipByUserId"]["Ship"]
                 crew = self.capture(alias, "list_all_characters_of_user")["CharacterService"][
-                    "ListAllCharactersOfUser"]["Characters"]["Character"]
-                rival, me = self.capture(alias, "find_user_ranking")["LadderService"]["FindUserRanking"][
-                    "Users"]["User"]
+                    "ListAllCharactersOfUser"
+                ]["Characters"]["Character"]
+                rival, me = self.capture(alias, "find_user_ranking")["LadderService"]["FindUserRanking"]["Users"][
+                    "User"
+                ]
                 attack, defense = self.capture(alias, "list_pvp_battles2")["BattleService"]["ListPvPBattles2"][
-                    "Battles"]["Battle"]
+                    "Battles"
+                ]["Battle"]
                 # The account itself is USER-A and PLAYER-A in every file, opponents follow.
-                self.assertEqual({user["@Id"], ship["@UserId"], crew["@OwnerUserId"], me["@Id"],
-                                  attack["@AttackingUserId"], defense["@DefendingUserId"]}, {"USER-A"})
-                self.assertEqual({rival["@Id"], attack["@DefendingUserId"], defense["@AttackingUserId"],
-                                  defense["UserId"]}, {"USER-B"})
+                self.assertEqual(
+                    {
+                        user["@Id"],
+                        ship["@UserId"],
+                        crew["@OwnerUserId"],
+                        me["@Id"],
+                        attack["@AttackingUserId"],
+                        defense["@DefendingUserId"],
+                    },
+                    {"USER-A"},
+                )
+                self.assertEqual(
+                    {rival["@Id"], attack["@DefendingUserId"], defense["@AttackingUserId"], defense["UserId"]},
+                    {"USER-B"},
+                )
                 self.assertEqual({user["@Name"], me["@Name"], attack["@AttackingUserName"]}, {"PLAYER-A"})
                 self.assertEqual({rival["@Name"], attack["@DefendingUserName"]}, {"PLAYER-B"})
                 self.assertEqual({ship["@ShipName"], attack["@AttackingShipName"]}, {"SHIP-A"})
                 self.assertEqual({user["@AllianceName"], rival["@AllianceName"]}, {"ALLIANCE-A"})
                 self.assertEqual(ship["@ShipDesignId"], "17")  # design ids are game data
         # A second run of the same responses gives byte-identical files.
-        first = {name: (self.output / name).read_text(encoding="utf-8") for name in self.files()
-                 if name != MANIFEST_NAME}
+        first = {
+            name: (self.output / name).read_text(encoding="utf-8") for name in self.files() if name != MANIFEST_NAME
+        }
         self.output = self.dir / "captures-again"
         CaptureClient.instances = []
         self.assertEqual(self.run_main()[0], 0)
@@ -471,10 +557,11 @@ class CaptureCommandTests(unittest.TestCase):
         self.assertEqual((ranking["status"], ranking["file"], ranking["table_row"]), ("withheld", None, None))
         self.assertEqual(ranking["scan"], "withheld: redaction pattern 1 (line 3)")
         battles = entries[("alpha", "ListPvPBattles2")]
-        self.assertEqual((battles["status"], battles["scan"]),
-                         ("withheld", "withheld: response is not well-formed XML"))
+        self.assertEqual(
+            (battles["status"], battles["scan"]), ("withheld", "withheld: response is not well-formed XML")
+        )
         self.assertIn("| alpha | FindUserRanking | withheld |", out)
-        self.assertIn("| alpha | logged in | 0.999.60 | 9 | 2 |", out)
+        self.assertIn("| alpha | logged in | 0.999.60 | 10 | 2 |", out)
         # The rule is reported, never the value.
         self.assertNotIn(UNSANITIZABLE_KEY, out + err + log + self.everything_written())
         self.assert_no_planted_value(out, err, log, self.everything_written())
@@ -485,14 +572,18 @@ class CaptureCommandTests(unittest.TestCase):
             raise RuntimeError(
                 f"GET https://api.pixelstarships.com/ShipService/GetShipByUserId?userId={client.user.id}"
                 f"&accessToken={SYNTHETIC_ACCESS_TOKEN} failed for {ALPHA_REFRESH} {BRAVO_PASSWORD} "
-                f"{NAMES[client.user.id]} {SYNTHETIC_EMAIL}")
+                f"{NAMES[client.user.id]} {SYNTHETIC_EMAIL}"
+            )
 
         CaptureClient.overrides = {"getShipByUserId": failing}
         code, out, err, log = self.run_main()
         self.assertEqual(code, 1)
         self.assertIn("| alpha | GetShipByUserId | error |", out)
-        entry = next(entry for entry in self.manifest()["captures"]
-                     if entry["alias"] == "alpha" and entry["endpoint"] == "GetShipByUserId")
+        entry = next(
+            entry
+            for entry in self.manifest()["captures"]
+            if entry["alias"] == "alpha" and entry["endpoint"] == "GetShipByUserId"
+        )
         self.assertTrue(entry["reason"].startswith("RuntimeError: "), entry["reason"])
         self.assertIn("alpha/list_pvp_battles2.xml", self.files())
         self.assert_no_planted_value(out, err, log, self.everything_written())
@@ -572,10 +663,12 @@ class CaptureCommandTests(unittest.TestCase):
         self.assertFalse(self.output.exists())
 
     def test_flag_conflicts_and_missing_flags(self):
-        for extra, message in ((("--baseline",), "cannot be combined with --baseline"),
-                               (("--concurrent", "2"), "cannot be combined with --concurrent"),
-                               (("--fleet-dry-run",), "cannot be combined with --fleet-dry-run"),
-                               (("--auth-file", "x"), "cannot be combined with --auth-file")):
+        for extra, message in (
+            (("--baseline",), "cannot be combined with --baseline"),
+            (("--concurrent", "2"), "cannot be combined with --concurrent"),
+            (("--fleet-dry-run",), "cannot be combined with --fleet-dry-run"),
+            (("--auth-file", "x"), "cannot be combined with --auth-file"),
+        ):
             with self.subTest(extra=extra):
                 code, _, err, _ = self.run_main(*extra)
                 self.assertEqual(code, 2)
@@ -589,33 +682,62 @@ class CaptureCommandTests(unittest.TestCase):
 class SanitizerTests(unittest.TestCase):
     # Verifies: S03-R2
     def test_scan_matches_the_live_sanitized_fixture_scan(self):
-        samples = (*profile_tests._REDACTION_SAMPLES, *profile_tests._NUMERIC_ID_SAMPLES,
-                   *profile_tests._EMAIL_SAMPLES, *profile_tests._TOKEN_SAMPLES,
-                   profile_tests._CLEAN_XML, profile_tests._CLEAN_JSON,
-                   (REPO_ROOT / "tests/fixtures/live_sanitized/README.md").read_text(encoding="utf-8"))
+        samples = (
+            *profile_tests._REDACTION_SAMPLES,
+            *profile_tests._NUMERIC_ID_SAMPLES,
+            *profile_tests._EMAIL_SAMPLES,
+            *profile_tests._TOKEN_SAMPLES,
+            profile_tests._CLEAN_XML,
+            profile_tests._CLEAN_JSON,
+            (REPO_ROOT / "tests/fixtures/live_sanitized/README.md").read_text(encoding="utf-8"),
+        )
         for sample in samples:
             with self.subTest(sample=sample[:60]):
-                self.assertEqual([tuple(f) for f in scan_capture_text(sample, "x")],
-                                 [tuple(f) for f in profile_tests.scan_text(sample, "x")])
+                self.assertEqual(
+                    [tuple(f) for f in scan_capture_text(sample, "x")],
+                    [tuple(f) for f in profile_tests.scan_text(sample, "x")],
+                )
         self.assertTrue(scan_capture_text(profile_tests._NUMERIC_ID_SAMPLES[0]))
         self.assertEqual(scan_capture_text(profile_tests._CLEAN_XML), [])
 
     def test_field_categories(self):
-        cases = {"@Id": "USER", "UserId": "USER", "@AttackingUserId": "USER", "@accountid": "USER",
-                 "@Name": "PLAYER", "@UserName": "PLAYER", "@DefendingUserName": "PLAYER", "PlayerName": "PLAYER",
-                 "@ShipName": "SHIP", "@AllianceName": "ALLIANCE", "@accessToken": "secret",
-                 "@RefreshToken": "secret", "@DeviceKey": "secret", "@Checksum": "secret", "Password": "secret",
-                 "@client_secret": "secret", "@Email": "email", "@ShipDesignId": None, "@BattleId": "instance",
-                 "@Trophy": None, "@RoomName": None, "@CharacterName": "CREW", "@IsPaid": None,
-                 "@IconSpriteId": None, "@ActionTypeId": None, "@StarSystemId": None,
-                 "@UserStarSystemId": "instance", "@UnlockedShipDesignIds": None, "@ItemIds": "instance"}
+        cases = {
+            "@Id": "USER",
+            "UserId": "USER",
+            "@AttackingUserId": "USER",
+            "@accountid": "USER",
+            "@Name": "PLAYER",
+            "@UserName": "PLAYER",
+            "@DefendingUserName": "PLAYER",
+            "PlayerName": "PLAYER",
+            "@ShipName": "SHIP",
+            "@AllianceName": "ALLIANCE",
+            "@accessToken": "secret",
+            "@RefreshToken": "secret",
+            "@DeviceKey": "secret",
+            "@Checksum": "secret",
+            "Password": "secret",
+            "@client_secret": "secret",
+            "@Email": "email",
+            "@ShipDesignId": None,
+            "@BattleId": "instance",
+            "@Trophy": None,
+            "@RoomName": None,
+            "@CharacterName": "CREW",
+            "@IsPaid": None,
+            "@IconSpriteId": None,
+            "@ActionTypeId": None,
+            "@StarSystemId": None,
+            "@UserStarSystemId": "instance",
+            "@UnlockedShipDesignIds": None,
+            "@ItemIds": "instance",
+        }
         for name, category in cases.items():
             with self.subTest(name=name):
                 self.assertEqual(field_category(name), category)
 
     def test_placeholders_are_letters_per_value(self):
-        self.assertEqual([_letters(i) for i in (0, 1, 25, 26, 27, 701, 702)],
-                         ["A", "B", "Z", "AA", "AB", "ZZ", "AAA"])
+        self.assertEqual([_letters(i) for i in (0, 1, 25, 26, 27, 701, 702)], ["A", "B", "Z", "AA", "AB", "ZZ", "AAA"])
         placeholders = Placeholders()
         placeholders.seed("USER", "42")
         self.assertEqual(placeholders.get("USER", "7"), "USER-B")
@@ -633,30 +755,55 @@ class SanitizerTests(unittest.TestCase):
 
     # Verifies: S03-R1, S03-R2
     def test_json_shaped_payloads_are_sanitized_and_empty_values_kept(self):
-        payload = {"first": {"UserId": 700000101, "accessToken": "", "Email": None},
-                   "second": [{"@Id": "700000101", "@Name": NAMES["700000101"], "@Level": 3}]}
+        payload = {
+            "first": {"UserId": 700000101, "accessToken": "", "Email": None},
+            "second": [{"@Id": "700000101", "@Name": NAMES["700000101"], "@Level": 3}],
+        }
         capture = sanitize_capture(payload, Placeholders())
         self.assertEqual(capture.extension, ".json")  # two roots: not an XML document
         self.assertTrue(capture.clean, capture.findings)
-        self.assertEqual(json.loads(capture.text), {
-            "first": {"UserId": "USER-A", "accessToken": "", "Email": None},
-            "second": [{"@Id": "USER-A", "@Name": "PLAYER-A", "@Level": 3}]})
+        self.assertEqual(
+            json.loads(capture.text),
+            {
+                "first": {"UserId": "USER-A", "accessToken": "", "Email": None},
+                "second": [{"@Id": "USER-A", "@Name": "PLAYER-A", "@Level": 3}],
+            },
+        )
 
 
 # --- Real Client, fake HTTP adapter -------------------------------------------------------------
 
 REAL_REFRESH = {"alpha": "RT-alpha-synthetic-capture-0001", "bravo": "RT-bravo-synthetic-capture-0002"}
 REAL_TOKENS = {"alpha": "aaaaaaaa-1111-2222-3333-444444444444", "bravo": "bbbbbbbb-1111-2222-3333-444444444444"}
-REAL_ENV = {"SYNTH_ALPHA": f"capture|{SYNTHETIC_DEVICE_KEY_IOS}|{REAL_REFRESH['alpha']}|en",
-            "SYNTH_BRAVO": f"capture|{SYNTHETIC_DEVICE_KEY_MAC}|{REAL_REFRESH['bravo']}|en"}
-REAL_REGISTRY = {"version": 1, "accounts": [
-    {"alias": alias, "objective": "grow", "policy_id": "baseline-v1", "credentials_secret": f"SYNTH_{alias.upper()}"}
-    for alias in ("alpha", "bravo")]}
-ALLOWED_PATHS = {"/UserService/DeviceLogin17", "/SettingService/GetLatestVersion3",
-                 "/LiveOpsService/GetTodayLiveOps2", "/ShipService/GetShipByUserId",
-                 "/CharacterService/ListAllCharactersOfUser", "/ItemService/ListItemsOfAShip",
-                 "/LadderService/FindUserRanking", "/BattleService/ListPvPBattles2",
-                 "/RoomService/ListRoomDesigns2", "/DesignService/ListAllDesigns4"}
+REAL_ENV = {
+    "SYNTH_ALPHA": f"capture|{SYNTHETIC_DEVICE_KEY_IOS}|{REAL_REFRESH['alpha']}|en",
+    "SYNTH_BRAVO": f"capture|{SYNTHETIC_DEVICE_KEY_MAC}|{REAL_REFRESH['bravo']}|en",
+}
+REAL_REGISTRY = {
+    "version": 1,
+    "accounts": [
+        {
+            "alias": alias,
+            "objective": "grow",
+            "policy_id": "baseline-v1",
+            "credentials_secret": f"SYNTH_{alias.upper()}",
+        }
+        for alias in ("alpha", "bravo")
+    ],
+}
+ALLOWED_PATHS = {
+    "/UserService/DeviceLogin17",
+    "/SettingService/GetLatestVersion3",
+    "/LiveOpsService/GetTodayLiveOps2",
+    "/ShipService/GetShipByUserId",
+    "/CharacterService/ListAllCharactersOfUser",
+    "/ItemService/ListItemsOfAShip",
+    "/LadderService/FindUserRanking",
+    "/BattleService/ListPvPBattles2",
+    "/BattleService/CreateStarBattle5",
+    "/RoomService/ListRoomDesigns2",
+    "/DesignService/ListAllDesigns4",
+}
 # Every design list ListAllDesigns4 must return (Client.listAllDesigns4 refuses a response missing one), and the
 # version fields the real client reads from the settings to build that request.
 CLIENT_SOURCE = (REPO_ROOT / "sdk/client.py").read_text(encoding="utf-8")
@@ -666,17 +813,20 @@ ALL_DESIGN_LISTS = re.findall(r'^\s+"(\w+)",$', CLIENT_SOURCE.split("designs = [
 
 def real_latest_xml():
     """The settings a live server sends: the version fields of latest_xml plus every design list version."""
-    versions = " ".join(f'{name}="1"' for name in DESIGN_VERSION_FIELDS if name not in ("RoomDesignVersion",
-                                                                                         "ResearchDesignVersion"))
+    versions = " ".join(
+        f'{name}="1"' for name in DESIGN_VERSION_FIELDS if name not in ("RoomDesignVersion", "ResearchDesignVersion")
+    )
     return latest_xml().replace("<Setting ", f"<Setting {versions} ", 1)
 
 
 def all_designs_xml():
     """A ListAllDesigns4 response: ShipDesigns and RoomDesignPurchases filled in, every other list empty."""
-    filled = {"ShipDesigns": '<ShipDesign ShipDesignId="17" ShipDesignName="Hull 1" Rows="12" Columns="16" '
-                             'Mask="0011110000111100" ShipLevel="1"/>',
-              "RoomDesignPurchases": '<RoomDesignPurchase RoomDesignPurchaseId="301" RoomDesignId="6" Level="1" '
-                                     'Quantity="1"/>'}
+    filled = {
+        "ShipDesigns": '<ShipDesign ShipDesignId="17" ShipDesignName="Hull 1" Rows="12" Columns="16" '
+        'Mask="0011110000111100" ShipLevel="1"/>',
+        "RoomDesignPurchases": '<RoomDesignPurchase RoomDesignPurchaseId="301" RoomDesignId="6" Level="1" '
+        'Quantity="1"/>',
+    }
     lists = "".join(f"<{name}>{filled[name]}</{name}>" if name in filled else f"<{name}/>" for name in ALL_DESIGN_LISTS)
     return f"<DesignService><ListAllDesigns>{lists}</ListAllDesigns></DesignService>"
 
@@ -716,10 +866,26 @@ class CaptureGameAdapter(BaseAdapter):
             return xml_response("<LiveOpsService><GetTodayLiveOps/></LiveOpsService>")
         alias = self.alias_by_token[parse_qs(parts.query)["accessToken"][0]]
         uid = UIDS[alias]
-        bodies = {"GetShipByUserId": ship_xml(uid), "ListAllCharactersOfUser": characters_xml(uid),
-                  "ListItemsOfAShip": items_xml(), "FindUserRanking": ranking_xml(uid),
-                  "ListPvPBattles2": battles_xml(uid, alias).replace(OWN_SECRET[alias], REAL_REFRESH[alias])}
+        bodies = {
+            "GetShipByUserId": ship_xml(uid),
+            "ListAllCharactersOfUser": characters_xml(uid),
+            "ListItemsOfAShip": items_xml(),
+            "FindUserRanking": ranking_xml(uid),
+            "ListPvPBattles2": battles_xml(uid, alias).replace(OWN_SECRET[alias], REAL_REFRESH[alias]),
+            "CreateStarBattle5": battle_create_xml(uid),
+        }
         return xml_response(bodies[parts.path.rsplit("/", 1)[1]])
+
+
+def battle_create_xml(uid: str) -> str:
+    """Synthetic CreateStarBattle5 response with opponent data."""
+    return f'''<BattleService>
+  <CreateStarBattle5 ChanceToFindStarBattles="0">
+    <Battle BattleId="battle-{uid}-001" AttackingShipId="{uid}" DefendingShipId="5790873" RandomSeed="867">
+      <Opponent Name="wados651(PPP)" ShipClass="Pirate Destroyer (Heavy)" ShipLevel="6" Faction="Free People!" HullNumber="24" />
+    </Battle>
+  </CreateStarBattle5>
+</BattleService>'''
 
     def close(self):
         pass
@@ -742,14 +908,19 @@ class RealClientCaptureTests(unittest.TestCase):
         cwd = os.getcwd()
         os.chdir(directory)
         self.addCleanup(os.chdir, cwd)
-        with patch.object(sys, "argv", argv), patch.dict(os.environ, REAL_ENV, clear=True), \
-                patch.object(logging.getLogger(), "handlers", [logging.StreamHandler(log)]), \
-                patch.dict(Client.session.adapters, {"https://": adapter}), \
-                patch.object(Client, "request", inspect.unwrap(Client.request)), \
-                patch("run.Device", side_effect=forbidden("run.Device")), \
-                patch.object(socket, "socket", side_effect=forbidden("socket.socket")), \
-                patch.object(socket, "create_connection", side_effect=forbidden("socket.create_connection")), \
-                redirect_stdout(stdout), redirect_stderr(stderr), self.assertRaises(SystemExit) as exit_info:
+        with (
+            patch.object(sys, "argv", argv),
+            patch.dict(os.environ, REAL_ENV, clear=True),
+            patch.object(logging.getLogger(), "handlers", [logging.StreamHandler(log)]),
+            patch.dict(Client.session.adapters, {"https://": adapter}),
+            patch.object(Client, "request", inspect.unwrap(Client.request)),
+            patch("run.Device", side_effect=forbidden("run.Device")),
+            patch.object(socket, "socket", side_effect=forbidden("socket.socket")),
+            patch.object(socket, "create_connection", side_effect=forbidden("socket.create_connection")),
+            redirect_stdout(stdout),
+            redirect_stderr(stderr),
+            self.assertRaises(SystemExit) as exit_info,
+        ):
             run.main()
         out = stdout.getvalue()
         self.assertEqual(exit_info.exception.code, 0, stderr.getvalue() + out)
@@ -767,8 +938,6 @@ class RealClientCaptureTests(unittest.TestCase):
         self.assertFalse((directory / ".device").exists())
 
 
-
-
 class SettingsFieldsTests(unittest.TestCase):
     """The server settings summary names fields and keeps only version-like values."""
 
@@ -776,10 +945,20 @@ class SettingsFieldsTests(unittest.TestCase):
     def test_summary_keeps_version_values_and_hides_everything_else(self):
         from datetime import datetime, timezone
         from sdk.state.capture import scan_capture_text, settings_fields
+
         secret_like = "A" * 48
-        settings = {"SettingService": {"GetLatestSetting": {"Setting": {
-            "@LatestVersion": "0.999.60", "@ProductionServer": "api.example.invalid",
-            "@FileHash": secret_like, "@MinimumClientVersion": "0.999.55"}}}}
+        settings = {
+            "SettingService": {
+                "GetLatestSetting": {
+                    "Setting": {
+                        "@LatestVersion": "0.999.60",
+                        "@ProductionServer": "api.example.invalid",
+                        "@FileHash": secret_like,
+                        "@MinimumClientVersion": "0.999.55",
+                    }
+                }
+            }
+        }
         result = settings_fields("pss1", settings, None, lambda: datetime(2026, 11, 12, tzinfo=timezone.utc))
         self.assertEqual((result.status, result.scan), ("captured", "clean"))
         self.assertIn('"LatestVersion": "0.999.60"', result.text)
@@ -793,6 +972,7 @@ class SettingsFieldsTests(unittest.TestCase):
     def test_no_settings_is_no_data(self):
         from datetime import datetime, timezone
         from sdk.state.capture import settings_fields
+
         result = settings_fields("pss1", None, None, lambda: datetime(2026, 11, 12, tzinfo=timezone.utc))
         self.assertEqual(result.status, "no data")
 
@@ -802,19 +982,37 @@ class InstanceIdTests(unittest.TestCase):
 
     def sanitize(self, xml):
         from sdk.state.capture import Placeholders, sanitize_capture
+
         return sanitize_capture(xml, Placeholders(), path="t.xml")
 
     # Verifies: S03-R1
     def test_instance_kinds(self):
         from sdk.state.capture import instance_kind
-        cases = {"@ShipId": "SHIPID", "@AttackingShipId": "SHIPID", "@OwnerShipId": "SHIPID",
-                 "@DefendingAllianceId": "ALLIANCEID", "@BattleId": "BATTLEID", "@ItemIds": "ITEMID",
-                 "@CharacterActionId": "CHARACTERACTIONID", "@RoomActionId": "ROOMACTIONID",
-                 "@UserStarSystemId": "USERSTARSYSTEMID", "@UserSeasonId": "USERSEASONID",
-                 "@ShipDesignId": None, "@AttackingAllianceSpriteId": None, "@ConditionTypeId": None,
-                 "@OriginalRaceId": None, "@BackgroundId": None, "@FromStarSystemId": None,
-                 "@ExploredStarSystemIds": None, "@CompletedMissionEventIds": None, "@Id": None,
-                 "@AttackingUserId": None, "@IsPaid": None, "@Trophy": None}
+
+        cases = {
+            "@ShipId": "SHIPID",
+            "@AttackingShipId": "SHIPID",
+            "@OwnerShipId": "SHIPID",
+            "@DefendingAllianceId": "ALLIANCEID",
+            "@BattleId": "BATTLEID",
+            "@ItemIds": "ITEMID",
+            "@CharacterActionId": "CHARACTERACTIONID",
+            "@RoomActionId": "ROOMACTIONID",
+            "@UserStarSystemId": "USERSTARSYSTEMID",
+            "@UserSeasonId": "USERSEASONID",
+            "@ShipDesignId": None,
+            "@AttackingAllianceSpriteId": None,
+            "@ConditionTypeId": None,
+            "@OriginalRaceId": None,
+            "@BackgroundId": None,
+            "@FromStarSystemId": None,
+            "@ExploredStarSystemIds": None,
+            "@CompletedMissionEventIds": None,
+            "@Id": None,
+            "@AttackingUserId": None,
+            "@IsPaid": None,
+            "@Trophy": None,
+        }
         for name, kind in cases.items():
             with self.subTest(name=name):
                 self.assertEqual(instance_kind(name), kind)
@@ -826,7 +1024,8 @@ class InstanceIdTests(unittest.TestCase):
             '<Character CharacterId="16681254" CharacterName="Hulk" OwnerShipId="2708491" RoomId="0" '
             'ItemIds="231455761,0" CharacterDesignId="20"/>'
             '<Battle BattleId="311497" AttackingShipId="2708491" DefendingShipId="9069446" '
-            'AttackingAllianceId="12008" DefendingAllianceId="0" BackgroundId="13"/></R>')
+            'AttackingAllianceId="12008" DefendingAllianceId="0" BackgroundId="13"/></R>'
+        )
         text = capture.text
         for value in ("2708491", "9069446", "16681254", "Hulk", "231455761", "311497", "12008"):
             self.assertNotIn(value, text)
@@ -853,11 +1052,19 @@ class SettingsSummaryPathTests(unittest.TestCase):
     def test_long_paths_and_names_do_not_trip_the_scan(self):
         from datetime import datetime, timezone
         from sdk.state.capture import settings_fields
+
         long_name = "VeryLongSettingNameThatLooksLikeBase64ToTheScan"
-        settings = {"SettingService": {"GetLatestVersion": {"Setting": {
-            "@LatestVersion": "0.999.60", "@MaintenanceMessage": "x"},
-            "SettingsCollectionForExtendedClientVersions": {"@MinimumClientVersion": "0.999.55",
-                                                            "@" + long_name: "1"}}}}
+        settings = {
+            "SettingService": {
+                "GetLatestVersion": {
+                    "Setting": {"@LatestVersion": "0.999.60", "@MaintenanceMessage": "x"},
+                    "SettingsCollectionForExtendedClientVersions": {
+                        "@MinimumClientVersion": "0.999.55",
+                        "@" + long_name: "1",
+                    },
+                }
+            }
+        }
         result = settings_fields("pss1", settings, None, lambda: datetime(2026, 11, 12, tzinfo=timezone.utc))
         self.assertEqual((result.status, result.scan), ("captured", "clean"), result.reason)
         self.assertIn('"SettingService.GetLatestVersion.Setting"', result.text)

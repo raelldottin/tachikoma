@@ -870,9 +870,19 @@
       "tests": [
         "tests/test_battle_flow.py"
       ]
-    },
-    {
-      "name": "runBattleEndToEnd",
+            },
+            {
+              "name": "createStarBattle5Auto",
+              "pillar": "C",
+              "kind": "read-only",
+              "evidence": "mocked-test",
+              "tests": [
+                "tests/test_capture_reads.py",
+                "tests/test_battle_flow.py"
+              ]
+            },
+            {
+              "name": "runBattleEndToEnd",
       "pillar": "C",
       "kind": "mutating",
       "evidence": "mocked-test",

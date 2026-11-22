@@ -27,23 +27,24 @@ from .redaction import redact_secrets, safe_log_message  # noqa: F401
 
 def lowercase_urlencode(params: dict) -> str:
     """URL-encode with lowercase hex digits to match official iOS client.
-    
+
     urllib.parse.urlencode uses uppercase (%3A) but the official client
     sends lowercase (%3a). Server requires exact byte-for-byte match.
     """
     parts = []
     for k, v in params.items():
-        k_enc = urllib.parse.quote(k, safe='')
-        v_enc = urllib.parse.quote(v, safe='')
+        k_enc = urllib.parse.quote(k, safe="")
+        v_enc = urllib.parse.quote(v, safe="")
         # Force lowercase hex digits
-        k_enc = re.sub(r'%([0-9A-F]{2})', lambda m: '%' + m.group(1).lower(), k_enc)
-        v_enc = re.sub(r'%([0-9A-F]{2})', lambda m: '%' + m.group(1).lower(), v_enc)
-        parts.append(f'{k_enc}={v_enc}')
-    return '&'.join(parts)
+        k_enc = re.sub(r"%([0-9A-F]{2})", lambda m: "%" + m.group(1).lower(), k_enc)
+        v_enc = re.sub(r"%([0-9A-F]{2})", lambda m: "%" + m.group(1).lower(), v_enc)
+        parts.append(f"{k_enc}={v_enc}")
+    return "&".join(parts)
 
 
 class ConfigurationError(RuntimeError):
     """Raised when required configuration is missing or invalid."""
+
     pass
 
 
@@ -63,8 +64,14 @@ def place_room_reply(response) -> dict:
     leak-scans and redacts that text before it is journaled. A reply that is not XML keeps only its
     status and length.
     """
-    summary = {"http_status": getattr(response, "status_code", None), "success_shape": False,
-               "elements": [], "messages": [], "parsed": False, "length": None}
+    summary = {
+        "http_status": getattr(response, "status_code", None),
+        "success_shape": False,
+        "elements": [],
+        "messages": [],
+        "parsed": False,
+        "length": None,
+    }
     if response is None:
         return summary
     content = getattr(response, "content", None) or b""
@@ -87,11 +94,15 @@ def place_room_reply(response) -> dict:
         for key, value in node.items():
             if key.startswith("@"):
                 lowered = key.lower()
-                if ("error" in lowered or "message" in lowered) and len(summary["messages"]) < PLACE_REPLY_MESSAGE_LIMIT:
+                if ("error" in lowered or "message" in lowered) and len(
+                    summary["messages"]
+                ) < PLACE_REPLY_MESSAGE_LIMIT:
                     summary["messages"].append({"attribute": key[1:], "text": str(value)[:PLACE_REPLY_TEXT_LIMIT]})
             elif key == "#text":
                 if len(summary["messages"]) < PLACE_REPLY_MESSAGE_LIMIT:
-                    summary["messages"].append({"attribute": f"{name} text", "text": str(value)[:PLACE_REPLY_TEXT_LIMIT]})
+                    summary["messages"].append(
+                        {"attribute": f"{name} text", "text": str(value)[:PLACE_REPLY_TEXT_LIMIT]}
+                    )
             else:
                 walk(value, key)
 
@@ -125,7 +136,6 @@ def _extract_collection(data, item_key: str) -> list[dict]:
             if res:
                 return res
     return []
-
 
 
 DEFAULT_TIMEOUT = 5  # seconds
@@ -230,9 +240,7 @@ class Client(object):
                 logging.error("[%s] {%s} - {%s}", self.info["@Name"], redact_secrets(url), redact_secrets(str(d)))
 
         if "Failed to authorize access token" in r.text:
-            logging.info(
-                "[%s] Attempting to reauthorized access token.", self.info["@Name"]
-            )
+            logging.info("[%s] Attempting to reauthorized access token.", self.info["@Name"])
             self.user.isAuthorized = False
             self.quickReload()
             r = self.session.request(method, url, headers=self.headers, data=data)
@@ -312,9 +320,7 @@ class Client(object):
                 pass
         elif "FreeStarbuxReceivedToday" in r.text:
             try:
-                self.freeStarbuxToday = int(
-                    r.text.split('FreeStarbuxReceivedToday="')[1].split('"')[0]
-                )
+                self.freeStarbuxToday = int(r.text.split('FreeStarbuxReceivedToday="')[1].split('"')[0])
             except Exception:
                 pass
 
@@ -333,7 +339,7 @@ class Client(object):
 
     def _build_device_login_payload(self):
         """Build the DeviceLogin17 JSON payload for the current device state.
-        
+
         Format matches official iOS client (Unity 6000.0.77f1, build 18054).
 
         Protocol detail (verified 2026-08-03, 7/7 captures):
@@ -344,12 +350,12 @@ class Client(object):
         """
         checksum_key = self.settings.get("checksum_key") or "5343"
         savy_checksum = self.settings.get("savy_checksum") or "Savvy!s0d@"
-        
+
         # Full precision timestamp for the request body
         client_dt = "{0:%Y-%m-%dT%H:%M:%S.%f}Z".format(DotNet.validDateTime())
         # Stripped to seconds for the checksum preimage
         client_dt_checksum = client_dt.split(".")[0]
-        
+
         self.checksum = checksum_device_login17(
             device_key=self.device.key,
             client_date_time=client_dt_checksum,
@@ -380,10 +386,7 @@ class Client(object):
     @staticmethod
     def _extract_access_token(response):
         """Extract the accessToken attribute value from a DeviceLogin17 response."""
-        if (
-            (not response or response.status_code != 200)
-            or ("accessToken" not in response.text)
-        ):
+        if (not response or response.status_code != 200) or ("accessToken" not in response.text):
             return None
         return response.text.split('accessToken="')[1].split('"')[0]
 
@@ -447,16 +450,18 @@ class Client(object):
             savy_checksum,
         )
 
-        post_data = lowercase_urlencode({
-            "clientDateTime": ts,
-            "checksum": self.checksum,
-            "deviceKey": self.device.key,
-            "email": email,
-            "password": password,
-            "languageKey": self.device.languageKey or "en",
-            "isWeb": "False",
-            "accessToken": self.accessToken,
-        })
+        post_data = lowercase_urlencode(
+            {
+                "clientDateTime": ts,
+                "checksum": self.checksum,
+                "deviceKey": self.device.key,
+                "email": email,
+                "password": password,
+                "languageKey": self.device.languageKey or "en",
+                "isWeb": "False",
+                "accessToken": self.accessToken,
+            }
+        )
         # Official client sends ALL params in URL query string AND POST body
         url = f"{self.baseUrl}/UserService/UserEmailPasswordAuthorize4?{post_data}"
         r = self.request(url, "POST", data=post_data)
@@ -475,9 +480,7 @@ class Client(object):
             )
             return False
 
-        self.device.refreshTokenAcquire(
-            r.text.split('refreshToken="')[1].split('"')[0]
-        )
+        self.device.refreshTokenAcquire(r.text.split('refreshToken="')[1].split('"')[0])
         return True
 
     def exchange_refresh_token(self) -> bool:
@@ -600,8 +603,9 @@ class Client(object):
         return self._fetchDesignList("TaskService/ListAllTaskDesigns2", "TaskDesignVersion", "allTaskDesigns")
 
     def listAllTrainingDesigns2(self):
-        return self._fetchDesignList("TrainingService/ListAllTrainingDesigns2", "TrainingDesignVersion",
-                                     "trainingDesigns")
+        return self._fetchDesignList(
+            "TrainingService/ListAllTrainingDesigns2", "TrainingDesignVersion", "trainingDesigns"
+        )
 
     def _shipRecord(self):
         """The ``Ship`` record of the last GetShipByUserId reply, or None.
@@ -651,9 +655,7 @@ class Client(object):
         url = f"https://api.pixelstarships.com/GalaxyService/ListStarSystemMarkersAndUserMarkers?accessToken={self.accessToken}"
         r = self.request(url, "GET")
         if r:
-            self.starSystemMarkersAndUserMarkers = xmltodict.parse(
-                r.content, xml_attribs=True
-            )
+            self.starSystemMarkersAndUserMarkers = xmltodict.parse(r.content, xml_attribs=True)
 
     def collectAvailableMarkers(self) -> int:
         """List star system markers and collect all those owned by this user.
@@ -749,11 +751,13 @@ class Client(object):
 
     def listActionTypes2(self):
         return bool(self.user.isAuthorized) and self._fetchDesignList(
-            "RoomService/ListActionTypes2", "ActionTypeVersion", "actionTypes")
+            "RoomService/ListActionTypes2", "ActionTypeVersion", "actionTypes"
+        )
 
     def listConditionTypes2(self):
         return bool(self.user.isAuthorized) and self._fetchDesignList(
-            "RoomService/ListConditionTypes2", "ConditionTypeVersion", "conditionTypes")
+            "RoomService/ListConditionTypes2", "ConditionTypeVersion", "conditionTypes"
+        )
 
     def listAllResearches(self):
         url = f"https://api.pixelstarships.com/ResearchService/ListAllResearches?accessToken={self.accessToken}&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
@@ -809,7 +813,9 @@ class Client(object):
         return True
 
     def getTrainingUpdate(self, characterId):
-        url = f"{self.baseUrl}/TrainingService/GetTrainingUpdate?characterId={characterId}&accessToken={self.accessToken}"
+        url = (
+            f"{self.baseUrl}/TrainingService/GetTrainingUpdate?characterId={characterId}&accessToken={self.accessToken}"
+        )
         r = self.request(url, "POST")
         if r and "errorMessage" in r.text:
             return False
@@ -830,10 +836,7 @@ class Client(object):
         if r:
             allDesignVersion = xmltodict.parse(r.content, xml_attribs=True)
 
-            if (
-                "DesignService" not in allDesignVersion
-                and "ListAllDesigns" not in allDesignVersion["DesignService"]
-            ):
+            if "DesignService" not in allDesignVersion and "ListAllDesigns" not in allDesignVersion["DesignService"]:
                 return False
             designs = [
                 "Files",
@@ -874,97 +877,39 @@ class Client(object):
                     logging.error("Missing design data.")
                     return False
             self.files = allDesignVersion["DesignService"]["ListAllDesigns"]["Files"]
-            self.sprites = allDesignVersion["DesignService"]["ListAllDesigns"][
-                "Sprites"
-            ]
-            self.backgrounds = allDesignVersion["DesignService"]["ListAllDesigns"][
-                "Backgrounds"
-            ]
-            self.shipDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-                "ShipDesigns"
-            ]
-            self.roomDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-                "RoomDesigns"
-            ]
-            self.characterDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-                "CharacterDesigns"
-            ]
-            self.characterDesignActions = allDesignVersion["DesignService"][
-                "ListAllDesigns"
-            ]["CharacterDesignActions"]
-            self.itemDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-                "ItemDesigns"
-            ]
-            self.craftDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-                "CraftDesigns"
-            ]
-            self.missileDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-                "MissileDesigns"
-            ]
-            self.starSystems = allDesignVersion["DesignService"]["ListAllDesigns"][
-                "StarSystems"
-            ]
-            self.starSystemsLinks = allDesignVersion["DesignService"]["ListAllDesigns"][
-                "StarSystemLinks"
-            ]
-            self.newsDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-                "NewsDesigns"
-            ]
-            self.leagues = allDesignVersion["DesignService"]["ListAllDesigns"][
-                "Leagues"
-            ]
-            self.achievementDesigns = allDesignVersion["DesignService"][
-                "ListAllDesigns"
-            ]["AchievementDesigns"]
-            self.roomDesignPurchases = allDesignVersion["DesignService"][
-                "ListAllDesigns"
-            ]["RoomDesignPurchases"]
-            self.roomDesignSprites = allDesignVersion["DesignService"][
-                "ListAllDesigns"
-            ]["RoomDesignSprites"]
-            self.missionDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-                "MissionDesigns"
-            ]
-            self.animations = allDesignVersion["DesignService"]["ListAllDesigns"][
-                "Animations"
-            ]
-            self.researchDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-                "ResearchDesigns"
-            ]
-            self.trainingDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-                "TrainingDesigns"
-            ]
-            self.challengeDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-                "ChallengeDesigns"
-            ]
-            self.rewardDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-                "RewardDesigns"
-            ]
-            self.divisionDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-                "DivisionDesigns"
-            ]
-            self.collectionDesigns = allDesignVersion["DesignService"][
-                "ListAllDesigns"
-            ]["CollectionDesigns"]
-            self.drawDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-                "DrawDesigns"
-            ]
-            self.promotionDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-                "PromotionDesigns"
-            ]
-            self.situationDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-                "SituationDesigns"
-            ]
-            self.itemDesignActions = allDesignVersion["DesignService"][
-                "ListAllDesigns"
-            ]["ItemDesignActions"]
-            self.seasonDesigns = allDesignVersion["DesignService"]["ListAllDesigns"][
-                "SeasonDesigns"
-            ]
+            self.sprites = allDesignVersion["DesignService"]["ListAllDesigns"]["Sprites"]
+            self.backgrounds = allDesignVersion["DesignService"]["ListAllDesigns"]["Backgrounds"]
+            self.shipDesigns = allDesignVersion["DesignService"]["ListAllDesigns"]["ShipDesigns"]
+            self.roomDesigns = allDesignVersion["DesignService"]["ListAllDesigns"]["RoomDesigns"]
+            self.characterDesigns = allDesignVersion["DesignService"]["ListAllDesigns"]["CharacterDesigns"]
+            self.characterDesignActions = allDesignVersion["DesignService"]["ListAllDesigns"]["CharacterDesignActions"]
+            self.itemDesigns = allDesignVersion["DesignService"]["ListAllDesigns"]["ItemDesigns"]
+            self.craftDesigns = allDesignVersion["DesignService"]["ListAllDesigns"]["CraftDesigns"]
+            self.missileDesigns = allDesignVersion["DesignService"]["ListAllDesigns"]["MissileDesigns"]
+            self.starSystems = allDesignVersion["DesignService"]["ListAllDesigns"]["StarSystems"]
+            self.starSystemsLinks = allDesignVersion["DesignService"]["ListAllDesigns"]["StarSystemLinks"]
+            self.newsDesigns = allDesignVersion["DesignService"]["ListAllDesigns"]["NewsDesigns"]
+            self.leagues = allDesignVersion["DesignService"]["ListAllDesigns"]["Leagues"]
+            self.achievementDesigns = allDesignVersion["DesignService"]["ListAllDesigns"]["AchievementDesigns"]
+            self.roomDesignPurchases = allDesignVersion["DesignService"]["ListAllDesigns"]["RoomDesignPurchases"]
+            self.roomDesignSprites = allDesignVersion["DesignService"]["ListAllDesigns"]["RoomDesignSprites"]
+            self.missionDesigns = allDesignVersion["DesignService"]["ListAllDesigns"]["MissionDesigns"]
+            self.animations = allDesignVersion["DesignService"]["ListAllDesigns"]["Animations"]
+            self.researchDesigns = allDesignVersion["DesignService"]["ListAllDesigns"]["ResearchDesigns"]
+            self.trainingDesigns = allDesignVersion["DesignService"]["ListAllDesigns"]["TrainingDesigns"]
+            self.challengeDesigns = allDesignVersion["DesignService"]["ListAllDesigns"]["ChallengeDesigns"]
+            self.rewardDesigns = allDesignVersion["DesignService"]["ListAllDesigns"]["RewardDesigns"]
+            self.divisionDesigns = allDesignVersion["DesignService"]["ListAllDesigns"]["DivisionDesigns"]
+            self.collectionDesigns = allDesignVersion["DesignService"]["ListAllDesigns"]["CollectionDesigns"]
+            self.drawDesigns = allDesignVersion["DesignService"]["ListAllDesigns"]["DrawDesigns"]
+            self.promotionDesigns = allDesignVersion["DesignService"]["ListAllDesigns"]["PromotionDesigns"]
+            self.situationDesigns = allDesignVersion["DesignService"]["ListAllDesigns"]["SituationDesigns"]
+            self.itemDesignActions = allDesignVersion["DesignService"]["ListAllDesigns"]["ItemDesignActions"]
+            self.seasonDesigns = allDesignVersion["DesignService"]["ListAllDesigns"]["SeasonDesigns"]
             self.assets = allDesignVersion["DesignService"]["ListAllDesigns"]["Assets"]
-            self.starSystemMarkerGenerators = allDesignVersion["DesignService"][
-                "ListAllDesigns"
-            ]["StarSystemMarkerGenerators"]
+            self.starSystemMarkerGenerators = allDesignVersion["DesignService"]["ListAllDesigns"][
+                "StarSystemMarkerGenerators"
+            ]
         return True
 
     def listAllCharacterDesigns2(self):
@@ -977,9 +922,7 @@ class Client(object):
             self.allCharacterDesigns = xmltodict.parse(r.content, xml_attribs=True)
 
             if "CharacterService" not in self.allCharacterDesigns:
-                logging.error(
-                    "[%s] CharacterService data not avaialble.", self.info["@Name"]
-                )
+                logging.error("[%s] CharacterService data not avaialble.", self.info["@Name"])
                 return False
             return True
         return False
@@ -993,17 +936,11 @@ class Client(object):
         return True
 
     def manageTraining(self):
-        if (
-            not hasattr(self, "allCharactersOfUser")
-            and not self.listAllCharactersOfUser()
-        ):
+        if not hasattr(self, "allCharactersOfUser") and not self.listAllCharactersOfUser():
             logging.error("allCharactersOfUser data not avaialble.")
             return False
 
-        if (
-            not hasattr(self, "allCharacterDesigns")
-            and not self.listAllCharacterDesigns2()
-        ):
+        if not hasattr(self, "allCharacterDesigns") and not self.listAllCharacterDesigns2():
             logging.error("AllCharacterDesigns data not avaialble.")
             return False
 
@@ -1113,13 +1050,8 @@ class Client(object):
             if room.get("@RoomDesignId"):
                 self.getRoomName(room["@RoomDesignId"])
 
-            logging.debug(
-                "{0!r} in {1!r}".format(character["@CharacterName"], self.roomName)
-            )
-            if any(
-                primaryRoom in self.roomName
-                for primaryRoom in ["Academy", "GYM", "Galaxy Gym", "Lunar College"]
-            ):
+            logging.debug("{0!r} in {1!r}".format(character["@CharacterName"], self.roomName))
+            if any(primaryRoom in self.roomName for primaryRoom in ["Academy", "GYM", "Galaxy Gym", "Lunar College"]):
                 roleData = {}
                 for data in roles.values():
                     if character["@CharacterName"] in data["characters"]:
@@ -1141,44 +1073,31 @@ class Client(object):
                     count = count + int(character[stat])
 
                 characterDesign = {}
-                for characterDesign in self.allCharacterDesigns["CharacterService"][
-                    "ListAllCharacterDesigns"
-                ]["CharacterDesigns"]["CharacterDesign"]:
-                    if (
-                        character["@CharacterDesignId"]
-                        == characterDesign["@CharacterDesignId"]
-                    ):
+                for characterDesign in self.allCharacterDesigns["CharacterService"]["ListAllCharacterDesigns"][
+                    "CharacterDesigns"
+                ]["CharacterDesign"]:
+                    if character["@CharacterDesignId"] == characterDesign["@CharacterDesignId"]:
                         break
 
                 trainingEndDate = None
                 if character["@TrainingEndDate"]:
-                    trainingEndDate = datetime.datetime.strptime(
-                        character["@TrainingEndDate"], "%Y-%m-%dT%H:%M:%S"
-                    )
+                    trainingEndDate = datetime.datetime.strptime(character["@TrainingEndDate"], "%Y-%m-%dT%H:%M:%S")
 
-                percent = math.ceil(
-                    count / int(characterDesign["@TrainingCapacity"]) * 100
-                )
+                percent = math.ceil(count / int(characterDesign["@TrainingCapacity"]) * 100)
                 # Check research prerequisites for each tier
                 has_101_research = self.hasResearch("Fitness", 101) or self.hasResearch("Education", 101)
                 has_201_research = self.hasResearch("Fitness", 201) or self.hasResearch("Education", 201)
                 has_202_research = self.hasResearch("Fitness", 202) or self.hasResearch("Education", 202)
                 has_203_research = self.hasResearch("Fitness", 203) or self.hasResearch("Education", 203)
-                
+
                 if (
                     roleData
-                    and any(
-                        primaryRoom in self.roomName
-                        for primaryRoom in roleData["primaryRoom"]
-                    )
+                    and any(primaryRoom in self.roomName for primaryRoom in roleData["primaryRoom"])
                     and (percent < 51)
                     and has_101_research
                     and (
                         not trainingEndDate
-                        or (
-                            trainingEndDate
-                            < (datetime.datetime.utcnow() - datetime.timedelta(hours=1))
-                        )
+                        or (trainingEndDate < (datetime.datetime.utcnow() - datetime.timedelta(hours=1)))
                     )
                 ):
                     trainingName = roleData["primaryT1"]
@@ -1187,21 +1106,12 @@ class Client(object):
                     )
                 elif (
                     roleData
-                    and any(
-                        primaryRoom in self.roomName
-                        for primaryRoom in roleData["primaryRoom"]
-                    )
+                    and any(primaryRoom in self.roomName for primaryRoom in roleData["primaryRoom"])
                     and (50 < percent < 65)
                     and has_201_research
                     and (
                         not trainingEndDate
-                        or (
-                            trainingEndDate
-                            < (
-                                datetime.datetime.utcnow()
-                                - datetime.timedelta(hours=3, minutes=15)
-                            )
-                        )
+                        or (trainingEndDate < (datetime.datetime.utcnow() - datetime.timedelta(hours=3, minutes=15)))
                     )
                 ):
                     trainingName = roleData["primaryT2"]
@@ -1210,21 +1120,12 @@ class Client(object):
                     )
                 elif (
                     roleData
-                    and any(
-                        primaryRoom in self.roomName
-                        for primaryRoom in roleData["primaryRoom"]
-                    )
+                    and any(primaryRoom in self.roomName for primaryRoom in roleData["primaryRoom"])
                     and (64 < percent < 72)
                     and has_203_research
                     and (
                         not trainingEndDate
-                        or (
-                            trainingEndDate
-                            < (
-                                datetime.datetime.utcnow()
-                                - datetime.timedelta(hours=12, minutes=15)
-                            )
-                        )
+                        or (trainingEndDate < (datetime.datetime.utcnow() - datetime.timedelta(hours=12, minutes=15)))
                     )
                 ):
                     trainingName = roleData["primaryT3"]
@@ -1234,10 +1135,7 @@ class Client(object):
                 elif (
                     roleData
                     and percent > 71
-                    and not any(
-                        secondaryRoom in self.roomName
-                        for secondaryRoom in roleData["secondaryRoom"]
-                    )
+                    and not any(secondaryRoom in self.roomName for secondaryRoom in roleData["secondaryRoom"])
                 ):
                     logging.error(
                         f"[{self.info['@Name']}] Move {character['@CharacterName']} with {math.ceil(percent)}% training and {character['@Fatigue']} fatigue in {self.roomName} to the {' or '.join(roleData['secondaryRoom'])} to complete training complete for ability {characterDesign['@SpecialAbilityType']}."
@@ -1245,17 +1143,11 @@ class Client(object):
 
                 elif (
                     roleData
-                    and any(
-                        secondaryRoom in self.roomName
-                        for secondaryRoom in roleData["secondaryRoom"]
-                    )
+                    and any(secondaryRoom in self.roomName for secondaryRoom in roleData["secondaryRoom"])
                     and (71 < percent < 74)
                     and (
                         not trainingEndDate
-                        or (
-                            trainingEndDate
-                            < (datetime.datetime.utcnow() - datetime.timedelta(hours=1))
-                        )
+                        or (trainingEndDate < (datetime.datetime.utcnow() - datetime.timedelta(hours=1)))
                     )
                 ):
                     trainingName = roleData["secondaryT1"]
@@ -1264,21 +1156,12 @@ class Client(object):
                     )
                 elif (
                     roleData
-                    and any(
-                        secondaryRoom in self.roomName
-                        for secondaryRoom in roleData["secondaryRoom"]
-                    )
+                    and any(secondaryRoom in self.roomName for secondaryRoom in roleData["secondaryRoom"])
                     and (73 < percent < 85)
                     and has_201_research
                     and (
                         not trainingEndDate
-                        or (
-                            trainingEndDate
-                            < (
-                                datetime.datetime.utcnow()
-                                - datetime.timedelta(hours=3, minutes=15)
-                            )
-                        )
+                        or (trainingEndDate < (datetime.datetime.utcnow() - datetime.timedelta(hours=3, minutes=15)))
                     )
                 ):
                     trainingName = roleData["secondaryT2"]
@@ -1287,21 +1170,12 @@ class Client(object):
                     )
                 elif (
                     roleData
-                    and any(
-                        secondaryRoom in self.roomName
-                        for secondaryRoom in roleData["secondaryRoom"]
-                    )
+                    and any(secondaryRoom in self.roomName for secondaryRoom in roleData["secondaryRoom"])
                     and (84 < percent < 90)
                     and has_203_research
                     and (
                         not trainingEndDate
-                        or (
-                            trainingEndDate
-                            < (
-                                datetime.datetime.utcnow()
-                                - datetime.timedelta(hours=12, minutes=15)
-                            )
-                        )
+                        or (trainingEndDate < (datetime.datetime.utcnow() - datetime.timedelta(hours=12, minutes=15)))
                     )
                 ):
                     trainingName = roleData["secondaryT3"]
@@ -1319,14 +1193,10 @@ class Client(object):
                         statChange = ""
                         for stat in stats:
                             statTotal = statTotal + int(
-                                self.trainingFinish["TrainingService"][
-                                    "FinishTraining"
-                                ]["Character"][stat]
+                                self.trainingFinish["TrainingService"]["FinishTraining"]["Character"][stat]
                             )
                             if int(character[stat]) < int(
-                                self.trainingFinish["TrainingService"][
-                                    "FinishTraining"
-                                ]["Character"][stat]
+                                self.trainingFinish["TrainingService"]["FinishTraining"]["Character"][stat]
                             ):
                                 if statChange:
                                     statChange = ", ".join(
@@ -1334,20 +1204,16 @@ class Client(object):
                                         + " increased by "
                                         + str(
                                             int(
-                                                self.trainingFinish["TrainingService"][
-                                                    "FinishTraining"
-                                                ]["Character"][stat]
+                                                self.trainingFinish["TrainingService"]["FinishTraining"]["Character"][
+                                                    stat
+                                                ]
                                                 - int(character[stat])
                                             )
                                         )
                                     )
-                        newPercent = (
-                            statTotal / int(characterDesign["@TrainingCapacity"]) * 100
-                        )
+                        newPercent = statTotal / int(characterDesign["@TrainingCapacity"]) * 100
                         newFatigue = int(
-                            self.trainingFinish["TrainingService"]["FinishTraining"][
-                                "Character"
-                            ]["@Fatigue"]
+                            self.trainingFinish["TrainingService"]["FinishTraining"]["Character"]["@Fatigue"]
                         )
 
                         logging.info(
@@ -1391,11 +1257,13 @@ class Client(object):
                         if int(character[stat]) > 0:
                             primary_stat = stat_to_cons.get(stat)
                             break
-                    
+
                     if primary_stat:
                         grey_cons_id = self.findConsumableDesignId(primary_stat, "Common")
                         if grey_cons_id:
-                            logging.info(f"[{self.info['@Name']}] Using grey {primary_stat} consumable for {character['@CharacterName']} ({percent:.1f}% TP)")
+                            logging.info(
+                                f"[{self.info['@Name']}] Using grey {primary_stat} consumable for {character['@CharacterName']} ({percent:.1f}% TP)"
+                            )
                             self.useConsumable(grey_cons_id, int(character_id))
 
                 # Step 5: Hero consumables at 100 fatigue for guaranteed TP
@@ -1420,7 +1288,9 @@ class Client(object):
                             if cons_type:
                                 hero_cons_id = self.findConsumableDesignId(cons_type, "Hero")
                                 if hero_cons_id:
-                                    logging.info(f"[{self.info['@Name']}] Using hero {cons_type} consumable for {character['@CharacterName']} at 100 fatigue ({percent:.1f}% TP)")
+                                    logging.info(
+                                        f"[{self.info['@Name']}] Using hero {cons_type} consumable for {character['@CharacterName']} at 100 fatigue ({percent:.1f}% TP)"
+                                    )
                                     self.useConsumable(hero_cons_id, int(character_id))
                                     break
 
@@ -1431,18 +1301,18 @@ class Client(object):
             if not self.listAllCharactersOfUser():
                 return False
 
-        for character in self.allCharactersOfUser["CharacterService"][
-            "ListAllCharactersOfUser"
-        ]["Characters"]["Character"]:
+        for character in self.allCharactersOfUser["CharacterService"]["ListAllCharactersOfUser"]["Characters"][
+            "Character"
+        ]:
             self.getRoomName(character["@RoomDesignId"])
             if self.roomName != "":
-                logging.info(
-                    f"[{self.info['@Name']}] {character['@CharacterName']} is located in {self.roomName}."
-                )
+                logging.info(f"[{self.info['@Name']}] {character['@CharacterName']} is located in {self.roomName}.")
         return True
 
     def upgradeCharacter(self, characterId):
-        url = f"{self.baseUrl}/CharacterService/UpgradeCharacter?characterId={characterId}&accessToken={self.accessToken}"
+        url = (
+            f"{self.baseUrl}/CharacterService/UpgradeCharacter?characterId={characterId}&accessToken={self.accessToken}"
+        )
         self.request(url, "POST")
 
     def upgradeCharacters(self):
@@ -1594,10 +1464,7 @@ class Client(object):
             for character in characters:
                 if character.get("@RoomId") != "0" and character.get("@Level") != "40":
                     for characterDesign in character_designs:
-                        if (
-                            character.get("@CharacterDesignId")
-                            == characterDesign.get("@CharacterDesignId")
-                        ):
+                        if character.get("@CharacterDesignId") == characterDesign.get("@CharacterDesignId"):
                             character_names.append(character.get("@CharacterName", ""))
                             logging.debug(f"{len(crewCosts)=} {len(legendaryCrewCosts)=}")
                             try:
@@ -1607,11 +1474,7 @@ class Client(object):
                                 continue
 
                             rarity = characterDesign.get("@Rarity", "")
-                            xp_cost = (
-                                legendaryCrewCosts[lvl]
-                                if rarity == "Legendary"
-                                else crewCosts[lvl]
-                            )
+                            xp_cost = legendaryCrewCosts[lvl] if rarity == "Legendary" else crewCosts[lvl]
                             if xp >= xp_cost:
                                 self.collectAllResources()
                                 date_str = character.get("@AvailableDate", "")
@@ -1622,11 +1485,7 @@ class Client(object):
                                 except ValueError:
                                     date_to_check = datetime.datetime.now()
                                 current_datetime = datetime.datetime.now()
-                                gas_cost = (
-                                    legendaryCrewGasCosts[lvl]
-                                    if rarity == "Legendary"
-                                    else crewGasCosts[lvl]
-                                )
+                                gas_cost = legendaryCrewGasCosts[lvl] if rarity == "Legendary" else crewGasCosts[lvl]
                                 try:
                                     gas_avail = int(self.gasTotal)
                                 except (ValueError, TypeError):
@@ -1680,9 +1539,7 @@ class Client(object):
             logging.debug(redact_secrets(url))
             r = self.request(url, "POST")
             if r:
-                self.systemMessagesForUser = xmltodict.parse(
-                    r.content, xml_attribs=True
-                )
+                self.systemMessagesForUser = xmltodict.parse(r.content, xml_attribs=True)
             return True
         return False
 
@@ -1750,21 +1607,21 @@ class Client(object):
 
     def findConsumableDesignId(self, statType: str, tier: str = "Common") -> int:
         """Find a consumable item design ID by stat type and tier.
-        
+
         Args:
             statType: One of "HP", "ATK", "ABL", "STA", "WPN", "PLT", "SCI", "ENG"
             tier: One of "Common" (grey), "Uncommon", "Rare", "Epic", "Legendary", "Hero"
-            
+
         Returns:
             ItemDesignId or 0 if not found
         """
         if not hasattr(self, "itemDesigns") or not self.itemDesigns:
             self.listAllDesigns4()
-            
+
         items = _extract_collection(getattr(self, "itemDesigns", {}), "ItemDesign")
         if not items:
             return 0
-            
+
         for item in items:
             item_name = item.get("@ItemName", "")
             item_subtype = item.get("@ItemSubType", "")
@@ -1813,9 +1670,7 @@ class Client(object):
             messages = _extract_collection(d, "Message")
             self.marketplaceMessages = messages
             if not messages:
-                logging.debug(
-                    f'[{self.info.get("@Name", "")}] You have no items listed on the marketplace.'
-                )
+                logging.debug(f"[{self.info.get('@Name', '')}] You have no items listed on the marketplace.")
                 return True
 
             for msg in messages:
@@ -1826,12 +1681,8 @@ class Client(object):
             return False
 
     def infoBux(self):
-        logging.info(
-            f"[{self.info['@Name']}] A total of {self.freeStarbuxToday} free starbux was collected today."
-        )
-        logging.info(
-            f"[{self.info['@Name']}] You have a total of {self.credits} starbux."
-        )
+        logging.info(f"[{self.info['@Name']}] A total of {self.freeStarbuxToday} free starbux was collected today.")
+        logging.info(f"[{self.info['@Name']}] You have a total of {self.credits} starbux.")
 
     def collectAllResources(self):
         url = "https://api.pixelstarships.com/RoomService/CollectAllResources?itemType=None&collectDate={}&accessToken={}".format(
@@ -1892,28 +1743,20 @@ class Client(object):
         return True
 
     def getResourceTotals(self):
-        logging.info(
-            f'[{self.info["@Name"]}] There is a total of {self.mineralTotal} minerals on your ship.'
-        )
-        logging.info(
-            f'[{self.info["@Name"]}] There is a total of {self.gasTotal} gas on your ship.'
-        )
+        logging.info(f"[{self.info['@Name']}] There is a total of {self.mineralTotal} minerals on your ship.")
+        logging.info(f"[{self.info['@Name']}] There is a total of {self.gasTotal} gas on your ship.")
 
     def collectDailyReward(self):
         try:
             if not getattr(self, "todayLiveOps", None) or "LiveOpsService" not in self.todayLiveOps:
-                logging.error(
-                    "Unable to collect daily reward because of missing Live Ops data."
-                )
+                logging.error("Unable to collect daily reward because of missing Live Ops data.")
                 return False
             live_ops = self.todayLiveOps.get("LiveOpsService", {}).get("GetTodayLiveOps", {}).get("LiveOps", {})
             if isinstance(live_ops, dict) and "@DailyRewardArgument" in live_ops:
                 self.dailyRewardArgument = live_ops["@DailyRewardArgument"]
 
             if self.info.get("@DailyRewardStatus") == "1":
-                logging.info(
-                    f"[{self.info.get('@Name', '')}] Daily reward already collected today."
-                )
+                logging.info(f"[{self.info.get('@Name', '')}] Daily reward already collected today.")
                 return True
 
             if self.user.isAuthorized:
@@ -1944,11 +1787,12 @@ class Client(object):
     def collectMiningDrone(self, starSystemMarkerId):
         if self.user.isAuthorized and starSystemMarkerId not in self.dronesCollected:
             from sdk.security import checksum_collect_marker2
+
             checksum_key = self.settings.get("checksum_key")
             savy_checksum = self.settings.get("savy_checksum")
             if not checksum_key or not savy_checksum:
                 logging.warning(
-                    f'[{self.info.get("@Name", "")}] collectMiningDrone skipped: '
+                    f"[{self.info.get('@Name', '')}] collectMiningDrone skipped: "
                     "checksum_key/savy_checksum not configured"
                 )
                 return False
@@ -1991,11 +1835,13 @@ class Client(object):
 
     def collectReward2(self, messageId):
         from sdk.security import ChecksumTimeForDate, ChecksumPasswordWithString
+
         url = f"https://api.pixelstarships.com/MessageService/CollectReward2?messageId={messageId}&clientDateTime={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}&checksum={str(ChecksumTimeForDate(DotNet.get_time()) + ChecksumPasswordWithString(self.accessToken))}&accessToken={self.accessToken}"
         self.request(url, "POST")
 
     def AddStarbux2(self, quantity=1):
         from sdk.security import checksum_add_starbux2
+
         ts = "{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime())
         checksum = checksum_add_starbux2(str(quantity), ts, self.accessToken)
         url = f"https://api.pixelstarships.com/UserService/AddStarbux2?quantity={quantity}&clientDateTime={ts}&checksum={checksum}&accessToken={self.accessToken}"
@@ -2017,7 +1863,7 @@ class Client(object):
                     quantity = random.randint(1, 5)
             else:
                 logging.info(
-                    f'[{self.info["@Name"]}] You have collected a total of {self.freeStarbuxToday} starbux today.'
+                    f"[{self.info['@Name']}] You have collected a total of {self.freeStarbuxToday} starbux today."
                 )
                 return True
             logging.debug(f"[{self.info['@Name']}] {quantity=}")
@@ -2037,9 +1883,7 @@ class Client(object):
                 self.quickReload()
                 return False
 
-            logging.info(
-                f'[{self.info["@Name"]}] You have collected a total of {self.freeStarbuxToday} starbux today.'
-            )
+            logging.info(f"[{self.info['@Name']}] You have collected a total of {self.freeStarbuxToday} starbux today.")
             self.freeStarbuxTodayTimestamp = time.time()
 
             return True
@@ -2047,50 +1891,51 @@ class Client(object):
 
     def purchaseDrawWithStarbux(self, drawDesignId: str) -> bool:
         """Purchase a draw (pod) using Starbux.
-        
+
         Endpoint: CharacterService/Draw?drawDesignId={drawDesignId}&clientDateTime={}&checksum={}&accessToken={}
         Checksum: MD5(drawDesignId + clientDateTime + ChecksumKey + SavyChecksum)
-        
+
         Args:
             drawDesignId: The ID of the draw design to purchase (e.g., "Scorched Pod")
-            
+
         Returns:
             True if purchase successful, False otherwise
         """
         from sdk.security import checksum_character_draw
-        
+
         ts = "{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime())
         settings = self.settings or {}
         checksum_key = settings.get("checksum_key", "5343")
         savy_checksum = settings.get("savy_checksum", "Savvy!s0d@")
-        
+
         checksum = checksum_character_draw(
             draw_design_id=drawDesignId,
             client_date_time=ts,
             checksum_key=checksum_key,
             savy_checksum=savy_checksum,
         )
-        
+
         url = f"https://api.pixelstarships.com/CharacterService/Draw?drawDesignId={drawDesignId}&clientDateTime={ts}&checksum={checksum}&accessToken={self.accessToken}"
         r = self.request(url, "POST")
-        
+
         if r:
             result = xmltodict.parse(r.content, xml_attribs=True)
-            logging.info(f'[{self.info["@Name"]}] Draw purchase result: {result}')
-            
+            logging.info(f"[{self.info['@Name']}] Draw purchase result: {result}")
+
             # Check for error
             if "CharacterService" in result:
                 draw_result = result["CharacterService"].get("Draw", {})
                 if "@errorCode" in draw_result and draw_result["@errorCode"] != "0":
-                    logging.error(f'[{self.info["@Name"]}] Draw purchase failed: {draw_result.get("@errorMessage", "Unknown error")}')
+                    logging.error(
+                        f"[{self.info['@Name']}] Draw purchase failed: {draw_result.get('@errorMessage', 'Unknown error')}"
+                    )
                     return False
-            
+
             # Refresh designs to get updated state
             self.listAllDesigns4()
             return True
-        
-        return False
 
+        return False
 
     def purchaseCatalogItem(self, argument: str) -> bool:
         """Purchase an item from the shop using PurchaseCatalog2 endpoint.
@@ -2127,13 +1972,15 @@ class Client(object):
 
         if r:
             result = xmltodict.parse(r.content, xml_attribs=True)
-            logging.info(f'[{self.info["@Name"]}] PurchaseCatalog2 result: {result}')
+            logging.info(f"[{self.info['@Name']}] PurchaseCatalog2 result: {result}")
 
             # Check for error
             if "ShopService" in result:
                 purchase_result = result["ShopService"].get("PurchaseCatalog2", {})
                 if "@errorCode" in purchase_result and purchase_result["@errorCode"] != "0":
-                    logging.error(f'[{self.info["@Name"]}] PurchaseCatalog2 failed: {purchase_result.get("@errorMessage", "Unknown error")}')
+                    logging.error(
+                        f"[{self.info['@Name']}] PurchaseCatalog2 failed: {purchase_result.get('@errorMessage', 'Unknown error')}"
+                    )
                     return False
 
                 # Update credits balance from response if available
@@ -2155,7 +2002,6 @@ class Client(object):
 
         return False
 
-
     def purchaseScorchedPodIfAffordable(self) -> bool:
         """Purchase Scorched Pod from Shop if user has enough Starbux.
 
@@ -2174,10 +2020,10 @@ class Client(object):
         cost = 1000
 
         if starbux < cost:
-            logging.info(f'[{self.info["@Name"]}] Not enough Starbux for Scorched Pod: have {starbux}, need {cost}')
+            logging.info(f"[{self.info['@Name']}] Not enough Starbux for Scorched Pod: have {starbux}, need {cost}")
             return False
 
-        logging.info(f'[{self.info["@Name"]}] Purchasing Scorched Pod (Cost: {cost} Starbux, Argument: 1291)')
+        logging.info(f"[{self.info['@Name']}] Purchasing Scorched Pod (Cost: {cost} Starbux, Argument: 1291)")
         return self.purchaseCatalogItem("1291")
 
     def getCatalogQuantity(self) -> dict:
@@ -2211,7 +2057,7 @@ class Client(object):
 
         if r:
             result = xmltodict.parse(r.content, xml_attribs=True)
-            logging.info(f'[{self.info["@Name"]}] GetCatalogQuantity result: {result}')
+            logging.info(f"[{self.info['@Name']}] GetCatalogQuantity result: {result}")
             return result
 
         return {}
@@ -2222,9 +2068,9 @@ class Client(object):
             if not self.listAllResearchDesigns2():
                 return False
 
-        for i in self.allResearchDesigns["ResearchService"]["ListAllResearchDesigns"][
-            "ResearchDesigns"
-        ]["ResearchDesign"]:
+        for i in self.allResearchDesigns["ResearchService"]["ListAllResearchDesigns"]["ResearchDesigns"][
+            "ResearchDesign"
+        ]:
             if i["@ResearchDesignId"] == researchDesignId:
                 url = f"https://api.pixelstarships.com/ResearchService/SpeedUpResearchUsingBoostGauge?researchId={researchId}&accessToken={self.accessToken}&clientDateTime={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}"
                 r = self.request(url, "POST")
@@ -2233,9 +2079,7 @@ class Client(object):
                         f"[{self.info['@Name']}] Failed to speed up research for {''.join(i['@ResearchName'])}."
                     )
                     return False
-                logging.info(
-                    f"[{self.info['@Name']}] Speeding up research for {''.join(i['@ResearchName'])}."
-                )
+                logging.info(f"[{self.info['@Name']}] Speeding up research for {''.join(i['@ResearchName'])}.")
                 return True
         return False
 
@@ -2251,13 +2095,9 @@ class Client(object):
                 url = f"https://api.pixelstarships.com/RoomService/SpeedUpRoomConstructionUsingBoostGauge?roomId={roomId}&clientDateTime={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}&accessToken={self.accessToken}"
                 r = self.request(url, "POST")
                 if r and "errorMessage" in r.text:
-                    logging.info(
-                        f"[{self.info['@Name']}] Failed to speed contruction for {''.join(i['@RoomName'])}."
-                    )
+                    logging.info(f"[{self.info['@Name']}] Failed to speed contruction for {''.join(i['@RoomName'])}.")
                     return False
-                logging.info(
-                    f"[{self.info['@Name']}] Speeding up contruction for {''.join(i['@RoomName'])}."
-                )
+                logging.info(f"[{self.info['@Name']}] Speeding up contruction for {''.join(i['@RoomName'])}.")
                 return True
         return False
 
@@ -2266,23 +2106,13 @@ class Client(object):
             self.getShipByUserId()
 
         if "ShipService" in self.shipByUserId:
-            for i in self.shipByUserId["ShipService"]["GetShipByUserId"]["Ship"][
-                "Researches"
-            ]["Research"]:
+            for i in self.shipByUserId["ShipService"]["GetShipByUserId"]["Ship"]["Researches"]["Research"]:
                 if i["@ResearchState"] == "Researching":
-                    return self.speedUpResearchUsingBoostGauge(
-                        i["@ResearchId"], i["@ResearchDesignId"]
-                    )
-                for i in self.shipByUserId["ShipService"]["GetShipByUserId"]["Ship"][
-                    "Rooms"
-                ]["Room"]:
+                    return self.speedUpResearchUsingBoostGauge(i["@ResearchId"], i["@ResearchDesignId"])
+                for i in self.shipByUserId["ShipService"]["GetShipByUserId"]["Ship"]["Rooms"]["Room"]:
                     if i["@RoomStatus"] == "Upgrading":
-                        return self.speedUpRoomConstructionUsingBoostGauge(
-                            i["@RoomId"], i["@RoomDesignId"]
-                        )
-        logging.debug(
-            f'[{self.info["@Name"]}] There are no rooms or research to speed up.'
-        )
+                        return self.speedUpRoomConstructionUsingBoostGauge(i["@RoomId"], i["@RoomDesignId"])
+        logging.debug(f"[{self.info['@Name']}] There are no rooms or research to speed up.")
         return False
 
     def upgradeResearches(self):
@@ -2329,14 +2159,10 @@ class Client(object):
             self.collectAllResources()
             if not researchingFlag:
                 for researchItem in upgradeList:
-                    if int(researchItem[1]) > 0 and int(researchItem[1]) < int(
-                        self.gasTotal
-                    ):
+                    if int(researchItem[1]) > 0 and int(researchItem[1]) < int(self.gasTotal):
                         res = self.addResearch(researchItem[0])
                         if res is True:
-                            logging.info(
-                                f"[{self.info['@Name']}] Beginning research for {researchItem[3]}"
-                            )
+                            logging.info(f"[{self.info['@Name']}] Beginning research for {researchItem[3]}")
                             researchingFlag = True
                             break
                         elif res == "LAB_UPGRADE_REQUIRED":
@@ -2350,20 +2176,20 @@ class Client(object):
 
     def getResearchLevel(self, researchName: str) -> int:
         """Get the current level of a specific research by name.
-        
+
         Args:
             researchName: Name of the research (e.g., "Fitness 101", "Education 201")
-            
+
         Returns:
             Research level (0 if not found)
         """
         if not hasattr(self, "allResearches") or not self.allResearches:
             self.listAllResearches()
-        
+
         all_researches = _extract_collection(getattr(self, "allResearches", None), "Research")
         if not all_researches:
             return 0
-            
+
         for research in all_researches:
             if research.get("@ResearchName", "").startswith(researchName.split()[0]):
                 try:
@@ -2375,11 +2201,11 @@ class Client(object):
 
     def hasResearch(self, researchName: str, minLevel: int = 1) -> bool:
         """Check if a research has reached at least the minimum level.
-        
+
         Args:
             researchName: Name of the research (e.g., "Fitness", "Education")
             minLevel: Minimum required level (e.g., 101, 201, 202, 203)
-            
+
         Returns:
             True if research level >= minLevel
         """
@@ -2438,7 +2264,7 @@ class Client(object):
                     break
 
             if not next_design:
-                logging.warning(f'[{self.info["@Name"]}] No ship design found for level {next_level}')
+                logging.warning(f"[{self.info['@Name']}] No ship design found for level {next_level}")
                 return False
 
             next_design_id = next_design.get("@ShipDesignId", "")
@@ -2446,31 +2272,33 @@ class Client(object):
             try:
                 mineral_cost = int(mineral_cost_str)
             except (ValueError, TypeError):
-                logging.warning(f'[{self.info["@Name"]}] Invalid mineral cost for ship design {next_design_id}: {mineral_cost_str}')
+                logging.warning(
+                    f"[{self.info['@Name']}] Invalid mineral cost for ship design {next_design_id}: {mineral_cost_str}"
+                )
                 return False
 
             # Check if we have enough minerals
             current_minerals = int(self.mineralTotal) if self.mineralTotal else 0
             if current_minerals < mineral_cost:
                 logging.info(
-                    f'[{self.info["@Name"]}] Insufficient minerals for ship upgrade: need {mineral_cost}, have {current_minerals}'
+                    f"[{self.info['@Name']}] Insufficient minerals for ship upgrade: need {mineral_cost}, have {current_minerals}"
                 )
                 return False
 
             # Attempt ship upgrade
             logging.info(
-                f'[{self.info["@Name"]}] Upgrading ship from level {current_level} to {next_level} (cost: {mineral_cost} minerals)'
+                f"[{self.info['@Name']}] Upgrading ship from level {current_level} to {next_level} (cost: {mineral_cost} minerals)"
             )
             r = self.upgradeShip(next_design_id)
             if r and "errorMessage" not in r.text:
-                logging.info(f'[{self.info["@Name"]}] Ship upgrade successful!')
+                logging.info(f"[{self.info['@Name']}] Ship upgrade successful!")
                 return True
             else:
-                logging.warning(f'[{self.info["@Name"]}] Ship upgrade failed: {r.text if r else "No response"}')
+                logging.warning(f"[{self.info['@Name']}] Ship upgrade failed: {r.text if r else 'No response'}")
                 return False
 
         except Exception:
-            logging.exception(f'[{self.info["@Name"]}] Error attempting ship upgrade', exc_info=True)
+            logging.exception(f"[{self.info['@Name']}] Error attempting ship upgrade", exc_info=True)
             return False
 
     def placeRoom(self, roomDesignId, row, column):
@@ -2558,14 +2386,10 @@ class Client(object):
                             upgradeRoomName = "".join(roomDesignData.get("@RoomName", ""))
                             cost_str = roomDesignData.get("@PriceString", "")
                             cost = cost_str.split(":") if cost_str else [""]
-                            if (cost[0] == "mineral") and (
-                                len(cost) > 1 and int(cost[1]) > int(self.mineralTotal)
-                            ):
+                            if (cost[0] == "mineral") and (len(cost) > 1 and int(cost[1]) > int(self.mineralTotal)):
                                 continue
 
-                            if (cost[0] == "gas") and (
-                                len(cost) > 1 and int(cost[1]) > int(self.gasTotal)
-                            ):
+                            if (cost[0] == "gas") and (len(cost) > 1 and int(cost[1]) > int(self.gasTotal)):
                                 continue
 
                             if (
@@ -2574,30 +2398,29 @@ class Client(object):
                                 and (roomStatus != "Upgrading")
                                 and upgradeRoomDesignId != "0"
                             ):
-                                logging.info(
-                                    f'[{self.info["@Name"]}] Upgrading {roomName} to {upgradeRoomName}.'
-                                )
+                                logging.info(f"[{self.info['@Name']}] Upgrading {roomName} to {upgradeRoomName}.")
                                 r = self.upgradeRoom(roomId, upgradeRoomDesignId)
                                 roomName = ""
                                 upgradeRoomName = ""
                                 if r:
-                                    if "You cannot build or upgrade more rooms. Please wait for other constructions to be completed." in r.text:
+                                    if (
+                                        "You cannot build or upgrade more rooms. Please wait for other constructions to be completed."
+                                        in r.text
+                                    ):
                                         logging.info(
-                                            f'[{self.info["@Name"]}] Max concurrent constructions reached: cannot build or upgrade more rooms.'
+                                            f"[{self.info['@Name']}] Max concurrent constructions reached: cannot build or upgrade more rooms."
                                         )
                                         self.max_room_upgrades = True
                                         hit_blocker = True
                                         break
                                     if "You need to upgrade your ship first." in r.text:
-                                        logging.info(
-                                            f'[{self.info["@Name"]}] Ship upgrade required for room upgrade.'
-                                        )
+                                        logging.info(f"[{self.info['@Name']}] Ship upgrade required for room upgrade.")
                                         # Try to upgrade the ship if we have enough minerals
                                         ship_upgraded = self._tryUpgradeShip()
                                         if ship_upgraded:
                                             # Ship upgraded successfully, restart the while loop to re-scan rooms with new ship level
                                             logging.info(
-                                                f'[{self.info["@Name"]}] Ship upgraded, restarting room upgrade scan.'
+                                                f"[{self.info['@Name']}] Ship upgraded, restarting room upgrade scan."
                                             )
                                             upgraded_any = True  # Treat ship upgrade as progress to continue while loop
                                             break  # Break inner for loop, while loop will restart
@@ -2647,9 +2470,12 @@ class Client(object):
                             )
 
     def listAllResearchDesigns2(self):
-        return (self._fetchDesignList("ResearchService/ListAllResearchDesigns2", "ResearchDesignVersion",
-                                      "allResearchDesigns")
-                and "ResearchService" in self.allResearchDesigns)
+        return (
+            self._fetchDesignList(
+                "ResearchService/ListAllResearchDesigns2", "ResearchDesignVersion", "allResearchDesigns"
+            )
+            and "ResearchService" in self.allResearchDesigns
+        )
 
     def addResearch(self, researchDesignId):
         url = f"https://api.pixelstarships.com/ResearchService/AddResearch?researchDesignId={researchDesignId}&researchStartDate={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}&accessToken={self.accessToken}"
@@ -2673,6 +2499,7 @@ class Client(object):
         checksum = MD5(encrypted)
         """
         from sdk.security import checksum_rebuild_ammo3
+
         # These must be provided via configuration - no fallback to hardcoded values
         checksum_key = self.settings.get("checksum_key")
         savy_checksum = self.settings.get("savy_checksum")
@@ -2696,11 +2523,9 @@ class Client(object):
         ]
         for ammoCategory in ammoCategories:
             if ammoCategory == "None":
-                logging.info(f'[{self.info["@Name"]}] Restocking all ammo items.')
+                logging.info(f"[{self.info['@Name']}] Restocking all ammo items.")
             else:
-                logging.info(
-                    f'[{self.info["@Name"]}] Restocking {ammoCategory.lower()} items.'
-                )
+                logging.info(f"[{self.info['@Name']}] Restocking {ammoCategory.lower()} items.")
             ts = "{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime())
             checksum = checksum_rebuild_ammo3(
                 ammo_category=ammoCategory,
@@ -2713,7 +2538,7 @@ class Client(object):
             logging.debug(redact_secrets(f"{url=}"))
             r = self.request(url, "POST")
             if "errorMessage=" in r.text:
-                logging.warning(f'[{self.info["@Name"]}] RebuildAmmo3 {ammoCategory} failed: {r.text[:200]}')
+                logging.warning(f"[{self.info['@Name']}] RebuildAmmo3 {ammoCategory} failed: {r.text[:200]}")
         return True
 
     def updateMarkerMovement(self, marker_id: str) -> bool:
@@ -2727,6 +2552,7 @@ class Client(object):
         checksum = MD5(encrypted)
         """
         from sdk.security import checksum_update_marker_movement
+
         checksum_key = self.settings.get("checksum_key")
         savy_checksum = self.settings.get("savy_checksum")
 
@@ -2751,7 +2577,7 @@ class Client(object):
         logging.debug(redact_secrets(f"{url=}"))
         r = self.request(url, "POST")
         if "errorMessage=" in r.text:
-            logging.warning(f'[{self.info["@Name"]}] UpdateMarkerMovement failed: {r.text[:200]}')
+            logging.warning(f"[{self.info['@Name']}] UpdateMarkerMovement failed: {r.text[:200]}")
             return False
         return True
 
@@ -2766,6 +2592,7 @@ class Client(object):
             marker_id: Star system marker ID to collect.
         """
         from sdk.security import checksum_collect_marker2
+
         checksum_key = self.settings.get("checksum_key")
         savy_checksum = self.settings.get("savy_checksum")
 
@@ -2790,7 +2617,7 @@ class Client(object):
         logging.debug(redact_secrets(f"{url=}"))
         r = self.request(url, "POST")
         if "errorMessage=" in r.text:
-            logging.warning(f'[{self.info["@Name"]}] CollectMarker2 failed: {r.text[:200]}')
+            logging.warning(f"[{self.info['@Name']}] CollectMarker2 failed: {r.text[:200]}")
             return False
         return True
 
@@ -2873,8 +2700,7 @@ class Client(object):
         savy_checksum = self.settings.get("savy_checksum")
         if not checksum_key or not savy_checksum:
             logging.warning(
-                f"[{self.info.get('@Name', '')}] goToStarSystem skipped: "
-                "checksum_key/savy_checksum not configured"
+                f"[{self.info.get('@Name', '')}] goToStarSystem skipped: checksum_key/savy_checksum not configured"
             )
             return None
 
@@ -2897,8 +2723,7 @@ class Client(object):
         r = self.request(url, "POST")
         if not r or "errorMessage=" in r.text:
             logging.warning(
-                f"[{self.info.get('@Name', '')}] GoTo({star_system_id}) failed: "
-                f"{r.text[:200] if r else 'no response'}"
+                f"[{self.info.get('@Name', '')}] GoTo({star_system_id}) failed: {r.text[:200] if r else 'no response'}"
             )
             return None
 
@@ -2931,8 +2756,7 @@ class Client(object):
         savy_checksum = self.settings.get("savy_checksum")
         if not checksum_key or not savy_checksum:
             logging.warning(
-                f"[{self.info.get('@Name', '')}] speedUpTravelling skipped: "
-                "checksum_key/savy_checksum not configured"
+                f"[{self.info.get('@Name', '')}] speedUpTravelling skipped: checksum_key/savy_checksum not configured"
             )
             return False
 
@@ -2954,21 +2778,16 @@ class Client(object):
         r = self.request(url, "POST")
         if not r or "errorMessage=" in r.text:
             logging.warning(
-                f"[{self.info.get('@Name', '')}] SpeedUpTravelling failed: "
-                f"{r.text[:200] if r else 'no response'}"
+                f"[{self.info.get('@Name', '')}] SpeedUpTravelling failed: {r.text[:200] if r else 'no response'}"
             )
             return False
 
         if "Success" in r.text:
-            logging.info(
-                f"[{self.info.get('@Name', '')}] SpeedUpTravelling: Success"
-            )
+            logging.info(f"[{self.info.get('@Name', '')}] SpeedUpTravelling: Success")
             return True
         return False
 
-    def waitForArrival(
-        self, arrival_date: str, max_wait: int = 300, poll_interval: int = 15
-    ) -> bool:
+    def waitForArrival(self, arrival_date: str, max_wait: int = 300, poll_interval: int = 15) -> bool:
         """Wait for the ship to arrive at its destination.
 
         If the remaining travel time is less than max_wait seconds, polls the
@@ -2995,27 +2814,20 @@ class Client(object):
             # Handle the PSS date format: YYYY-MM-DDTHH:MM:SS
             arrival_dt = datetime.datetime.fromisoformat(arrival_date)
         except (ValueError, TypeError):
-            logging.error(
-                f"[{self.info.get('@Name', '')}] "
-                f"waitForArrival: cannot parse arrival_date='{arrival_date}'"
-            )
+            logging.error(f"[{self.info.get('@Name', '')}] waitForArrival: cannot parse arrival_date='{arrival_date}'")
             return False
 
         now = datetime.datetime.now()
         remaining = (arrival_dt - now).total_seconds()
 
         if remaining <= 0:
-            logging.info(
-                f"[{self.info.get('@Name', '')}] "
-                f"Ship already arrived (arrival {arrival_date})"
-            )
+            logging.info(f"[{self.info.get('@Name', '')}] Ship already arrived (arrival {arrival_date})")
             return True
 
         # If travel time < 5 minutes, use SpeedUpTravelling to eliminate it
         if remaining < 300:
             logging.info(
-                f"[{self.info.get('@Name', '')}] "
-                f"Travel time {int(remaining)}s < 5min — calling SpeedUpTravelling"
+                f"[{self.info.get('@Name', '')}] Travel time {int(remaining)}s < 5min — calling SpeedUpTravelling"
             )
             if self.speedUpTravelling():
                 return True
@@ -3023,8 +2835,7 @@ class Client(object):
 
         # Wait for arrival by polling
         logging.info(
-            f"[{self.info.get('@Name', '')}] "
-            f"Waiting for arrival at {arrival_date} ({int(remaining)}s remaining)"
+            f"[{self.info.get('@Name', '')}] Waiting for arrival at {arrival_date} ({int(remaining)}s remaining)"
         )
 
         waited = 0
@@ -3035,9 +2846,7 @@ class Client(object):
 
             now = datetime.datetime.now()
             if now >= arrival_dt:
-                logging.info(
-                    f"[{self.info.get('@Name', '')}] Ship arrived at {arrival_date}"
-                )
+                logging.info(f"[{self.info.get('@Name', '')}] Ship arrived at {arrival_date}")
                 return True
 
             # Optionally poll the server to confirm
@@ -3045,15 +2854,13 @@ class Client(object):
             # If travel time dropped below 5 minutes while waiting, speed up
             if remaining < 300 and remaining > 0:
                 logging.info(
-                    f"[{self.info.get('@Name', '')}] "
-                    f"Remaining {int(remaining)}s < 5min — calling SpeedUpTravelling"
+                    f"[{self.info.get('@Name', '')}] Remaining {int(remaining)}s < 5min — calling SpeedUpTravelling"
                 )
                 if self.speedUpTravelling():
                     return True
 
         logging.warning(
-            f"[{self.info.get('@Name', '')}] "
-            f"waitForArrival timed out after {max_wait}s (arrival {arrival_date})"
+            f"[{self.info.get('@Name', '')}] waitForArrival timed out after {max_wait}s (arrival {arrival_date})"
         )
         return False
 
@@ -3084,9 +2891,7 @@ class Client(object):
             logging.info(f"[{char_name}] No uncollected mining drones found")
             return 0
 
-        logging.info(
-            f"[{char_name}] Found {len(drones)} uncollected mining drone(s)"
-        )
+        logging.info(f"[{char_name}] Found {len(drones)} uncollected mining drone(s)")
 
         # Get current star system from ship data
         current_star_system = ""
@@ -3108,24 +2913,18 @@ class Client(object):
                 continue
 
             target_ss = drone["starSystemId"]
-            logging.info(
-                f"[{char_name}] Processing mining drone {marker_id} "
-                f"at StarSystem {target_ss}"
-            )
+            logging.info(f"[{char_name}] Processing mining drone {marker_id} at StarSystem {target_ss}")
 
             # Travel if needed
             if target_ss and target_ss != current_star_system:
                 arrival = self.goToStarSystem(target_ss)
                 if not arrival:
-                    logging.warning(
-                        f"[{char_name}] GoTo failed for drone {marker_id}, skipping"
-                    )
+                    logging.warning(f"[{char_name}] GoTo failed for drone {marker_id}, skipping")
                     continue
 
                 if not self.waitForArrival(arrival):
                     logging.warning(
-                        f"[{char_name}] Wait for arrival failed for drone {marker_id}, "
-                        f"attempting collection anyway"
+                        f"[{char_name}] Wait for arrival failed for drone {marker_id}, attempting collection anyway"
                     )
 
                 current_star_system = target_ss
@@ -3134,23 +2933,14 @@ class Client(object):
             try:
                 if self.collectMiningDrone(marker_id):
                     collected += 1
-                    logging.info(
-                        f"[{char_name}] Collected mining drone {marker_id}"
-                    )
+                    logging.info(f"[{char_name}] Collected mining drone {marker_id}")
                 else:
-                    logging.warning(
-                        f"[{char_name}] CollectMiningDrone({marker_id}) returned False"
-                    )
+                    logging.warning(f"[{char_name}] CollectMiningDrone({marker_id}) returned False")
             except Exception as e:
-                logging.error(
-                    f"[{char_name}] CollectMiningDrone({marker_id}) failed: "
-                    f"{redact_secrets(str(e))}"
-                )
+                logging.error(f"[{char_name}] CollectMiningDrone({marker_id}) failed: {redact_secrets(str(e))}")
 
         if collected:
-            logging.info(
-                f"[{char_name}] Collected {collected} mining drone(s)"
-            )
+            logging.info(f"[{char_name}] Collected {collected} mining drone(s)")
         return collected
 
     def getCrewInfo(self):
@@ -3168,9 +2958,7 @@ class Client(object):
                 if name:
                     character_list.append(name)
             if character_list:
-                logging.info(
-                    f"[{self.info.get('@Name', '')}] List of characters: {', '.join(character_list)}"
-                )
+                logging.info(f"[{self.info.get('@Name', '')}] List of characters: {', '.join(character_list)}")
             return True
         except Exception as e:
             logging.error(f"getCrewInfo failed: {redact_secrets(str(e))}")
@@ -3187,7 +2975,9 @@ class Client(object):
         """
         try:
             from sdk.ship_layout import (
-                parse_rooms, analyze_layout, format_analysis_report,
+                parse_rooms,
+                analyze_layout,
+                format_analysis_report,
             )
 
             # Ensure ship data is loaded
@@ -3217,7 +3007,9 @@ class Client(object):
             # Parse and analyze
             rooms = parse_rooms(ship, room_design_list)
             analysis = analyze_layout(
-                rooms, ship_name=ship_name, ship_level=ship_level,
+                rooms,
+                ship_name=ship_name,
+                ship_level=ship_level,
                 ship_design_id=ship_design_id,
             )
 
@@ -3248,9 +3040,7 @@ class Client(object):
                     parts = activity_arg.split(":")
                     arg_type = parts[0]
                     arg_val = parts[1] if len(parts) > 1 else ""
-                    logging.info(
-                        f"[{self.info.get('@Name', '')}] {message_text} {arg_val} {arg_type} is collectable."
-                    )
+                    logging.info(f"[{self.info.get('@Name', '')}] {message_text} {arg_val} {arg_type} is collectable.")
                     if arg_type not in ["gas", "mineral"] and message_id:
                         self.collectReward2(message_id)
                 else:
@@ -3342,6 +3132,7 @@ class Client(object):
             self.quickReload()
 
         from sdk.security import checksum_heartbeat4
+
         ts_str = "{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime())
         checksum = checksum_heartbeat4(
             ticks=DotNet.get_time(),
@@ -3402,28 +3193,26 @@ class Client(object):
         logging.debug(redact_secrets(f"{url=}"))
         r = self.request(url, "POST", data=post_data)
         if r and "errorMessage=" in r.text:
-            logging.warning(f'[{self.info["@Name"]}] CreateBattle9 failed: {r.text[:200]}')
+            logging.warning(f"[{self.info['@Name']}] CreateBattle9 failed: {r.text[:200]}")
             return False
 
         if r:
             self.createBattle9Result = xmltodict.parse(r.content, xml_attribs=True)
             # Log the raw response for debugging
-            logging.debug(f'[{self.info["@Name"]}] CreateBattle9 response: {redact_secrets(r.text[:300])}')
+            logging.debug(f"[{self.info['@Name']}] CreateBattle9 response: {redact_secrets(r.text[:300])}")
             # Extract battleId from response for subsequent calls.
             # The server returns <CreateBattle> not <CreateBattle9> as the wrapper element,
             # so we try both keys. (Verified against live CI run 31656147771.)
             battle_service = self.createBattle9Result.get("BattleService", {})
-            battle_wrapper = (
-                battle_service.get("CreateBattle9")
-                or battle_service.get("CreateBattle")
-                or {}
-            )
+            battle_wrapper = battle_service.get("CreateBattle9") or battle_service.get("CreateBattle") or {}
             try:
                 battle_id = battle_wrapper["Battle"]["@BattleId"]
                 self.lastBattleId = battle_id
-                logging.info(f'[{self.info["@Name"]}] Created battle: {battle_id}')
+                logging.info(f"[{self.info['@Name']}] Created battle: {battle_id}")
             except (KeyError, TypeError) as e:
-                logging.warning(f'[{self.info["@Name"]}] Could not extract BattleId: {e}. Response structure: {redact_secrets(str(self.createBattle9Result)[:200])}')
+                logging.warning(
+                    f"[{self.info['@Name']}] Could not extract BattleId: {e}. Response structure: {redact_secrets(str(self.createBattle9Result)[:200])}"
+                )
             return True
         return False
 
@@ -3450,8 +3239,7 @@ class Client(object):
 
         if not savy_checksum:
             raise ConfigurationError(
-                "AcceptBattle5 requires savy_checksum configuration "
-                "value compatible with the installed game version."
+                "AcceptBattle5 requires savy_checksum configuration value compatible with the installed game version."
             )
 
         if not self.accessToken:
@@ -3470,7 +3258,7 @@ class Client(object):
         logging.debug(redact_secrets(f"{url=}"))
         r = self.request(url, "POST", data=post_data)
         if r and "errorMessage=" in r.text:
-            logging.warning(f'[{self.info["@Name"]}] AcceptBattle5 failed: {r.text[:200]}')
+            logging.warning(f"[{self.info['@Name']}] AcceptBattle5 failed: {r.text[:200]}")
             return False
 
         if r:
@@ -3478,64 +3266,72 @@ class Client(object):
             return True
         return False
 
+    def createStarBattle5Auto(self, searchNumber: int = 0, value: int = 0) -> bool:
+        """Create a star battle using current ship HP (for capture/automation)."""
+        client_hp = self.getShipHp()
+        if client_hp <= 0:
+            logging.warning(f"[{self.info.get('@Name', '')}] Cannot createStarBattle5Auto: unable to determine ship HP")
+            return False
+        return self.createStarBattle5(clientHp=client_hp, searchNumber=searchNumber, value=value)
+
     def createStarBattle5(self, clientHp: int, searchNumber: int = 0, value: int = 0) -> bool:
-            """Create a star battle (PvP matchmaking).
+        """Create a star battle (PvP matchmaking).
 
-            Uses CreateStarBattle5 endpoint with checksum.
-            Requires checksum_key and savy_checksum configuration settings.
+        Uses CreateStarBattle5 endpoint with checksum.
+        Requires checksum_key and savy_checksum configuration settings.
 
-            Checksum formula (original implementation with deviceKey and email):
-            preimage = clientHp + clientDateTime + accessToken + searchNumber + value + deviceKey + email + checksumKey
-            encrypted = preimage + savyChecksum
-            checksum = MD5(encrypted)
-            """
-            checksum_key = self.settings.get("checksum_key")
-            savy_checksum = self.settings.get("savy_checksum")
+        Checksum formula (original implementation with deviceKey and email):
+        preimage = clientHp + clientDateTime + accessToken + searchNumber + value + deviceKey + email + checksumKey
+        encrypted = preimage + savyChecksum
+        checksum = MD5(encrypted)
+        """
+        checksum_key = self.settings.get("checksum_key")
+        savy_checksum = self.settings.get("savy_checksum")
 
-            if not checksum_key or not savy_checksum:
-                raise ConfigurationError(
-                    "CreateStarBattle5 requires checksum_key and savy_checksum configuration "
-                    "values compatible with the installed game version."
-                )
-
-            if not self.accessToken:
-                raise ConfigurationError("CreateStarBattle5 requires accessToken (must be logged in)")
-
-            ts = "{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime())
-            email = self.info.get("@Email", "unknown@unknown.com")
-        
-            from sdk.security import checksum_create_star_battle5
-        
-            checksum = checksum_create_star_battle5(
-                client_hp=str(clientHp),
-                client_date_time=ts,
-                access_token=self.accessToken,
-                search_number=str(searchNumber),
-                value=str(value),
-                device_key=self.device.key,
-                email=email,
-                checksum_key=checksum_key,
-                savy_checksum=savy_checksum,
+        if not checksum_key or not savy_checksum:
+            raise ConfigurationError(
+                "CreateStarBattle5 requires checksum_key and savy_checksum configuration "
+                "values compatible with the installed game version."
             )
 
-            url = f"{self.baseUrl}/BattleService/CreateStarBattle5?clientHp={clientHp}&clientDateTime={ts}&checksum={checksum}&accessToken={self.accessToken}&searchNumber={searchNumber}&value={value}"
-            logging.debug(redact_secrets(f"{url=}"))
-            r = self.request(url, "POST")
-            if r and "errorMessage=" in r.text:
-                logging.warning(f'[{self.info["@Name"]}] CreateStarBattle5 failed: {r.text[:200]}')
-                return False
-        
-            if r:
-                self.createStarBattle5Result = xmltodict.parse(r.content, xml_attribs=True)
-                # Extract battleId from response for subsequent calls
-                try:
-                    battle_id = self.createStarBattle5Result["BattleService"]["CreateStarBattle5"]["@battleId"]
-                    self.lastBattleId = battle_id
-                    logging.info(f'[{self.info["@Name"]}] Created battle: {battle_id}')
-                except (KeyError, TypeError):
-                    pass
-                return True
+        if not self.accessToken:
+            raise ConfigurationError("CreateStarBattle5 requires accessToken (must be logged in)")
+
+        ts = "{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime())
+        email = self.info.get("@Email", "unknown@unknown.com")
+
+        from sdk.security import checksum_create_star_battle5
+
+        checksum = checksum_create_star_battle5(
+            client_hp=str(clientHp),
+            client_date_time=ts,
+            access_token=self.accessToken,
+            search_number=str(searchNumber),
+            value=str(value),
+            device_key=self.device.key,
+            email=email,
+            checksum_key=checksum_key,
+            savy_checksum=savy_checksum,
+        )
+
+        url = f"{self.baseUrl}/BattleService/CreateStarBattle5?clientHp={clientHp}&clientDateTime={ts}&checksum={checksum}&accessToken={self.accessToken}&searchNumber={searchNumber}&value={value}"
+        logging.debug(redact_secrets(f"{url=}"))
+        r = self.request(url, "POST")
+        if r and "errorMessage=" in r.text:
+            logging.warning(f"[{self.info['@Name']}] CreateStarBattle5 failed: {r.text[:200]}")
             return False
+
+        if r:
+            self.createStarBattle5Result = xmltodict.parse(r.content, xml_attribs=True)
+            # Extract battleId from response for subsequent calls
+            try:
+                battle_id = self.createStarBattle5Result["BattleService"]["CreateStarBattle5"]["@battleId"]
+                self.lastBattleId = battle_id
+                logging.info(f"[{self.info['@Name']}] Created battle: {battle_id}")
+            except (KeyError, TypeError):
+                pass
+            return True
+        return False
 
     def verifyBattle2(
         self,
@@ -3551,7 +3347,7 @@ class Client(object):
         score: int = 0,
     ) -> bool:
         """Verify battle result with the server.
-        
+
         Uses VerifyBattle2 endpoint with checksum.
         Requires checksum_key and savy_checksum configuration settings.
         """
@@ -3581,7 +3377,7 @@ class Client(object):
         )
         encrypted = preimage + savy_checksum
         checksum = hashlib.md5(encrypted.encode("utf-8")).hexdigest()
-        
+
         url = (
             f"{self.baseUrl}/BattleService/VerifyBattle2?"
             f"battleId={battleId}&clientOutcomeType={clientOutcomeType}&clientEndFrame={clientEndFrame}"
@@ -3593,9 +3389,9 @@ class Client(object):
         logging.debug(redact_secrets(f"{url=}"))
         r = self.request(url, "POST")
         if r and "errorMessage=" in r.text:
-            logging.warning(f'[{self.info["@Name"]}] VerifyBattle2 failed: {r.text[:200]}')
+            logging.warning(f"[{self.info['@Name']}] VerifyBattle2 failed: {r.text[:200]}")
             return False
-        
+
         if r:
             self.verifyBattle2Result = xmltodict.parse(r.content, xml_attribs=True)
         return True
@@ -3610,7 +3406,7 @@ class Client(object):
         clientVersion: str = "0.999.59",
     ) -> bool:
         """Finalise battle with the server (FinaliseBattle15 endpoint).
-        
+
         Uses the templated FinaliseBattle15 endpoint with checksum.
         This is the final step to complete a battle.
         Requires checksum_key and savy_checksum configuration settings.
@@ -3642,7 +3438,7 @@ class Client(object):
         )
         encrypted = preimage + savy_checksum
         checksum = hashlib.md5(encrypted.encode("utf-8")).hexdigest()
-        
+
         # URL template: /BattleService/{0}?battleId={1}&clientOutcomeType={2}&clientEndFrame={3}&clientResultString={4}&attackingShipHp={5}&checksum={6}&clientVersion={7}&accessToken={8}
         # Where {0} = "FinaliseBattle15"
         url = (
@@ -3654,80 +3450,82 @@ class Client(object):
         logging.debug(redact_secrets(f"{url=}"))
         r = self.request(url, "POST")
         if r and "errorMessage=" in r.text:
-            logging.warning(f'[{self.info["@Name"]}] FinaliseBattle15 failed: {r.text[:200]}')
+            logging.warning(f"[{self.info['@Name']}] FinaliseBattle15 failed: {r.text[:200]}")
             return False
-        
+
         if r:
             self.finaliseBattle15Result = xmltodict.parse(r.content, xml_attribs=True)
-            logging.info(f'[{self.info["@Name"]}] Battle finalised successfully: {battleId}')
+            logging.info(f"[{self.info['@Name']}] Battle finalised successfully: {battleId}")
         return True
 
     def getShipHpFraction(self) -> float:
-            """Return the ship's current HP as a fraction of max (0.0-1.0).
+        """Return the ship's current HP as a fraction of max (0.0-1.0).
 
-            Ship design is the authoritative source for max HP. The ship data
-            provides current HP (@Hp), while the ship design provides max HP.
-            """
-            logging.debug(f"[{self.info.get('@Name', '')}] Getting ship HP fraction...")
-        
-            # Get current HP from ship data
-            if not hasattr(self, "shipByUserId") or not self.shipByUserId:
-                if not self.getShipByUserId():
-                    logging.warning(f"[{self.info.get('@Name', '')}] getShipByUserId() failed")
-                    return -1.0
-        
-            try:
-                ship = self.shipByUserId["ShipService"]["GetShipByUserId"]["Ship"]
-            except (KeyError, TypeError) as e:
-                logging.warning(f"[{self.info.get('@Name', '')}] Ship data structure error: {e}")
+        Ship design is the authoritative source for max HP. The ship data
+        provides current HP (@Hp), while the ship design provides max HP.
+        """
+        logging.debug(f"[{self.info.get('@Name', '')}] Getting ship HP fraction...")
+
+        # Get current HP from ship data
+        if not hasattr(self, "shipByUserId") or not self.shipByUserId:
+            if not self.getShipByUserId():
+                logging.warning(f"[{self.info.get('@Name', '')}] getShipByUserId() failed")
                 return -1.0
 
-            # Get current HP from ship data
-            cur = ship.get("@Hp")
-            if cur is None:
-                logging.warning(f"[{self.info.get('@Name', '')}] No @Hp in ship data")
-                return -1.0
-            try:
-                cur_i = int(cur)
-            except (ValueError, TypeError):
-                logging.warning(f"[{self.info.get('@Name', '')}] Invalid @Hp value: {cur}")
-                return -1.0
-
-            # Get max HP from ship design
-            ship_design_id = ship.get("@ShipDesignId")
-            if not ship_design_id:
-                logging.warning(f"[{self.info.get('@Name', '')}] No @ShipDesignId in ship data")
-                return -1.0
-
-            # Ensure ship designs are loaded
-            if not hasattr(self, "shipDesigns") or not self.shipDesigns:
-                logging.warning(f"[{self.info.get('@Name', '')}] Loading ship designs...")
-                if not self.listAllDesigns4():
-                    logging.warning(f"[{self.info.get('@Name', '')}] Failed to load ship designs")
-                    return -1.0
-                logging.debug(f"[{self.info.get('@Name', '')}] Ship designs loaded successfully")
-
-            designs = self.shipDesigns.get("ShipDesign", [])
-            if isinstance(designs, dict):
-                designs = [designs]
-        
-            for design in designs:
-                if design.get("@ShipDesignId") == ship.get("@ShipDesignId"):
-                    # Look for max HP fields in ship design
-                    for hp_field in ["@MaxHp", "@Hp", "@HullHp", "@HullMaxHp", "@HpMax"]:
-                        mx = design.get(hp_field)
-                        if mx is not None:
-                            try:
-                                mx_i = int(mx)
-                                if mx_i > 0:
-                                    cur_i = int(ship.get("@Hp", 0))
-                                    logging.debug(f"[{self.info.get('@Name', '')}] Ship HP from design: {cur_i}/{mx_i} = {cur_i/mx_i:.2%} (from {hp_field})")
-                                    return cur_i / mx_i
-                            except (ValueError, TypeError):
-                                continue
-        
-            logging.warning(f"[{self.info.get('@Name', '')}] No max HP found in ship design")
+        try:
+            ship = self.shipByUserId["ShipService"]["GetShipByUserId"]["Ship"]
+        except (KeyError, TypeError) as e:
+            logging.warning(f"[{self.info.get('@Name', '')}] Ship data structure error: {e}")
             return -1.0
+
+        # Get current HP from ship data
+        cur = ship.get("@Hp")
+        if cur is None:
+            logging.warning(f"[{self.info.get('@Name', '')}] No @Hp in ship data")
+            return -1.0
+        try:
+            cur_i = int(cur)
+        except (ValueError, TypeError):
+            logging.warning(f"[{self.info.get('@Name', '')}] Invalid @Hp value: {cur}")
+            return -1.0
+
+        # Get max HP from ship design
+        ship_design_id = ship.get("@ShipDesignId")
+        if not ship_design_id:
+            logging.warning(f"[{self.info.get('@Name', '')}] No @ShipDesignId in ship data")
+            return -1.0
+
+        # Ensure ship designs are loaded
+        if not hasattr(self, "shipDesigns") or not self.shipDesigns:
+            logging.warning(f"[{self.info.get('@Name', '')}] Loading ship designs...")
+            if not self.listAllDesigns4():
+                logging.warning(f"[{self.info.get('@Name', '')}] Failed to load ship designs")
+                return -1.0
+            logging.debug(f"[{self.info.get('@Name', '')}] Ship designs loaded successfully")
+
+        designs = self.shipDesigns.get("ShipDesign", [])
+        if isinstance(designs, dict):
+            designs = [designs]
+
+        for design in designs:
+            if design.get("@ShipDesignId") == ship.get("@ShipDesignId"):
+                # Look for max HP fields in ship design
+                for hp_field in ["@MaxHp", "@Hp", "@HullHp", "@HullMaxHp", "@HpMax"]:
+                    mx = design.get(hp_field)
+                    if mx is not None:
+                        try:
+                            mx_i = int(mx)
+                            if mx_i > 0:
+                                cur_i = int(ship.get("@Hp", 0))
+                                logging.debug(
+                                    f"[{self.info.get('@Name', '')}] Ship HP from design: {cur_i}/{mx_i} = {cur_i / mx_i:.2%} (from {hp_field})"
+                                )
+                                return cur_i / mx_i
+                        except (ValueError, TypeError):
+                            continue
+
+        logging.warning(f"[{self.info.get('@Name', '')}] No max HP found in ship design")
+        return -1.0
 
     def getShipHp(self) -> int:
         """Return the ship's current HP as an integer, or -1 if unavailable."""
@@ -3741,96 +3539,96 @@ class Client(object):
             return -1
 
     def runBattleEndToEnd(self, clientHp: int = 0) -> bool:
-            """Execute a complete ship battle end-to-end.
+        """Execute a complete ship battle end-to-end.
 
-            Flow:
-            0. Pre-flight: only start if ship HP is 100%
-            1. Pre-flight: rearm ship (restock ammo)
-            2. CreateBattle9 - initiate battle matchmaking (older API used by game client)
-            3. AcceptBattle5 - accept the battle
-            4. FinaliseBattle15 - finalize battle with server
+        Flow:
+        0. Pre-flight: only start if ship HP is 100%
+        1. Pre-flight: rearm ship (restock ammo)
+        2. CreateBattle9 - initiate battle matchmaking (older API used by game client)
+        3. AcceptBattle5 - accept the battle
+        4. FinaliseBattle15 - finalize battle with server
 
-            This uses the checksum formulas derived from static analysis of the IL2CPP binary
-            and verified against the universal checksum pattern across all PSS endpoints.
-            HeartBeat4 is sent periodically (every ~60s) during the flow, matching official client.
-            """
-            logging.info(f'[{self.info.get("@Name", "")}] Starting end-to-end battle flow...')
+        This uses the checksum formulas derived from static analysis of the IL2CPP binary
+        and verified against the universal checksum pattern across all PSS endpoints.
+        HeartBeat4 is sent periodically (every ~60s) during the flow, matching official client.
+        """
+        logging.info(f"[{self.info.get('@Name', '')}] Starting end-to-end battle flow...")
 
-            # Step 0: Pre-flight - only battle at full ship HP
-            hp_fraction = self.getShipHpFraction()
-            if hp_fraction < 0:
-                logging.warning(
-                    f'[{self.info.get("@Name", "")}] Ship HP unavailable; cannot confirm 100%. Aborting battle.'
-                )
-                return False
-            if hp_fraction < 1.0:
-                logging.info(
-                    f'[{self.info.get("@Name", "")}] Ship HP at {hp_fraction:.0%}; not 100%. Skipping battle.'
-                )
-                return False
-            logging.info(f'[{self.info.get("@Name", "")}] Ship HP at 100%; proceeding to battle.')
-
-            # Determine actual ship HP for CreateBattle9 clientHp parameter.
-            # The official client sends the ship's current HP (e.g. 4000), not a max value.
-            # If clientHp was explicitly passed (non-zero), use it; otherwise use ship's actual HP.
-            actual_client_hp = clientHp if clientHp > 0 else self.getShipHp()
-            if actual_client_hp <= 0:
-                logging.warning(f'[{self.info.get("@Name", "")}] Could not determine ship HP; defaulting to 4000')
-                actual_client_hp = 4000
-            logging.info(f'[{self.info.get("@Name", "")}] Using clientHp={actual_client_hp} for battle')
-
-            # Step 1: Pre-flight - rearm ship (restock all ammo categories)
-            logging.info(f'[{self.info.get("@Name", "")}] Rearming ship before battle...')
-            if not self.rebuildAmmo():
-                logging.error(f'[{self.info.get("@Name", "")}] Failed to rearm ship; aborting battle.')
-                return False
-            logging.info(f'[{self.info.get("@Name", "")}] Ship rearmed successfully.')
-
-            # Step 2: Create battle using CreateBattle9 (older API used by game client)
-            # Send heartbeat before CreateBattle9 to ensure session is active
-            # Force=True because we just authenticated and lastHeartBeat may be stale
-            self.heartbeat(force=True)
-            battle_created = self.createBattle9(clientHp=actual_client_hp)
-            if not battle_created:
-                logging.warning(f'[{self.info.get("@Name", "")}] CreateBattle9 failed, but continuing with battle flow...')
-
-            battleId = getattr(self, "lastBattleId", None)
-            if not battleId:
-                # Try to use a dummy battleId to continue the flow
-                battleId = "0"
-                logging.warning(f'[{self.info.get("@Name", "")}] No battleId from CreateBattle9, using dummy battleId={battleId} to continue flow')
-            else:
-                logging.info(f'[{self.info.get("@Name", "")}] Battle created: {battleId}')
-
-            # Step 3: Accept battle
-            # Send heartbeat to keep session alive during battle
-            self.heartbeat()
-            battle_accepted = self.acceptBattle5(battleId=battleId, itemDesignId=0)
-            if not battle_accepted:
-                logging.warning(f'[{self.info.get("@Name", "")}] AcceptBattle5 failed, but continuing...')
-
-            logging.info(f'[{self.info.get("@Name", "")}] Battle accept attempted')
-
-            # Step 4: Finalise battle
-            # Send heartbeat before finalising
-            self.heartbeat()
-            # Parameters verified against mitmproxy capture:
-            # - clientEndFrame: real client sends 2400-2600 (battle frame count); use 2428
-            # - clientResultString: real client sends empty string ""
-            # - attackingShipHp: real client sends actual ship HP (e.g. 4000); use our actual_client_hp
-            battle_finalised = self.finaliseBattle15(
-                battleId=battleId,
-                clientOutcomeType=1,
-                clientEndFrame=2428,
-                clientResultString="",
-                attackingShipHp=actual_client_hp,
-                clientVersion="0.999.59",
+        # Step 0: Pre-flight - only battle at full ship HP
+        hp_fraction = self.getShipHpFraction()
+        if hp_fraction < 0:
+            logging.warning(
+                f"[{self.info.get('@Name', '')}] Ship HP unavailable; cannot confirm 100%. Aborting battle."
             )
-            if not battle_finalised:
-                logging.warning(f'[{self.info.get("@Name", "")}] FinaliseBattle15 failed')
+            return False
+        if hp_fraction < 1.0:
+            logging.info(f"[{self.info.get('@Name', '')}] Ship HP at {hp_fraction:.0%}; not 100%. Skipping battle.")
+            return False
+        logging.info(f"[{self.info.get('@Name', '')}] Ship HP at 100%; proceeding to battle.")
 
-            logging.info(f'[{self.info.get("@Name", "")}] End-to-end battle flow completed')
-            return battle_created or battle_accepted or battle_finalised
+        # Determine actual ship HP for CreateBattle9 clientHp parameter.
+        # The official client sends the ship's current HP (e.g. 4000), not a max value.
+        # If clientHp was explicitly passed (non-zero), use it; otherwise use ship's actual HP.
+        actual_client_hp = clientHp if clientHp > 0 else self.getShipHp()
+        if actual_client_hp <= 0:
+            logging.warning(f"[{self.info.get('@Name', '')}] Could not determine ship HP; defaulting to 4000")
+            actual_client_hp = 4000
+        logging.info(f"[{self.info.get('@Name', '')}] Using clientHp={actual_client_hp} for battle")
+
+        # Step 1: Pre-flight - rearm ship (restock all ammo categories)
+        logging.info(f"[{self.info.get('@Name', '')}] Rearming ship before battle...")
+        if not self.rebuildAmmo():
+            logging.error(f"[{self.info.get('@Name', '')}] Failed to rearm ship; aborting battle.")
+            return False
+        logging.info(f"[{self.info.get('@Name', '')}] Ship rearmed successfully.")
+
+        # Step 2: Create battle using CreateBattle9 (older API used by game client)
+        # Send heartbeat before CreateBattle9 to ensure session is active
+        # Force=True because we just authenticated and lastHeartBeat may be stale
+        self.heartbeat(force=True)
+        battle_created = self.createBattle9(clientHp=actual_client_hp)
+        if not battle_created:
+            logging.warning(f"[{self.info.get('@Name', '')}] CreateBattle9 failed, but continuing with battle flow...")
+
+        battleId = getattr(self, "lastBattleId", None)
+        if not battleId:
+            # Try to use a dummy battleId to continue the flow
+            battleId = "0"
+            logging.warning(
+                f"[{self.info.get('@Name', '')}] No battleId from CreateBattle9, using dummy battleId={battleId} to continue flow"
+            )
+        else:
+            logging.info(f"[{self.info.get('@Name', '')}] Battle created: {battleId}")
+
+        # Step 3: Accept battle
+        # Send heartbeat to keep session alive during battle
+        self.heartbeat()
+        battle_accepted = self.acceptBattle5(battleId=battleId, itemDesignId=0)
+        if not battle_accepted:
+            logging.warning(f"[{self.info.get('@Name', '')}] AcceptBattle5 failed, but continuing...")
+
+        logging.info(f"[{self.info.get('@Name', '')}] Battle accept attempted")
+
+        # Step 4: Finalise battle
+        # Send heartbeat before finalising
+        self.heartbeat()
+        # Parameters verified against mitmproxy capture:
+        # - clientEndFrame: real client sends 2400-2600 (battle frame count); use 2428
+        # - clientResultString: real client sends empty string ""
+        # - attackingShipHp: real client sends actual ship HP (e.g. 4000); use our actual_client_hp
+        battle_finalised = self.finaliseBattle15(
+            battleId=battleId,
+            clientOutcomeType=1,
+            clientEndFrame=2428,
+            clientResultString="",
+            attackingShipHp=actual_client_hp,
+            clientVersion="0.999.59",
+        )
+        if not battle_finalised:
+            logging.warning(f"[{self.info.get('@Name', '')}] FinaliseBattle15 failed")
+
+        logging.info(f"[{self.info.get('@Name', '')}] End-to-end battle flow completed")
+        return battle_created or battle_accepted or battle_finalised
 
     # --- Fleet coordination methods ---
     # These are fleet-level actions that coordinate across multiple accounts.
