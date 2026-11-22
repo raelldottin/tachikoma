@@ -337,17 +337,22 @@ def run_tests(names: list[str], require_tests: bool = False, verbosity: int = 1)
                 if names
                 else unittest.defaultTestLoader.discover(str(ROOT / "tests"), pattern="test_*.py")
             )
+
             # Force unbuffered output to prevent GitHub Actions 10-min no-output timeout
             class FlushStream:
                 def __init__(self, stream):
                     self._stream = stream
+
                 def write(self, data):
                     self._stream.write(data)
                     self._stream.flush()
+
                 def flush(self):
                     self._stream.flush()
+
                 def __getattr__(self, name):
                     return getattr(self._stream, name)
+
             result = unittest.TextTestRunner(verbosity=verbosity, stream=FlushStream(sys.stdout)).run(suite)
         finally:
             # Leave the directory and close log files opened in it (run.py logs to ./tachikoma.log) before it is
