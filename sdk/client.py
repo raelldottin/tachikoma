@@ -557,6 +557,36 @@ class Client(object):
         if r.content:
             self.latestVersion = xmltodict.parse(r.content, xml_attribs=True)
 
+    def _settings(self):
+        """GetLatestVersion3's ``Setting`` record, or None (for example an error payload).
+
+        When login left no settings, they are fetched once more for the session, not once per caller.
+        """
+        if not getattr(self, "latestVersion", None) and not getattr(self, "_latestVersionRetried", False):
+            self._latestVersionRetried = True
+            self.getLatestVersion3()
+        try:
+            setting = self.latestVersion["SettingService"]["GetLatestSetting"]["Setting"]
+        except (AttributeError, KeyError, TypeError):
+            return None
+        return setting if isinstance(setting, dict) else None
+
+    def _designVersion(self, key):
+        """GetLatestVersion3's ``@<key>`` design version, or None when the settings are unavailable or lack it."""
+        return (self._settings() or {}).get(f"@{key}")
+
+    def _fetchDesignList(self, path, versionKey, attribute):
+        """GET ``<path>`` at the server's ``versionKey`` design version into ``self.<attribute>``; True on success."""
+        version = self._designVersion(versionKey)
+        if version is None:
+            return False
+        url = f"https://api.pixelstarships.com/{path}?languageKey={self.device.languageKey}&designVersion={version}"
+        r = self.request(url, "GET")
+        if not r or not r.content:
+            return False
+        setattr(self, attribute, xmltodict.parse(r.content, xml_attribs=True))
+        return True
+
     def getTodayLiveOps2(self):
         url = f"https://api.pixelstarships.com/LiveOpsService/GetTodayLiveOps2?languageKey={self.device.languageKey}&deviceType=DeviceTypeIPhone"
         r = self.request(url, "GET")
@@ -564,52 +594,32 @@ class Client(object):
             self.todayLiveOps = xmltodict.parse(r.content, xml_attribs=True)
 
     def listRoomDesigns2(self):
-        if not getattr(self, 'latestVersion', None):
-            self.getLatestVersion3()
-        if not getattr(self, 'latestVersion', None):
-            return False
-        url = f"https://api.pixelstarships.com/RoomService/ListRoomDesigns2?languageKey={self.device.languageKey}&designVersion={self.latestVersion['SettingService']['GetLatestSetting']['Setting']['@RoomDesignVersion']}"
-        r = self.request(url, "GET")
-        if r:
-            self.roomDesigns = xmltodict.parse(r.content, xml_attribs=True)
+        return self._fetchDesignList("RoomService/ListRoomDesigns2", "RoomDesignVersion", "roomDesigns")
 
     def listAllTaskDesigns2(self):
-        if not getattr(self, 'latestVersion', None):
-            self.getLatestVersion3()
-        if not getattr(self, 'latestVersion', None):
-            return False
-        url = f"https://api.pixelstarships.com/TaskService/ListAllTaskDesigns2?languageKey={self.device.languageKey}&designVersion={self.latestVersion['SettingService']['GetLatestSetting']['Setting']['@RoomDesignVersion']}"
-        r = self.request(url, "GET")
-        if r:
-            self.allTaskDesigns = xmltodict.parse(r.content, xml_attribs=True)
+        return self._fetchDesignList("TaskService/ListAllTaskDesigns2", "TaskDesignVersion", "allTaskDesigns")
 
     def listAllTrainingDesigns2(self):
-        if not getattr(self, 'latestVersion', None):
-            self.getLatestVersion3()
-        if not getattr(self, 'latestVersion', None):
-            return False
-        url = f"https://api.pixelstarships.com/TrainingService/ListAllTrainingDesigns2?languageKey={self.device.languageKey}&designVersion={self.latestVersion['SettingService']['GetLatestSetting']['Setting']['@RoomDesignVersion']}"
-        r = self.request(url, "GET")
-        if r:
-            self.trainingDesigns = xmltodict.parse(r.content, xml_attribs=True)
+        return self._fetchDesignList("TrainingService/ListAllTrainingDesigns2", "TrainingDesignVersion",
+                                     "trainingDesigns")
+
+    def _shipRecord(self):
+        """The ``Ship`` record of the last GetShipByUserId reply, or None.
+
+        An empty ``<ShipService/>`` or ``<GetShipByUserId/>`` parses to None rather than a mapping.
+        """
+        node = getattr(self, "shipByUserId", None)
+        for key in ("ShipService", "GetShipByUserId", "Ship"):
+            node = node.get(key) if isinstance(node, dict) else None
+        return node if isinstance(node, dict) else None
 
     def getShipByUserId(self, userId=0):
         url = f"https://api.pixelstarships.com/ShipService/GetShipByUserId?userId={userId if userId else self.user.id}&accessToken={self.accessToken}&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
         r = self.request(url, "GET")
         if r:
             self.shipByUserId = xmltodict.parse(r.content, xml_attribs=True)
-
-            if not self.shipByUserId or "ShipService" not in self.shipByUserId:
-                logging.error("ShipService data not avaialble.")
-                return False
-
-            get_ship = self.shipByUserId["ShipService"].get("GetShipByUserId")
-            if not get_ship:
-                logging.error("GetShipByUserId data not available.")
-                return False
-
-            ship = get_ship.get("Ship")
-            if not ship:
+            ship = self._shipRecord()
+            if ship is None:
                 logging.error("Ship data not available.")
                 return False
             # A new ship can return an empty <Rooms/> or <Researches/>, which parses to
@@ -737,30 +747,12 @@ class Client(object):
         return False
 
     def listActionTypes2(self):
-        if not getattr(self, 'latestVersion', None):
-            self.getLatestVersion3()
-        if not getattr(self, 'latestVersion', None):
-            return False
-        if self.user.isAuthorized:
-            url = f"https://api.pixelstarships.com/RoomService/ListActionTypes2?languageKey={self.device.languageKey}&designVersion={self.latestVersion['SettingService']['GetLatestSetting']['Setting']['@ResearchDesignVersion']}"
-            r = self.request(url, "GET")
-            if r:
-                self.actionTypes = xmltodict.parse(r.content, xml_attribs=True)
-                return True
-        return False
+        return bool(self.user.isAuthorized) and self._fetchDesignList(
+            "RoomService/ListActionTypes2", "ActionTypeVersion", "actionTypes")
 
     def listConditionTypes2(self):
-        if not getattr(self, 'latestVersion', None):
-            self.getLatestVersion3()
-        if not getattr(self, 'latestVersion', None):
-            return False
-        if self.user.isAuthorized:
-            url = f"https://api.pixelstarships.com/RoomService/ListConditionTypes2?languageKey={self.device.languageKey}&designVersion={self.latestVersion['SettingService']['GetLatestSetting']['Setting']['@ResearchDesignVersion']}"
-            r = self.request(url, "GET")
-            if r:
-                self.conditionTypes = xmltodict.parse(r.content, xml_attribs=True)
-                return True
-        return False
+        return bool(self.user.isAuthorized) and self._fetchDesignList(
+            "RoomService/ListConditionTypes2", "ConditionTypeVersion", "conditionTypes")
 
     def listAllResearches(self):
         url = f"https://api.pixelstarships.com/ResearchService/ListAllResearches?accessToken={self.accessToken}&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
@@ -829,11 +821,9 @@ class Client(object):
         ListAllDesigns4 has been deprecated
         The design data will be fetched individually
         """
-        if not getattr(self, 'latestVersion', None):
-            self.getLatestVersion3()
-        if not getattr(self, 'latestVersion', None) or "SettingService" not in self.latestVersion:
+        versions = self._settings()
+        if not versions or "@FileVersion" not in versions:
             return False
-        versions = self.latestVersion["SettingService"]["GetLatestSetting"]["Setting"]
         url = f"{self.baseUrl}/DesignService/ListAllDesigns4?LanguageKey=en&ListFileVersion={versions['@FileVersion']}&ListSpriteVersion={versions['@SpriteVersion']}&ListBackgroundVersion={versions['@BackgroundVersion']}&ListAllShipDesignVersion={versions['@ShipDesignVersion']}&ListRoomDesignVersion={versions['@RoomDesignVersion']}&ListAllCharacterDesignVersion={versions['@CharacterDesignVersion']}&ListAllCharacterDesignActionVersion={versions['@CharacterDesignActionVersion']}&ListItemDesignVersion={versions['@ItemDesignVersion']}&ListCraftDesignVersion={versions['@CraftDesignVersion']}&ListMissileDesignVersion={versions['@MissileDesignVersion']}&ListStarSystemVersion={versions['@StarSystemVersion']}&ListStarSystemLinkVersion={versions['@StarSystemLinkVersion']}&ListAllNewsDesignVersion={versions['@NewsDesignVersion']}&ListLeagueVersion={versions['@LeagueVersion']}&ListAchievementDesignVersion={versions['@AchievementDesignVersion']}&ListRoomDesignPurchaseVersion={versions['@RoomDesignPurchaseVersion']}&ListRoomDesignSpriteVersion={versions['@RoomDesignSpriteVersion']}&ListAllMissionDesignVersion={versions['@MissionDesignVersion']}&ListAnimationVersion={versions['@AnimationVersion']}&ListAllResearchDesignVersion={versions['@ResearchDesignVersion']}&ListAllTrainingDesignVersion={versions['@TrainingDesignVersion']}&ListAllChallengeDesignVersion={versions['@ChallengeDesignVersion']}&ListAllRewardDesignVersion={versions['@RewardDesignVersion']}&ListAllDivisionDesignVersion={versions['@DivisionDesignVersion']}&ListAllCollectionDesignVersion={versions['@CollectionDesignVersion']}&ListAllDrawDesignVersion={versions['@DrawDesignVersion']}&ListAllPromotionDesignVersion={versions['@PromotionDesignVersion']}&ListAllSituationDesignVersion={versions['@SituationDesignVersion']}&ListAllTaskDesignVersion={versions['@TaskDesignVersion']}&ListActionTypeVersion={versions['@ActionTypeVersion']}&ListConditionTypeVersion={versions['@ConditionTypeVersion']}&ListItemDesignActionVersion={versions['@ItemDesignActionVersion']}&ListSeasonDesignVersion={versions['@SeasonDesignVersion']}&ListAssetVersion={versions['@AssetVersion']}&ListMarkerGeneratorDesignVersion={versions['@MarkerGeneratorDesignVersion']}"
         r = self.request(url, "GET")
         if r:
@@ -977,11 +967,10 @@ class Client(object):
         return True
 
     def listAllCharacterDesigns2(self):
-        if not getattr(self, 'latestVersion', None):
-            self.getLatestVersion3()
-        if not getattr(self, 'latestVersion', None):
+        version = self._designVersion("CharacterDesignVersion")
+        if version is None:
             return False
-        url = f"{self.baseUrl}/CharacterService/ListAllCharacterDesigns2?languageKey={self.device.languageKey}&designVersion={self.latestVersion['SettingService']['GetLatestSetting']['Setting']['@CharacterDesignVersion']}"
+        url = f"{self.baseUrl}/CharacterService/ListAllCharacterDesigns2?languageKey={self.device.languageKey}&designVersion={version}"
         r = self.request(url, "GET")
         if r:
             self.allCharacterDesigns = xmltodict.parse(r.content, xml_attribs=True)
@@ -2534,17 +2523,9 @@ class Client(object):
                             )
 
     def listAllResearchDesigns2(self):
-        if not getattr(self, 'latestVersion', None):
-            self.getLatestVersion3()
-        if not getattr(self, 'latestVersion', None):
-            return False
-        url = f"https://api.pixelstarships.com/ResearchService/ListAllResearchDesigns2?languageKey={self.device.languageKey}&designVersion={self.latestVersion['SettingService']['GetLatestSetting']['Setting']['@ResearchDesignVersion']}"
-        r = self.request(url, "GET")
-        self.allResearchDesigns = xmltodict.parse(r.content, xml_attribs=True)
-        if "ResearchService" not in self.allResearchDesigns:
-            return False
-
-        return True
+        return (self._fetchDesignList("ResearchService/ListAllResearchDesigns2", "ResearchDesignVersion",
+                                      "allResearchDesigns")
+                and "ResearchService" in self.allResearchDesigns)
 
     def addResearch(self, researchDesignId):
         url = f"https://api.pixelstarships.com/ResearchService/AddResearch?researchDesignId={researchDesignId}&researchStartDate={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}&accessToken={self.accessToken}"
@@ -3097,13 +3078,8 @@ class Client(object):
                     return False
 
             # Extract ship data
-            get_ship = self.shipByUserId.get("ShipService", {}).get("GetShipByUserId")
-            if not get_ship:
-                logging.warning(f"[{self.info.get('@Name', '')}] Cannot analyze layout: GetShipByUserId data unavailable")
-                return False
-
-            ship = get_ship.get("Ship")
-            if not ship:
+            ship = self._shipRecord()
+            if ship is None:
                 logging.warning(f"[{self.info.get('@Name', '')}] Cannot analyze layout: Ship data unavailable")
                 return False
             ship_name = ship.get("@ShipName", "")
@@ -3731,37 +3707,34 @@ class Client(object):
             logging.info(f'[{self.info.get("@Name", "")}] End-to-end battle flow completed')
             return battle_created or battle_accepted or battle_finalised
 
-    # --- Fleet coordination methods (Option C) ---
+    # --- Fleet coordination methods ---
     # These are fleet-level actions that coordinate across multiple accounts.
     # They are called by the fleet orchestrator, not by individual account runs.
+    # None is implemented yet: each logs and returns False, so no caller (or
+    # journal) can mistake a placeholder for a completed coordination.
+
+    def _fleetNotImplemented(self, description: str) -> bool:
+        logging.warning(f"[Fleet] {description}: not implemented; nothing was done")
+        return False
 
     def fleetPoolResources(self, action: str, resource_type: str, amount: int) -> bool:
-        """Contribute to or withdraw from the fleet resource pool.
+        """Contribute to or withdraw from the fleet resource pool (not implemented).
 
         Args:
             action: "contribute" or "withdraw"
             resource_type: "minerals", "gas", "starbux"
             amount: Amount to contribute/withdraw
         """
-        # TODO: Implement fleet resource pooling
-        # This will coordinate with the fleet state store
-        logging.info(f"[Fleet] Pool resources: {action} {amount} {resource_type}")
-        return True
+        return self._fleetNotImplemented(f"pool resources: {action} {amount} {resource_type}")
 
     def fleetMarketplaceSync(self) -> bool:
-        """Coordinate marketplace buy/sell across fleet accounts."""
-        # TODO: Implement fleet marketplace synchronization
-        logging.info("[Fleet] Marketplace sync")
-        return True
+        """Coordinate marketplace buy/sell across fleet accounts (not implemented)."""
+        return self._fleetNotImplemented("marketplace sync")
 
     def fleetBattleCoordinate(self, target_fleet: str, battle_type: str) -> bool:
-        """Schedule and coordinate a fleet battle."""
-        # TODO: Implement fleet battle coordination
-        logging.info(f"[Fleet] Battle coordinate: {battle_type} vs {target_fleet}")
-        return True
+        """Schedule and coordinate a fleet battle (not implemented)."""
+        return self._fleetNotImplemented(f"battle coordinate: {battle_type} vs {target_fleet}")
 
     def fleetShareCrewXp(self, source_account: str, target_account: str, character_id: str) -> bool:
-        """Share crew training XP across fleet accounts."""
-        # TODO: Implement crew XP sharing
-        logging.info(f"[Fleet] Share crew XP: {source_account} -> {target_account} for {character_id}")
-        return True
+        """Share crew training XP across fleet accounts (not implemented)."""
+        return self._fleetNotImplemented(f"share crew XP: {source_account} -> {target_account} for {character_id}")

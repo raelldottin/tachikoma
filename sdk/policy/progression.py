@@ -190,6 +190,21 @@ class _Budget:
                 self.cap_left[kind] -= amount
 
 
+def _cap_requests(requests: list[ActionRequest], rejected: list[Rejection],
+                  max_requests: Optional[int]) -> tuple[list[ActionRequest], list[Rejection]]:
+    """Keep the first ``max_requests`` requests and reject the rest as over the cap."""
+    if max_requests is None or len(requests) <= max_requests:
+        return requests, rejected
+    over = [Rejection(request.action_id, f"over max_requests ({max_requests})") for request in requests[max_requests:]]
+    return requests[:max_requests], rejected + over
+
+
+def _unmet_preconditions(action_id: str, snapshot: AccountSnapshot, params: Mapping[str, Any]) -> Optional[str]:
+    """The action's failed preconditions joined with "; ", or None when all hold."""
+    failures = check_preconditions(get_spec(action_id), snapshot, params)
+    return "; ".join(failures) if failures else None
+
+
 class BaselineV1:
     """run.py's daily order: research, room upgrades (each followed by a
     resource collection, as ``Client.upgradeRooms`` does), then the daily
@@ -204,9 +219,9 @@ class BaselineV1:
 
         def admit(action_id: str, params: Mapping[str, Any], reason: str, label: str,
                   cost_kind: Optional[str] = None, cost_amount: int = 0, unknown_cost: Optional[str] = None) -> bool:
-            failures = check_preconditions(get_spec(action_id), snapshot, params)
-            if failures:
-                rejected.append(Rejection(label, "; ".join(failures)))
+            unmet = _unmet_preconditions(action_id, snapshot, params)
+            if unmet:
+                rejected.append(Rejection(label, unmet))
                 return False
             if unknown_cost:
                 rejected.append(Rejection(label, f"cost unknown: {unknown_cost}"))
@@ -257,8 +272,6 @@ class BaselineV1:
         else:
             upgrades = {room.upgrade_from: room for room in design.rooms if room.upgrade_from}
             for room in snapshot.rooms:
-                if room.design_id is None:
-                    continue
                 target = upgrades.get(room.design_id)
                 if target is None:
                     continue
@@ -275,12 +288,9 @@ class BaselineV1:
         # 3. Daily reward.
         admit("collect_daily_reward", {}, "daily reward", "collect_daily_reward")
 
-        rejected.append(Rejection("add_training", "crew training is not modelled by baseline-v1"))
+        rejected.append(Rejection("add_training", f"crew training is not modelled by {self.name}"))
 
-        if config.max_requests is not None and len(requests) > config.max_requests:
-            for request in requests[config.max_requests:]:
-                rejected.append(Rejection(request.action_id, f"over max_requests ({config.max_requests})"))
-            requests = requests[: config.max_requests]
+        requests, rejected = _cap_requests(requests, rejected, config.max_requests)
 
         return Plan(
             policy=self.name,
@@ -386,147 +396,43 @@ class HullReserveV1:
         return replace(held, policy=self.name, rejected=rejected)
 
 
-class FleetV1:
-    """Full run.py daily order plus inter-fleet coordination actions.
+class FleetV1(BaselineV1):
+    """baseline-v1 wrapped in the rest of run.py's daily loop.
 
-    Order mirrors run.py's main loop:
-    1. grab_flying_starbux (daily, requires mobile session)
-    2. collect_task_reward (completed tasks)
-    3. Research upgrades (baseline-v1 logic)
-    4. Room upgrades + collect_all_resources (baseline-v1 logic)
-    5. collect_daily_reward
-    6. collect_available_markers
-    7. collect_mining_drones
-    8. add_training (crew training - budget aware)
-    9. upgrade_characters (maps to add_training calls)
-    10. Inter-fleet actions (pool, sync, coordinate, share XP)
+    Order mirrors run.py's main loop: grab_flying_starbux and collect_task_reward first, then baseline-v1's
+    research, room upgrades (each followed by collect_all_resources) and daily reward, then
+    collect_available_markers and collect_mining_drones. None of the added actions has a planned cost, so the
+    baseline's budget decisions are unchanged. Crew training is not modelled. The inter-fleet actions
+    (fleet_pool_resources, fleet_marketplace_sync, fleet_battle_coordinate, fleet_share_crew_xp) are fleet-level
+    and are never planned for a single account.
     """
 
     name = "fleet-v1"
 
     def plan(self, snapshot: AccountSnapshot, design: DesignData, config: PolicyConfig) -> Plan:
-        requests: list[ActionRequest] = []
         rejected: list[Rejection] = []
-        budget = _Budget(snapshot, config)
 
-        def admit(action_id: str, params: Mapping[str, Any], reason: str, label: str,
-                  cost_kind: Optional[str] = None, cost_amount: int = 0, unknown_cost: Optional[str] = None) -> bool:
-            failures = check_preconditions(get_spec(action_id), snapshot, params)
-            if failures:
-                rejected.append(Rejection(label, "; ".join(failures)))
-                return False
-            if unknown_cost:
-                rejected.append(Rejection(label, f"cost unknown: {unknown_cost}"))
-                return False
-            problem = budget.check(cost_kind, cost_amount)
-            if problem:
-                rejected.append(Rejection(label, problem))
-                return False
-            budget.spend(cost_kind, cost_amount)
-            cost = {cost_kind: cost_amount} if cost_kind and cost_amount else {}
-            requests.append(ActionRequest(action_id, dict(params), reason, cost))
-            return True
+        def admitted(action_id: str, reason: str) -> list[ActionRequest]:
+            unmet = _unmet_preconditions(action_id, snapshot, {})
+            if unmet:
+                rejected.append(Rejection(action_id, unmet))
+                return []
+            return [ActionRequest(action_id, {}, reason, {})]
 
-        # 1. grab_flying_starbux (requires mobile game running, daily limit)
-        if snapshot.section("resources") is Completeness.COMPLETE:
-            admit("grab_flying_starbux", {}, "collect daily free starbux (requires mobile session)", "grab_flying_starbux")
+        before = (admitted("grab_flying_starbux", "collect free starbux (requires a mobile session)")
+                  + admitted("collect_task_reward", "collect completed task rewards"))
+        base = super().plan(snapshot, design, replace(config, max_requests=None))
+        after = (admitted("collect_available_markers", "collect galaxy markers")
+                 + admitted("collect_mining_drones", "travel to and collect mining drones"))
 
-        # 2. collect_task_reward
-        if snapshot.section("tasks") is Completeness.COMPLETE:
-            admit("collect_task_reward", {}, "collect completed task rewards", "collect_task_reward")
-
-        # 3. Research: one design per research line, mirroring Client.upgradeResearches.
-        if snapshot.section("research") is Completeness.MISSING:
-            rejected.append(Rejection("research", "research section not observed"))
-        else:
-            busy_roots = {
-                item.root_id for item in design.research
-                if snapshot.research_state(item.design_id) == "Researching"
-            }
-            seen_roots: set[Optional[str]] = set()
-            for item in design.research:
-                label = f"add_research {item.design_id}"
-                if snapshot.research_state(item.design_id) in ("Researching", "Completed"):
-                    continue
-                if item.root_id in busy_roots:
-                    rejected.append(Rejection(label, f"research line {item.root_id} is already researching"))
-                    continue
-                if item.root_id in seen_roots:
-                    continue
-                seen_roots.add(item.root_id)
-                if item.starbux_cost is None:
-                    rejected.append(Rejection(label, f"cost unknown: research {item.design_id} has an "
-                                                     "unparseable @StarbuxCost"))
-                    continue
-                if item.starbux_cost > 0 and not config.allow_starbux_spend:
-                    rejected.append(Rejection(label, f"costs {item.starbux_cost} starbux; starbux spend not allowed"))
-                    continue
-                admit("add_research", {"research_design_id": item.design_id},
-                      f"next research in line {item.root_id}", label, "gas", item.gas_cost or 0,
-                      unknown_cost=(f"research {item.design_id} has no parseable @GasCost"
-                                    if item.gas_cost is None else None))
-
-        # 4. Room upgrades, each followed by a collection.
-        if snapshot.section("rooms") is Completeness.MISSING:
-            rejected.append(Rejection("rooms", "rooms section not observed"))
-        else:
-            upgrades = {room.upgrade_from: room for room in design.rooms if room.upgrade_from}
-            for room in snapshot.rooms:
-                if room.design_id is None:
-                    continue
-                target = upgrades.get(room.design_id)
-                if target is None:
-                    continue
-                label = f"upgrade_room {room.room_id}"
-                params = {"room_id": room.room_id, "upgrade_room_design_id": target.design_id}
-                unknown = target.cost_kind is None or target.cost_amount is None
-                if admit("upgrade_room", params, f"upgrade to {target.name or target.design_id}", label,
-                         target.cost_kind, target.cost_amount or 0,
-                         unknown_cost=(f"room design {target.design_id} has no parseable @PriceString"
-                                       if unknown else None)):
-                    admit("collect_all_resources", {}, "collect after a room upgrade, as upgradeRooms does",
-                          "collect_all_resources")
-
-        # 5. Daily reward.
-        admit("collect_daily_reward", {}, "daily reward", "collect_daily_reward")
-
-        # 6. collect_available_markers
-        if snapshot.section("markers") is Completeness.COMPLETE:
-            admit("collect_available_markers", {}, "collect user galaxy markers", "collect_available_markers")
-
-        # 7. collect_mining_drones
-        if snapshot.section("resources") is Completeness.COMPLETE and snapshot.section("ship") is Completeness.COMPLETE:
-            admit("collect_mining_drones", {}, "travel to and collect mining drones", "collect_mining_drones")
-
-        # 8. Crew training (add_training) - budget aware
-        if snapshot.section("crew") is Completeness.COMPLETE:
-            # For each crew member not at max level, plan their next training
-            for member in snapshot.crew:
-                if member.level is not None and member.level < 40:  # max crew level
-                    # Find next available training design for this character
-                    # This is a simplified version - in practice would match character to training designs
-                    rejected.append(Rejection(f"add_training {member.character_id}",
-                                             "training design selection not implemented in fleet-v1; use upgradeCharacters"))
-
-        # 9. Inter-fleet actions (executed once per fleet run, not per account)
-        # These are planned but the actual coordination happens at fleet level
-        # fleet_pool_resources, fleet_marketplace_sync, fleet_battle_coordinate, fleet_share_crew_xp
-
-        if config.max_requests is not None and len(requests) > config.max_requests:
-            for request in requests[config.max_requests:]:
-                rejected.append(Rejection(request.action_id, f"over max_requests ({config.max_requests})"))
-            requests = requests[: config.max_requests]
-
-        return Plan(
-            policy=self.name,
-            account_alias=snapshot.account_alias,
-            observed_at=snapshot.observed_at.isoformat(),
-            requests=tuple(requests),
-            rejected=tuple(rejected),
-        )
+        requests, rejected = _cap_requests(before + list(base.requests) + after, rejected + list(base.rejected),
+                                           config.max_requests)
+        return replace(base, requests=tuple(requests), rejected=tuple(rejected))
 
 
-POLICIES: dict[str, ProgressionPolicy] = {BaselineV1.name: BaselineV1(), HullReserveV1.name: HullReserveV1(), FleetV1.name: FleetV1()}
+POLICIES: dict[str, ProgressionPolicy] = {
+    BaselineV1.name: BaselineV1(), HullReserveV1.name: HullReserveV1(), FleetV1.name: FleetV1(),
+}
 
 
 def get_policy(name: str) -> ProgressionPolicy:

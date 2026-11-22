@@ -7,7 +7,7 @@ from pathlib import Path
 
 from sdk.actions import CATALOG
 from sdk.actions.catalog import ROOM_FILL_EMPTY_NOTE, ROOM_FILL_UNREAD_REASON
-from sdk.execution import CALL_ARGUMENTS, ActionRunner, UncertainPriorAttemptError
+from sdk.execution import ActionRunner, UncertainPriorAttemptError, call_arguments
 from sdk.journal import GameplayJournal, summarize
 from sdk.state import AccountMismatchError, build_snapshot
 
@@ -84,8 +84,10 @@ class RunnerTests(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def test_every_catalog_action_has_call_arguments(self):
-        self.assertEqual(set(CALL_ARGUMENTS), set(CATALOG))
+    def test_call_arguments_are_the_required_params_in_order(self):
+        spec = CATALOG["place_room"]
+        self.assertEqual(call_arguments(spec, {"column": 3, "row": 2, "room_design_id": 42}), (42, 2, 3))
+        self.assertEqual(call_arguments(CATALOG["collect_all_resources"], {}), ())
 
     def test_verified_action_is_called_once_and_journaled_with_cost(self):
         self.world.effect = gain_minerals

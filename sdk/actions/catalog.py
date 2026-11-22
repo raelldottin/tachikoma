@@ -98,13 +98,17 @@ def _room_idle(snapshot: AccountSnapshot, params: Params) -> Optional[str]:
     return None
 
 
+def _is_int_at_least(value: Any, minimum: int) -> bool:
+    """True for an ``int`` (not a ``bool``) of at least ``minimum``."""
+    return isinstance(value, int) and not isinstance(value, bool) and value >= minimum
+
+
 def _placement_params_valid(snapshot: AccountSnapshot, params: Params) -> Optional[str]:
     """``place_room`` needs a numeric room design id and a non-negative integer row and column."""
     if not str(params.get("room_design_id") or "").strip().isdigit():
         return "room_design_id must be a numeric room design id"
     for name in ("row", "column"):
-        value = params.get(name)
-        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        if not _is_int_at_least(params.get(name), 0):
             return f"{name} must be a non-negative integer"
     return None
 
@@ -122,21 +126,18 @@ def _starbux_observed(snapshot: AccountSnapshot, params: Params) -> Optional[str
     return None
 
 
-def _tasks_observed(snapshot: AccountSnapshot, params: Params) -> Optional[str]:
-    if snapshot.section("tasks") is Completeness.MISSING:
-        return "tasks section was not observed"
-    return None
+FLEET_POOL_ACTIONS = ("contribute", "withdraw")
+FLEET_POOL_RESOURCES = ("minerals", "gas", "starbux")
 
 
-def _markers_observed(snapshot: AccountSnapshot, params: Params) -> Optional[str]:
-    if snapshot.section("markers") is Completeness.MISSING:
-        return "markers section was not observed"
-    return None
-
-
-def _ship_observed(snapshot: AccountSnapshot, params: Params) -> Optional[str]:
-    if snapshot.section("ship") is Completeness.MISSING:
-        return "ship section was not observed"
+def _fleet_pool_params_valid(snapshot: AccountSnapshot, params: Params) -> Optional[str]:
+    """``fleet_pool_resources`` needs a known direction, a known resource and a positive integer amount."""
+    if params.get("action") not in FLEET_POOL_ACTIONS:
+        return f"action must be one of {', '.join(FLEET_POOL_ACTIONS)}"
+    if params.get("resource_type") not in FLEET_POOL_RESOURCES:
+        return f"resource_type must be one of {', '.join(FLEET_POOL_RESOURCES)}"
+    if not _is_int_at_least(params.get("amount"), 1):
+        return "amount must be a positive integer"
     return None
 
 
@@ -171,6 +172,27 @@ def _reward_received(delta, before, after, params):
     if any(value is None for value in base.values()) or not inventory_observed:
         return ReconciliationStatus.UNKNOWN, "no increase seen, but not every reward channel was observed on both sides"
     return ReconciliationStatus.NOT_OBSERVED, "no resource, starbux or item increase observed"
+
+
+def _training_started(delta, before, after, params):
+    character_id = str(params["character_id"])
+    requested = str(params["training_design_id"])
+    if "crew" in delta.unknown_sections:
+        return ReconciliationStatus.UNKNOWN, "crew was not observed on both sides"
+    old, new = before.crew_member(character_id), after.crew_member(character_id)
+    if new is None:
+        return ReconciliationStatus.CONTRADICTED, f"crew member {character_id} disappeared"
+    if old is None or not (old.training_observed and new.training_observed):
+        return ReconciliationStatus.UNKNOWN, f"training state of {character_id} was not observed on both sides"
+    if new.training_design_id == requested and new.training_active:
+        return ReconciliationStatus.VERIFIED, f"{character_id} is training {requested} until {new.training_end}"
+    if not old.training_active and new.training_active and new.training_design_id is None:
+        return ReconciliationStatus.VERIFIED, f"{character_id} started training ending {new.training_end}"
+    if new.training_active and new.training_design_id not in (None, requested) and (
+        (old.training_design_id, old.training_end) != (new.training_design_id, new.training_end)
+    ):
+        return ReconciliationStatus.CONTRADICTED, f"{character_id} started different training {new.training_design_id}"
+    return ReconciliationStatus.NOT_OBSERVED, f"training of {character_id} unchanged"
 
 
 def _room_placed(delta, before, after, params):
@@ -240,97 +262,14 @@ def _starbux_increased(delta, before, after, params):
     if delta.starbux > 0:
         return ReconciliationStatus.VERIFIED, f"starbux increased by {delta.starbux}"
     if delta.starbux < 0:
-        return ReconciliationStatus.CONTRADICTED, f"starbux decreased by {delta.starbux}"
+        return ReconciliationStatus.CONTRADICTED, f"starbux decreased by {-delta.starbux}"
     return ReconciliationStatus.NOT_OBSERVED, "starbux unchanged"
 
 
-def _task_reward_collected(delta, before, after, params):
-    base = {"minerals": delta.minerals, "gas": delta.gas, "starbux": delta.starbux}
-    inventory_observed = "inventory" not in delta.unknown_sections
-    gains = dict(base)
-    if inventory_observed:
-        gains.update({f"item {item}": change for item, change in delta.inventory_quantity.items()})
-    increased = sorted(name for name, value in gains.items() if value is not None and value > 0)
-    if increased:
-        return ReconciliationStatus.VERIFIED, "task reward observed in " + ", ".join(increased)
-    if any(value is None for value in base.values()) or not inventory_observed:
-        return ReconciliationStatus.UNKNOWN, "no increase seen, but not every reward channel was observed on both sides"
-    return ReconciliationStatus.NOT_OBSERVED, "no resource, starbux or item increase observed"
-
-
-def _markers_collected(delta, before, after, params):
-    if delta.minerals is None and delta.gas is None:
-        return ReconciliationStatus.UNKNOWN, "minerals and gas were not observed on both sides"
-    known = {name: value for name, value in {"minerals": delta.minerals, "gas": delta.gas}.items() if value is not None}
-    if not known:
-        return ReconciliationStatus.UNKNOWN, "minerals and gas were not observed on both sides"
-    if any(value > 0 for value in known.values()):
-        return ReconciliationStatus.VERIFIED, "markers collected: " + ", ".join(f"{name} {value:+d}" for name, value in sorted(known.items()))
-    if any(value < 0 for value in known.values()):
-        return ReconciliationStatus.CONTRADICTED, "resources decreased after marker collection"
-    if len(known) < 2:
-        return ReconciliationStatus.UNKNOWN, "no observed increase and one resource was not observed"
-    return ReconciliationStatus.NOT_OBSERVED, "minerals and gas unchanged"
-
-
-def _mining_drones_collected(delta, before, after, params):
-    if delta.minerals is None and delta.gas is None:
-        return ReconciliationStatus.UNKNOWN, "minerals and gas were not observed on both sides"
-    known = {name: value for name, value in {"minerals": delta.minerals, "gas": delta.gas}.items() if value is not None}
-    if not known:
-        return ReconciliationStatus.UNKNOWN, "minerals and gas were not observed on both sides"
-    if any(value > 0 for value in known.values()):
-        return ReconciliationStatus.VERIFIED, "mining drones collected: " + ", ".join(f"{name} {value:+d}" for name, value in sorted(known.items()))
-    if any(value < 0 for value in known.values()):
-        return ReconciliationStatus.CONTRADICTED, "resources decreased after drone collection"
-    if len(known) < 2:
-        return ReconciliationStatus.UNKNOWN, "no observed increase and one resource was not observed"
-    return ReconciliationStatus.NOT_OBSERVED, "minerals and gas unchanged"
-
-
-def _training_started(delta, before, after, params):
-    character_id = str(params["character_id"])
-    requested = str(params["training_design_id"])
-    if "crew" in delta.unknown_sections:
-        return ReconciliationStatus.UNKNOWN, "crew was not observed on both sides"
-    old, new = before.crew_member(character_id), after.crew_member(character_id)
-    if new is None:
-        return ReconciliationStatus.CONTRADICTED, f"crew member {character_id} disappeared"
-    if old is None or not (old.training_observed and new.training_observed):
-        return ReconciliationStatus.UNKNOWN, f"training state of {character_id} was not observed on both sides"
-    if new.training_design_id == requested and new.training_active:
-        return ReconciliationStatus.VERIFIED, f"{character_id} is training {requested} until {new.training_end}"
-    if not old.training_active and new.training_active and new.training_design_id is None:
-        return ReconciliationStatus.VERIFIED, f"{character_id} started training ending {new.training_end}"
-    if new.training_active and new.training_design_id not in (None, requested) and (
-        (old.training_design_id, old.training_end) != (new.training_design_id, new.training_end)
-    ):
-        return ReconciliationStatus.CONTRADICTED, f"{character_id} started different training {new.training_design_id}"
-    return ReconciliationStatus.NOT_OBSERVED, f"training of {character_id} unchanged"
-
-
-# Inter-fleet postconditions
-def _fleet_pool_changed(delta, before, after, params):
-    action = params.get("action", "")
-    if action == "contribute":
-        return ReconciliationStatus.VERIFIED, "fleet reserve contribution recorded"
-    if action == "withdraw":
-        return ReconciliationStatus.VERIFIED, "fleet reserve withdrawal recorded"
-    return ReconciliationStatus.NOT_OBSERVED, "fleet pool action not recognized"
-
-
-def _fleet_sync_performed(delta, before, after, params):
-    return ReconciliationStatus.VERIFIED, "fleet marketplace sync completed"
-
-
-def _fleet_battle_scheduled(delta, before, after, params):
-    if delta.trophies is not None:
-        return ReconciliationStatus.VERIFIED, f"fleet battle completed, trophies changed {delta.trophies:+d}"
-    return ReconciliationStatus.NOT_OBSERVED, "fleet battle scheduled"
-
-
-def _crew_xp_shared(delta, before, after, params):
-    return ReconciliationStatus.VERIFIED, "crew XP sharing coordinated"
+# Inter-fleet postconditions. A fleet coordination effect is not part of an account snapshot, so it can never be
+# verified from one: the outcome stays unknown rather than being claimed from the call alone (see ``reconcile``).
+def _fleet_effect_not_observable(delta, before, after, params):
+    return ReconciliationStatus.UNKNOWN, "fleet coordination effects are not observable in an account snapshot"
 
 
 # --- evidence ----------------------------------------------------------------------
@@ -745,16 +684,18 @@ CATALOG: dict[str, ActionSpec] = {
             evidence_probe=_battle_probe,
             evidence=_battle_evidence,
         ),
-        # --- New mutating actions from run.py (Option B) ---
+        # --- Collections ported from the run.py daily loop ---
         ActionSpec(
             action_id="grab_flying_starbux",
             client_method="grabFlyingStarbux",
             mutating=True,
-            idempotency=Idempotency.ONCE_PER_PERIOD,
+            # Each call grabs 1-5 of the day's free starbux (the server caps the day), so run.py calls it on
+            # every loop; once per period would stop after the first small grab.
+            idempotency=Idempotency.SAFE_TO_RETRY,
             required_params=(),
             preconditions=(_section_observed("resources"), _starbux_observed),
             postcondition=_starbux_increased,
-            expected_effect="free starbux collected for the day",
+            expected_effect="free starbux increase",
         ),
         ActionSpec(
             action_id="collect_task_reward",
@@ -762,8 +703,8 @@ CATALOG: dict[str, ActionSpec] = {
             mutating=True,
             idempotency=Idempotency.ONCE_PER_PERIOD,
             required_params=(),
-            preconditions=(_section_observed("tasks"),),
-            postcondition=_task_reward_collected,
+            preconditions=(_section_observed("resources"),),
+            postcondition=_reward_received,
             expected_effect="completed task rewards collected (resources, starbux, or items)",
         ),
         ActionSpec(
@@ -772,8 +713,8 @@ CATALOG: dict[str, ActionSpec] = {
             mutating=True,
             idempotency=Idempotency.SAFE_TO_RETRY,
             required_params=(),
-            preconditions=(_section_observed("markers"),),
-            postcondition=_markers_collected,
+            preconditions=(_section_observed("resources"),),
+            postcondition=_resources_collected,
             expected_effect="user markers collected, minerals and/or gas increase",
         ),
         ActionSpec(
@@ -782,19 +723,20 @@ CATALOG: dict[str, ActionSpec] = {
             mutating=True,
             idempotency=Idempotency.SAFE_TO_RETRY,
             required_params=(),
-            preconditions=(_section_observed("resources"), _ship_observed),
-            postcondition=_mining_drones_collected,
+            preconditions=(_section_observed("resources"), _section_observed("ship")),
+            postcondition=_resources_collected,
             expected_effect="mining drones collected after travel, minerals and/or gas increase",
         ),
-        # --- Inter-fleet actions (Option C) ---
+        # --- Inter-fleet actions ---
         ActionSpec(
             action_id="fleet_pool_resources",
             client_method="fleetPoolResources",
             mutating=True,
-            idempotency=Idempotency.SAFE_TO_RETRY,
+            # A repeated contribution or withdrawal moves the amount twice.
+            idempotency=Idempotency.NOT_IDEMPOTENT,
             required_params=("action", "resource_type", "amount"),
-            preconditions=(),
-            postcondition=_fleet_pool_changed,
+            preconditions=(_fleet_pool_params_valid,),
+            postcondition=_fleet_effect_not_observable,
             expected_effect="fleet reserve contribution or withdrawal recorded",
         ),
         ActionSpec(
@@ -804,7 +746,7 @@ CATALOG: dict[str, ActionSpec] = {
             idempotency=Idempotency.SAFE_TO_RETRY,
             required_params=(),
             preconditions=(),
-            postcondition=_fleet_sync_performed,
+            postcondition=_fleet_effect_not_observable,
             expected_effect="fleet-wide marketplace buy/sell coordinated",
         ),
         ActionSpec(
@@ -814,7 +756,7 @@ CATALOG: dict[str, ActionSpec] = {
             idempotency=Idempotency.NOT_IDEMPOTENT,
             required_params=("target_fleet", "battle_type"),
             preconditions=(),
-            postcondition=_fleet_battle_scheduled,
+            postcondition=_battle_outcome_observed,
             expected_effect="coordinated fleet battle scheduled and executed",
         ),
         ActionSpec(
@@ -824,7 +766,7 @@ CATALOG: dict[str, ActionSpec] = {
             idempotency=Idempotency.ONCE_PER_PERIOD,
             required_params=("source_account", "target_account", "character_id"),
             preconditions=(),
-            postcondition=_crew_xp_shared,
+            postcondition=_fleet_effect_not_observable,
             expected_effect="crew training XP shared across fleet accounts",
         ),
     )
