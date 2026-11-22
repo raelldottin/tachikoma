@@ -38,6 +38,7 @@ from sdk.fleet.factory import (
     ExecutionRefusedError,
     GatedActionRunner,
     _ExecuteGateMixin,
+    canary_choice,
     registry_hash,
     registry_stamp,
 )
@@ -613,6 +614,24 @@ class CanaryTests(FleetExecuteTestCase):
         code, out, err = self.execute("--plan-only", "--mode", "canary")
         self.assertEqual(code, 0, err)
         self.assertIn("| nothing | add_research | 1000 | 1000 |", self.row(out, "alpha"))
+
+    # Regression (PR #272 review): a safe-to-retry action that does more than an effect the canary can
+    # reconcile (the mining drone trip moves the ship; the starbux grab cannot be verified) is never the canary.
+    def test_the_canary_runs_only_canary_safe_actions(self):
+        now = datetime.now(timezone.utc)
+        actions = [*SAFE_ACTIONS, "collect_mining_drones", "grab_flying_starbux"]
+        gate = ExecutionGate(authorization_from_dict(authorization_payload(actions=actions)),
+                             load_registry(self.registry), "canary", lambda: now)
+        snapshot = build_snapshot("alpha", now, "test", resources={"minerals": 5, "gas": 5, "starbux": None})
+        drones = ActionRequest("collect_mining_drones", {}, "drones")
+        grab = ActionRequest("grab_flying_starbux", {}, "grab")
+        result = AuthorizedPolicy(OverplanningPolicy(drones, grab), gate).plan(snapshot, DesignData(), PolicyConfig())
+        self.assertEqual([request.action_id for request in result.requests], ["collect_all_resources"])
+        self.assertEqual([(item.candidate, item.reason) for item in result.rejected],
+                         [("collect_mining_drones", "canary: safe to retry, but not canary-safe"),
+                          ("grab_flying_starbux", "canary: safe to retry, but not canary-safe")])
+        self.assertEqual(canary_choice(["collect_mining_drones", "collect_all_resources"], gate, "alpha"),
+                         "collect_all_resources")
 
     # Verifies: S05-R4, S05-R6
     def test_the_canary_fallback_is_only_planned_when_allowed_and_observed(self):

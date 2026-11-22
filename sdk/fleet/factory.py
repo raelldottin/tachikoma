@@ -64,7 +64,7 @@ Execute gate (SPEC-05, S05-R1 and S05-R4 to S05-R6). ``ExecuteFleetOrchestrator`
 and ``ConcurrentExecuteFleetOrchestrator`` run the fleet orchestrators' own
 per-account steps under an ``ExecutionGate`` built from an owner-written
 ``Authorization``: the plan keeps only authorized actions (in ``canary`` mode
-only the first safe-to-retry one, or else one ``collect_all_resources`` when the
+only the first canary-safe one, or else one ``collect_all_resources`` when the
 authorization allows it), budgets are the tighter of the registry's
 and the authorization's caps with starbux at 0, ``GatedActionRunner`` refuses
 an action outside the authorization or one whose cap would be exceeded, and
@@ -859,10 +859,11 @@ def _candidate(action_id: str, params: Mapping[str, Any]) -> str:
     return " ".join([action_id, *(str(value) for value in params.values())])
 
 
-# The canary's own request when the plan keeps no safe-to-retry one (baseline-v1 plans a collection only
+# The canary's own request when the plan keeps no canary-safe one (baseline-v1 plans a collection only
 # after a room upgrade). It is safe to retry and costs nothing, so a canary still proves the execute path.
 CANARY_FALLBACK_ACTION = "collect_all_resources"
 CANARY_NOT_SAFE = "canary: not safe to retry"
+CANARY_NOT_CANARY_SAFE = "canary: safe to retry, but not canary-safe"
 CANARY_NOT_FIRST = "canary: only the first safe-to-retry action runs"
 
 
@@ -870,12 +871,23 @@ def _safe_to_retry(action_id: str) -> bool:
     return get_spec(action_id).idempotency is Idempotency.SAFE_TO_RETRY
 
 
+def _canary_safe(action_id: str) -> bool:
+    """A canary may run the action: safe to retry and marked ``canary_safe`` in the catalog."""
+    return _safe_to_retry(action_id) and get_spec(action_id).canary_safe
+
+
+def _canary_refusal(action_id: str) -> str:
+    if _canary_safe(action_id):
+        return CANARY_NOT_FIRST
+    return CANARY_NOT_CANARY_SAFE if _safe_to_retry(action_id) else CANARY_NOT_SAFE
+
+
 class AuthorizedPolicy:
     """A progression policy whose plan keeps only what the gate allows.
 
     Requests the authorization does not allow, and any request with a planned
     starbux cost, move to ``rejected``. In canary mode only the first
-    remaining safe-to-retry request is kept; when none remains and the policy
+    remaining canary-safe request is kept; when none remains and the policy
     did not plan ``collect_all_resources`` itself, a single
     ``collect_all_resources`` request is planned instead, if the gate allows it
     for the account and its preconditions hold. ``journal`` supplies the events
@@ -903,10 +915,9 @@ class AuthorizedPolicy:
             else:
                 kept.append(request)
         if self.gate.canary:
-            first = next((index for index, request in enumerate(kept) if _safe_to_retry(request.action_id)), None)
+            first = next((index for index, request in enumerate(kept) if _canary_safe(request.action_id)), None)
             canary = kept[first] if first is not None else None
-            rejected += [Rejection(_candidate(request.action_id, request.params),
-                                   CANARY_NOT_FIRST if _safe_to_retry(request.action_id) else CANARY_NOT_SAFE)
+            rejected += [Rejection(_candidate(request.action_id, request.params), _canary_refusal(request.action_id))
                          for index, request in enumerate(kept) if index != first]
             # A collection the policy planned and the checks above rejected (for a starbux cost, say) is
             # never planned again here.
@@ -917,7 +928,7 @@ class AuthorizedPolicy:
 
     def _canary_fallback(self, snapshot: AccountSnapshot, events: Optional[Callable[[], Iterable[GameplayEvent]]],
                          rejected: list) -> Optional[ActionRequest]:
-        """The canary's ``collect_all_resources`` request when the plan kept no safe-to-retry one, or ``None``.
+        """The canary's ``collect_all_resources`` request when the plan kept no canary-safe one, or ``None``.
 
         Nothing is planned when the gate refuses the action for this account. A
         failed precondition (such as resources not observed) is a rejection, and so
@@ -1173,12 +1184,12 @@ def canary_choice(actions: Sequence[str], gate: ExecutionGate, alias: str,
                   events: Optional[Callable[[], Iterable[GameplayEvent]]] = None) -> Optional[str]:
     """The action a canary run would take from ``actions`` (plan order), or ``None``.
 
-    As in ``AuthorizedPolicy``: the first authorized safe-to-retry action, else
+    As in ``AuthorizedPolicy``: the first authorized canary-safe action, else
     ``collect_all_resources`` when the gate allows it (its preconditions are
     checked only by the execute run, against a fresh snapshot).
     """
     for action_id in actions:
-        if _safe_to_retry(action_id) and gate.refusal(alias, action_id, events) is None:
+        if _canary_safe(action_id) and gate.refusal(alias, action_id, events) is None:
             return action_id
     if gate.refusal(alias, CANARY_FALLBACK_ACTION, events) is None:
         return CANARY_FALLBACK_ACTION
