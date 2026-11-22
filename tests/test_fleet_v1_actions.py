@@ -222,5 +222,59 @@ class SettingsRetryTests(ClientGuardTests):
         self.assertIs(self.client.listAllTaskDesigns2(), False)
         self.client.getLatestVersion3.assert_called_once()
 
+    def test_an_error_settings_payload_is_retried_once_per_session(self):
+        # Login can leave an error payload rather than nothing; it, too, is fetched once more.
+        self.client.latestVersion = {"SettingService": {"GetLatestVersion3": {"@errorMessage": "x"}}}
+
+        def load():
+            self.client.latestVersion = SETTINGS
+
+        self.client.getLatestVersion3 = MagicMock(side_effect=load)
+        self.assertIs(self.client.listRoomDesigns2(), True)
+        self.assertIs(self.client.listAllTaskDesigns2(), True)
+        self.client.getLatestVersion3.assert_called_once()
+
+
+class SecondReviewFindingTests(ClientGuardTests):
+    """Regression coverage for the PR #272 findings fixed after the high-effort review."""
+
+    def test_markers_nested_under_the_method_node_are_collected(self):
+        # The reply nests UserMarkers under <ListStarSystemMarkersAndUserMarkers>, as findMiningDrones reads it.
+        def fake_list():
+            self.client.starSystemMarkersAndUserMarkers = {"GalaxyService": {"ListStarSystemMarkersAndUserMarkers": {
+                "UserMarkers": {"UserMarker": [{"@StarSystemMarkerId": "7"}, {"@StarSystemMarkerId": "8"}]}}}}
+
+        self.client.listStarSystemMarkersAndUserMarkers = fake_list
+        self.client.collectMiningDrone = MagicMock(return_value=True)
+        self.assertEqual(self.client.collectAvailableMarkers(), 2)
+        self.assertEqual([c.args[0] for c in self.client.collectMiningDrone.call_args_list], ["7", "8"])
+
+    def test_drone_travel_tolerates_an_empty_ship_reply(self):
+        drone = {"markerId": "9", "starSystemId": "5"}
+        self.client.dronesCollected = {}
+        self.client.findMiningDrones = MagicMock(return_value=[drone])
+
+        def empty_ship(*args, **kwargs):
+            self.client.shipByUserId = {"ShipService": None}
+            return False
+
+        self.client.getShipByUserId = MagicMock(side_effect=empty_ship)
+        self.client.goToStarSystem = MagicMock(return_value="2026-11-21T00:00:00")
+        self.client.waitForArrival = MagicMock(return_value=True)
+        self.client.collectMiningDrone = MagicMock(return_value=True)
+        self.assertEqual(self.client.collectMiningDronesWithTravel(), 1)
+        self.client.goToStarSystem.assert_called_once_with("5")
+
+    def test_character_designs_use_their_own_version_and_fail_on_an_empty_reply(self):
+        self.client.latestVersion = {"SettingService": {"GetLatestSetting": {"Setting": {
+            "@CharacterDesignVersion": "55"}}}}
+        self.client.request.return_value = MagicMock(content=b"<CharacterService/>")
+        self.assertIs(self.client.listAllCharacterDesigns2(), True)
+        self.assertIn("CharacterService/ListAllCharacterDesigns2", self.client.request.call_args.args[0])
+        self.assertIn("designVersion=55", self.client.request.call_args.args[0])
+        self.client.request.return_value = MagicMock(content=b"")
+        self.assertIs(self.client.listAllCharacterDesigns2(), False)
+
+
 if __name__ == "__main__":
     unittest.main()

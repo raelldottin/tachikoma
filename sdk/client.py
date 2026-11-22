@@ -566,11 +566,18 @@ class Client(object):
     def _settings(self):
         """GetLatestVersion3's ``Setting`` record, or None (for example an error payload).
 
-        When login left no settings, they are fetched once more for the session, not once per caller.
+        When login left no settings (nothing, or an error payload), they are fetched once more for the
+        session, not once per caller.
         """
-        if not getattr(self, "latestVersion", None) and not getattr(self, "_latestVersionRetried", False):
+        setting = self._loadedSettings()
+        if setting is None and not getattr(self, "_latestVersionRetried", False):
             self._latestVersionRetried = True
             self.getLatestVersion3()
+            setting = self._loadedSettings()
+        return setting
+
+    def _loadedSettings(self):
+        """The ``Setting`` record already in ``self.latestVersion``, or None."""
         try:
             setting = self.latestVersion["SettingService"]["GetLatestSetting"]["Setting"]
         except (AttributeError, KeyError, TypeError):
@@ -679,6 +686,10 @@ class Client(object):
         galaxy = data.get("GalaxyService") if isinstance(data, dict) else None
         if not isinstance(galaxy, dict):
             return False
+        # The reply nests its lists under the method's node, as findMiningDrones reads them.
+        listing = galaxy.get("ListStarSystemMarkersAndUserMarkers")
+        if isinstance(listing, dict):
+            galaxy = listing
 
         # Extract UserMarker entries (markers the user can collect)
         user_markers_wrapper = galaxy.get("UserMarkers")
@@ -974,21 +985,13 @@ class Client(object):
         return True
 
     def listAllCharacterDesigns2(self):
-        version = self._designVersion("CharacterDesignVersion")
-        if version is None:
+        if not self._fetchDesignList("CharacterService/ListAllCharacterDesigns2", "CharacterDesignVersion",
+                                     "allCharacterDesigns"):
             return False
-        url = f"{self.baseUrl}/CharacterService/ListAllCharacterDesigns2?languageKey={self.device.languageKey}&designVersion={version}"
-        r = self.request(url, "GET")
-        if r:
-            self.allCharacterDesigns = xmltodict.parse(r.content, xml_attribs=True)
-
-            if "CharacterService" not in self.allCharacterDesigns:
-                logging.error(
-                    "[%s] CharacterService data not avaialble.", self.info["@Name"]
-                )
-                return False
-            return True
-        return False
+        if "CharacterService" not in self.allCharacterDesigns:
+            logging.error("[%s] CharacterService data not avaialble.", self.info["@Name"])
+            return False
+        return True
 
     def addTraining(self, trainingDesignId, characterId):
         url = f"{self.baseUrl}/TrainingService/AddTraining?trainingDesignId={trainingDesignId}&characterId={characterId}&trainingStartDate={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}&accessToken={self.accessToken}"
@@ -3082,9 +3085,9 @@ class Client(object):
             self.getShipByUserId()
         except Exception:
             pass
-        ship_data = getattr(self, "shipByUserId", None)
-        if ship_data and isinstance(ship_data, dict):
-            ship = ship_data.get("ShipService", {}).get("GetShipByUserId", {}).get("Ship", {})
+        # An empty <ShipService/> or <GetShipByUserId/> parses to None; _shipRecord tolerates it.
+        ship = self._shipRecord()
+        if ship is not None:
             current_star_system = ship.get("@StarSystemId", "")
 
         collected = 0
