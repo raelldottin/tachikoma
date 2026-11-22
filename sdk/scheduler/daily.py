@@ -11,7 +11,7 @@ Safety rules:
 - An operator stop file is checked before every action.
 - A per-run action budget caps how many requests are attempted.
 - Once-per-period actions already verified, or still uncertain, within the
-  period are skipped, judged from journal history.
+  period with the same params are skipped, judged from journal history.
 - The run stops on the first ``contradicted`` outcome, on an ``unknown``
   outcome for a non-idempotent action, and on any refusal from the runner.
 """
@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from sdk.actions import Idempotency, get_spec
-from sdk.execution import ActionRunner, RunResult, UncertainPriorAttemptError
+from sdk.execution import ActionRunner, RunResult, UncertainPriorAttemptError, params_key
 from sdk.policy import ActionRequest, DesignData, Plan, PolicyConfig, ProgressionPolicy
 from sdk.state import AccountMismatchError
 
@@ -77,12 +77,15 @@ class DailyScheduler:
         self.config = config
         self.clock = clock
 
-    def _done_this_period(self, action_id: str) -> bool:
+    def _done_this_period(self, action_id: str, params) -> bool:
+        """Whether this action, with these params, was verified or left uncertain within the period."""
         cutoff = self.clock() - self.config.period
+        key = params_key(params)
         for event in self.runner.journal.read():
             if (
                 event.account_alias == self.runner.account_alias
                 and event.action_id == action_id
+                and params_key(event.params) == key
                 and event.attempted
                 and event.outcome in ("verified", "unknown")
                 and datetime.fromisoformat(event.finished_at) >= cutoff
@@ -113,7 +116,7 @@ class DailyScheduler:
                 stop_reason = f"action budget reached ({self.config.max_actions})"
                 break
             spec = get_spec(request.action_id)
-            if spec.idempotency is Idempotency.ONCE_PER_PERIOD and self._done_this_period(spec.action_id):
+            if spec.idempotency is Idempotency.ONCE_PER_PERIOD and self._done_this_period(spec.action_id, request.params):
                 skipped.append(SkippedRequest(request, "already verified or uncertain within this period"))
                 continue
             try:

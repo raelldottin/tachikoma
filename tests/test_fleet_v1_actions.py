@@ -6,7 +6,7 @@ Synthetic snapshots and design data only; all Pixel Starships network traffic is
 import unittest
 from unittest.mock import MagicMock
 
-from sdk.actions import Idempotency, ReconciliationStatus, check_preconditions, get_spec
+from sdk.actions import CATALOG, Idempotency, ReconciliationStatus, check_preconditions, get_spec
 from sdk.client import Client
 from sdk.device import Device
 from sdk.policy import PolicyConfig, get_policy
@@ -174,6 +174,53 @@ class ClientGuardTests(unittest.TestCase):
                 self.client.request.return_value = MagicMock(content=body)
                 self.assertIs(self.client.getShipByUserId(), False)
 
+
+
+class RemainingReviewFindingTests(unittest.TestCase):
+    """Regression coverage for the PR #272 findings fixed after the first review pass."""
+
+    def test_marketplace_sync_is_not_retried(self):
+        self.assertIs(get_spec("fleet_marketplace_sync").idempotency, Idempotency.NOT_IDEMPOTENT)
+
+    def test_only_the_resource_collection_is_canary_safe(self):
+        self.assertEqual([spec.action_id for spec in CATALOG.values() if spec.canary_safe], ["collect_all_resources"])
+
+    def test_grab_flying_starbux_runs_without_an_observed_starbux_balance(self):
+        # The runner's snapshots never carry starbux (only the plan's does), so requiring it blocked every grab.
+        unobserved = {"minerals": "100", "gas": "100", "starbux": None}
+        self.assertEqual(check_preconditions(get_spec("grab_flying_starbux"), snap(resources=unobserved), {}), [])
+        self.assertIs(outcome("grab_flying_starbux", {}, before_overrides={"resources": unobserved}).status, U)
+
+
+class MarkerCollectionResultTests(unittest.TestCase):
+    def setUp(self):
+        device = Device(language="en")
+        device.key = "00000000-0000-0000-0000-000000000000"
+        self.client = Client(device=device)
+        self.client.accessToken = SYNTHETIC_ACCESS_TOKEN
+        self.client.info = {"@Name": "TestCaptain"}
+
+    def listed(self, payload):
+        def fake_list():
+            self.client.starSystemMarkersAndUserMarkers = payload
+        self.client.listStarSystemMarkersAndUserMarkers = fake_list
+
+    def test_a_failed_read_is_false_and_an_empty_one_is_zero(self):
+        self.listed({"GalaxyService": {"UserMarkers": None}})
+        self.assertIs(self.client.collectAvailableMarkers(), 0)
+        self.listed({"SettingService": {"@errorMessage": "x"}})
+        self.assertIs(self.client.collectAvailableMarkers(), False)
+        self.client.accessToken = None
+        self.assertIs(self.client.collectAvailableMarkers(), False)
+        self.assertIs(self.client.collectMiningDronesWithTravel(), False)
+
+
+class SettingsRetryTests(ClientGuardTests):
+    def test_missing_settings_are_retried_once_per_session(self):
+        self.client.getLatestVersion3 = MagicMock()  # the reply never loads
+        self.assertIs(self.client.listRoomDesigns2(), False)
+        self.assertIs(self.client.listAllTaskDesigns2(), False)
+        self.client.getLatestVersion3.assert_called_once()
 
 if __name__ == "__main__":
     unittest.main()

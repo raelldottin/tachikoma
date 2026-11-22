@@ -162,6 +162,18 @@ class RunnerTests(unittest.TestCase):
         self.world.effect = gain_minerals
         self.assertEqual(self.runner.run("collect_all_resources").outcome, "verified")
 
+    # Regression (PR #272 review): the marker and drone collections return a count; 0 (nothing to collect)
+    # was journaled as an ambiguous response, so every quiet run read as unknown.
+    def test_a_count_is_a_completed_call(self):
+        self.world.result = 0
+        result = self.runner.run("collect_available_markers")
+        self.assertEqual(result.outcome, "not-observed")
+        self.assertIs(result.event.response_ok, True)
+        self.world.result = False
+        self.assertIs(self.runner.run("collect_available_markers").event.response_ok, False)
+        self.world.result = -1
+        self.assertEqual(self.runner.run("collect_available_markers").outcome, "unknown")
+
     def test_failed_preconditions_skip_without_calling(self):
         result = self.runner.run("add_research", {"research_design_id": "500"})
         self.assertEqual(result.outcome, "skipped")

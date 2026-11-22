@@ -658,22 +658,23 @@ class Client(object):
     def collectAvailableMarkers(self) -> int:
         """List star system markers and collect all those owned by this user.
 
-        Returns the count of markers successfully collected.
+        Returns the count of markers collected (0 when there was nothing to collect), or False when the
+        markers could not be listed, so a caller can tell a failed read from an empty one.
         """
         if not self.accessToken:
-            return 0
+            return False
         try:
             self.listStarSystemMarkersAndUserMarkers()
         except Exception as e:
             logging.error(f"listStarSystemMarkersAndUserMarkers failed: {redact_secrets(str(e))}")
-            return 0
+            return False
 
-        data = getattr(self, "starSystemMarkersAndUserMarkers", {})
-        if not data:
-            return 0
+        data = getattr(self, "starSystemMarkersAndUserMarkers", None)
+        galaxy = data.get("GalaxyService") if isinstance(data, dict) else None
+        if not isinstance(galaxy, dict):
+            return False
 
         # Extract UserMarker entries (markers the user can collect)
-        galaxy = data.get("GalaxyService", {})
         user_markers_wrapper = galaxy.get("UserMarkers")
         if not user_markers_wrapper:
             return 0
@@ -2948,10 +2949,11 @@ class Client(object):
         Skips drones that are already collected (tracks via dronesCollected).
 
         Returns:
-            The number of mining drones successfully collected.
+            The number of mining drones successfully collected (0 when none was found), or False when
+            there is no session to search with.
         """
         if not self.accessToken:
-            return 0
+            return False
 
         char_name = self.info.get("@Name", "") if isinstance(self.info, dict) else ""
         drones = self.findMiningDrones()

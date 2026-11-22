@@ -65,6 +65,10 @@ class ActionSpec:
     expected_effect: str
     evidence_probe: Optional[EvidenceProbe] = None
     evidence: Optional[EvidenceBuilder] = None
+    # A canary (--fleet-execute --mode canary) may run this action: it is safe to retry, costs nothing and does
+    # nothing beyond an effect its postcondition can reconcile. Set explicitly, so a new safe-to-retry action
+    # never becomes a live canary without that decision.
+    canary_safe: bool = False
 
 
 class ActionSpecError(ValueError):
@@ -117,12 +121,6 @@ def _research_not_started(snapshot: AccountSnapshot, params: Params) -> Optional
     state = snapshot.research_state(str(params["research_design_id"]))
     if state in ("Researching", "Completed"):
         return f"research {params['research_design_id']} is already {state.lower()}"
-    return None
-
-
-def _starbux_observed(snapshot: AccountSnapshot, params: Params) -> Optional[str]:
-    if snapshot.resources.starbux is None:
-        return "starbux balance was not observed"
     return None
 
 
@@ -617,6 +615,7 @@ CATALOG: dict[str, ActionSpec] = {
             expected_effect="minerals and/or gas increase",
             evidence_probe=_collection_probe,
             evidence=_collection_evidence,
+            canary_safe=True,
         ),
         ActionSpec(
             action_id="collect_daily_reward",
@@ -693,7 +692,9 @@ CATALOG: dict[str, ActionSpec] = {
             # every loop; once per period would stop after the first small grab.
             idempotency=Idempotency.SAFE_TO_RETRY,
             required_params=(),
-            preconditions=(_section_observed("resources"), _starbux_observed),
+            # Starbux is not required: it comes only from the login profile, which only the plan's snapshot
+            # carries, so the runner's before-snapshot never has it. Unobserved, the grab reconciles as unknown.
+            preconditions=(_section_observed("resources"),),
             postcondition=_starbux_increased,
             expected_effect="free starbux increase",
         ),
@@ -743,7 +744,8 @@ CATALOG: dict[str, ActionSpec] = {
             action_id="fleet_marketplace_sync",
             client_method="fleetMarketplaceSync",
             mutating=True,
-            idempotency=Idempotency.SAFE_TO_RETRY,
+            # A sync buys and sells: repeating an uncertain one could trade twice.
+            idempotency=Idempotency.NOT_IDEMPOTENT,
             required_params=(),
             preconditions=(),
             postcondition=_fleet_effect_not_observable,

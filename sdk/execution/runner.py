@@ -76,9 +76,17 @@ def _utc_now() -> datetime:
 
 
 def _response_ok(result: Any) -> Optional[bool]:
-    """Client methods return True/False, None, or other values. Only a
-    boolean is treated as a definite response; anything else is ambiguous."""
-    return result if isinstance(result, bool) else None
+    """Client methods return True/False, a count, None, or other values.
+
+    A boolean is a definite response. A non-negative count (the collection
+    methods return how many things they collected, 0 when there was nothing)
+    is a completed call. Anything else is ambiguous.
+    """
+    if isinstance(result, bool):
+        return result
+    if isinstance(result, int) and result >= 0:
+        return True
+    return None
 
 
 def planned_cost(expected_cost: Optional[Mapping[str, Any]]) -> dict[str, int]:
@@ -105,7 +113,8 @@ def with_uncertain_cost(cost: Mapping[str, Any], planned: Mapping[str, int]) -> 
     return result
 
 
-def _params_key(params: Mapping[str, Any]) -> tuple:
+def params_key(params: Mapping[str, Any]) -> tuple:
+    """A hashable, order-independent key for an action's params, as journaled."""
     return tuple(sorted((str(key), str(value)) for key, value in params.items()))
 
 
@@ -148,7 +157,7 @@ class ActionRunner:
         return snapshot
 
     def _last_attempt_uncertain(self, spec: ActionSpec, params: Mapping[str, Any]) -> bool:
-        key = _params_key(params)
+        key = params_key(params)
         account_wide = spec.action_id in ACCOUNT_WIDE_UNCERTAINTY
         attempts = [
             event
@@ -156,7 +165,7 @@ class ActionRunner:
             if event.account_alias == self.account_alias
             and event.action_id == spec.action_id
             and event.attempted
-            and (account_wide or _params_key(event.params) == key)
+            and (account_wide or params_key(event.params) == key)
         ]
         return bool(attempts) and attempts[-1].outcome == ReconciliationStatus.UNKNOWN.value
 
