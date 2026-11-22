@@ -18,6 +18,7 @@ import unittest
 from unittest.mock import patch
 
 from scripts import ci
+from sdk.fleet.accounts import load_registry
 from tests.synthetic_fixtures import SYNTHETIC_ACCESS_TOKEN, SYNTHETIC_DEVICE_KEY_IOS
 from tests.test_strict_mode import skip_unless_dependency
 
@@ -354,23 +355,24 @@ class WorkflowPolicyTests(unittest.TestCase):
                 ci.check_workflows(docs)
 
     def test_fleet_v1_dry_run_step_is_read_only_and_covers_every_account(self):
-        job = next(iter(self.documents["live-trial.yml"]["jobs"].values()))
-        self.assertIn(
-            "fleet-dry-run", self.documents["live-trial.yml"]["on"]["workflow_dispatch"]["inputs"]["step"]["options"]
-        )
+        workflow = self.documents["live-trial.yml"]
+        job = next(iter(workflow["jobs"].values()))
+        self.assertIn("fleet-dry-run", workflow["on"]["workflow_dispatch"]["inputs"]["step"]["options"])
         step = next(step for step in job["steps"] if step.get("if") == "inputs.step == 'fleet-dry-run'")
         self.assertIn("--fleet-dry-run", step["run"])
         self.assertNotIn("--fleet-execute", step["run"])
         self.assertIn("--identity-salt-env TACHIKOMA_FLEET_SALT", step["run"])
-        registry = json.loads((ci.ROOT / job["env"]["FLEET_V1_REGISTRY"]).read_text(encoding="utf-8"))
-        accounts = registry["accounts"]
-        self.assertEqual([account["alias"] for account in accounts], [f"pss{n}" for n in range(1, 6)])
-        for account in accounts:
-            with self.subTest(alias=account["alias"]):
-                self.assertEqual(account["policy_id"], "fleet-v1")
-                self.assertTrue(account["enabled"])
-                self.assertEqual(set(account["budgets"].values()), {0})
-                secret = account["credentials_secret"]
+        self.assertEqual(step["env"]["TACHIKOMA_FLEET_SALT"], "${{ secrets.TACHIKOMA_FLEET_SALT }}")
+        # The runner's own loader: a registry it would refuse (exit 2) fails here.
+        registry = load_registry(ci.ROOT / job["env"]["FLEET_V1_REGISTRY"])
+        self.assertEqual(registry.aliases(), tuple(f"pss{n}" for n in range(1, 6)))
+        self.assertEqual(len(registry.enabled()), 5)
+        for profile in registry.enabled():
+            with self.subTest(alias=profile.alias):
+                self.assertEqual(profile.policy_id, "fleet-v1")
+                # Every kind is listed: a missing mineral or gas budget is uncapped, not zero.
+                self.assertEqual(dict(profile.budgets), {"minerals": 0, "gas": 0, "starbux": 0})
+                secret = profile.credentials_secret
                 for suffix in ("_EMAIL", "_PASSWORD"):
                     self.assertEqual(step["env"][secret + suffix], f"${{{{ secrets.{secret}{suffix} }}}}")
 
