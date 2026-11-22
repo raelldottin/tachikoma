@@ -7,7 +7,7 @@ from pathlib import Path
 
 from sdk.execution import ActionRunner
 from sdk.journal import GameplayEvent, GameplayJournal
-from sdk.policy import DesignData, PolicyConfig, get_policy
+from sdk.policy import ActionRequest, DesignData, Plan, PolicyConfig, get_policy
 from sdk.scheduler import DailyScheduler, SchedulerConfig
 from sdk.state import AccountMismatchError, build_snapshot
 
@@ -118,6 +118,26 @@ class SchedulerTests(unittest.TestCase):
         report = self.scheduler().run(execute=True)
         self.assertNotIn("collectDailyReward", self.game.calls)
         self.assertEqual([skip.request.action_id for skip in report.skipped], ["collect_daily_reward"])
+
+    # Regression (PR #272 review): the period check ignored params, so sharing crew XP for one character
+    # skipped every other character for the rest of the period.
+    def test_once_per_period_is_judged_per_params(self):
+        def share(character_id):
+            return ActionRequest("fleet_share_crew_xp", {"source_account": "alpha", "target_account": "beta",
+                                                         "character_id": character_id}, "share")
+
+        class SharePolicy:
+            name = "share-test"
+
+            def plan(self, snapshot, design, config):
+                requests = (share("c1"), share("c2"), share("c1"))
+                return Plan(self.name, snapshot.account_alias, snapshot.observed_at.isoformat(), requests, ())
+
+        self.game.fleetShareCrewXp = lambda *args: self.game.calls.append(("share",) + args) or False
+        report = DailyScheduler(self.runner, SharePolicy(), DESIGN, PolicyConfig(), SchedulerConfig(),
+                                clock=self.clock).run(execute=True)
+        self.assertEqual(self.game.calls, [("share", "alpha", "beta", "c1"), ("share", "alpha", "beta", "c2")])
+        self.assertEqual([skip.request.params["character_id"] for skip in report.skipped], ["c1"])
 
     def test_once_per_period_action_runs_again_after_the_period(self):
         self.scheduler().run(execute=True)

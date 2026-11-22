@@ -65,6 +65,10 @@ class ActionSpec:
     expected_effect: str
     evidence_probe: Optional[EvidenceProbe] = None
     evidence: Optional[EvidenceBuilder] = None
+    # A canary (--fleet-execute --mode canary) may run this action: it is safe to retry, costs nothing and does
+    # nothing beyond an effect its postcondition can reconcile. Set explicitly, so a new safe-to-retry action
+    # never becomes a live canary without that decision.
+    canary_safe: bool = False
 
 
 class ActionSpecError(ValueError):
@@ -98,13 +102,17 @@ def _room_idle(snapshot: AccountSnapshot, params: Params) -> Optional[str]:
     return None
 
 
+def _is_int_at_least(value: Any, minimum: int) -> bool:
+    """True for an ``int`` (not a ``bool``) of at least ``minimum``."""
+    return isinstance(value, int) and not isinstance(value, bool) and value >= minimum
+
+
 def _placement_params_valid(snapshot: AccountSnapshot, params: Params) -> Optional[str]:
     """``place_room`` needs a numeric room design id and a non-negative integer row and column."""
     if not str(params.get("room_design_id") or "").strip().isdigit():
         return "room_design_id must be a numeric room design id"
     for name in ("row", "column"):
-        value = params.get(name)
-        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        if not _is_int_at_least(params.get(name), 0):
             return f"{name} must be a non-negative integer"
     return None
 
@@ -113,6 +121,21 @@ def _research_not_started(snapshot: AccountSnapshot, params: Params) -> Optional
     state = snapshot.research_state(str(params["research_design_id"]))
     if state in ("Researching", "Completed"):
         return f"research {params['research_design_id']} is already {state.lower()}"
+    return None
+
+
+FLEET_POOL_ACTIONS = ("contribute", "withdraw")
+FLEET_POOL_RESOURCES = ("minerals", "gas", "starbux")
+
+
+def _fleet_pool_params_valid(snapshot: AccountSnapshot, params: Params) -> Optional[str]:
+    """``fleet_pool_resources`` needs a known direction, a known resource and a positive integer amount."""
+    if params.get("action") not in FLEET_POOL_ACTIONS:
+        return f"action must be one of {', '.join(FLEET_POOL_ACTIONS)}"
+    if params.get("resource_type") not in FLEET_POOL_RESOURCES:
+        return f"resource_type must be one of {', '.join(FLEET_POOL_RESOURCES)}"
+    if not _is_int_at_least(params.get("amount"), 1):
+        return "amount must be a positive integer"
     return None
 
 
@@ -229,6 +252,22 @@ def _battle_outcome_observed(delta, before, after, params):
             f"trophies changed {delta.trophies:+d} (a defense in the same interval would also change trophies)"
         )
     return ReconciliationStatus.NOT_OBSERVED, "trophies unchanged; no battle outcome observed"
+
+
+def _starbux_increased(delta, before, after, params):
+    if delta.starbux is None:
+        return ReconciliationStatus.UNKNOWN, "starbux was not observed on both sides"
+    if delta.starbux > 0:
+        return ReconciliationStatus.VERIFIED, f"starbux increased by {delta.starbux}"
+    if delta.starbux < 0:
+        return ReconciliationStatus.CONTRADICTED, f"starbux decreased by {-delta.starbux}"
+    return ReconciliationStatus.NOT_OBSERVED, "starbux unchanged"
+
+
+# Inter-fleet postconditions. A fleet coordination effect is not part of an account snapshot, so it can never be
+# verified from one: the outcome stays unknown rather than being claimed from the call alone (see ``reconcile``).
+def _fleet_effect_not_observable(delta, before, after, params):
+    return ReconciliationStatus.UNKNOWN, "fleet coordination effects are not observable in an account snapshot"
 
 
 # --- evidence ----------------------------------------------------------------------
@@ -576,6 +615,7 @@ CATALOG: dict[str, ActionSpec] = {
             expected_effect="minerals and/or gas increase",
             evidence_probe=_collection_probe,
             evidence=_collection_evidence,
+            canary_safe=True,
         ),
         ActionSpec(
             action_id="collect_daily_reward",
@@ -642,6 +682,94 @@ CATALOG: dict[str, ActionSpec] = {
             expected_effect="a battle outcome is observed as a trophy change",
             evidence_probe=_battle_probe,
             evidence=_battle_evidence,
+        ),
+        # --- Collections ported from the run.py daily loop ---
+        ActionSpec(
+            action_id="grab_flying_starbux",
+            client_method="grabFlyingStarbux",
+            mutating=True,
+            # Each call grabs 1-5 of the day's free starbux (the server caps the day), so run.py calls it on
+            # every loop; once per period would stop after the first small grab.
+            idempotency=Idempotency.SAFE_TO_RETRY,
+            required_params=(),
+            # Starbux is not required: it comes only from the login profile, which only the plan's snapshot
+            # carries, so the runner's before-snapshot never has it. Unobserved, the grab reconciles as unknown.
+            preconditions=(_section_observed("resources"),),
+            postcondition=_starbux_increased,
+            expected_effect="free starbux increase",
+        ),
+        ActionSpec(
+            action_id="collect_task_reward",
+            client_method="collectTaskReward",
+            mutating=True,
+            idempotency=Idempotency.ONCE_PER_PERIOD,
+            required_params=(),
+            preconditions=(_section_observed("resources"),),
+            postcondition=_reward_received,
+            expected_effect="completed task rewards collected (resources, starbux, or items)",
+        ),
+        ActionSpec(
+            action_id="collect_available_markers",
+            client_method="collectAvailableMarkers",
+            mutating=True,
+            idempotency=Idempotency.SAFE_TO_RETRY,
+            required_params=(),
+            preconditions=(_section_observed("resources"),),
+            postcondition=_resources_collected,
+            expected_effect="user markers collected, minerals and/or gas increase",
+        ),
+        ActionSpec(
+            action_id="collect_mining_drones",
+            client_method="collectMiningDronesWithTravel",
+            mutating=True,
+            idempotency=Idempotency.SAFE_TO_RETRY,
+            required_params=(),
+            preconditions=(_section_observed("resources"), _section_observed("ship")),
+            postcondition=_resources_collected,
+            expected_effect="mining drones collected after travel, minerals and/or gas increase",
+        ),
+        # --- Inter-fleet actions ---
+        ActionSpec(
+            action_id="fleet_pool_resources",
+            client_method="fleetPoolResources",
+            mutating=True,
+            # A repeated contribution or withdrawal moves the amount twice.
+            idempotency=Idempotency.NOT_IDEMPOTENT,
+            required_params=("action", "resource_type", "amount"),
+            preconditions=(_fleet_pool_params_valid,),
+            postcondition=_fleet_effect_not_observable,
+            expected_effect="fleet reserve contribution or withdrawal recorded",
+        ),
+        ActionSpec(
+            action_id="fleet_marketplace_sync",
+            client_method="fleetMarketplaceSync",
+            mutating=True,
+            # A sync buys and sells: repeating an uncertain one could trade twice.
+            idempotency=Idempotency.NOT_IDEMPOTENT,
+            required_params=(),
+            preconditions=(),
+            postcondition=_fleet_effect_not_observable,
+            expected_effect="fleet-wide marketplace buy/sell coordinated",
+        ),
+        ActionSpec(
+            action_id="fleet_battle_coordinate",
+            client_method="fleetBattleCoordinate",
+            mutating=True,
+            idempotency=Idempotency.NOT_IDEMPOTENT,
+            required_params=("target_fleet", "battle_type"),
+            preconditions=(),
+            postcondition=_battle_outcome_observed,
+            expected_effect="coordinated fleet battle scheduled and executed",
+        ),
+        ActionSpec(
+            action_id="fleet_share_crew_xp",
+            client_method="fleetShareCrewXp",
+            mutating=True,
+            idempotency=Idempotency.ONCE_PER_PERIOD,
+            required_params=("source_account", "target_account", "character_id"),
+            preconditions=(),
+            postcondition=_fleet_effect_not_observable,
+            expected_effect="crew training XP shared across fleet accounts",
         ),
     )
 }
