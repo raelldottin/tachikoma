@@ -120,7 +120,9 @@ Every field is required.
 | `actions` | A non-empty list of distinct action ids from `sdk.actions.CATALOG` |
 | `not_before`, `expires` | ISO 8601 times in UTC (`Z` or `+00:00`). `expires` is later than `not_before` and at most 14 days after it. The window is `not_before` inclusive to `expires` exclusive. |
 | `caps` | One entry per listed account, each with non-negative integer `minerals` and `gas` caps per period. A `starbux` cap is refused: starbux spending is never authorizable, and `Authorization.cap(alias, "starbux")` is always 0. |
-| `modes` | A non-empty list of distinct run modes from `canary` and `full` |
+| `modes` | A non-empty list of distinct run modes from `canary`, `full`, `place` and `upgrade-ship` |
+
+Optional sections are listed in the `sdk/fleet/authorization.py` docstring. A file without them loads and hashes as before. Among them is `hull_upgrades`, required exactly when `upgrade_ship` is in `actions`. It maps each listed account to a non-empty list of distinct `{"ship_design_id": N}` entries, where N is a positive integer. `run.py --fleet-execute --mode upgrade-ship --upgrade-ship N` runs only a design named there (`hull_upgrade_refusal_reason`). The gate refuses `upgrade_ship` in every other mode, so no policy plan can upgrade a hull.
 
 `load_authorization(path)` and `authorization_from_dict(payload)` return a frozen `Authorization` and fail closed with `AuthorizationError` on an unreadable or non-JSON file, a wrong version, unknown or missing fields, any rule above, a secret-named key anywhere in the file, or any value that `redact_secrets` would change. As in the registry, error text names the field but never repeats the offending value.
 

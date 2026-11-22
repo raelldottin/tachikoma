@@ -117,6 +117,13 @@ def _placement_params_valid(snapshot: AccountSnapshot, params: Params) -> Option
     return None
 
 
+def _hull_design_id_valid(snapshot: AccountSnapshot, params: Params) -> Optional[str]:
+    """``upgrade_ship`` needs a numeric hull (ship) design id."""
+    if not str(params.get("ship_design_id") or "").strip().isdigit():
+        return "ship_design_id must be a numeric hull design id"
+    return None
+
+
 def _research_not_started(snapshot: AccountSnapshot, params: Params) -> Optional[str]:
     state = snapshot.research_state(str(params["research_design_id"]))
     if state in ("Researching", "Completed"):
@@ -215,6 +222,28 @@ def _room_placed(delta, before, after, params):
         status = placed[0].status or "status not observed"
         return ReconciliationStatus.VERIFIED, f"a room of design {design} appeared at row {row}, column {column} ({status})"
     return ReconciliationStatus.NOT_OBSERVED, f"no new room of design {design} at row {row}, column {column}"
+
+
+def _hull_upgrade_started(delta, before, after, params):
+    """A hull upgrade, decided from the ship record alone.
+
+    Hull upgrades look timed: the ship record carries ``@UpgradeShipDesignId``
+    (the hull it is upgrading to) beside ``@ShipDesignId``. Verified when the
+    ship after the call shows the requested design as its hull (an instant
+    upgrade) or as its upgrade under way, and did not already show it before
+    (an effect present before the call is not this call's). ``ship`` is not a
+    delta section, so both snapshots' ship sections are checked here.
+    """
+    if before.section("ship") is Completeness.MISSING or after.section("ship") is Completeness.MISSING:
+        return ReconciliationStatus.UNKNOWN, "the ship was not observed on both sides"
+    target = str(params["ship_design_id"]).strip()
+    if target in (before.ship_design_id, before.upgrade_ship_design_id):
+        return ReconciliationStatus.NOT_OBSERVED, f"the ship already showed hull design {target} before the call"
+    if after.ship_design_id == target:
+        return ReconciliationStatus.VERIFIED, f"the ship's hull design is now {target}"
+    if after.upgrade_ship_design_id == target:
+        return ReconciliationStatus.VERIFIED, f"the ship started upgrading to hull design {target}"
+    return ReconciliationStatus.NOT_OBSERVED, f"the ship shows neither hull design {target} nor an upgrade to it"
 
 
 def _room_upgrade_started(delta, before, after, params):
@@ -562,11 +591,16 @@ def _build_collection_evidence(before: Mapping[str, Any], after: Mapping[str, An
 PLACE_REPLY_WITHHELD = "withheld: the leak scan flagged this text"
 
 
-def _placement_probe(client: Any) -> Mapping[str, Any]:
-    try:
-        return {"reply": getattr(client, "placeRoomReply", None)}
-    except Exception:  # the probe runs before and after the call and must not raise
-        return {_PROBE_FAILED: True}
+def _reply_probe(attribute: str) -> EvidenceProbe:
+    """A probe that reads the reply summary a client keeps in ``attribute`` (``None`` when it keeps none)."""
+
+    def probe(client: Any) -> Mapping[str, Any]:
+        try:
+            return {"reply": getattr(client, attribute, None)}
+        except Exception:  # the probe runs before and after the call and must not raise
+            return {_PROBE_FAILED: True}
+
+    return probe
 
 
 def _clean_reply_text(text: Any) -> str:
@@ -599,6 +633,12 @@ def _placement_evidence(before: Mapping[str, Any], after: Mapping[str, Any], sta
         }}
     except Exception:  # evidence never breaks the journal entry
         return {"server_reply": None}
+
+
+# Hull upgrade evidence: ``Client.upgradeShip`` returns the raw UpgradeShip response. A
+# client that keeps a summary of it as ``client.upgradeShipReply`` (the shape of
+# ``placeRoomReply``) gets it journaled like a placement's reply, after redaction and the
+# leak scan; a client without one journals ``server_reply: None``. It never changes the outcome.
 
 
 CATALOG: dict[str, ActionSpec] = {
@@ -658,7 +698,21 @@ CATALOG: dict[str, ActionSpec] = {
             preconditions=(_section_observed("rooms"), _placement_params_valid),
             postcondition=_room_placed,
             expected_effect="a room of the requested design appears at the requested row and column",
-            evidence_probe=_placement_probe,
+            evidence_probe=_reply_probe("placeRoomReply"),
+            evidence=_placement_evidence,
+        ),
+        # Only --fleet-execute --mode upgrade-ship plans this action (HullUpgradePolicy in sdk.fleet.factory): it
+        # resolves the race-matched next hull and its mineral cost before the runner is called.
+        ActionSpec(
+            action_id="upgrade_ship",
+            client_method="upgradeShip",
+            mutating=True,
+            idempotency=Idempotency.NOT_IDEMPOTENT,
+            required_params=("ship_design_id",),
+            preconditions=(_section_observed("ship"), _hull_design_id_valid),
+            postcondition=_hull_upgrade_started,
+            expected_effect="the ship's hull design, or the hull upgrade under way, becomes the requested design",
+            evidence_probe=_reply_probe("upgradeShipReply"),
             evidence=_placement_evidence,
         ),
         ActionSpec(

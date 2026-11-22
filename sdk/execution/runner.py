@@ -14,8 +14,8 @@ Exceptions, timeouts and ambiguous responses are journaled as ``unknown``
 action's evidence says this call cannot account for (``outcome_supported``
 is ``False``) is also ``unknown``, never ``verified``. A non-idempotent
 action whose previous attempt is still uncertain is refused until an
-operator reconciles it; for ``place_room`` any uncertain placement on the
-account blocks every later one, at any position.
+operator reconciles it; for ``place_room`` and ``upgrade_ship`` any
+uncertain attempt on the account blocks every later one, whatever its params.
 
 An attempt's journaled ``cost`` holds the signed observed resource deltas
 (``<kind>_delta``, ``None`` when unobserved). When the caller passes the
@@ -51,8 +51,9 @@ def call_arguments(spec: ActionSpec, params: Mapping[str, Any]) -> tuple:
 
 
 # Actions whose uncertain outcome blocks every later attempt on the account, whatever its params (S13-R6):
-# a placement whose room was not seen may still exist, so a second room at another position could be bought too.
-ACCOUNT_WIDE_UNCERTAINTY = frozenset({"place_room"})
+# a placement whose room was not seen may still exist, so a second room at another position could be bought too;
+# a hull upgrade that was not seen may still be under way, so another hull design could be paid for too.
+ACCOUNT_WIDE_UNCERTAINTY = frozenset({"place_room", "upgrade_ship"})
 
 # Planned-cost kinds (policy requests use "mineral") -> journal resource names.
 COST_KINDS = {"mineral": "minerals", "minerals": "minerals", "gas": "gas", "starbux": "starbux"}
@@ -204,8 +205,9 @@ class ActionRunner:
             and self._last_attempt_uncertain(spec, params)
         ):
             self._record(spec, started, params, outcome="skipped",
-                         reason=("a previous placement on this account is still uncertain; reconcile it before "
-                                 "placing another room" if spec.action_id in ACCOUNT_WIDE_UNCERTAINTY
+                         reason=(f"a previous {spec.action_id} attempt on this account is still uncertain, whatever "
+                                 f"its params; reconcile it before running {spec.action_id} again"
+                                 if spec.action_id in ACCOUNT_WIDE_UNCERTAINTY
                                  else "previous attempt is still uncertain; reconcile it before retrying"),
                          attempted=False, error_class="UncertainPriorAttemptError", dry_run=dry_run)
             raise UncertainPriorAttemptError(f"{spec.action_id} has an uncertain prior attempt")

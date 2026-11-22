@@ -176,5 +176,29 @@ class BaselineV1Tests(unittest.TestCase):
             get_policy("greedy-v9")
 
 
+class HullDesignRaceTests(unittest.TestCase):
+    """Hull designs carry their race: one hull design per race per level."""
+
+    def test_race_is_parsed_and_unknown_when_missing(self):
+        design = DesignData.from_records(ship_designs=[
+            {"@ShipDesignId": "3", "@ShipLevel": "2", "@RaceId": "2", "@MineralCost": "500"},
+            {"@ShipDesignId": "9", "@ShipLevel": "2", "@MineralCost": "500"},
+            {"@ShipDesignId": "10", "@ShipLevel": "2", "@RaceId": " ", "@MineralCost": "500"},
+        ])
+        self.assertEqual([hull.race_id for hull in design.hulls], ["2", None, None])
+
+    def test_no_policy_plans_a_hull_upgrade(self):
+        from sdk.policy import POLICIES
+
+        hull_design = DesignData(rooms=DESIGN.rooms, research=DESIGN.research, hulls=DesignData.from_records(
+            ship_designs=[{"@ShipDesignId": "3", "@ShipLevel": "2", "@RaceId": "2", "@MineralCost": "1"}]).hulls)
+        rich = snap(ship={"@ShipDesignId": "2", "@ShipLevel": "1"},
+                    resources={"minerals": "1000000", "gas": "1000000", "starbux": "0"})
+        for name, policy in POLICIES.items():
+            with self.subTest(policy=name):
+                planned = policy.plan(rich, hull_design, PolicyConfig())
+                self.assertNotIn("upgrade_ship", [request.action_id for request in planned.requests])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -157,6 +157,10 @@ class AccountSnapshot:
     # The ship's @ShipDesignId (its hull design, which gives the interior grid); None when not observed. Like
     # Room.row/column, it is read only by room placement and is not kept in baselines, so it is left out of equality.
     ship_design_id: Optional[str] = field(default=None, compare=False)
+    # The ship's @UpgradeShipDesignId: the hull design a timed hull upgrade is heading to; None when the record
+    # does not carry one, carries "0" (no upgrade under way) or carries the ship's own hull design (a leftover of a
+    # finished upgrade). Read only by hull upgrades, and left out of equality and baselines like ship_design_id.
+    upgrade_ship_design_id: Optional[str] = field(default=None, compare=False)
 
     def section(self, name: str) -> Completeness:
         return self.completeness.get(name, Completeness.MISSING)
@@ -181,6 +185,7 @@ class AccountSnapshot:
             "game_version": self.game_version,
             "hull_level": self.hull_level,
             "ship_design_id": self.ship_design_id,
+            "upgrade_ship_design_id": self.upgrade_ship_design_id,
             "trophies": self.trophies,
             "resources": {
                 "minerals": self.resources.minerals,
@@ -299,11 +304,14 @@ def build_snapshot(
 
     hull_level = None
     ship_design_id = None
+    upgrade_ship_design_id = None
     if ship is None:
         builder.completeness["ship"] = Completeness.MISSING
     else:
         hull_level = _int_or_none(ship.get("@ShipLevel"))
         ship_design_id = _clean_text(ship.get("@ShipDesignId"), "ship.design_id") or None
+        upgrade = (_clean_text(ship.get("@UpgradeShipDesignId"), "ship.upgrade_design_id") or "").strip()
+        upgrade_ship_design_id = None if upgrade in ("", "0", ship_design_id) else upgrade
         builder.completeness["ship"] = Completeness.COMPLETE if hull_level is not None else Completeness.PARTIAL
 
     if resources is None:
@@ -381,6 +389,7 @@ def build_snapshot(
         notes=tuple(builder.notes),
         game_identity=game_identity,
         ship_design_id=ship_design_id,
+        upgrade_ship_design_id=upgrade_ship_design_id,
     )
 
 

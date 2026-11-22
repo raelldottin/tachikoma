@@ -251,7 +251,7 @@ class PlaceRoomRunnerTests(unittest.TestCase):
             with self.subTest(params=params), self.assertRaises(UncertainPriorAttemptError):
                 self.runner.run("place_room", params)
         self.assertEqual(len(self.world.calls), 1)  # nothing after the uncertain call reached the game
-        self.assertIn("a previous placement on this account is still uncertain", self.journal.read()[-1].reason)
+        self.assertIn("a previous place_room attempt on this account is still uncertain", self.journal.read()[-1].reason)
 
     # Verifies: S13-R6
     def test_a_definite_success_without_a_room_is_not_observed_and_does_not_block(self):
@@ -271,6 +271,50 @@ class PlaceRoomRunnerTests(unittest.TestCase):
         self.runner.run("upgrade_room", {"room_id": "r2", "upgrade_room_design_id": "12"})  # not blocked
         with self.assertRaises(UncertainPriorAttemptError):
             self.runner.run("upgrade_room", {"room_id": "r1", "upgrade_room_design_id": "12"})
+
+
+LEVEL_1_SHIP = {"@ShipDesignId": "2", "@ShipLevel": "1", "@UpgradeShipDesignId": "0"}
+
+
+def start_hull_upgrade(state):
+    state["ship"] = {**LEVEL_1_SHIP, "@UpgradeShipDesignId": "3", "@UpgradeStartDate": "2026-11-10T12:00:05"}
+    state["resources"] = {"minerals": "40", "gas": "100", "starbux": "5"}
+
+
+class UpgradeShipRunnerTests(unittest.TestCase):
+    """``upgrade_ship`` through the runner: verified by the ship record, any uncertain attempt blocks the account."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.journal = GameplayJournal(Path(self.tmp.name) / "events.jsonl")
+        self.clock = FakeClock()
+        self.world = FakeWorld(self.clock)
+        self.world.state["ship"] = LEVEL_1_SHIP
+        self.runner = ActionRunner("alpha", self.world, self.world.snapshot, self.journal, clock=self.clock)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_a_started_upgrade_is_verified_from_a_raw_response(self):
+        self.world.effect = start_hull_upgrade
+        self.world.result = object()  # Client.upgradeShip returns the raw response
+        result = self.runner.run("upgrade_ship", {"ship_design_id": "3"}, expected_cost={"mineral": 60})
+        self.assertEqual(result.outcome, "verified", result.reason)
+        self.assertEqual(self.world.calls, [("upgradeShip", ("3",))])
+        self.assertEqual(result.event.cost["minerals_delta"], -60)
+        self.assertEqual(result.event.evidence, {"server_reply": None})  # no upgradeShipReply on this client
+
+    def test_an_unchanged_ship_after_a_raw_response_is_unknown_and_blocks_every_later_upgrade(self):
+        self.world.result = object()
+        first = self.runner.run("upgrade_ship", {"ship_design_id": "3"}, expected_cost={"mineral": 60})
+        self.assertEqual(first.outcome, "unknown")
+        self.assertEqual(first.event.cost["minerals_delta"], 0)
+        for params in ({"ship_design_id": "3"}, {"ship_design_id": "4"}):
+            with self.subTest(params=params), self.assertRaises(UncertainPriorAttemptError):
+                self.runner.run("upgrade_ship", params)
+        self.assertEqual(len(self.world.calls), 1)
+        self.assertIn("a previous upgrade_ship attempt on this account is still uncertain",
+                      self.journal.read()[-1].reason)
 
 
 # Room instance ids that must never reach the journal.

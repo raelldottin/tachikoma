@@ -105,10 +105,13 @@ from sdk.execution.runner import planned_cost
 from sdk.fleet.accounts import REGISTRY_VERSION, AccountProfile, AccountRegistry
 from sdk.fleet.authorization import (
     BATTLE_ACTION_ID,
+    HULL_UPGRADE_ACTION_ID,
     PLACE_ACTION_ID,
     Authorization,
+    HullUpgrade,
     Placement,
     check_authorization,
+    hull_upgrade_refusal_reason,
     placement_refusal_reason,
 )
 from sdk.fleet.concurrent import ConcurrentFleetOrchestrator
@@ -125,6 +128,7 @@ from sdk.fleet.orchestrator import (
 from sdk.journal import GameplayEvent, GameplayJournal, new_attempt_id
 from sdk.policy import ActionRequest, DesignData, Plan, PolicyConfig, ProgressionPolicy, Rejection, get_policy
 from sdk.policy.placement import ShipLayout, first_free, placement_refusal
+from sdk.policy.progression import next_hull_design
 from sdk.redaction import redact_secrets
 from sdk.scheduler import DailyScheduler, ScheduleReport, SchedulerConfig
 from sdk.state import AccountSnapshot, ClientSnapshotProvider, Completeness
@@ -750,7 +754,7 @@ def latest_dry_run(events: Iterable[GameplayEvent], profile: AccountProfile, sta
 # --- Execute gate (SPEC-05, S05-R1, S05-R4 to S05-R6) -------------------------------------------
 
 EXECUTE_SOURCE = "run.py --fleet-execute"
-CANARY, FULL, PLACE = "canary", "full", "place"
+CANARY, FULL, PLACE, UPGRADE_SHIP = "canary", "full", "place", "upgrade-ship"
 CAP_KINDS = ("minerals", "gas")
 DEFAULT_HALT_SHARE = 0.0  # any stopped account halts the fleet (S05-Q2 safe default)
 # A battle rearms first (RebuildAmmo3) at a cost the repo does not record, so it may only start while at least
@@ -770,16 +774,20 @@ class ExecutionGate:
     """What an authorized execute run may do: actions, time, mode and per-account budgets."""
 
     def __init__(self, authorization: Authorization, registry: AccountRegistry, mode: str,
-                 clock: Callable[[], datetime], placement: Optional[Placement] = None) -> None:
-        if mode not in (CANARY, FULL, PLACE):
-            raise ValueError("mode must be canary, full or place")
+                 clock: Callable[[], datetime], placement: Optional[Placement] = None,
+                 hull_upgrade: Optional[HullUpgrade] = None) -> None:
+        if mode not in (CANARY, FULL, PLACE, UPGRADE_SHIP):
+            raise ValueError("mode must be canary, full, place or upgrade-ship")
         if (mode == PLACE) != (placement is not None):
             raise ValueError("a placement is given when, and only when, the mode is place")
+        if (mode == UPGRADE_SHIP) != (hull_upgrade is not None):
+            raise ValueError("a hull upgrade is given when, and only when, the mode is upgrade-ship")
         self.authorization = authorization
         self.registry = registry
         self.mode = mode
         self.clock = clock
         self.placement = placement
+        self.hull_upgrade = hull_upgrade
 
     @property
     def canary(self) -> bool:
@@ -788,6 +796,10 @@ class ExecutionGate:
     @property
     def placing(self) -> bool:
         return self.mode == PLACE
+
+    @property
+    def upgrading_ship(self) -> bool:
+        return self.mode == UPGRADE_SHIP
 
     def refusal(self, alias: str, action_id: str,
                 events: Optional[Callable[[], Iterable[GameplayEvent]]] = None) -> Optional[str]:
@@ -816,14 +828,29 @@ class ExecutionGate:
                     reasons.append(reason)
         elif action_id == PLACE_ACTION_ID:  # never from a policy plan, whatever the actions list says
             reasons.append(f"{PLACE_ACTION_ID} runs only in place mode")
+        if self.upgrading_ship:  # upgrade-ship mode runs only the one hull upgrade the authorization names
+            if action_id != HULL_UPGRADE_ACTION_ID:
+                reasons.append(f"upgrade-ship mode runs only {HULL_UPGRADE_ACTION_ID}")
+            else:
+                reason = hull_upgrade_refusal_reason(self.authorization, alias, self.hull_upgrade)
+                if reason is not None and reason not in reasons:
+                    reasons.append(reason)
+        elif action_id == HULL_UPGRADE_ACTION_ID:  # never from a policy plan, whatever the actions list says
+            reasons.append(f"{HULL_UPGRADE_ACTION_ID} runs only in upgrade-ship mode")
         return "; ".join(reasons) if reasons else None
 
     def params_refusal(self, action_id: str, params: Mapping[str, Any]) -> Optional[str]:
-        """In place mode, why ``params`` of a ``place_room`` request are not the authorized placement, or ``None``.
+        """Why ``params`` are not the authorized placement or hull upgrade, or ``None``.
 
-        The design must be the placement's; for a row-and-column placement the position must be too. A
-        ``first-free`` placement's position is the one the placement check chose on this run's snapshot.
+        In place mode, a ``place_room`` request's design must be the placement's; for a row-and-column
+        placement the position must be too. A ``first-free`` placement's position is the one the placement
+        check chose on this run's snapshot. In upgrade-ship mode, an ``upgrade_ship`` request's hull design
+        must be the authorized one.
         """
+        if self.upgrading_ship and action_id == HULL_UPGRADE_ACTION_ID:
+            if str(params.get("ship_design_id")).strip() != str(self.hull_upgrade.ship_design_id):
+                return "the request's hull design is not the authorized hull upgrade's"
+            return None
         if not self.placing or action_id != PLACE_ACTION_ID:
             return None
         placement = self.placement
@@ -847,12 +874,12 @@ class ExecutionGate:
         return replace(profile, budgets=self.budgets(profile))
 
     def max_actions(self, profile: AccountProfile) -> int:
-        """Actions the scheduler may execute: one in canary and place mode, else the profile's ``max_actions``.
+        """Actions the scheduler may execute: one in canary, place and upgrade-ship mode, else ``max_actions``.
 
         The policy still plans up to ``max_actions`` requests, so that the
         canary is chosen from the whole plan, not from its first request.
         """
-        return 1 if self.canary or self.placing else profile.max_actions
+        return 1 if self.canary or self.placing or self.upgrading_ship else profile.max_actions
 
 
 def _candidate(action_id: str, params: Mapping[str, Any]) -> str:
@@ -1009,6 +1036,63 @@ class PlacementPolicy:
         return Plan(self.name, snapshot.account_alias, snapshot.observed_at.isoformat(), (request,), ())
 
 
+class HullUpgradePolicy:
+    """Upgrade-ship mode's plan: at most one ``upgrade_ship`` request, for the authorized hull design only.
+
+    It never comes from the account's progression policy, so no policy plan upgrades a hull. The next hull is
+    resolved from the design data and this run's fresh snapshot (``next_hull_design``) and must be the
+    authorized design. The request carries the hull's mineral (and any gas) cost as its planned cost, so the
+    gated runner checks it against the caps. Refused here: a hull with a starbux price or an unparseable gas
+    price, one with no mineral or gas price to check against the caps, and unobserved minerals (or gas) or
+    fewer than the price.
+    """
+
+    name = "hull-upgrade"
+
+    def __init__(self, gate: ExecutionGate) -> None:
+        if not gate.upgrading_ship:
+            raise ValueError("HullUpgradePolicy needs a gate in upgrade-ship mode")
+        self.gate = gate
+
+    def plan(self, snapshot: AccountSnapshot, design: DesignData, config: PolicyConfig) -> Plan:
+        upgrade = self.gate.hull_upgrade
+        label = upgrade.describe()
+
+        def rejected(reason: str) -> Plan:
+            return Plan(self.name, snapshot.account_alias, snapshot.observed_at.isoformat(), (),
+                        (Rejection(label, reason),))
+
+        refusal = self.gate.refusal(snapshot.account_alias, HULL_UPGRADE_ACTION_ID)
+        if refusal is not None:
+            return rejected(f"not authorized: {refusal}")
+        target, why = next_hull_design(snapshot, design)
+        if target is None:
+            return rejected(f"no hull upgrade resolved: {why}")
+        if target.design_id != str(upgrade.ship_design_id):
+            return rejected(f"the ship's next hull is design {target.design_id} ({why}), not the authorized {label}")
+        if target.starbux_cost != 0:
+            return rejected(f"hull design {target.design_id} has a starbux price (or one that cannot be read); "
+                            "starbux is never spent")
+        if target.gas_cost is None:
+            return rejected(f"hull design {target.design_id} has a gas price that cannot be read")
+        cost = {"mineral": target.mineral_cost, "gas": target.gas_cost}
+        if not any(cost.values()):
+            return rejected(f"hull design {target.design_id} has no mineral or gas price, so the caps cannot be "
+                            "checked")
+        observed = {"mineral": snapshot.resources.minerals, "gas": snapshot.resources.gas}
+        for kind, amount in cost.items():
+            if not amount:
+                continue
+            if observed[kind] is None:
+                return rejected(f"{kind} was not observed, so the hull's price cannot be checked")
+            if observed[kind] < amount:
+                return rejected(f"not enough {kind}s: {observed[kind]} observed, the hull costs {amount}")
+        request = ActionRequest(HULL_UPGRADE_ACTION_ID, {"ship_design_id": target.design_id},
+                                f"upgrade-ship: {label}, {why}",
+                                expected_cost={kind: amount for kind, amount in cost.items() if amount})
+        return Plan(self.name, snapshot.account_alias, snapshot.observed_at.isoformat(), (request,), ())
+
+
 class GatedActionRunner(ActionRunner):
     """``ActionRunner`` that refuses, before any call, what the gate does not allow.
 
@@ -1133,8 +1217,12 @@ class _ExecuteGateMixin:
                         else context.snapshot_provider)
             runner = GatedActionRunner(self.gate, gated.budgets, self.period, profile.alias, context.client,
                                        provider, context.journal, clock=self.clock, halted=self._halted)
-            policy = (PlacementPolicy(self.gate, ship_layout(context.client)) if self.gate.placing
-                      else AuthorizedPolicy(get_policy(profile.policy_id), self.gate, context.journal))
+            if self.gate.placing:
+                policy = PlacementPolicy(self.gate, ship_layout(context.client))
+            elif self.gate.upgrading_ship:
+                policy = HullUpgradePolicy(self.gate)
+            else:
+                policy = AuthorizedPolicy(get_policy(profile.policy_id), self.gate, context.journal)
             scheduler = DailyScheduler(
                 runner, policy, context.design,
                 policy_config,
