@@ -2394,6 +2394,85 @@ class Client(object):
         url = f"https://api.pixelstarships.com/RoomService/UpgradeRoom2?roomId={roomId}&upgradeRoomDesignId={upgradeRoomDesignId}&accessToken={self.accessToken}"
         return self.request(url, "POST")
 
+    def upgradeShip(self, nextShipDesignId):
+        """Request a ship/hull upgrade (UpgradeShip) and return the raw response.
+
+        This upgrades the ship to the next hull design. Requires sufficient minerals.
+        It performs no eligibility or cost checks of its own; callers decide.
+        """
+        url = f"https://api.pixelstarships.com/ShipService/UpgradeShip?shipDesignId={nextShipDesignId}&accessToken={self.accessToken}"
+        return self.request(url, "POST")
+
+    def _tryUpgradeShip(self):
+        """Attempt to upgrade the ship to the next hull level if enough minerals available.
+
+        Returns True if ship was upgraded, False otherwise.
+        """
+        try:
+            # Get current ship data
+            if not hasattr(self, "shipByUserId") or not self.shipByUserId:
+                if not self.getShipByUserId():
+                    return False
+            ship = self._shipRecord()
+            if not ship:
+                return False
+
+            current_design_id = ship.get("@ShipDesignId", "")
+            current_level = int(ship.get("@ShipLevel", 0))
+
+            # Load ship designs if not already loaded
+            if not hasattr(self, "shipDesigns") or not self.shipDesigns:
+                if not self.listAllDesigns4():
+                    return False
+
+            designs = self.shipDesigns.get("ShipDesign", [])
+            if isinstance(designs, dict):
+                designs = [designs]
+
+            # Find next hull design (level + 1)
+            next_level = current_level + 1
+            next_design = None
+            for design in designs:
+                if int(design.get("@ShipLevel", 0)) == next_level:
+                    next_design = design
+                    break
+
+            if not next_design:
+                logging.warning(f'[{self.info["@Name"]}] No ship design found for level {next_level}')
+                return False
+
+            next_design_id = next_design.get("@ShipDesignId", "")
+            mineral_cost_str = next_design.get("@MineralCost", "0")
+            try:
+                mineral_cost = int(mineral_cost_str)
+            except (ValueError, TypeError):
+                logging.warning(f'[{self.info["@Name"]}] Invalid mineral cost for ship design {next_design_id}: {mineral_cost_str}')
+                return False
+
+            # Check if we have enough minerals
+            current_minerals = int(self.mineralTotal) if self.mineralTotal else 0
+            if current_minerals < mineral_cost:
+                logging.info(
+                    f'[{self.info["@Name"]}] Insufficient minerals for ship upgrade: need {mineral_cost}, have {current_minerals}'
+                )
+                return False
+
+            # Attempt ship upgrade
+            logging.info(
+                f'[{self.info["@Name"]}] Upgrading ship from level {current_level} to {next_level} (cost: {mineral_cost} minerals)'
+            )
+            r = self.upgradeShip(next_design_id)
+            if r and "errorMessage" not in r.text:
+                logging.info(f'[{self.info["@Name"]}] Ship upgrade successful!')
+                return True
+            else:
+                logging.warning(f'[{self.info["@Name"]}] Ship upgrade failed: {r.text if r else "No response"}')
+                return False
+
+        except Exception:
+            logging.exception(f'[{self.info["@Name"]}] Error attempting ship upgrade', exc_info=True)
+            return False
+
     def placeRoom(self, roomDesignId, row, column):
         """Buy one room and place its top-left cell at ``row``, ``column`` (BuyRoom2; SPEC-13, S13-R2).
 
@@ -2502,20 +2581,31 @@ class Client(object):
                                 roomName = ""
                                 upgradeRoomName = ""
                                 if r:
-                                    blocker_messages = [
-                                        "You cannot build or upgrade more rooms. Please wait for other constructions to be completed.",
-                                        "You need to upgrade your ship first.",
-                                    ]
-                                    for msg in blocker_messages:
-                                        if msg in r.text:
+                                    if "You cannot build or upgrade more rooms. Please wait for other constructions to be completed." in r.text:
+                                        logging.info(
+                                            f'[{self.info["@Name"]}] Max concurrent constructions reached: cannot build or upgrade more rooms.'
+                                        )
+                                        self.max_room_upgrades = True
+                                        hit_blocker = True
+                                        break
+                                    if "You need to upgrade your ship first." in r.text:
+                                        logging.info(
+                                            f'[{self.info["@Name"]}] Ship upgrade required for room upgrade.'
+                                        )
+                                        # Try to upgrade the ship if we have enough minerals
+                                        ship_upgraded = self._tryUpgradeShip()
+                                        if ship_upgraded:
+                                            # Ship upgraded successfully, restart the while loop to re-scan rooms with new ship level
                                             logging.info(
-                                                f'[{self.info["@Name"]}] Blocker encountered: {msg}'
+                                                f'[{self.info["@Name"]}] Ship upgraded, restarting room upgrade scan.'
                                             )
+                                            upgraded_any = True  # Treat ship upgrade as progress to continue while loop
+                                            break  # Break inner for loop, while loop will restart
+                                        else:
+                                            # Cannot upgrade ship (insufficient minerals or other issue)
                                             self.max_room_upgrades = True
                                             hit_blocker = True
                                             break
-                                    if hit_blocker:
-                                        break
                                 self.collectAllResources()
                                 # Refresh ship data so the upgraded room shows as "Upgrading"
                                 self.getShipByUserId()
