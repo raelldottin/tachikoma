@@ -1,0 +1,76 @@
+{
+  "version": 1,
+  "accounts": [
+    {
+      "alias": "pss1",
+      "objective": "fleet-v1 dry run (read-only, never executed)",
+      "policy_id": "fleet-v1",
+      "budgets": {
+        "minerals": 0,
+        "gas": 0,
+        "starbux": 0
+      },
+      "max_actions": 10,
+      "enabled": true,
+      "credentials_secret": "PSS_ACCOUNT_1",
+      "legacy_run_account": 1
+    },
+    {
+      "alias": "pss2",
+      "objective": "fleet-v1 dry run (read-only, never executed)",
+      "policy_id": "fleet-v1",
+      "budgets": {
+        "minerals": 0,
+        "gas": 0,
+        "starbux": 0
+      },
+      "max_actions": 10,
+      "enabled": true,
+      "credentials_secret": "PSS_ACCOUNT_2",
+      "legacy_run_account": 2
+    },
+    {
+      "alias": "pss3",
+      "objective": "fleet-v1 dry run (read-only, never executed)",
+      "policy_id": "fleet-v1",
+      "budgets": {
+        "minerals": 0,
+        "gas": 0,
+        "starbux": 0
+      },
+      "max_actions": 10,
+      "enabled": true,
+      "credentials_secret": "PSS_ACCOUNT_3",
+      "legacy_run_account": 3
+    },
+    {
+      "alias": "pss4",
+      "objective": "fleet-v1 dry run (read-only, never executed)",
+      "policy_id": "fleet-v1",
+      "budgets": {
+        "minerals": 0,
+        "gas": 0,
+        "starbux": 0
+      },
+      "max_actions": 10,
+      "enabled": true,
+      "credentials_secret": "PSS_ACCOUNT_4",
+      "legacy_run_account": 4
+    },
+    {
+      "alias": "pss5",
+      "objective": "fleet-v1 dry run (read-only, never executed)",
+      "policy_id": "fleet-v1",
+      "budgets": {
+        "minerals": 0,
+        "gas": 0,
+        "starbux": 0
+      },
+      "max_actions": 10,
+      "enabled": true,
+      "credentials_secret": "PSS_ACCOUNT_5",
+      "expected_game_identity": "gid1-c2fc0631d4ec45f76dc7c64f316ccb6b",
+      "legacy_run_account": 5
+    }
+  ]
+}

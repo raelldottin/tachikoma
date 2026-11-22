@@ -353,6 +353,25 @@ class WorkflowPolicyTests(unittest.TestCase):
             with self.subTest(trigger=trigger), self.assertRaisesRegex(ValueError, "manual dispatch"):
                 ci.check_workflows(docs)
 
+    def test_fleet_v1_dry_run_step_is_read_only_and_covers_every_account(self):
+        job = next(iter(self.documents["live-trial.yml"]["jobs"].values()))
+        self.assertIn("fleet-dry-run", self.documents["live-trial.yml"]["on"]["workflow_dispatch"]["inputs"]["step"]["options"])
+        step = next(step for step in job["steps"] if step.get("if") == "inputs.step == 'fleet-dry-run'")
+        self.assertIn("--fleet-dry-run", step["run"])
+        self.assertNotIn("--fleet-execute", step["run"])
+        self.assertIn("--identity-salt-env TACHIKOMA_FLEET_SALT", step["run"])
+        registry = json.loads((ci.ROOT / job["env"]["FLEET_V1_REGISTRY"]).read_text(encoding="utf-8"))
+        accounts = registry["accounts"]
+        self.assertEqual([account["alias"] for account in accounts], [f"pss{n}" for n in range(1, 6)])
+        for account in accounts:
+            with self.subTest(alias=account["alias"]):
+                self.assertEqual(account["policy_id"], "fleet-v1")
+                self.assertTrue(account["enabled"])
+                self.assertEqual(set(account["budgets"].values()), {0})
+                secret = account["credentials_secret"]
+                for suffix in ("_EMAIL", "_PASSWORD"):
+                    self.assertEqual(step["env"][secret + suffix], f"${{{{ secrets.{secret}{suffix} }}}}")
+
     def test_only_release_publisher_has_write_permissions(self):
         for filename, document in self.documents.items():
             for name, job in document["jobs"].items():

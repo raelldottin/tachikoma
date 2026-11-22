@@ -6,6 +6,7 @@ name: Live trial (owner-dispatched)
 #   capture   G1: read-only, sanitized response captures of pss1..pss5
 #   baseline  G1: read-only baseline snapshot of pss1..pss5
 #   enrol     G2: dry run of pss5 with the identity salt, to read its fingerprint
+#   fleet-dry-run  fleet-v1 dry run of pss1..pss5 with the identity salt; read-only, never executes
 #   canary    G2: dry run, then one authorized safe action on pss5
 #   place     G6: one authorized room placement on pss5 (SPEC-13); no dry run needed
 # Output (sanitized, scanned) is uploaded as a short-lived artifact.
@@ -21,6 +22,7 @@ on:
           - capture
           - baseline
           - enrol
+          - fleet-dry-run
           - canary
           - place
 
@@ -42,6 +44,7 @@ jobs:
       G1_REGISTRY: docs/experiments/live/registry-g1-readonly.json
       G2_REGISTRY: docs/experiments/live/registry-g2-pss5.json
       G2_AUTHORIZATION: docs/experiments/live/authorization-g2-pss5-canary.json
+      FLEET_V1_REGISTRY: docs/experiments/live/registry-fleet-v1-dry-run.json
       G6_REGISTRY: docs/experiments/live/registry-g6-pss5-place.json
       G6_AUTHORIZATION: docs/experiments/live/authorization-g6-pss5-place.json
     steps:
@@ -109,6 +112,27 @@ jobs:
           mkdir -p "$OUT/journals"
           python run.py --fleet-dry-run --registry "$G2_REGISTRY" --fleet-journal-dir "$OUT/journals" \
             --identity-salt-env TACHIKOMA_FLEET_SALT | tee "$OUT/enrol.md"
+
+      - name: Fleet-v1 dry run (all accounts)
+        if: inputs.step == 'fleet-dry-run'
+        env:
+          PSS_ACCOUNT_1_EMAIL: ${{ secrets.PSS_ACCOUNT_1_EMAIL }}
+          PSS_ACCOUNT_1_PASSWORD: ${{ secrets.PSS_ACCOUNT_1_PASSWORD }}
+          PSS_ACCOUNT_2_EMAIL: ${{ secrets.PSS_ACCOUNT_2_EMAIL }}
+          PSS_ACCOUNT_2_PASSWORD: ${{ secrets.PSS_ACCOUNT_2_PASSWORD }}
+          PSS_ACCOUNT_3_EMAIL: ${{ secrets.PSS_ACCOUNT_3_EMAIL }}
+          PSS_ACCOUNT_3_PASSWORD: ${{ secrets.PSS_ACCOUNT_3_PASSWORD }}
+          PSS_ACCOUNT_4_EMAIL: ${{ secrets.PSS_ACCOUNT_4_EMAIL }}
+          PSS_ACCOUNT_4_PASSWORD: ${{ secrets.PSS_ACCOUNT_4_PASSWORD }}
+          PSS_ACCOUNT_5_EMAIL: ${{ secrets.PSS_ACCOUNT_5_EMAIL }}
+          PSS_ACCOUNT_5_PASSWORD: ${{ secrets.PSS_ACCOUNT_5_PASSWORD }}
+          TACHIKOMA_FLEET_SALT: ${{ secrets.TACHIKOMA_FLEET_SALT }}
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p "$OUT/journals"
+          python run.py --fleet-dry-run --registry "$FLEET_V1_REGISTRY" --fleet-journal-dir "$OUT/journals" \
+            --identity-salt-env TACHIKOMA_FLEET_SALT | tee "$OUT/fleet-dry-run.md"
 
       - name: Canary (G2)
         if: inputs.step == 'canary'
