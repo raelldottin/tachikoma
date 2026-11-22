@@ -627,6 +627,15 @@
       ]
     },
     {
+      "name": "nextHullDesign",
+      "pillar": "B",
+      "kind": "read-only",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_runtime_guards.py"
+      ]
+    },
+    {
       "name": "placeRoom",
       "pillar": "B",
       "kind": "mutating",
