@@ -37,7 +37,7 @@ jobs:
       - run: python -m pip install -r .github/requirements-ci.txt
       - name: Full mocked application suite
         if: runner.os != 'Windows'
-        run: python scripts/ci.py test
+        run: python -u scripts/ci.py test --verbose
       - name: Portable Windows smoke suite
         if: runner.os == 'Windows'
         run: >-
