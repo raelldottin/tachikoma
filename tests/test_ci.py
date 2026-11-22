@@ -355,7 +355,9 @@ class WorkflowPolicyTests(unittest.TestCase):
 
     def test_fleet_v1_dry_run_step_is_read_only_and_covers_every_account(self):
         job = next(iter(self.documents["live-trial.yml"]["jobs"].values()))
-        self.assertIn("fleet-dry-run", self.documents["live-trial.yml"]["on"]["workflow_dispatch"]["inputs"]["step"]["options"])
+        self.assertIn(
+            "fleet-dry-run", self.documents["live-trial.yml"]["on"]["workflow_dispatch"]["inputs"]["step"]["options"]
+        )
         step = next(step for step in job["steps"] if step.get("if") == "inputs.step == 'fleet-dry-run'")
         self.assertIn("--fleet-dry-run", step["run"])
         self.assertNotIn("--fleet-execute", step["run"])
