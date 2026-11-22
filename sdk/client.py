@@ -2450,11 +2450,19 @@ class Client(object):
                     return False
                 return True
 
-            self.listUpgradingRooms()
-            self.getShipByUserId()
-            shipByUserId = getattr(self, "shipByUserId", None)
-            if shipByUserId:
+            # Loop until no more upgrades possible
+            while True:
+                self.listUpgradingRooms()
+                self.getShipByUserId()
+                shipByUserId = getattr(self, "shipByUserId", None)
+                if not shipByUserId:
+                    logging.info("Ship data unavailable; stopping room upgrades.")
+                    break
+
                 rooms = _extract_collection(shipByUserId, "Room")
+                upgraded_any = False
+                hit_blocker = False
+
                 for room in rooms:
                     roomId = room.get("@RoomId")
                     roomStatus = room.get("@RoomStatus")
@@ -2488,7 +2496,7 @@ class Client(object):
                                 and upgradeRoomDesignId != "0"
                             ):
                                 logging.info(
-                                    f'[{self.info["@Name"]}] Upgradng {roomName} to {upgradeRoomName}.'
+                                    f'[{self.info["@Name"]}] Upgrading {roomName} to {upgradeRoomName}.'
                                 )
                                 r = self.upgradeRoom(roomId, upgradeRoomDesignId)
                                 roomName = ""
@@ -2498,10 +2506,19 @@ class Client(object):
                                         f'[{self.info["@Name"]}] You have reached the maximum number of concurrent constructions allowed.'
                                     )
                                     self.max_room_upgrades = True
+                                    hit_blocker = True
                                     break
                                 self.collectAllResources()
-                    if self.max_room_upgrades:
+                                upgraded_any = True
+                    if hit_blocker:
                         break
+
+                # Stop if: no upgrades this pass, hit max concurrent, or no more resources
+                if not upgraded_any or hit_blocker:
+                    if not upgraded_any and not hit_blocker:
+                        logging.info("No more rooms to upgrade or insufficient resources.")
+                    break
+
             return True
         except Exception:
             logging.exception("Unable to upgrade rooms.", exc_info=True)
