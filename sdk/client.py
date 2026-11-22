@@ -2501,17 +2501,21 @@ class Client(object):
                                 r = self.upgradeRoom(roomId, upgradeRoomDesignId)
                                 roomName = ""
                                 upgradeRoomName = ""
-                                if (
-                                    r
-                                    and "You cannot build or upgrade more rooms. Please wait for other constructions to be completed."
-                                    in r.text
-                                ):
-                                    logging.info(
-                                        f'[{self.info["@Name"]}] Max concurrent constructions reached: cannot build or upgrade more rooms.'
-                                    )
-                                    self.max_room_upgrades = True
-                                    hit_blocker = True
-                                    break
+                                if r:
+                                    blocker_messages = [
+                                        "You cannot build or upgrade more rooms. Please wait for other constructions to be completed.",
+                                        "You need to upgrade your ship first.",
+                                    ]
+                                    for msg in blocker_messages:
+                                        if msg in r.text:
+                                            logging.info(
+                                                f'[{self.info["@Name"]}] Blocker encountered: {msg}'
+                                            )
+                                            self.max_room_upgrades = True
+                                            hit_blocker = True
+                                            break
+                                    if hit_blocker:
+                                        break
                                 self.collectAllResources()
                                 # Refresh ship data so the upgraded room shows as "Upgrading"
                                 self.getShipByUserId()
