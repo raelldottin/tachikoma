@@ -306,6 +306,17 @@ class TestTargetedRoomUpgrade(unittest.TestCase):
         self.assertTrue(self.client.max_room_upgrades)
         self.client.collectAllResources.assert_not_called()
 
+    def test_upgrade_rooms_stops_at_ship_upgrade_required(self):
+        self.client.gasTotal = 5000
+        self.client.request = MagicMock(
+            return_value=MagicMock(text="You need to upgrade your ship first.")
+        )  # type: ignore
+        with patch.object(self.client, "upgradeRoom", wraps=self.client.upgradeRoom) as targeted:
+            self.assertTrue(self.client.upgradeRooms())
+        targeted.assert_called_once_with("1", "101")
+        self.assertTrue(self.client.max_room_upgrades)
+        self.client.collectAllResources.assert_not_called()
+
 
 class TestResearchOutcomeClassification(unittest.TestCase):
     """Test research lab upgrade skip vs failure classification (R4)."""
