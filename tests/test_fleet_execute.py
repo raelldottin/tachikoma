@@ -25,7 +25,13 @@ from urllib.parse import urlsplit
 
 import run  # imported here so run.py's log file opens in the repository, not a test tmpdir
 from sdk.fleet.accounts import load_registry
-from sdk.fleet.authorization import Placement, authorization_from_dict, authorization_hash, load_authorization
+from sdk.fleet.authorization import (
+    HullUpgrade,
+    Placement,
+    authorization_from_dict,
+    authorization_hash,
+    load_authorization,
+)
 from sdk.fleet.concurrent import ConcurrentFleetOrchestrator
 from sdk.fleet.factory import (
     DRY_RUN_ID,
@@ -37,6 +43,7 @@ from sdk.fleet.factory import (
     EnvironmentAccountFactory,
     ExecutionRefusedError,
     GatedActionRunner,
+    HullUpgradePolicy,
     _ExecuteGateMixin,
     canary_choice,
     registry_hash,
@@ -45,6 +52,7 @@ from sdk.fleet.factory import (
 from sdk.fleet.orchestrator import FleetOrchestrator
 from sdk.journal import GameplayEvent, GameplayJournal, JournalError, read_events
 from sdk.policy import ActionRequest, DesignData, Plan, PolicyConfig, get_policy
+from sdk.policy.progression import next_hull_design
 from sdk.state import build_snapshot
 from sdk.state.snapshot import game_identity_fingerprint
 from tests.synthetic_fixtures import SYNTHETIC_DEVICE_KEY_IOS, SYNTHETIC_DEVICE_KEY_MAC
@@ -439,8 +447,9 @@ class AuthorizationRefusalTests(FleetExecuteTestCase):
               "--identity-salt-env", SALT_ENV), "--fleet-execute cannot be combined with --fleet-dry-run"),
             (("--fleet-execute", "--registry", "x", "--authorization", "a"), "--identity-salt-env NAME"),
             (("--fleet-dry-run", "--registry", "x", "--authorization", "a"),
-             "--authorization, --mode, --plan-only, --place-room and --halt-share are only used with "),
+             "--authorization, --mode, --plan-only, --place-room, --upgrade-ship and --halt-share are only used "),
             (("--plan-only",), "only used with --fleet-execute"),
+            (("--upgrade-ship", "5"), "only used with --fleet-execute"),
             (("--halt-share", "0.5"), "only used with --fleet-execute"),
             (("--fleet-execute", "--mode", "yolo"), "invalid choice"),
             (("--fleet-execute", "--halt-share", "1"), "must be at least 0 and below 1"),
@@ -1401,6 +1410,313 @@ class PlaceModeTests(FleetExecuteTestCase):
         for bad in ("42", "42@", "42@1", "x@first-free", "42@1,x", "0@first-free"):
             with self.subTest(text=bad), self.assertRaises(ValueError):
                 run.parse_place_room(bad)
+
+
+# Hull (ShipDesign) records in the live shape: one design per race per level. pss5's ship is race 2, level 1, on
+# design 2 (tests/fixtures/live_sanitized/rooms/buy_room2.json); race 1's designs must never be picked for it.
+HULL_DESIGNS = [
+    {"@ShipDesignId": "1", "@ShipLevel": "1", "@RaceId": "1", "@MineralCost": "0"},
+    {"@ShipDesignId": "2", "@ShipLevel": "1", "@RaceId": "2", "@MineralCost": "0"},
+    {"@ShipDesignId": "11", "@ShipLevel": "2", "@RaceId": "1", "@MineralCost": "600"},
+    {"@ShipDesignId": "3", "@ShipLevel": "2", "@RaceId": "2", "@MineralCost": "500"},
+    {"@ShipDesignId": "4", "@ShipLevel": "3", "@RaceId": "2", "@MineralCost": "9000"},
+]
+
+
+class UpgradeShipClient(ExecClient):
+    """A level 1, race 2 ship on hull design 2; ``upgradeShip`` starts a timed upgrade, as the live record suggests.
+
+    Ships live in ``ships`` (by user id), so a later run's login sees an upgrade an earlier run started. Like
+    ``Client.upgradeShip``, the call returns the raw response, which is never a definite success.
+    """
+
+    ships = {}
+    hulls = HULL_DESIGNS
+
+    @property
+    def ship(self):
+        return UpgradeShipClient.ships.setdefault(self.user.id, {
+            "@ShipDesignId": "2", "@ShipLevel": "1", "@RaceId": "2", "@UpgradeShipDesignId": "0",
+            "@UpgradeStartDate": "2026-10-19T19:15:13"})
+
+    def listAllDesigns4(self):
+        loaded = super().listAllDesigns4()
+        if loaded:
+            self.shipDesigns = {"ShipDesign": list(UpgradeShipClient.hulls)}
+        return loaded
+
+    def getShipByUserId(self):
+        super().getShipByUserId()
+        self.shipByUserId["Ship"].update(self.ship)
+        return True
+
+    def _start(self, design_id):
+        cost = next(int(hull["@MineralCost"]) for hull in UpgradeShipClient.hulls if hull["@ShipDesignId"] == design_id)
+        self.ship.update({"@UpgradeShipDesignId": str(design_id), "@UpgradeStartDate": "2026-11-22T05:00:00"})
+        self.minerals -= cost
+        return "<ShipService><UpgradeShip /></ShipService>"  # the raw response
+
+    def upgradeShip(self, ship_design_id):
+        return self._mutate("upgradeShip", self._start, ship_design_id)
+
+
+class UpgradeShipModeTests(FleetExecuteTestCase):
+    """``--fleet-execute --mode upgrade-ship``: one authorized hull upgrade on one account; no game traffic."""
+
+    def setUp(self):
+        super().setUp()
+        UpgradeShipClient.ships = {}
+        UpgradeShipClient.hulls = HULL_DESIGNS
+        self.write_registry(bravo={"enabled": False})
+        self.write_hull_authorization()
+
+    def write_hull_authorization(self, **overrides):
+        fields = dict(accounts=["alpha"], actions=["upgrade_ship"], modes=["upgrade-ship"],
+                      caps={"alpha": {"minerals": 500, "gas": 0}},
+                      hull_upgrades={"alpha": [{"ship_design_id": 3}]})
+        fields.update(overrides)
+        self.write_authorization(**fields)
+
+    def upgrade(self, design="3", *extra):
+        return self.execute("--mode", "upgrade-ship", "--upgrade-ship", design, *extra, client=UpgradeShipClient)
+
+    def rejection(self):
+        (record,) = self.records()
+        return record["accounts"][0]["rejected"][0]["reason"]
+
+    def test_a_started_upgrade_to_the_race_matched_next_hull_is_verified(self):
+        code, out, err = self.upgrade()
+        self.assertEqual(code, 0, err + out)
+        self.assertEqual(ExecClient.executed, [("1001", "upgradeShip")])
+        (event,) = self.attempted("alpha")
+        self.assertEqual((event.action_id, dict(event.params), event.outcome),
+                         ("upgrade_ship", {"ship_design_id": "3"}, "verified"))
+        self.assertIn("started upgrading to hull design 3", event.reason)
+        self.assertEqual(event.cost["minerals_delta"], -500)
+        (record,) = self.records()
+        self.assertEqual((record["mode"], record["hull_upgrade"], record["placement"]),
+                         ("upgrade-ship", {"ship_design_id": 3}, None))
+        self.assertFalse(any(call == "collectAllResources" for _, call in ExecClient.executed))
+
+    def test_an_instant_hull_change_is_verified_too(self):
+        def instant(client, design_id):
+            client.ship.update({"@ShipDesignId": str(design_id), "@ShipLevel": "2"})
+            client.minerals -= 500
+            return None
+        ExecClient.effects = {"upgradeShip": instant}
+        code, out, err = self.upgrade()
+        self.assertEqual(code, 0, err + out)
+        (event,) = self.attempted("alpha")
+        self.assertEqual(event.outcome, "verified", event.reason)
+        self.assertIn("hull design is now 3", event.reason)
+
+    def test_an_unchanged_ship_is_unknown_and_blocks_the_next_run(self):
+        ExecClient.effects = {"upgradeShip": lambda client, *args: object()}  # the raw response, no change
+        self.upgrade()
+        (first,) = self.attempted("alpha")
+        self.assertEqual(first.outcome, "unknown")
+        self.assertIn("ambiguous response", first.reason)
+        ExecClient.effects = {}
+        self.upgrade()
+        self.assertEqual(ExecClient.executed, [("1001", "upgradeShip")])  # the second run reached no game call
+        last = read_events(self.journal_dir / "alpha.log")[-1]
+        self.assertEqual((last.action_id, last.attempted), ("upgrade_ship", False))
+        self.assertIn("still uncertain", last.reason)
+
+    def test_the_minerals_cap_is_checked_against_the_hull_cost(self):
+        self.write_hull_authorization(caps={"alpha": {"minerals": 0, "gas": 0}})
+        code, out, err = self.upgrade()
+        self.assertNotEqual(code, 0)
+        self.assertEqual(ExecClient.executed, [])
+        refused = [event for event in read_events(self.journal_dir / "alpha.log") if event.action_id == "upgrade_ship"]
+        self.assertIn("minerals cap would be exceeded (0 spent + 500 planned > 0)", refused[-1].reason)
+        self.assertFalse(refused[-1].attempted)
+
+    def test_upgrade_ship_mode_needs_no_dry_run_but_still_checks_identity(self):
+        code, out, err = self.upgrade()  # no --fleet-dry-run first
+        self.assertEqual(code, 0, err + out)
+        UpgradeShipClient.ships = {}
+        self.write_registry(alpha={"expected_game_identity": BRAVO_ID}, bravo={"enabled": False})
+        code, out, err = self.upgrade()
+        self.assertNotEqual(code, 0)
+        self.assertEqual(ExecClient.executed, [("1001", "upgradeShip")])  # the second run upgraded nothing
+
+    def test_requests_outside_the_authorization_are_refused_before_login(self):
+        cases = {
+            "--mode upgrade-ship without --upgrade-ship": (("--mode", "upgrade-ship"), "--upgrade-ship is required"),
+            "--upgrade-ship in canary mode": (("--mode", "canary", "--upgrade-ship", "3"),
+                                              "--upgrade-ship is required with --mode upgrade-ship"),
+            "--upgrade-ship in place mode": (("--mode", "place", "--place-room", "42@first-free", "--upgrade-ship",
+                                              "3"), "--upgrade-ship is required with --mode upgrade-ship"),
+            "a design the file does not name": (("--mode", "upgrade-ship", "--upgrade-ship", "4"), "not named"),
+            "a malformed design": (("--mode", "upgrade-ship", "--upgrade-ship", "three"), "positive whole number"),
+            "a zero design": (("--mode", "upgrade-ship", "--upgrade-ship", "0"), "positive whole number"),
+        }
+        for name, (args, message) in cases.items():
+            with self.subTest(case=name):
+                code, _, err = self.execute(*args, client=UpgradeShipClient)
+                self.assert_refused_before_login(code, err, message)
+
+    def test_upgrade_ship_mode_needs_exactly_one_enabled_account_and_the_mode_allowed(self):
+        self.write_registry()
+        self.write_hull_authorization(accounts=["alpha", "bravo"],
+                                      caps={"alpha": {"minerals": 500, "gas": 0}, "bravo": {"minerals": 0, "gas": 0}})
+        code, _, err = self.upgrade()
+        self.assert_refused_before_login(code, err, "exactly one enabled account")
+        self.write_registry(bravo={"enabled": False})
+        self.write_hull_authorization(modes=["canary"])
+        code, _, err = self.upgrade()
+        self.assert_refused_before_login(code, err, "mode 'upgrade-ship' is not allowed")
+
+    def test_plan_only_shows_the_authorized_hull_upgrade_without_logging_in(self):
+        code, out, err = self.upgrade("3", "--plan-only")
+        self.assertEqual(code, 0, err)
+        self.assertIn("# Fleet execute plan (upgrade-ship), plan only", out)
+        self.assertIn("| alpha | hull design 3 | 500 | 0 |", out)
+        self.assertEqual(self.exec_logins(), [])
+        code, _, err = self.upgrade("4", "--plan-only")
+        self.assert_refused_before_login(code, err, "not named")
+
+    def test_an_authorized_design_that_is_not_the_next_hull_is_not_attempted(self):
+        self.write_hull_authorization(hull_upgrades={"alpha": [{"ship_design_id": 11}]},
+                                      caps={"alpha": {"minerals": 600, "gas": 0}})
+        self.upgrade("11")  # race 1's level 2 hull: the wrong race for this ship
+        self.assertEqual(ExecClient.executed, [])
+        self.assertIn("next hull is design 3", self.rejection())
+
+    def test_unresolvable_hulls_are_refused_with_a_reason(self):
+        duplicate = {"@ShipDesignId": "30", "@ShipLevel": "2", "@RaceId": "2", "@MineralCost": "500"}
+        no_race = [{key: value for key, value in hull.items() if key != "@RaceId"} for hull in HULL_DESIGNS]
+        no_cost = [{**hull, "@MineralCost": ""} if hull["@ShipDesignId"] == "3" else hull for hull in HULL_DESIGNS]
+        under_way = {"@ShipDesignId": "2", "@ShipLevel": "1", "@UpgradeShipDesignId": "3"}
+        cases = (
+            ("no hull design data", lambda: setattr(FakeClient, "designs4_ok", False), "no hull designs"),
+            ("two level 2 hulls of the race", lambda: setattr(UpgradeShipClient, "hulls", HULL_DESIGNS + [duplicate]),
+             "ambiguous (designs 3, 30)"),
+            ("no race on the hull records", lambda: setattr(UpgradeShipClient, "hulls", no_race), "no @RaceId"),
+            ("no parseable cost", lambda: setattr(UpgradeShipClient, "hulls", no_cost), "no parseable @MineralCost"),
+            ("an upgrade already under way", lambda: UpgradeShipClient.ships.update({"1001": under_way}),
+             "already under way"),
+        )
+        for name, setup, reason in cases:
+            with self.subTest(case=name):
+                FakeClient.designs4_ok, UpgradeShipClient.hulls, UpgradeShipClient.ships = True, HULL_DESIGNS, {}
+                for path in (self.journal_dir / "runs").glob("*.json") if (self.journal_dir / "runs").exists() else ():
+                    path.unlink()
+                setup()
+                self.upgrade()
+                self.assertEqual(ExecClient.executed, [])
+                self.assertIn(reason, self.rejection())
+        FakeClient.designs4_ok = True
+
+    def test_not_enough_minerals_is_refused_before_the_call(self):
+        original = UpgradeShipClient.listItemsOfAShip
+
+        def poor(client):
+            client.minerals = 499
+            return original(client)
+        with patch.object(UpgradeShipClient, "listItemsOfAShip", poor):
+            self.upgrade()
+        self.assertEqual(ExecClient.executed, [])
+        self.assertIn("not enough minerals: 499 observed, the hull costs 500", self.rejection())
+
+    def test_a_hull_priced_in_starbux_or_without_a_checkable_price_is_never_upgraded(self):
+        def priced(**fields):
+            return [{**hull, **fields} if hull["@ShipDesignId"] == "3" else hull for hull in HULL_DESIGNS]
+        cases = (
+            ("a starbux price", priced(**{"@StarbuxCost": "100"}), "starbux is never spent"),
+            ("an unreadable starbux price", priced(**{"@StarbuxCost": "lots"}), "starbux is never spent"),
+            ("an unreadable gas price", priced(**{"@GasCost": "?"}), "gas price that cannot be read"),
+            ("no price at all", priced(**{"@MineralCost": "0"}), "no mineral or gas price"),
+        )
+        for name, hulls, reason in cases:
+            with self.subTest(case=name):
+                UpgradeShipClient.hulls = hulls
+                for path in (self.journal_dir / "runs").glob("*.json") if (self.journal_dir / "runs").exists() else ():
+                    path.unlink()
+                self.upgrade()
+                self.assertEqual(ExecClient.executed, [])
+                self.assertIn(reason, self.rejection())
+
+    def test_a_gas_price_is_checked_against_the_gas_cap(self):
+        UpgradeShipClient.hulls = [{**hull, "@GasCost": "50"} if hull["@ShipDesignId"] == "3" else hull
+                                   for hull in HULL_DESIGNS]
+        self.upgrade()  # the gas cap is 0
+        self.assertEqual(ExecClient.executed, [])
+        refused = [event for event in read_events(self.journal_dir / "alpha.log") if event.action_id == "upgrade_ship"]
+        self.assertIn("gas cap would be exceeded (0 spent + 50 planned > 0)", refused[-1].reason)
+
+    def test_an_action_the_file_does_not_allow_is_reported_once(self):
+        self.write_authorization(accounts=["alpha"], actions=["collect_all_resources"], modes=["upgrade-ship"],
+                                 caps={"alpha": {"minerals": 500, "gas": 0}})
+        code, _, err = self.upgrade()
+        self.assert_refused_before_login(code, err, "action 'upgrade_ship' is not allowed")
+        self.assertEqual(err.count("action 'upgrade_ship' is not allowed"), 1, err)
+
+    def test_the_gate_holds_a_hull_upgrade_only_in_upgrade_ship_mode(self):
+        auth = load_authorization(self.authorization)
+        reg = load_registry(self.registry)
+        now = lambda: datetime.now(timezone.utc)  # noqa: E731
+        with self.assertRaises(ValueError):
+            ExecutionGate(auth, reg, "upgrade-ship", now)
+        with self.assertRaises(ValueError):
+            ExecutionGate(auth, reg, "full", now, hull_upgrade=HullUpgrade(3))
+        with self.assertRaises(ValueError):
+            ExecutionGate(auth, reg, "place", now, placement=Placement(42), hull_upgrade=HullUpgrade(3))
+        gate = ExecutionGate(auth, reg, "upgrade-ship", now, hull_upgrade=HullUpgrade(3))
+        self.assertIsNone(gate.refusal("alpha", "upgrade_ship"))
+        self.assertIn("upgrade-ship mode runs only upgrade_ship", gate.refusal("alpha", "collect_all_resources"))
+        self.assertIn("runs only in place mode", gate.refusal("alpha", "place_room"))
+        self.assertEqual(gate.max_actions(reg.get("alpha")), 1)
+        self.assertIsNone(gate.params_refusal("upgrade_ship", {"ship_design_id": "3"}))
+        self.assertIn("hull design", gate.params_refusal("upgrade_ship", {"ship_design_id": "4"}))
+        other = ExecutionGate(auth, reg, "upgrade-ship", now, hull_upgrade=HullUpgrade(4))
+        self.assertIn("not named", other.refusal("alpha", "upgrade_ship"))
+        with self.assertRaises(ValueError):
+            HullUpgradePolicy(ExecutionGate(auth, reg, "canary", now))
+
+    def test_no_progression_plan_can_upgrade_a_hull(self):
+        # Even with upgrade_ship in the actions list, canary and full mode refuse it: only this mode runs it.
+        self.write_hull_authorization(modes=["canary", "full", "upgrade-ship"])
+        auth = load_authorization(self.authorization)
+        reg = load_registry(self.registry)
+        now = lambda: datetime.now(timezone.utc)  # noqa: E731
+        for mode in ("canary", "full"):
+            with self.subTest(mode=mode):
+                self.assertIn("runs only in upgrade-ship mode",
+                              ExecutionGate(auth, reg, mode, now).refusal("alpha", "upgrade_ship"))
+
+    def test_next_hull_design_reads_only_observed_state(self):
+        design = DesignData.from_records(ship_designs=HULL_DESIGNS)
+        ship = {"@ShipDesignId": "2", "@ShipLevel": "1", "@UpgradeShipDesignId": "0"}
+        snapshot = build_snapshot("alpha", datetime.now(timezone.utc), "test", ship=ship)
+        hull, why = next_hull_design(snapshot, design)
+        self.assertEqual((hull.design_id, hull.mineral_cost, hull.race_id), ("3", 500, "2"))
+        self.assertIn("race 2", why)
+        # Another kind of ship of the same race and level is never taken for the player's next hull.
+        typed = [{**record, "@ShipType": "Player"} for record in HULL_DESIGNS]
+        boss = {"@ShipDesignId": "77", "@ShipLevel": "2", "@RaceId": "2", "@MineralCost": "1", "@ShipType": "Boss"}
+        self.assertEqual(next_hull_design(snapshot, DesignData.from_records(ship_designs=typed + [boss]))[0].design_id,
+                         "3")
+        no_player = [record for record in typed if record["@ShipDesignId"] != "3"] + [boss]
+        self.assertIsNone(next_hull_design(snapshot, DesignData.from_records(ship_designs=no_player))[0])
+        for name, ship_fields, reason in (
+                ("no ship read", None, "ship section is missing"),
+                ("an unknown hull design", {**ship, "@ShipDesignId": "99"}, "not in the design data"),
+                ("a level that is not the design's", {**ship, "@ShipLevel": "2"}, "is not its hull design's level"),
+                ("the top hull", {**ship, "@ShipDesignId": "4", "@ShipLevel": "3"}, "no level 4 hull design")):
+            with self.subTest(case=name):
+                snapshot = build_snapshot("alpha", datetime.now(timezone.utc), "test", ship=ship_fields)
+                hull, why = next_hull_design(snapshot, design)
+                self.assertIsNone(hull)
+                self.assertIn(reason, why)
+
+    def test_parse_upgrade_ship(self):
+        self.assertEqual(run.parse_upgrade_ship("3"), HullUpgrade(3))
+        self.assertEqual(run.parse_upgrade_ship(" 12 "), HullUpgrade(12))
+        for bad in ("", "x", "0", "-3", "3.0", "3@1"):
+            with self.subTest(text=bad), self.assertRaises(ValueError):
+                run.parse_upgrade_ship(bad)
 
 
 if __name__ == "__main__":

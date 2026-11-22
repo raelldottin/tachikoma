@@ -187,5 +187,42 @@ class DiffSnapshotTests(unittest.TestCase):
             diff_snapshots(full_snapshot(observed_at=T0 + timedelta(seconds=1)), full_snapshot())
 
 
+class HullUpgradeFieldTests(unittest.TestCase):
+    """The ship's @UpgradeShipDesignId, as the live ship record carries it (rooms/buy_room2.json ship_after)."""
+
+    def live_ship(self):
+        import os
+        from pathlib import Path
+
+        import xmltodict
+
+        fixture = Path(os.path.abspath(__file__)).parents[1] / "tests/fixtures/live_sanitized/rooms/buy_room2.json"
+        text = json.loads(fixture.read_text(encoding="utf-8"))["ship_after"]
+        return xmltodict.parse(text)["ShipService"]["GetShipByUserId"]["Ship"]
+
+    def test_no_upgrade_under_way_is_none_despite_a_stale_start_date(self):
+        ship = self.live_ship()
+        self.assertEqual((ship["@UpgradeShipDesignId"], ship["@UpgradeStartDate"]), ("0", "2026-10-19T19:15:13"))
+        snapshot = build_snapshot("alpha", T0, "fixture", ship=ship)
+        self.assertEqual((snapshot.ship_design_id, snapshot.hull_level, snapshot.upgrade_ship_design_id),
+                         ("2", 1, None))
+
+    def test_an_upgrade_under_way_is_read_and_left_out_of_equality(self):
+        started = build_snapshot("alpha", T0, "fixture", ship={**SHIP, "@UpgradeShipDesignId": "107"})
+        self.assertEqual(started.upgrade_ship_design_id, "107")
+        self.assertEqual(started.to_dict()["upgrade_ship_design_id"], "107")
+        self.assertEqual(started, build_snapshot("alpha", T0, "fixture", ship=SHIP))
+        self.assertIsNone(build_snapshot("alpha", T0, "fixture", ship=SHIP).upgrade_ship_design_id)
+        self.assertIsNone(build_snapshot("alpha", T0, "fixture").upgrade_ship_design_id)
+
+    def test_a_padded_zero_or_a_leftover_equal_to_the_hull_is_no_upgrade(self):
+        for value in (" 0 ", "", SHIP["@ShipDesignId"], f" {SHIP['@ShipDesignId']}"):
+            with self.subTest(value=value):
+                snapshot = build_snapshot("alpha", T0, "fixture", ship={**SHIP, "@UpgradeShipDesignId": value})
+                self.assertIsNone(snapshot.upgrade_ship_design_id)
+        padded = build_snapshot("alpha", T0, "fixture", ship={**SHIP, "@UpgradeShipDesignId": " 107 "})
+        self.assertEqual(padded.upgrade_ship_design_id, "107")
+
+
 if __name__ == "__main__":
     unittest.main()

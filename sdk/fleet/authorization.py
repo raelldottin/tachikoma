@@ -30,6 +30,12 @@ before and hashes the same):
   adds them); until then they are accepted in ``actions`` only when the file
   also has a ``market`` section. ``check_trade`` returns why one trade falls
   outside the section. A starbux trade is always refused.
+- ``placements`` (SPEC-13, S13-R7): ``{alias: [{room_design_id, row, column} |
+  {room_design_id, position: "first-free"}]}``, required exactly when
+  ``place_room`` is in ``actions``; ``placement_refusal_reason`` checks one.
+- ``hull_upgrades``: ``{alias: [{"ship_design_id": N}]}``, required exactly
+  when ``upgrade_ship`` is in ``actions`` (run mode ``upgrade-ship``);
+  ``hull_upgrade_refusal_reason`` checks one requested hull design.
 """
 
 from __future__ import annotations
@@ -51,23 +57,26 @@ from sdk.state.snapshot import ACCOUNT_ALIAS_PATTERN
 AUTHORIZATION_VERSION = 1
 MAX_WINDOW = timedelta(days=14)
 MAX_WINDOW_HOURS = int(MAX_WINDOW.total_seconds() // 3600)
-RUN_MODES = ("canary", "full", "place")
+RUN_MODES = ("canary", "full", "place", "upgrade-ship")
 CAP_CURRENCIES = ("minerals", "gas")
 MAX_PURPOSE_LENGTH = 500
 OWNER_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._-]{0,63}$")
 ACTION_ID_PATTERN = re.compile(r"^[a-z0-9_]{1,64}$")
-MODE_PATTERN = re.compile(r"^(canary|full|place)$")
+MODE_PATTERN = re.compile(r"^(canary|full|place|upgrade-ship)$")
 # Device keys and access tokens are UUID-shaped; an owner label never is.
 UUID_PATTERN = re.compile(r"[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}")
 AUTHORIZATION_FIELDS = frozenset({
     "version", "owner", "purpose", "accounts", "actions", "not_before", "expires", "caps", "modes",
 })
-OPTIONAL_AUTHORIZATION_FIELDS = frozenset({"legacy_run_skipped", "battles", "market", "placements"})
+OPTIONAL_AUTHORIZATION_FIELDS = frozenset({
+    "legacy_run_skipped", "battles", "market", "placements", "hull_upgrades",
+})
 BATTLE_ACTION_ID = "run_pvp_battle"
 # SPEC-09 market actions the catalog does not hold yet; valid only next to a market section.
 MARKET_ACTION_IDS = frozenset({"sell_item", "purchase_item"})
 BATTLE_FIELDS = ("max_per_window", "window_hours")
 PLACE_ACTION_ID = "place_room"
+HULL_UPGRADE_ACTION_ID = "upgrade_ship"
 FIRST_FREE = "first-free"
 MARKET_FIELDS = ("item_design_ids", "max_value_per_trade", "max_value_per_window", "window_hours")
 
@@ -270,6 +279,47 @@ def _parse_placements(value: Any, accounts: tuple[str, ...]) -> dict[str, tuple[
     return placements
 
 
+@dataclass(frozen=True)
+class HullUpgrade:
+    """One hull upgrade the owner allows: the ship (hull) design the account's ship may be upgraded to."""
+
+    ship_design_id: int
+
+    def describe(self) -> str:
+        return f"hull design {self.ship_design_id}"
+
+    def to_dict(self) -> dict:
+        return {"ship_design_id": self.ship_design_id}
+
+
+def parse_hull_upgrade(value: Any, name: str = "hull upgrade") -> HullUpgrade:
+    """A hull upgrade entry: ``{"ship_design_id": N}`` with N a positive integer."""
+    if not isinstance(value, Mapping):
+        raise AuthorizationError(f"{name} must be an object with ship_design_id")
+    if "starbux" in value:
+        raise AuthorizationError(f"{name}: starbux is never authorizable")
+    if set(value) != {"ship_design_id"}:
+        raise AuthorizationError(f"{name} must hold only ship_design_id")
+    return HullUpgrade(_positive_int(value["ship_design_id"], f"{name}.ship_design_id"))
+
+
+def _parse_hull_upgrades(value: Any, accounts: tuple[str, ...]) -> dict[str, tuple[HullUpgrade, ...]]:
+    if not isinstance(value, Mapping) or not value:
+        raise AuthorizationError("hull_upgrades must be an object keyed by account alias")
+    if set(value) - set(accounts):
+        raise AuthorizationError("hull_upgrades names an account that is not in accounts")
+    upgrades = {}
+    for alias in sorted(value):
+        entries = value[alias]
+        if not isinstance(entries, list) or not entries:
+            raise AuthorizationError(f"hull_upgrades.{alias} must be a non-empty list")
+        parsed = tuple(parse_hull_upgrade(entry, f"hull_upgrades.{alias} entry") for entry in entries)
+        if len(set(parsed)) != len(parsed):
+            raise AuthorizationError(f"hull_upgrades.{alias} has duplicate entries")
+        upgrades[alias] = parsed
+    return upgrades
+
+
 def _parse_legacy_run_skipped(value: Any) -> tuple[int, ...]:
     if not isinstance(value, list):
         raise AuthorizationError("legacy_run_skipped must be a list of PSS_ACCOUNT_N numbers")
@@ -294,6 +344,7 @@ class Authorization:
     battles: Optional[BattleLimits] = None
     market: Optional[MarketLimits] = None
     placements: Mapping[str, tuple[Placement, ...]] = field(default_factory=dict)
+    hull_upgrades: Mapping[str, tuple[HullUpgrade, ...]] = field(default_factory=dict)
 
     def cap(self, alias: str, currency: str) -> int:
         """The per-period cap for ``alias``; starbux is always 0, whatever the file says."""
@@ -326,6 +377,9 @@ class Authorization:
         if self.placements:
             payload["placements"] = {alias: [entry.to_dict() for entry in self.placements[alias]]
                                      for alias in sorted(self.placements)}
+        if self.hull_upgrades:
+            payload["hull_upgrades"] = {alias: [entry.to_dict() for entry in self.hull_upgrades[alias]]
+                                        for alias in sorted(self.hull_upgrades)}
         return payload
 
 
@@ -394,6 +448,9 @@ def authorization_from_dict(payload: Mapping[str, Any]) -> Authorization:
             "a market section is required when, and only when, actions include sell_item or purchase_item")
     if (PLACE_ACTION_ID in actions) != ("placements" in payload):
         raise AuthorizationError("a placements section is required when, and only when, actions include place_room")
+    if (HULL_UPGRADE_ACTION_ID in actions) != ("hull_upgrades" in payload):
+        raise AuthorizationError(
+            "a hull_upgrades section is required when, and only when, actions include upgrade_ship")
     battles = _parse_battles(payload["battles"]) if "battles" in payload else None
     market = _parse_market(payload["market"]) if has_market else None
     legacy_run_skipped = (
@@ -413,10 +470,13 @@ def authorization_from_dict(payload: Mapping[str, Any]) -> Authorization:
 
     caps = _parse_caps(payload["caps"], accounts)
     placements = _parse_placements(payload["placements"], accounts) if "placements" in payload else {}
+    hull_upgrades = (_parse_hull_upgrades(payload["hull_upgrades"], accounts)
+                     if "hull_upgrades" in payload else {})
     return Authorization(
         owner=owner, purpose=purpose, accounts=accounts, actions=actions,
         not_before=not_before, expires=expires, caps=caps, modes=modes,
         legacy_run_skipped=legacy_run_skipped, battles=battles, market=market, placements=placements,
+        hull_upgrades=hull_upgrades,
     )
 
 
@@ -513,6 +573,17 @@ def placement_refusal_reason(auth: Authorization, alias: str, placement: Placeme
     if placement not in auth.placements.get(alias, ()):
         return (f"{placement.describe()} on account {_label(alias, ACCOUNT_ALIAS_PATTERN)} is not named in the "
                 "authorization's placements")
+    return None
+
+
+def hull_upgrade_refusal_reason(auth: Authorization, alias: str, upgrade: HullUpgrade) -> Optional[str]:
+    """Why upgrading ``alias``'s ship to ``upgrade``'s hull design is outside ``auth``, or ``None``. The design
+    must match an entry of the account's ``hull_upgrades`` exactly."""
+    if HULL_UPGRADE_ACTION_ID not in auth.actions:
+        return f"action {HULL_UPGRADE_ACTION_ID!r} is not allowed by the authorization"
+    if upgrade not in auth.hull_upgrades.get(alias, ()):
+        return (f"{upgrade.describe()} on account {_label(alias, ACCOUNT_ALIAS_PATTERN)} is not named in the "
+                "authorization's hull_upgrades")
     return None
 
 

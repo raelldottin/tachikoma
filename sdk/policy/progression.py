@@ -45,6 +45,11 @@ class HullDesign:
     design_id: str
     level: Optional[int] = None  # @ShipLevel; None when missing or unparseable
     mineral_cost: Optional[int] = None  # @MineralCost; None when missing or unparseable
+    race_id: Optional[str] = None  # @RaceId; one hull design per race per level. None when missing or empty
+    ship_type: Optional[str] = None  # @ShipType when the record carries one
+    # Other prices a hull record may carry: a missing one is 0, a present but unparseable one None.
+    gas_cost: Optional[int] = 0
+    starbux_cost: Optional[int] = 0
 
 
 _COST = re.compile(r"\d+")
@@ -111,6 +116,10 @@ class DesignData:
                 design_id=str(record.get("@ShipDesignId")),
                 level=_cost(record.get("@ShipLevel")),
                 mineral_cost=_cost(record.get("@MineralCost")),
+                race_id=str(record.get("@RaceId") or "").strip() or None,
+                ship_type=str(record.get("@ShipType") or "").strip() or None,
+                gas_cost=_cost(record.get("@GasCost", 0)),
+                starbux_cost=_cost(record.get("@StarbuxCost", 0)),
             )
             for record in ship_designs
         ]
@@ -352,6 +361,55 @@ def hull_hold(snapshot: AccountSnapshot, design: DesignData) -> tuple[Optional[H
     cost = next(iter(costs))
     assert cost is not None
     return HullHold(nxt, cost), f"near the hull {nxt} upgrade: every crew member is at the crew level cap ({cap})"
+
+
+def next_hull_design(snapshot: AccountSnapshot, design: DesignData) -> tuple[Optional[HullDesign], str]:
+    """The hull design the ship upgrades to next, or ``None`` and why it cannot be told.
+
+    PSS has one hull design per race per level, so the next hull is the
+    design one level above the ship's current hull design with that design's
+    ``@RaceId`` (and its ``@ShipType``, when the records carry one, so no
+    other kind of ship with the same race and level is taken for the player's
+    hull). Only ``--fleet-execute --mode upgrade-ship`` reads it; no policy
+    plans a hull upgrade. Anything unobserved or ambiguous is a refusal, never a guess:
+    the ship section not complete, its hull design or level unknown, a hull
+    upgrade already under way, the current design missing from (or repeated
+    in) the design data, its race or level unknown, the ship's level not its
+    design's, and no candidate, several candidates or a candidate without a
+    parseable mineral cost.
+    """
+    if snapshot.section("ship") is not Completeness.COMPLETE:
+        return None, f"the ship section is {snapshot.section('ship').value}, so its hull is not observed"
+    current_id = snapshot.ship_design_id
+    if current_id is None:
+        return None, "the ship's hull design (@ShipDesignId) is not observed"
+    if snapshot.upgrade_ship_design_id is not None:
+        return None, f"a hull upgrade to design {snapshot.upgrade_ship_design_id} is already under way"
+    if not design.hulls:
+        return None, "no hull designs in the design data (listAllDesigns4 gave no ShipDesign records)"
+    current = [hull for hull in design.hulls if hull.design_id == current_id]
+    if len(current) != 1:
+        return None, (f"hull design {current_id} is "
+                      f"{'not in' if not current else 'listed more than once in'} the design data")
+    hull = current[0]
+    if hull.race_id is None:
+        return None, f"hull design {current_id} has no @RaceId, so the next hull of its race cannot be told"
+    if hull.level is None:
+        return None, f"hull design {current_id} has no parseable @ShipLevel"
+    if snapshot.hull_level != hull.level:
+        return None, f"the ship's level {snapshot.hull_level} is not its hull design's level {hull.level}"
+    level = hull.level + 1
+    candidates = [other for other in design.hulls
+                  if other.level == level and other.race_id == hull.race_id and other.ship_type == hull.ship_type]
+    if not candidates:
+        return None, f"no level {level} hull design for race {hull.race_id} in the design data"
+    if len(candidates) > 1:
+        listed = ", ".join(sorted(other.design_id for other in candidates))
+        return None, f"the level {level} hull for race {hull.race_id} is ambiguous (designs {listed})"
+    target = candidates[0]
+    if target.mineral_cost is None:
+        return None, f"hull design {target.design_id} has no parseable @MineralCost"
+    return target, f"hull level {hull.level} -> {level} (race {hull.race_id}), {target.mineral_cost} mineral"
 
 
 class HullReserveV1:

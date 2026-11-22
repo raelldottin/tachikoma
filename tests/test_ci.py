@@ -376,6 +376,26 @@ class WorkflowPolicyTests(unittest.TestCase):
                 for suffix in ("_EMAIL", "_PASSWORD"):
                     self.assertEqual(step["env"][secret + suffix], f"${{{{ secrets.{secret}{suffix} }}}}")
 
+    def test_upgrade_ship_step_runs_one_authorized_hull_upgrade_on_pss5_only(self):
+        from sdk.fleet.authorization import load_authorization
+
+        workflow = self.documents["live-trial.yml"]
+        job = next(iter(workflow["jobs"].values()))
+        self.assertIn("upgrade-ship", workflow["on"]["workflow_dispatch"]["inputs"]["step"]["options"])
+        step = next(step for step in job["steps"] if step.get("if") == "inputs.step == 'upgrade-ship'")
+        self.assertIn("--mode upgrade-ship --upgrade-ship", step["run"])
+        self.assertNotIn("--fleet-dry-run", step["run"])
+        self.assertEqual(set(step["env"]), {"PSS_ACCOUNT_5_EMAIL", "PSS_ACCOUNT_5_PASSWORD", "TACHIKOMA_FLEET_SALT"})
+        # The runner's own loaders: files it would refuse (exit 2) fail here.
+        registry = load_registry(ci.ROOT / job["env"]["G7_REGISTRY"])
+        authorization = load_authorization(ci.ROOT / job["env"]["G7_AUTHORIZATION"])
+        self.assertEqual([profile.alias for profile in registry.enabled()], ["pss5"])
+        self.assertEqual((authorization.accounts, authorization.actions), (("pss5",), ("upgrade_ship",)))
+        self.assertEqual(authorization.modes, ("upgrade-ship",))
+        self.assertEqual(len(authorization.hull_upgrades["pss5"]), 1)  # the step reads the one entry
+        self.assertEqual(authorization.cap("pss5", "gas"), 0)
+        self.assertEqual(registry.get("pss5").budget("minerals"), authorization.cap("pss5", "minerals"))
+
     def test_only_release_publisher_has_write_permissions(self):
         for filename, document in self.documents.items():
             for name, job in document["jobs"].items():
