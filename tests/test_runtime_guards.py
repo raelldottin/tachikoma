@@ -259,6 +259,33 @@ class TestTargetedRoomUpgrade(unittest.TestCase):
 
     def test_upgrade_rooms_selection_is_unchanged(self):
         self.client.request = MagicMock(return_value=MagicMock(text="<UpgradeRoom2/>"))  # type: ignore
+        # Simulate ship data refresh after upgrade: first call returns room 1 as Normal,
+        # second call returns room 1 as Upgrading so it's not eligible again.
+        ship_data_first = {
+            "Ship": {"Rooms": {"Room": [
+                {"@RoomId": "1", "@RoomStatus": "Normal", "@RoomDesignId": "100"},
+                {"@RoomId": "2", "@RoomStatus": "Normal", "@RoomDesignId": "200"},
+                {"@RoomId": "3", "@RoomStatus": "Upgrading", "@RoomDesignId": "100"},
+            ]}}
+        }
+        ship_data_after = {
+            "Ship": {"Rooms": {"Room": [
+                {"@RoomId": "1", "@RoomStatus": "Upgrading", "@RoomDesignId": "100"},
+                {"@RoomId": "2", "@RoomStatus": "Normal", "@RoomDesignId": "200"},
+                {"@RoomId": "3", "@RoomStatus": "Upgrading", "@RoomDesignId": "100"},
+            ]}}
+        }
+        call_count = 0
+
+        def mock_get_ship():
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                self.client.shipByUserId = ship_data_first
+            else:
+                self.client.shipByUserId = ship_data_after
+
+        self.client.getShipByUserId = mock_get_ship
         with patch.object(self.client, "upgradeRoom", wraps=self.client.upgradeRoom) as targeted:
             self.assertTrue(self.client.upgradeRooms())
         # Room 2 is unaffordable (gas 900 > 500) and room 3 is already upgrading.
@@ -268,7 +295,11 @@ class TestTargetedRoomUpgrade(unittest.TestCase):
 
     def test_upgrade_rooms_still_stops_at_concurrency_limit(self):
         self.client.gasTotal = 5000
-        self.client.request = MagicMock(return_value=MagicMock(text="max concurrent constructions"))  # type: ignore
+        self.client.request = MagicMock(
+            return_value=MagicMock(
+                text="You cannot build or upgrade more rooms. Please wait for other constructions to be completed."
+            )
+        )  # type: ignore
         with patch.object(self.client, "upgradeRoom", wraps=self.client.upgradeRoom) as targeted:
             self.assertTrue(self.client.upgradeRooms())
         targeted.assert_called_once_with("1", "101")
