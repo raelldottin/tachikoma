@@ -2501,14 +2501,26 @@ class Client(object):
                                 r = self.upgradeRoom(roomId, upgradeRoomDesignId)
                                 roomName = ""
                                 upgradeRoomName = ""
-                                if r and "concurrent" in r.text:
+                                if (
+                                    r
+                                    and "You cannot build or upgrade more rooms. Please wait for other constructions to be completed."
+                                    in r.text
+                                ):
                                     logging.info(
-                                        f'[{self.info["@Name"]}] You have reached the maximum number of concurrent constructions allowed.'
+                                        f'[{self.info["@Name"]}] Max concurrent constructions reached: cannot build or upgrade more rooms.'
                                     )
                                     self.max_room_upgrades = True
                                     hit_blocker = True
                                     break
                                 self.collectAllResources()
+                                # Refresh ship data so the upgraded room shows as "Upgrading"
+                                self.getShipByUserId()
+                                shipByUserId = getattr(self, "shipByUserId", None)
+                                if not shipByUserId:
+                                    logging.info("Ship data unavailable after upgrade; stopping room upgrades.")
+                                    hit_blocker = True
+                                    break
+                                rooms = _extract_collection(shipByUserId, "Room")
                                 upgraded_any = True
                     if hit_blocker:
                         break
