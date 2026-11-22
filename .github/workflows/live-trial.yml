@@ -9,6 +9,8 @@ name: Live trial (owner-dispatched)
 #   fleet-dry-run  fleet-v1 dry run of pss1..pss5 with the identity salt; read-only, never executes
 #   canary    G2: dry run, then one authorized safe action on pss5
 #   place     G6: one authorized room placement on pss5 (SPEC-13); no dry run needed
+#   upgrade-ship  G7: one authorized hull upgrade on pss5; no dry run needed. Its files hold
+#             placeholders (design 1, 0 mineral cap) that refuse until the owner fills them in
 # Output (sanitized, scanned) is uploaded as a short-lived artifact.
 
 on:
@@ -25,6 +27,7 @@ on:
           - fleet-dry-run
           - canary
           - place
+          - upgrade-ship
 
 permissions:
   contents: read
@@ -47,6 +50,8 @@ jobs:
       FLEET_V1_REGISTRY: docs/experiments/live/registry-fleet-v1-dry-run.json
       G6_REGISTRY: docs/experiments/live/registry-g6-pss5-place.json
       G6_AUTHORIZATION: docs/experiments/live/authorization-g6-pss5-place.json
+      G7_REGISTRY: docs/experiments/live/registry-g7-pss5-ship.json
+      G7_AUTHORIZATION: docs/experiments/live/authorization-g7-pss5-ship.json
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -161,6 +166,22 @@ jobs:
           mkdir -p "$OUT/journals"
           python run.py --fleet-execute --registry "$G6_REGISTRY" --authorization "$G6_AUTHORIZATION" \
             --mode place --place-room 42@first-free --identity-salt-env TACHIKOMA_FLEET_SALT \
+            --fleet-journal-dir "$OUT/journals"
+
+      - name: Upgrade the hull (G7)
+        if: inputs.step == 'upgrade-ship'
+        env:
+          PSS_ACCOUNT_5_EMAIL: ${{ secrets.PSS_ACCOUNT_5_EMAIL }}
+          PSS_ACCOUNT_5_PASSWORD: ${{ secrets.PSS_ACCOUNT_5_PASSWORD }}
+          TACHIKOMA_FLEET_SALT: ${{ secrets.TACHIKOMA_FLEET_SALT }}
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p "$OUT/journals"
+          # The hull design comes from the authorization itself: exactly one hull_upgrades entry for pss5.
+          DESIGN=$(python -c 'import json, sys; (entry,) = json.load(open(sys.argv[1]))["hull_upgrades"]["pss5"]; print(int(entry["ship_design_id"]))' "$G7_AUTHORIZATION")
+          python run.py --fleet-execute --registry "$G7_REGISTRY" --authorization "$G7_AUTHORIZATION" \
+            --mode upgrade-ship --upgrade-ship "$DESIGN" --identity-salt-env TACHIKOMA_FLEET_SALT \
             --fleet-journal-dir "$OUT/journals"
 
       - name: Upload sanitized output

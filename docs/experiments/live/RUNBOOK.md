@@ -86,6 +86,23 @@ Done on 2026-11-13: canary 43394041693 reconciled `verified` (minerals +10), so 
 
 An agent reads the artifact and records the result in [G2 evidence](g2-evidence.md). The collection's journal entry (`journals/pss5.log`) lists each room design's `CapacityUsed` before and after the call. A `room_fill_note` means no room held anything, so there was nothing to collect: check pss5's collectors and power in the game. If a collector design held resources before the call and minerals and gas still did not change, either storage was full or the before-and-after check has a defect. Compare with pss5's storage in the game, and investigate before block 1 opens if storage had room. The totals add up every room, storage included, and what `CapacityUsed` counts for each room type is not yet confirmed live. If the ship's rooms were not read fresh on both sides, the fill is left unobserved (`room_fill_unobserved_reason`).
 
+## G7: one hull upgrade on pss5 (not yet dispatchable)
+
+`step=upgrade-ship` runs `run.py --fleet-execute --mode upgrade-ship --upgrade-ship <design>` on pss5 with [registry-g7-pss5-ship.json](registry-g7-pss5-ship.json) and [authorization-g7-pss5-ship.json](authorization-g7-pss5-ship.json). The step reads the hull design id from the authorization's one `hull_upgrades.pss5` entry. Like `place`, it needs no dry run, but the identity check still runs. It makes at most one `upgrade_ship` call, and only after these checks against the design data and a fresh read of the ship:
+
+- The requested design must be the ship's next hull: one level above its current hull design, with the same `@RaceId` as that design. If the design data has no hull records, the current design is missing, the race or level is unknown, there are several candidates or no cost, or an upgrade is already under way, the step refuses and gives the reason.
+- pss5 must have at least the hull's `@MineralCost` in minerals. A hull with a starbux price is never upgraded, and a gas price is checked the same way against the gas cap (0).
+- The cost must fit the minerals cap. If it does not, the runner refuses before any call, with `minerals cap would be exceeded`.
+
+**The files hold placeholders.** `ship_design_id` is 1, and the minerals cap and the registry's minerals budget are 0, so a dispatch now refuses before any upgrade call. Before dispatching, the owner must:
+
+1. Take the next hull's design id and `@MineralCost` from a read-only capture (`step=capture`; pss5's `ShipDesign` records and its ship's `@ShipDesignId`).
+2. Set `hull_upgrades.pss5[0].ship_design_id` to that id. Set `caps.pss5.minerals` in the authorization and `budgets.minerals` in the registry to that cost.
+3. Set `not_before` and `expires` to the approved window (at most 14 days), and replace the placeholder `purpose`.
+4. Merge, then dispatch `gh workflow run live-trial.yml -f step=upgrade-ship`.
+
+The journal entry is `verified` when the ship's next read shows the requested design as its `@ShipDesignId` (an instant upgrade) or as its `@UpgradeShipDesignId` (a timed upgrade under way). `Client.upgradeShip` returns the raw response, so an unchanged ship is `unknown`. An `unknown` upgrade blocks every later `upgrade_ship` on the account, whatever the design, until someone reconciles it.
+
 ## What still needs the owner before the progression trial
 
 SPEC-07's trial plan needs, before its window opens:

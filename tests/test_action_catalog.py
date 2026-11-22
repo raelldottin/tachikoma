@@ -61,7 +61,7 @@ class CatalogShapeTests(unittest.TestCase):
         self.assertEqual(
             set(CATALOG),
             {"collect_all_resources", "collect_daily_reward", "add_training", "upgrade_room", "add_research",
-             "run_pvp_battle", "place_room",
+             "run_pvp_battle", "place_room", "upgrade_ship",
              "grab_flying_starbux", "collect_task_reward", "collect_available_markers", "collect_mining_drones",
              "fleet_pool_resources", "fleet_marketplace_sync", "fleet_battle_coordinate", "fleet_share_crew_xp"},
         )
@@ -260,6 +260,65 @@ class PlacementEvidenceTests(unittest.TestCase):
         self.assertEqual(self.probe(object()), {"reply": None})
         holder = type("Holder", (), {"placeRoomReply": {"http_status": 200}})()
         self.assertEqual(self.probe(holder), {"reply": {"http_status": 200}})
+
+
+# pss5's ship record shape (tests/fixtures/live_sanitized/rooms/buy_room2.json): a level 1 hull, design 2, and
+# @UpgradeShipDesignId "0" beside a stale @UpgradeStartDate while no hull upgrade is under way.
+SHIP = {"@ShipDesignId": "2", "@ShipLevel": "1", "@RaceId": "2", "@UpgradeShipDesignId": "0",
+        "@UpgradeStartDate": "2026-10-19T19:15:13"}
+HULL = {"ship_design_id": "3"}
+
+
+class UpgradeShipTests(unittest.TestCase):
+    """``upgrade_ship``: reconciled from the ship record alone, accepting a started (timed) upgrade."""
+
+    def test_spec_shape(self):
+        spec = get_spec("upgrade_ship")
+        self.assertEqual((spec.client_method, spec.idempotency, spec.required_params, spec.mutating),
+                         ("upgradeShip", Idempotency.NOT_IDEMPOTENT, ("ship_design_id",), True))
+        self.assertFalse(spec.canary_safe)
+
+    def test_bad_parameters_and_an_unobserved_ship_are_refused_before_the_call(self):
+        spec = get_spec("upgrade_ship")
+        self.assertEqual(check_preconditions(spec, snap(ship=SHIP), HULL), [])
+        for params in ({"ship_design_id": "x"}, {"ship_design_id": " "}, {"ship_design_id": "-3"}):
+            with self.subTest(params=params):
+                self.assertTrue(check_preconditions(spec, snap(ship=SHIP), params))
+        with self.assertRaises(ActionSpecError):
+            check_preconditions(spec, snap(ship=SHIP), {"ship_design_id": ""})
+        self.assertIn("ship section was not observed", check_preconditions(spec, snap(), HULL)[0])
+
+    def test_outcomes(self):
+        cases = {
+            "the upgrade started (timed)": ({"ship": {**SHIP, "@UpgradeShipDesignId": "3"}}, V),
+            "the hull changed at once": ({"ship": {**SHIP, "@ShipDesignId": "3", "@ShipLevel": "2"}}, V),
+            "the ship is unchanged": ({"ship": SHIP}, N),
+            "an upgrade to another hull started": ({"ship": {**SHIP, "@UpgradeShipDesignId": "4"}}, N),
+            "the ship was not observed after": ({"ship": None}, U),
+        }
+        for name, (after, expected) in cases.items():
+            with self.subTest(case=name):
+                result = outcome("upgrade_ship", after, HULL, before_overrides={"ship": SHIP})
+                self.assertIs(result.status, expected, result.reason)
+        self.assertIs(outcome("upgrade_ship", {"ship": SHIP}, HULL).status, U)  # not observed before
+
+    def test_a_hull_already_shown_before_the_call_is_not_this_upgrade(self):
+        started = {**SHIP, "@UpgradeShipDesignId": "3"}
+        self.assertIs(outcome("upgrade_ship", {}, HULL, before_overrides={"ship": started}).status, N)
+        done = {**SHIP, "@ShipDesignId": "3"}
+        self.assertIs(outcome("upgrade_ship", {}, HULL, before_overrides={"ship": done}).status, N)
+
+    def test_the_reply_probe_reads_upgrade_ship_reply_and_is_journaled_after_scanning(self):
+        spec = get_spec("upgrade_ship")
+        self.assertEqual(spec.evidence_probe(object()), {"reply": None})  # a client without the summary
+        reply = {"http_status": 200, "success_shape": False, "parsed": True, "length": 40,
+                 "elements": ["ShipService", "UpgradeShip"], "messages": [{"attribute": "errorMessage",
+                                                                           "text": "Not enough minerals."}]}
+        holder = type("Holder", (), {"upgradeShipReply": reply})()
+        self.assertEqual(spec.evidence_probe(holder), {"reply": reply})
+        evidence = spec.evidence({"reply": None}, {"reply": reply}, U, None)
+        self.assertEqual(evidence["server_reply"]["messages"][0]["text"], "Not enough minerals.")
+        self.assertEqual(spec.evidence({"reply": None}, {"reply": None}, U, None), {"server_reply": None})
 
 
 class CollectionEvidenceTests(unittest.TestCase):
