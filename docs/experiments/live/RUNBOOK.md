@@ -44,6 +44,14 @@ Since `spec13-capture-designs`, the capture step also records game data for room
 
 These are read-only calls. A capture run after that slice merges unblocks `spec13-grid-model`.
 
+## Fleet-v1 dry run (read-only)
+
+```bash
+gh workflow run live-trial.yml -f step=fleet-dry-run
+```
+
+Runs `--fleet-dry-run` with the identity salt over every test account (`pss1` to `pss5`), each on the `fleet-v1` policy, from [registry-fleet-v1-dry-run.json](registry-fleet-v1-dry-run.json). It plans and journals what fleet-v1 would do and never executes. The budgets are 0, so every costed research or room upgrade is reported as rejected under the spend cap: the plan shows fleet-v1's zero-cost collections, not its spending decisions. Each account's identity fingerprint is printed, and two accounts that resolve to the same game account are refused. `--fleet-execute` refuses this registry for two reasons: pss1 to pss4 declare no `expected_game_identity`, and no authorization covers all five accounts (authorizations name accounts, not registries, so pss5's canary authorization is not enough). Add the missing fingerprints from this run's output only together with the owner's authorization, since that removes the first guard. The artifact `live-fleet-dry-run-<run id>` holds the report (`fleet-dry-run.md`) and one journal per account.
+
 ## G2: first live execution (SPEC-05, SPEC-07)
 
 ```bash
