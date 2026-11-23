@@ -309,6 +309,27 @@ class SecondReviewFindingTests(ClientTestCase):
                     self.assertIs(getattr(self.client, method)(), False)
                     self.assertFalse(hasattr(self.client, attribute))
 
+    def test_a_design_list_error_rooted_at_its_own_service_is_not_kept(self):
+        # PSS roots an error at the service that was called, so the root check alone would keep it.
+        self.client.latestVersion = SETTINGS
+        for method, attribute, service in DESIGN_LISTS:
+            body = f'<{service}><Reply errorMessage="x"/></{service}>'
+            with self.subTest(method=method):
+                self.reply = MagicMock(content=body.encode(), text=body)
+                self.assertIs(getattr(self.client, method)(), False)
+                self.assertFalse(hasattr(self.client, attribute))
+
+    def test_an_error_marker_listing_is_a_failed_read(self):
+        # An errorMessage reply is a failed read (False), not an empty listing (0), and drops the old listing.
+        body = '<GalaxyService><ListStarSystemMarkersAndUserMarkers errorMessage="x"/></GalaxyService>'
+        self.client.starSystemMarkersAndUserMarkers = marker_listing({"@StarSystemMarkerId": "7"})
+        self.reply = MagicMock(content=body.encode(), text=body)
+        self.client.collectMiningDrone = MagicMock(return_value=True)
+        self.assertIs(self.client.collectAvailableMarkers(), False)
+        self.assertIsNone(self.client.starSystemMarkersAndUserMarkers)
+        self.client.collectMiningDrone.assert_not_called()
+        self.assertEqual(self.client.findMiningDrones(), [])
+
     def test_design_lists_honour_the_client_base_url(self):
         self.client.latestVersion = SETTINGS
         self.client.baseUrl = "https://example.invalid"

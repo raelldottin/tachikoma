@@ -597,15 +597,16 @@ class Client(object):
         """GET ``<path>`` at the server's ``versionKey`` design version into ``self.<attribute>``; True on success.
 
         Only a reply rooted at the path's service (``RoomService`` for ``RoomService/...``) with content is
-        stored. An empty root or another service's error payload is not, so callers that load a list only while
-        its attribute is absent fetch it again rather than reuse a bad reply.
+        stored. An empty root or an error payload (another service's, or this service's ``errorMessage``) is not,
+        so callers that load a list only while its attribute is absent fetch it again rather than reuse a bad
+        reply.
         """
         version = self._designVersion(versionKey)
         if version is None:
             return False
         url = f"{self.baseUrl}/{path}?languageKey={self.device.languageKey}&designVersion={version}"
         r = self.request(url, "GET")
-        if not r or not r.content:
+        if not r or not r.content or "errorMessage=" in r.text:
             return False
         reply = xmltodict.parse(r.content, xml_attribs=True)
         service = path.split("/", 1)[0]
@@ -678,10 +679,10 @@ class Client(object):
     def listStarSystemMarkersAndUserMarkers(self):
         url = f"https://api.pixelstarships.com/GalaxyService/ListStarSystemMarkersAndUserMarkers?accessToken={self.accessToken}"
         r = self.request(url, "GET")
-        # A failed read drops the previous listing, so callers never collect from a stale one.
-        self.starSystemMarkersAndUserMarkers = (
-            xmltodict.parse(r.content, xml_attribs=True) if r and r.content else None
-        )
+        # A failed read (an HTTP error, no content, or an errorMessage payload) drops the previous listing, so
+        # callers never collect from a stale one and report the failure rather than an empty listing.
+        ok = r and r.content and "errorMessage=" not in r.text
+        self.starSystemMarkersAndUserMarkers = xmltodict.parse(r.content, xml_attribs=True) if ok else None
 
     def _markerListing(self):
         """The ``GalaxyService`` node of the last marker listing, or None when that read failed.
