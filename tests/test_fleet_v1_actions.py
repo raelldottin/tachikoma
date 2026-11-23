@@ -34,6 +34,9 @@ SETTINGS = {
                 "@TaskDesignVersion": "22",
                 "@TrainingDesignVersion": "33",
                 "@ResearchDesignVersion": "44",
+                "@CharacterDesignVersion": "55",
+                "@ActionTypeVersion": "66",
+                "@ConditionTypeVersion": "77",
             }
         }
     }
@@ -90,6 +93,22 @@ class OptionCActionTests(unittest.TestCase):
                 params = {**FLEET_PARAMS["fleet_pool_resources"], **bad}
                 self.assertTrue(check_preconditions(spec, snap(), params))
 
+# Each design list: (method, attribute it fills, the service its reply is rooted at).
+DESIGN_LISTS = (
+    ("listRoomDesigns2", "roomDesigns", "RoomService"),
+    ("listAllTaskDesigns2", "allTaskDesigns", "TaskService"),
+    ("listAllTrainingDesigns2", "trainingDesigns", "TrainingService"),
+    ("listActionTypes2", "actionTypes", "RoomService"),
+    ("listConditionTypes2", "conditionTypes", "RoomService"),
+    ("listAllCharacterDesigns2", "allCharacterDesigns", "CharacterService"),
+    ("listAllResearchDesigns2", "allResearchDesigns", "ResearchService"),
+)
+
+
+def marker_listing(*user_markers):
+    """A ListStarSystemMarkersAndUserMarkers reply holding ``user_markers``, nested as the server sends it."""
+    return {"GalaxyService": {"ListStarSystemMarkersAndUserMarkers": {"UserMarkers": {"UserMarker": list(user_markers)}}}}
+
 
 SHIP = {"@ShipLevel": "3"}
 
@@ -121,7 +140,10 @@ class FleetV1PolicyTests(unittest.TestCase):
         self.assertIn("resources section was not observed", reasons(fleet)["collect_task_reward"])
 
 
-class ClientGuardTests(unittest.TestCase):
+class ClientTestCase(unittest.TestCase):
+    """A client with a synthetic session. ``request`` answers with a well-formed reply rooted at the service
+    each URL names, unless a test sets ``self.reply``."""
+
     def setUp(self):
         device = Device(language="en")
         device.key = "00000000-0000-0000-0000-000000000000"
@@ -129,9 +151,43 @@ class ClientGuardTests(unittest.TestCase):
         self.client.accessToken = SYNTHETIC_ACCESS_TOKEN
         self.client.info = {"@Name": "TestCaptain"}
         self.client.user = MagicMock(id="123", isAuthorized=True)
-        self.client.request = MagicMock(return_value=MagicMock(content=b"<RoomService/>"))
+        self.reply = None
+        self.client.request = MagicMock(side_effect=self._reply)
         self.client.getLatestVersion3 = MagicMock()
 
+    def _reply(self, url, *args, **kwargs):
+        if self.reply is not None:
+            return self.reply
+        service = url.split("/")[3]
+        return MagicMock(content=f"<{service}><Reply/></{service}>".encode())
+
+    def load_settings_on_fetch(self):
+        """Make getLatestVersion3 load SETTINGS, as a successful fetch would."""
+        def load():
+            self.client.latestVersion = SETTINGS
+
+        self.client.getLatestVersion3 = MagicMock(side_effect=load)
+
+    def listed(self, payload):
+        """Make the marker listing read return ``payload``."""
+        def fake_list():
+            self.client.starSystemMarkersAndUserMarkers = payload
+
+        self.client.listStarSystemMarkersAndUserMarkers = fake_list
+
+    def assert_travels_to_the_drone(self, getShipByUserId):
+        """With one drone at star system 5, the trip there is made and the drone collected."""
+        self.client.dronesCollected = {}
+        self.client.findMiningDrones = MagicMock(return_value=[{"markerId": "9", "starSystemId": "5"}])
+        self.client.getShipByUserId = getShipByUserId
+        self.client.goToStarSystem = MagicMock(return_value="2026-11-21T00:00:00")
+        self.client.waitForArrival = MagicMock(return_value=True)
+        self.client.collectMiningDrone = MagicMock(return_value=True)
+        self.assertEqual(self.client.collectMiningDronesWithTravel(), 1)
+        self.client.goToStarSystem.assert_called_once_with("5")
+
+
+class ClientGuardTests(ClientTestCase):
     def test_fleet_stubs_do_not_claim_success(self):
         self.assertIs(self.client.fleetPoolResources("contribute", "gas", 10), False)
         self.assertIs(self.client.fleetMarketplaceSync(), False)
@@ -140,18 +196,13 @@ class ClientGuardTests(unittest.TestCase):
 
     def test_design_lists_return_false_on_an_error_settings_payload(self):
         self.client.latestVersion = {"SettingService": {"GetLatestVersion3": {"@errorMessage": "x"}}}
-        for name in ("listRoomDesigns2", "listAllTaskDesigns2", "listAllTrainingDesigns2", "listActionTypes2",
-                     "listConditionTypes2", "listAllCharacterDesigns2", "listAllResearchDesigns2",
-                     "listAllDesigns4"):
+        for name in [method for method, _, _ in DESIGN_LISTS] + ["listAllDesigns4"]:
             with self.subTest(method=name):
                 self.assertIs(getattr(self.client, name)(), False)
         self.client.request.assert_not_called()
 
     def test_missing_settings_are_fetched_once_per_call(self):
-        def load():
-            self.client.latestVersion = SETTINGS
-
-        self.client.getLatestVersion3 = MagicMock(side_effect=load)
+        self.load_settings_on_fetch()
         self.assertIs(self.client.listRoomDesigns2(), True)
         self.client.getLatestVersion3.assert_called_once()
 
@@ -165,15 +216,14 @@ class ClientGuardTests(unittest.TestCase):
 
     def test_research_designs_fail_cleanly_on_an_empty_response(self):
         self.client.latestVersion = SETTINGS
-        self.client.request.return_value = MagicMock(content=b"")
+        self.reply = MagicMock(content=b"")
         self.assertIs(self.client.listAllResearchDesigns2(), False)
 
     def test_empty_ship_service_is_not_a_crash(self):
         for body in (b"<ShipService/>", b"<ShipService><GetShipByUserId/></ShipService>"):
             with self.subTest(body=body):
-                self.client.request.return_value = MagicMock(content=body)
+                self.reply = MagicMock(content=body)
                 self.assertIs(self.client.getShipByUserId(), False)
-
 
 
 class RemainingReviewFindingTests(unittest.TestCase):
@@ -192,19 +242,7 @@ class RemainingReviewFindingTests(unittest.TestCase):
         self.assertIs(outcome("grab_flying_starbux", {}, before_overrides={"resources": unobserved}).status, U)
 
 
-class MarkerCollectionResultTests(unittest.TestCase):
-    def setUp(self):
-        device = Device(language="en")
-        device.key = "00000000-0000-0000-0000-000000000000"
-        self.client = Client(device=device)
-        self.client.accessToken = SYNTHETIC_ACCESS_TOKEN
-        self.client.info = {"@Name": "TestCaptain"}
-
-    def listed(self, payload):
-        def fake_list():
-            self.client.starSystemMarkersAndUserMarkers = payload
-        self.client.listStarSystemMarkersAndUserMarkers = fake_list
-
+class MarkerCollectionResultTests(ClientTestCase):
     def test_a_failed_read_is_false_and_an_empty_one_is_zero(self):
         self.listed({"GalaxyService": {"UserMarkers": None}})
         self.assertIs(self.client.collectAvailableMarkers(), 0)
@@ -215,7 +253,7 @@ class MarkerCollectionResultTests(unittest.TestCase):
         self.assertIs(self.client.collectMiningDronesWithTravel(), False)
 
 
-class SettingsRetryTests(ClientGuardTests):
+class SettingsRetryTests(ClientTestCase):
     def test_missing_settings_are_retried_once_per_session(self):
         self.client.getLatestVersion3 = MagicMock()  # the reply never loads
         self.assertIs(self.client.listRoomDesigns2(), False)
@@ -225,55 +263,83 @@ class SettingsRetryTests(ClientGuardTests):
     def test_an_error_settings_payload_is_retried_once_per_session(self):
         # Login can leave an error payload rather than nothing; it, too, is fetched once more.
         self.client.latestVersion = {"SettingService": {"GetLatestVersion3": {"@errorMessage": "x"}}}
-
-        def load():
-            self.client.latestVersion = SETTINGS
-
-        self.client.getLatestVersion3 = MagicMock(side_effect=load)
+        self.load_settings_on_fetch()
         self.assertIs(self.client.listRoomDesigns2(), True)
         self.assertIs(self.client.listAllTaskDesigns2(), True)
         self.client.getLatestVersion3.assert_called_once()
 
 
-class SecondReviewFindingTests(ClientGuardTests):
+class SecondReviewFindingTests(ClientTestCase):
     """Regression coverage for the PR #272 findings fixed after the high-effort review."""
 
     def test_markers_nested_under_the_method_node_are_collected(self):
         # The reply nests UserMarkers under <ListStarSystemMarkersAndUserMarkers>, as findMiningDrones reads it.
-        def fake_list():
-            self.client.starSystemMarkersAndUserMarkers = {"GalaxyService": {"ListStarSystemMarkersAndUserMarkers": {
-                "UserMarkers": {"UserMarker": [{"@StarSystemMarkerId": "7"}, {"@StarSystemMarkerId": "8"}]}}}}
-
-        self.client.listStarSystemMarkersAndUserMarkers = fake_list
+        self.listed(marker_listing({"@StarSystemMarkerId": "7"}, {"@StarSystemMarkerId": "8"}))
         self.client.collectMiningDrone = MagicMock(return_value=True)
         self.assertEqual(self.client.collectAvailableMarkers(), 2)
         self.assertEqual([c.args[0] for c in self.client.collectMiningDrone.call_args_list], ["7", "8"])
 
     def test_drone_travel_tolerates_an_empty_ship_reply(self):
-        drone = {"markerId": "9", "starSystemId": "5"}
-        self.client.dronesCollected = {}
-        self.client.findMiningDrones = MagicMock(return_value=[drone])
-
         def empty_ship(*args, **kwargs):
             self.client.shipByUserId = {"ShipService": None}
             return False
 
-        self.client.getShipByUserId = MagicMock(side_effect=empty_ship)
-        self.client.goToStarSystem = MagicMock(return_value="2026-11-21T00:00:00")
-        self.client.waitForArrival = MagicMock(return_value=True)
-        self.client.collectMiningDrone = MagicMock(return_value=True)
-        self.assertEqual(self.client.collectMiningDronesWithTravel(), 1)
-        self.client.goToStarSystem.assert_called_once_with("5")
+        self.assert_travels_to_the_drone(MagicMock(side_effect=empty_ship))
+
+    def test_drone_travel_ignores_a_stale_ship_record_after_a_failed_read(self):
+        # The ship moved since the last good read; trusting the old record would skip the trip.
+        self.client.shipByUserId = {"ShipService": {"GetShipByUserId": {"Ship": {"@StarSystemId": "5"}}}}
+        self.assert_travels_to_the_drone(MagicMock(return_value=False))
 
     def test_character_designs_use_their_own_version_and_fail_on_an_empty_reply(self):
-        self.client.latestVersion = {"SettingService": {"GetLatestSetting": {"Setting": {
-            "@CharacterDesignVersion": "55"}}}}
-        self.client.request.return_value = MagicMock(content=b"<CharacterService/>")
+        self.client.latestVersion = SETTINGS
         self.assertIs(self.client.listAllCharacterDesigns2(), True)
         self.assertIn("CharacterService/ListAllCharacterDesigns2", self.client.request.call_args.args[0])
         self.assertIn("designVersion=55", self.client.request.call_args.args[0])
-        self.client.request.return_value = MagicMock(content=b"")
+        self.reply = MagicMock(content=b"")
         self.assertIs(self.client.listAllCharacterDesigns2(), False)
+
+    def test_an_unusable_design_list_reply_is_not_kept(self):
+        # Callers load a list only while its attribute is absent, so a bad reply must not linger.
+        self.client.latestVersion = SETTINGS
+        for method, attribute, service in DESIGN_LISTS:
+            for body in (f"<{service}/>".encode(), b'<UserService errorMessage="x"/>'):
+                with self.subTest(method=method, body=body):
+                    self.reply = MagicMock(content=body)
+                    self.assertIs(getattr(self.client, method)(), False)
+                    self.assertFalse(hasattr(self.client, attribute))
+
+    def test_design_lists_honour_the_client_base_url(self):
+        self.client.latestVersion = SETTINGS
+        self.client.baseUrl = "https://example.invalid"
+        self.assertIs(self.client.listRoomDesigns2(), True)
+        self.assertTrue(self.client.request.call_args.args[0].startswith("https://example.invalid/RoomService/"))
+
+    def test_a_failed_marker_listing_does_not_reuse_the_previous_one(self):
+        self.client.starSystemMarkersAndUserMarkers = marker_listing({"@StarSystemMarkerId": "7"})
+        self.reply = MagicMock(content=b"<GalaxyService/>")
+        self.reply.__bool__.return_value = False  # requests.Response is falsy on an HTTP error status
+        self.client.collectMiningDrone = MagicMock(return_value=True)
+        self.assertIs(self.client.collectAvailableMarkers(), False)
+        self.client.collectMiningDrone.assert_not_called()
+
+    def test_collected_and_empty_user_markers_are_skipped(self):
+        self.listed(marker_listing(None, {"@StarSystemMarkerId": "7", "@IsCollected": "true"},
+                                   {"@StarSystemMarkerId": "8", "@IsCollected": "false"}))
+        self.client.collectMiningDrone = MagicMock(return_value=True)
+        self.assertEqual(self.client.collectAvailableMarkers(), 1)
+        self.client.collectMiningDrone.assert_called_once_with("8")
+
+    def test_collected_and_non_mining_star_system_markers_are_not_drones(self):
+        # findMiningDrones shares the listing reader and the collected check with collectAvailableMarkers.
+        markers = [None, {"@StarSystemMarkerId": "1", "@MarkerType": "Mining", "@IsCollected": "true"},
+                   {"@StarSystemMarkerId": "2", "@MarkerType": "Mission"},
+                   {"@StarSystemMarkerId": "3", "@MarkerType": "Mining", "@StarSystemId": "5"}]
+        self.listed({"GalaxyService": {"ListStarSystemMarkersAndUserMarkers": {
+            "StarSystemMarkers": {"StarSystemMarker": markers}}}})
+        self.assertEqual([(d["markerId"], d["starSystemId"]) for d in self.client.findMiningDrones()], [("3", "5")])
+        self.listed(None)
+        self.assertEqual(self.client.findMiningDrones(), [])
 
 
 if __name__ == "__main__":

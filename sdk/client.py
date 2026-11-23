@@ -133,6 +133,11 @@ def _extract_collection(data, item_key: str) -> list[dict]:
     return []
 
 
+def _marker_collected(marker: dict) -> bool:
+    """Whether a star system or user marker's ``@IsCollected`` flag says it was already collected."""
+    return str(marker.get("@IsCollected", "false")).lower() == "true"
+
+
 
 DEFAULT_TIMEOUT = 5  # seconds
 ONE_MINUTE = 60
@@ -589,15 +594,25 @@ class Client(object):
         return (self._settings() or {}).get(f"@{key}")
 
     def _fetchDesignList(self, path, versionKey, attribute):
-        """GET ``<path>`` at the server's ``versionKey`` design version into ``self.<attribute>``; True on success."""
+        """GET ``<path>`` at the server's ``versionKey`` design version into ``self.<attribute>``; True on success.
+
+        Only a reply rooted at the path's service (``RoomService`` for ``RoomService/...``) with content is
+        stored. An empty root or another service's error payload is not, so callers that load a list only while
+        its attribute is absent fetch it again rather than reuse a bad reply.
+        """
         version = self._designVersion(versionKey)
         if version is None:
             return False
-        url = f"https://api.pixelstarships.com/{path}?languageKey={self.device.languageKey}&designVersion={version}"
+        url = f"{self.baseUrl}/{path}?languageKey={self.device.languageKey}&designVersion={version}"
         r = self.request(url, "GET")
         if not r or not r.content:
             return False
-        setattr(self, attribute, xmltodict.parse(r.content, xml_attribs=True))
+        reply = xmltodict.parse(r.content, xml_attribs=True)
+        service = path.split("/", 1)[0]
+        if not isinstance(reply.get(service), dict):
+            logging.error("[%s] %s data not available.", (self.info or {}).get("@Name", ""), service)
+            return False
+        setattr(self, attribute, reply)
         return True
 
     def getTodayLiveOps2(self):
@@ -663,10 +678,20 @@ class Client(object):
     def listStarSystemMarkersAndUserMarkers(self):
         url = f"https://api.pixelstarships.com/GalaxyService/ListStarSystemMarkersAndUserMarkers?accessToken={self.accessToken}"
         r = self.request(url, "GET")
-        if r:
-            self.starSystemMarkersAndUserMarkers = xmltodict.parse(
-                r.content, xml_attribs=True
-            )
+        # A failed read drops the previous listing, so callers never collect from a stale one.
+        self.starSystemMarkersAndUserMarkers = (
+            xmltodict.parse(r.content, xml_attribs=True) if r and r.content else None
+        )
+
+    def _markerListing(self):
+        """The ``GalaxyService`` node of the last marker listing, or None when that read failed.
+
+        Its lists sit under a ``ListStarSystemMarkersAndUserMarkers`` node; ``_extract_collection`` finds them
+        there or directly under ``GalaxyService``.
+        """
+        data = getattr(self, "starSystemMarkersAndUserMarkers", None)
+        galaxy = data.get("GalaxyService") if isinstance(data, dict) else None
+        return galaxy if isinstance(galaxy, dict) else None
 
     def collectAvailableMarkers(self) -> int:
         """List star system markers and collect all those owned by this user.
@@ -682,30 +707,16 @@ class Client(object):
             logging.error(f"listStarSystemMarkersAndUserMarkers failed: {redact_secrets(str(e))}")
             return False
 
-        data = getattr(self, "starSystemMarkersAndUserMarkers", None)
-        galaxy = data.get("GalaxyService") if isinstance(data, dict) else None
-        if not isinstance(galaxy, dict):
+        galaxy = self._markerListing()
+        if galaxy is None:
             return False
-        # The reply nests its lists under the method's node, as findMiningDrones reads them.
-        listing = galaxy.get("ListStarSystemMarkersAndUserMarkers")
-        if isinstance(listing, dict):
-            galaxy = listing
-
-        # Extract UserMarker entries (markers the user can collect)
-        user_markers_wrapper = galaxy.get("UserMarkers")
-        if not user_markers_wrapper:
-            return 0
-
-        user_markers = user_markers_wrapper.get("UserMarker") if isinstance(user_markers_wrapper, dict) else None
-        if not user_markers:
-            return 0
-
-        if isinstance(user_markers, dict):
-            user_markers = [user_markers]
 
         collected = 0
         char_name = self.info.get("@Name", "") if isinstance(self.info, dict) else ""
-        for marker in user_markers:
+        # UserMarker entries are the markers the user can collect; a collected one cannot be collected again.
+        for marker in _extract_collection(galaxy, "UserMarker"):
+            if _marker_collected(marker):
+                continue
             marker_id = marker.get("@StarSystemMarkerId")
             if not marker_id:
                 continue
@@ -985,13 +996,8 @@ class Client(object):
         return True
 
     def listAllCharacterDesigns2(self):
-        if not self._fetchDesignList("CharacterService/ListAllCharacterDesigns2", "CharacterDesignVersion",
-                                     "allCharacterDesigns"):
-            return False
-        if "CharacterService" not in self.allCharacterDesigns:
-            logging.error("[%s] CharacterService data not avaialble.", self.info["@Name"])
-            return False
-        return True
+        return self._fetchDesignList("CharacterService/ListAllCharacterDesigns2", "CharacterDesignVersion",
+                                     "allCharacterDesigns")
 
     def addTraining(self, trainingDesignId, characterId):
         url = f"{self.baseUrl}/TrainingService/AddTraining?trainingDesignId={trainingDesignId}&characterId={characterId}&trainingStartDate={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}&accessToken={self.accessToken}"
@@ -2638,9 +2644,8 @@ class Client(object):
                             )
 
     def listAllResearchDesigns2(self):
-        return (self._fetchDesignList("ResearchService/ListAllResearchDesigns2", "ResearchDesignVersion",
-                                      "allResearchDesigns")
-                and "ResearchService" in self.allResearchDesigns)
+        return self._fetchDesignList("ResearchService/ListAllResearchDesigns2", "ResearchDesignVersion",
+                                     "allResearchDesigns")
 
     def addResearch(self, researchDesignId):
         url = f"https://api.pixelstarships.com/ResearchService/AddResearch?researchDesignId={researchDesignId}&researchStartDate={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}&accessToken={self.accessToken}"
@@ -2808,31 +2813,13 @@ class Client(object):
             )
             return []
 
-        data = getattr(self, "starSystemMarkersAndUserMarkers", {})
-        if not data:
+        galaxy = self._markerListing()
+        if galaxy is None:
             return []
-
-        galaxy = data.get("GalaxyService", {})
-        markers_wrapper = galaxy.get("ListStarSystemMarkersAndUserMarkers", {})
-        if not markers_wrapper:
-            return []
-
-        star_markers_wrapper = markers_wrapper.get("StarSystemMarkers")
-        if not star_markers_wrapper:
-            return []
-
-        star_markers = star_markers_wrapper.get("StarSystemMarker")
-        if not star_markers:
-            return []
-
-        if isinstance(star_markers, dict):
-            star_markers = [star_markers]
 
         drones = []
-        for m in star_markers:
-            if m.get("@MarkerType") != "Mining":
-                continue
-            if m.get("@IsCollected", "false").lower() == "true":
+        for m in _extract_collection(galaxy, "StarSystemMarker"):
+            if m.get("@MarkerType") != "Mining" or _marker_collected(m):
                 continue
             drone = {
                 "markerId": m.get("@StarSystemMarkerId", ""),
@@ -3082,13 +3069,12 @@ class Client(object):
         # Get current star system from ship data
         current_star_system = ""
         try:
-            self.getShipByUserId()
+            # Only a successful read is trusted (it guarantees a ship record): a failed one would leave an
+            # earlier, possibly stale, record behind.
+            if self.getShipByUserId():
+                current_star_system = (self._shipRecord() or {}).get("@StarSystemId", "")
         except Exception:
             pass
-        # An empty <ShipService/> or <GetShipByUserId/> parses to None; _shipRecord tolerates it.
-        ship = self._shipRecord()
-        if ship is not None:
-            current_star_system = ship.get("@StarSystemId", "")
 
         collected = 0
         for drone in drones:
