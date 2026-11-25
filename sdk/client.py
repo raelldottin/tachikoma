@@ -12,6 +12,7 @@ import logging
 import math
 import hashlib
 from itertools import accumulate
+from xml.parsers.expat import ExpatError
 from requests.adapters import HTTPAdapter
 from urllib3.util import Retry
 from ratelimit import limits, sleep_and_retry
@@ -50,6 +51,11 @@ class ConfigurationError(RuntimeError):
 # The element a BuyRoom2 success reply puts its Room under: the live server's reply to the POST (run 43393262041,
 # 2026-11-13), then the owner's 2026-10-19 capture.
 PLACE_ROOM_REPLY_ELEMENTS = ("BuyRoom", "BuyRoom2")
+# No captured ActivateItem3 success exists; the server sometimes names the reply element without the version
+# suffix (BuyRoom for BuyRoom2), so both are accepted.
+ACTIVATE_ITEM_REPLY_ELEMENTS = ("ActivateItem3", "ActivateItem")
+# A research design name and its course number: "Fitness 201" -> ("Fitness", "201").
+_RESEARCH_COURSE = re.compile(r"^(?P<base>.+?)\s+(?P<course>\d+)$", re.ASCII)
 # UpgradeRoom2 replies that mean no further room can be upgraded this run.
 SHIP_UPGRADE_REQUIRED = "You need to upgrade your ship first."
 ROOM_UPGRADE_BLOCKERS = (
@@ -132,6 +138,102 @@ def _extract_collection(data, item_key: str) -> list[dict]:
                 return res
     return []
 
+
+def _has_error_message(node) -> bool:
+    """True when any element of a parsed reply carries an errorMessage (attribute or child)."""
+    if isinstance(node, list):
+        return any(_has_error_message(item) for item in node)
+    if not isinstance(node, dict):
+        return False
+    if "@errorMessage" in node or "errorMessage" in node:
+        return True
+    return any(_has_error_message(value) for key, value in node.items() if not key.startswith("@"))
+
+
+def _parse_reply(response) -> dict | None:
+    """The parsed XML of a reply that did not fail, or None.
+
+    None for: a falsy response (HTTP >= 400), empty or non-bytes/str content, a body that is not XML,
+    or an errorMessage anywhere in the reply (service root, method element or deeper).
+    """
+    if not response:
+        return None
+    content = getattr(response, "content", None)
+    if not content or not isinstance(content, (bytes, str)):
+        return None
+    try:
+        parsed = xmltodict.parse(content, xml_attribs=True)
+    except ExpatError:
+        return None
+    if _has_error_message(parsed):
+        return None
+    return parsed
+
+
+def _reply_element(parsed, service: str, elements: tuple[str, ...]) -> dict | None:
+    """``parsed[service][element]`` for the first of ``elements`` present, as a mapping, or None.
+
+    An empty element (``<AddTraining/>``) is ``{}``: present, so a success. A missing service root, a missing
+    element, a repeated element (list) or a text-only element is None. Callers test ``is None``, not truthiness.
+    """
+    root = parsed.get(service) if isinstance(parsed, dict) else None
+    if not isinstance(root, dict):
+        return None
+    for element in elements:
+        if element in root:
+            node = root[element]
+            if node is None:
+                return {}
+            return node if isinstance(node, dict) else None
+    return None
+
+
+def _game_id(value) -> str | None:
+    """A server id as the decimal string a request sends, or None for anything but a positive integer.
+
+    Accepts an int or a string of ASCII digits. Refuses None, bools, zero, negatives, floats and other text.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        number = value
+    elif isinstance(value, str) and value.isascii() and value.isdigit():
+        number = int(value)
+    else:
+        return None
+    return str(number) if number > 0 else None
+
+
+def _completed_research_names(researches, designs) -> list[str]:
+    """Names of the completed research designs, joining per-account records onto designs by ``@ResearchDesignId``.
+
+    ``researches`` and ``designs`` are the raw parsed ListAllResearches and ListAllResearchDesigns2 payloads (what
+    ``Client.allResearches``/``Client.allResearchDesigns`` hold), or None. Per-account records carry only
+    ``@ResearchId``, ``@ResearchDesignId`` and ``@ResearchState`` ("Completed" when done, "Researching" while in
+    progress); the name lives on the design. Designs without an id or a name, and records without a design id,
+    contribute nothing.
+    """
+    names = {design["@ResearchDesignId"]: design["@ResearchName"]
+             for design in _extract_collection(designs, "ResearchDesign")
+             if design.get("@ResearchDesignId") is not None and design.get("@ResearchName")}
+    return [names[record["@ResearchDesignId"]]
+            for record in _extract_collection(researches, "Research")
+            if record.get("@ResearchState") == "Completed" and record.get("@ResearchDesignId") in names]
+
+
+def _research_level(names, line: str) -> int:
+    """The highest course number among ``names`` of the research ``line`` ("Fitness 201" -> 201), or 0.
+
+    A course number in ``line`` is ignored ("Fitness 101" is the line "Fitness"); surrounding whitespace is stripped.
+    """
+    match = _RESEARCH_COURSE.match(line.strip())
+    base = match["base"] if match else line.strip()
+    level = 0
+    for name in names:
+        course = _RESEARCH_COURSE.match(name.strip())
+        if course and course["base"] == base:
+            level = max(level, int(course["course"]))
+    return level
 
 
 DEFAULT_TIMEOUT = 5  # seconds
@@ -245,6 +347,15 @@ class Client(object):
             r = self.session.request(method, url, headers=self.headers, data=data)
 
         return r
+
+    def _call(self, url, method, service: str, elements: tuple[str, ...]) -> tuple[dict | None, dict | None]:
+        """Send one request; (parsed reply, ``service``/``elements`` reply element), each None when absent.
+
+        The reply is None for a failed, unparseable or errorMessage reply (``_parse_reply``); the element follows
+        ``_reply_element``. Transport errors from ``request`` propagate.
+        """
+        reply = _parse_reply(self.request(url, method))
+        return reply, _reply_element(reply, service, elements)
 
     def parseUserLoginData(self, r):
         if not r or not r.content:
@@ -783,14 +894,19 @@ class Client(object):
         if r:
             self.roomsViaAccessToken = xmltodict.parse(r.content, xml_attribs=True)
 
-    def listAllCharactersOfUser(self):
-        url = f"https://api.pixelstarships.com/CharacterService/ListAllCharactersOfUser?accessToken={self.accessToken}&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
-        r = self.request(url, "GET")
-        self.allCharactersOfUser = xmltodict.parse(r.content, xml_attribs=True)
+    def listAllCharactersOfUser(self) -> bool:
+        """GET the crew into ``self.allCharactersOfUser``; True only for a parsed crew list (an empty one too).
 
-        if "CharacterService" not in self.allCharactersOfUser:
+        A failed read leaves ``self.allCharactersOfUser`` None, never an earlier crew or an error payload.
+        """
+        self.allCharactersOfUser = None
+        url = (f"{self.baseUrl}/CharacterService/ListAllCharactersOfUser?accessToken={self.accessToken}"
+               f"&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}")
+        reply, crew = self._call(url, "GET", "CharacterService", ("ListAllCharactersOfUser",))
+        if crew is None or "Characters" not in crew:
             logging.error("Failed to get list of characters on the ship.")
             return False
+        self.allCharactersOfUser = reply
         return True
 
     def getRoomName(self, roomDesignId):
@@ -806,23 +922,27 @@ class Client(object):
         self.roomName = ""
         return False
 
-    def finishTraining(self, characterId):
-        url = f"{self.baseUrl}/TrainingService/FinishTraining?characterId={characterId}&accessToken={self.accessToken}"
-        r = self.request(url, "POST")
-        if r:
-            if "errorMessage" in r.text:
-                return False
-            self.trainingFinish = xmltodict.parse(r.content, xml_attribs=True)
-        return True
+    def finishTraining(self, characterId) -> dict | None:
+        """POST FinishTraining; the reply's ``Character`` mapping, or None when it did not finish.
 
-    def getTrainingUpdate(self, characterId):
-        url = f"{self.baseUrl}/TrainingService/GetTrainingUpdate?characterId={characterId}&accessToken={self.accessToken}"
-        r = self.request(url, "POST")
-        if r and "errorMessage" in r.text:
-            return False
-        if r:
-            self.trainingUpdate = xmltodict.parse(r.content, xml_attribs=True)
-        return True
+        ``self.trainingFinish`` holds the whole reply after a success and is None after anything else.
+
+        Returns a mapping, not a bool, because manageTraining reports the trained stats from it. The action
+        runner's ``_response_ok`` (sdk/execution/runner.py) treats any non-bool, non-count result as ambiguous,
+        so this must not be a catalog ``client_method`` without an adapter that maps it to True/False.
+        """
+        self.trainingFinish = None
+        character_id = _game_id(characterId)
+        if character_id is None:
+            logging.error("finishTraining refused: the character id is not a positive integer.")
+            return None
+        url = f"{self.baseUrl}/TrainingService/FinishTraining?characterId={character_id}&accessToken={self.accessToken}"
+        reply, finished = self._call(url, "POST", "TrainingService", ("FinishTraining",))
+        character = finished.get("Character") if finished is not None else None
+        if not isinstance(character, dict):
+            return None
+        self.trainingFinish = reply
+        return character
 
     def listAllDesigns4(self):
         """
@@ -991,17 +1111,22 @@ class Client(object):
             return True
         return False
 
-    def addTraining(self, trainingDesignId, characterId):
-        url = f"{self.baseUrl}/TrainingService/AddTraining?trainingDesignId={trainingDesignId}&characterId={characterId}&trainingStartDate={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}&accessToken={self.accessToken}"
-        r = self.request(url, "POST")
-        if r:
-            if "errorMessage" in r.text:
-                return False
-        return True
+    def addTraining(self, trainingDesignId, characterId) -> bool:
+        """POST AddTraining; True only for a parsed ``TrainingService/AddTraining`` reply without an error.
+
+        Refuses (False, no request) when either id is not a positive integer, e.g. an unknown training design.
+        """
+        design_id, character_id = _game_id(trainingDesignId), _game_id(characterId)
+        if design_id is None or character_id is None:
+            logging.error("addTraining refused: the training design or character id is not a positive integer.")
+            return False
+        url = (f"{self.baseUrl}/TrainingService/AddTraining?trainingDesignId={design_id}&characterId={character_id}"
+               f"&trainingStartDate={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}&accessToken={self.accessToken}")
+        return self._call(url, "POST", "TrainingService", ("AddTraining",))[1] is not None
 
     def manageTraining(self):
         if (
-            not hasattr(self, "allCharactersOfUser")
+            getattr(self, "allCharactersOfUser", None) is None  # a failed read leaves None
             and not self.listAllCharactersOfUser()
         ):
             logging.error("allCharactersOfUser data not avaialble.")
@@ -1321,41 +1446,22 @@ class Client(object):
                     )
 
                 if trainingName:
-                    if self.finishTraining(character["@CharacterId"]):
+                    finished = self.finishTraining(character["@CharacterId"])
+                    if finished:
                         statTotal = 0
                         statChange = ""
                         for stat in stats:
-                            statTotal = statTotal + int(
-                                self.trainingFinish["TrainingService"][
-                                    "FinishTraining"
-                                ]["Character"][stat]
-                            )
-                            if int(character[stat]) < int(
-                                self.trainingFinish["TrainingService"][
-                                    "FinishTraining"
-                                ]["Character"][stat]
-                            ):
+                            trained = int(finished.get(stat, character[stat]))
+                            statTotal = statTotal + trained
+                            if int(character[stat]) < trained:
                                 if statChange:
                                     statChange = ", ".join(
-                                        stat
-                                        + " increased by "
-                                        + str(
-                                            int(
-                                                self.trainingFinish["TrainingService"][
-                                                    "FinishTraining"
-                                                ]["Character"][stat]
-                                                - int(character[stat])
-                                            )
-                                        )
+                                        stat + " increased by " + str(trained - int(character[stat]))
                                     )
                         newPercent = (
                             statTotal / int(characterDesign["@TrainingCapacity"]) * 100
                         )
-                        newFatigue = int(
-                            self.trainingFinish["TrainingService"]["FinishTraining"][
-                                "Character"
-                            ]["@Fatigue"]
-                        )
+                        newFatigue = int(finished.get("@Fatigue", character["@Fatigue"]))
 
                         logging.info(
                             f"[{self.info['@Name']}] Completed training for {character['@CharacterName']} in {self.roomName} with {statChange}, {newPercent - percent:.2f}% training increase and {newFatigue - int(character['@Fatigue'])} fatigue increase."
@@ -1433,24 +1539,14 @@ class Client(object):
 
         return True
 
-    def getCharacterRooms(self):
-        if not hasattr(self, "allCharactersOfUser"):
-            if not self.listAllCharactersOfUser():
-                return False
-
-        for character in self.allCharactersOfUser["CharacterService"][
-            "ListAllCharactersOfUser"
-        ]["Characters"]["Character"]:
-            self.getRoomName(character["@RoomDesignId"])
-            if self.roomName != "":
-                logging.info(
-                    f"[{self.info['@Name']}] {character['@CharacterName']} is located in {self.roomName}."
-                )
-        return True
-
-    def upgradeCharacter(self, characterId):
-        url = f"{self.baseUrl}/CharacterService/UpgradeCharacter?characterId={characterId}&accessToken={self.accessToken}"
-        self.request(url, "POST")
+    def upgradeCharacter(self, characterId) -> bool:
+        """POST UpgradeCharacter; True only for a parsed ``CharacterService/UpgradeCharacter`` reply without an error."""
+        character_id = _game_id(characterId)
+        if character_id is None:
+            logging.error("upgradeCharacter refused: the character id is not a positive integer.")
+            return False
+        url = f"{self.baseUrl}/CharacterService/UpgradeCharacter?characterId={character_id}&accessToken={self.accessToken}"
+        return self._call(url, "POST", "CharacterService", ("UpgradeCharacter",))[1] is not None
 
     def upgradeCharacters(self):
         try:
@@ -1708,11 +1804,23 @@ class Client(object):
         if r:
             self.userRanking = xmltodict.parse(r.content, xml_attribs=True)
 
-    def activateItem3(self, itemId=0, targetId=0):
-        url = f"https://api.pixelstarships.com/ItemService/ActivateItem3?itemId={itemId}&targetId={targetId}&"
-        r = self.request(url, "POST")
-        if r:
-            self.item = xmltodict.parse(r.content, xml_attribs=True)
+    def activateItem3(self, itemId, targetId) -> bool:
+        """POST ActivateItem3 (use an item on a target); True only for a parsed success reply.
+
+        ``self.item`` holds the reply after a success and is None after anything else.
+        """
+        self.item = None
+        item_id, target_id = _game_id(itemId), _game_id(targetId)
+        if item_id is None or target_id is None:
+            logging.error("activateItem3 refused: the item or target id is not a positive integer.")
+            return False
+        url = (f"{self.baseUrl}/ItemService/ActivateItem3?itemId={item_id}&targetId={target_id}"
+               f"&accessToken={self.accessToken}")
+        reply, activated = self._call(url, "POST", "ItemService", ACTIVATE_ITEM_REPLY_ELEMENTS)
+        if activated is None:
+            return False
+        self.item = reply
+        return True
 
     def useConsumable(self, consumableItemDesignId: int, characterId: int) -> bool:
         """Use a consumable item on a character.
@@ -1744,15 +1852,9 @@ class Client(object):
             return False
 
         logging.info(f"Using consumable {consumableItemDesignId} (itemId={item_id}) on character {characterId}")
-        self.activateItem3(itemId=item_id, targetId=characterId)
-
-        # Check for error
-        if hasattr(self, "item") and self.item:
-            error = self.item.get("ItemService", {}).get("ActivateItem3", {}).get("@errorMessage", "")
-            if error:
-                logging.error(f"useConsumable failed: {error}")
-                return False
-
+        if not self.activateItem3(itemId=item_id, targetId=characterId):
+            logging.error(f"useConsumable failed: consumable {consumableItemDesignId} was not activated.")
+            return False
         return True
 
     def findConsumableDesignId(self, statType: str, tier: str = "Common") -> int:
@@ -2355,40 +2457,44 @@ class Client(object):
             logging.exception("Unable to upgrade research.", exc_info=True)
             return False
 
-    def getResearchLevel(self, researchName: str) -> int:
-        """Get the current level of a specific research by name.
-        
-        Args:
-            researchName: Name of the research (e.g., "Fitness 101", "Education 201")
-            
-        Returns:
-            Research level (0 if not found)
+    def _completedResearchNames(self) -> list[str]:
+        """Names of the research designs this account has completed (the join is ``_completed_research_names``).
+
+        Each list is fetched at most once per client. A failed fetch leaves its attribute absent (never a None
+        placeholder), so readers that fetch on a missing attribute, like speedUpResearchUsingBoostGauge, still do.
         """
-        if not hasattr(self, "allResearches") or not self.allResearches:
-            self.listAllResearches()
-        
-        all_researches = _extract_collection(getattr(self, "allResearches", None), "Research")
-        if not all_researches:
-            return 0
-            
-        for research in all_researches:
-            if research.get("@ResearchName", "").startswith(researchName.split()[0]):
+        attempted = self.__dict__.setdefault("_researchFetchAttempted", set())
+        for attribute, fetch in (("allResearches", self.listAllResearches),
+                                 ("allResearchDesigns", self.listAllResearchDesigns2)):
+            if not hasattr(self, attribute) and attribute not in attempted:
+                attempted.add(attribute)
                 try:
-                    level = int(research.get("@ResearchLevel", "0"))
-                    return level
-                except (ValueError, TypeError):
-                    pass
-        return 0
+                    fetch()
+                except ExpatError:
+                    logging.error("Research data could not be parsed.")
+        return _completed_research_names(getattr(self, "allResearches", None),
+                                         getattr(self, "allResearchDesigns", None))
+
+    def getResearchLevel(self, researchName: str) -> int:
+        """The highest completed course number of a research line ("Fitness 201" completed -> 201).
+
+        Args:
+            researchName: The research line, e.g. "Fitness" or "Education"; a course number in it is ignored.
+
+        Returns:
+            The course number, or 0 when no course of that line is completed or the research lists are unavailable.
+        """
+        return _research_level(self._completedResearchNames(), researchName)
 
     def hasResearch(self, researchName: str, minLevel: int = 1) -> bool:
-        """Check if a research has reached at least the minimum level.
-        
+        """Whether this account has completed a course of a research line at or above ``minLevel``.
+
         Args:
-            researchName: Name of the research (e.g., "Fitness", "Education")
-            minLevel: Minimum required level (e.g., 101, 201, 202, 203)
-            
+            researchName: Name of the research line (e.g., "Fitness", "Education")
+            minLevel: Minimum required course (e.g., 101, 201, 202, 203)
+
         Returns:
-            True if research level >= minLevel
+            True if the highest completed course is >= minLevel
         """
         return self.getResearchLevel(researchName) >= minLevel
 
