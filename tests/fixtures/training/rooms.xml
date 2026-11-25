@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Synthetic, sanitized fixture: fake room ids. -->
+<RoomService>
+  <ListRoomsViaAccessToken>
+    <Rooms>
+      <Room RoomId="11" RoomDesignId="201" RoomStatus="Normal" />
+      <Room RoomId="12" RoomDesignId="202" RoomStatus="Normal" />
+      <Room RoomId="13" RoomDesignId="203" RoomStatus="Normal" />
+      <Room RoomId="14" RoomDesignId="204" RoomStatus="Normal" />
+      <Room RoomId="15" RoomDesignId="205" RoomStatus="Normal" />
+    </Rooms>
+  </ListRoomsViaAccessToken>
+</RoomService>

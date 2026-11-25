@@ -1,6 +1,6 @@
 """Declarative alert rules over gameplay journals and the isolation audit (AUTO-012).
 
-``evaluate_alerts(journals, now=..., audit=None, rules=DEFAULT_RULES)`` checks
+``evaluate_alerts(journals, now=..., audit=None, rules=DEFAULT_RULES, training_observations=())`` checks
 each account's journal events (``sdk.journal.GameplayEvent``) and, optionally,
 an ``sdk.fleet.audit.AuditReport`` against a set of ``AlertRule`` definitions
 and returns an ``AlertReport`` of ``Alert`` records.
@@ -15,8 +15,26 @@ Rule kinds:
   contradicted by observation (default: any).
 - ``no-verified``: the account attempted at least ``min_attempts`` actions in
   the window and none of them was verified.
+- ``failed-or-unknown-rate``: attempts with an error class or an outcome other
+  than verified, not-observed and contradicted (each counted once,
+  ``sdk.reports.training.is_failed_or_unknown``) / attempts in the window is
+  above ``threshold``.
 - ``audit-incident``: more than ``threshold`` audit incidents for the account
   under one audit rule (default: any). One alert per account and audit rule.
+- ``training-stalled``: crew idle in a training room for more than
+  ``threshold`` hours in a row, last observed inside the window (observations
+  from ``sdk.reports.training``: the journal's training decision records and
+  verified ``add_training`` attempts, plus any ``training_observations``
+  passed in). Crew whose last observation is a ``tp_cap_reached`` or
+  ``complete`` skip are capped, not stalled: they are counted in
+  ``capped_in_room`` and never raise the alert alone. One alert per account.
+  Evaluated from journals alone.
+
+``actions`` limits a journal rule (rate, ``contradicted``, ``no-verified``) to
+events with those action ids; the training rules use it to look only at
+``add_training``, ``finish_training`` and ``use_consumable``. A rule with
+``actions`` counts each ``attempt_id`` once (the first wins), as the training
+report does; rules without it count every event.
 
 Rate rules never fire below ``min_attempts`` attempts in the window (the
 sample-size guard); ``min_attempts`` must be at least 1 for them. Windows are
@@ -39,12 +57,23 @@ from datetime import datetime, timedelta
 from typing import Iterable, Mapping, Optional
 
 from sdk.journal import GameplayEvent
+from sdk.redaction import redact_secrets
+from sdk.reports.training import (
+    CAPPED_REASON_CODES,
+    TRAINING_ACTIONS,
+    TrainingObservation,
+    crew_idle,
+    crew_label,
+    is_failed_or_unknown,
+    observations_from_journal,
+)
 
 SEVERITIES = ("critical", "warning", "info")
 _SEVERITY_RANK = {severity: rank for rank, severity in enumerate(SEVERITIES)}
-RATE_KINDS = frozenset({"failure-rate", "uncertain-rate"})
+RATE_KINDS = frozenset({"failure-rate", "uncertain-rate", "failed-or-unknown-rate"})
 JOURNAL_KINDS = RATE_KINDS | {"contradicted", "no-verified"}
-KINDS = JOURNAL_KINDS | {"audit-incident"}
+OBSERVATION_KINDS = frozenset({"training-stalled"})
+KINDS = JOURNAL_KINDS | OBSERVATION_KINDS | {"audit-incident"}
 
 DEFAULT_WINDOW_HOURS = 24.0
 DEFAULT_MIN_ATTEMPTS = 5
@@ -64,7 +93,9 @@ class AlertRule:
     value is strictly above it. ``window_hours`` bounds the journal events a
     journal rule looks at. ``audit_rules`` limits an ``audit-incident`` rule to
     those audit rules (empty means every audit rule), minus
-    ``exclude_audit_rules``.
+    ``exclude_audit_rules``. ``actions`` limits a journal rule to events with
+    those action ids (empty means every action). For ``training-stalled`` the
+    threshold is in hours.
     """
 
     rule_id: str
@@ -75,6 +106,7 @@ class AlertRule:
     window_hours: float = DEFAULT_WINDOW_HOURS
     audit_rules: tuple[str, ...] = ()
     exclude_audit_rules: tuple[str, ...] = ()
+    actions: tuple[str, ...] = ()
     description: str = ""
 
     def __post_init__(self) -> None:
@@ -95,6 +127,10 @@ class AlertRule:
             raise AlertRuleError(f"{self.rule_id}: min_attempts must be >= 1")
         if self.window_hours <= 0:
             raise AlertRuleError(f"{self.rule_id}: window_hours must be positive")
+        if isinstance(self.actions, str) or any(not isinstance(a, str) or not a for a in self.actions):
+            raise AlertRuleError(f"{self.rule_id}: actions must be a collection of non-empty action ids")
+        if self.actions and self.kind not in JOURNAL_KINDS:
+            raise AlertRuleError(f"{self.rule_id}: actions apply only to journal rules")
 
 
 DEFAULT_RULES: tuple[AlertRule, ...] = (
@@ -112,6 +148,15 @@ DEFAULT_RULES: tuple[AlertRule, ...] = (
               description="Any isolation audit incident, one alert per account and audit rule."),
     AlertRule("budget-exceeded", "audit-incident", "critical", audit_rules=("budget-exceeded",),
               description="The audit found charged spend above an account's budget."),
+    AlertRule("training-contradicted", "contradicted", "warning", actions=TRAINING_ACTIONS,
+              description="Any training attempt in the last 24h was contradicted by observation."),
+    AlertRule("training-failed-rate-high", "failed-or-unknown-rate", "warning", threshold=DEFAULT_RATE_THRESHOLD,
+              min_attempts=DEFAULT_MIN_ATTEMPTS, actions=TRAINING_ACTIONS,
+              description="More than 20% of training attempts in the last 24h raised an error or have an unknown "
+                          "outcome (at least 5 attempts)."),
+    AlertRule("training-stalled", "training-stalled", "info", threshold=12,
+              description="A crew member observed in the last 24h has been idle in a training room for more "
+                          "than 12h."),
 )
 
 
@@ -168,9 +213,24 @@ def _rate(count: int, total: int) -> Optional[float]:
     return round(count / total, 4) if total else None
 
 
+def _first_attempts(events: list[GameplayEvent], now: datetime) -> list[GameplayEvent]:
+    """The events finished by ``now``, keeping only the first event per attempt id, as the training report does."""
+    seen: set[str] = set()
+    kept = []
+    for e in events:
+        if datetime.fromisoformat(e.finished_at) > now or e.attempt_id in seen:
+            continue
+        seen.add(e.attempt_id)
+        kept.append(e)
+    return kept
+
+
 def _journal_alerts(rule: AlertRule, alias: str, events: list[GameplayEvent], now: datetime) -> list[Alert]:
     start = now - timedelta(hours=rule.window_hours)
     own = [e for e in events if e.account_alias == alias]
+    if rule.actions:
+        # Rules scoped to actions (the training rules) count each attempt once, like sdk.reports.training.
+        own = [e for e in _first_attempts(own, now) if e.action_id in rule.actions]
     in_window = [e for e in own if start < datetime.fromisoformat(e.finished_at) <= now]
     attempted = _ordered(e for e in in_window if e.attempted)
     window = {"window_start": start.isoformat(), "window_end": now.isoformat()}
@@ -181,8 +241,11 @@ def _journal_alerts(rule: AlertRule, alias: str, events: list[GameplayEvent], no
             return []
         if rule.kind == "failure-rate":
             matched, label, noun = [e for e in attempted if e.error_class], "failed", "failure"
-        else:
+        elif rule.kind == "uncertain-rate":
             matched, label, noun = [e for e in attempted if e.outcome == "unknown"], "uncertain", "uncertain"
+        else:
+            matched = [e for e in attempted if is_failed_or_unknown(e)]
+            label, noun = "failed_or_unknown", "failed-or-unknown"
         rate = _rate(len(matched), total)
         if rate is None or rate <= rule.threshold:
             return []
@@ -218,6 +281,28 @@ def _journal_alerts(rule: AlertRule, alias: str, events: list[GameplayEvent], no
     return [Alert(rule.rule_id, rule.severity, alias, message, evidence)]
 
 
+def _stalled_alerts(rule: AlertRule, alias: str, events: list[GameplayEvent],
+                    extra: list[TrainingObservation], now: datetime) -> list[Alert]:
+    observations = observations_from_journal(events, alias) + extra
+    idle = {cid: value for (_, cid), value in crew_idle(observations, now=now).items()}
+    start = now - timedelta(hours=rule.window_hours)
+    over = {cid: value for cid, value in idle.items()
+            if value.streak_seconds / 3600 > rule.threshold and start < value.last_observed_at}
+    stalled = {cid: value for cid, value in over.items() if value.last_reason_code not in CAPPED_REASON_CODES}
+    if not stalled:
+        return []
+    longest = max(value.streak_seconds for value in stalled.values()) / 3600
+    message = f"{len(stalled)} crew idle in a training room for more than {rule.threshold:g}h (longest {longest:.1f}h)"
+    details = tuple(sorted(
+        f"{crew_label(alias, cid)} idle {value.streak_seconds / 3600:.2f}h since {value.streak_start.isoformat()}"
+        + (f" ({value.last_reason_code})" if value.last_reason_code else "")
+        for cid, value in stalled.items()))
+    counts = {"idle_crew": len(stalled), "capped_in_room": len(over) - len(stalled)}
+    evidence = AlertEvidence(counts=counts, threshold=rule.threshold, details=details,
+                             window_start=start.isoformat(), window_end=now.isoformat())
+    return [Alert(rule.rule_id, rule.severity, alias, message, evidence)]
+
+
 def _audit_alerts(rule: AlertRule, audit) -> list[Alert]:
     groups: dict[tuple[str, str], list] = {}
     for incident in audit.incidents:
@@ -246,9 +331,12 @@ def evaluate_alerts(
     now: datetime,
     audit=None,
     rules: Iterable[AlertRule] = DEFAULT_RULES,
+    training_observations: Iterable[TrainingObservation] = (),
 ) -> AlertReport:
     """Evaluate ``rules`` over ``journals`` (owner alias -> events) and an
-    optional ``AuditReport`` at ``now`` (timezone-aware)."""
+    optional ``AuditReport`` at ``now`` (timezone-aware). ``training_observations``
+    (for example from ``sdk.reports.training.observations_from_snapshots``) are
+    added to the observations ``training-stalled`` rules read from journals."""
     if now.tzinfo is None:
         raise AlertRuleError("now must be timezone-aware")
     rules = tuple(rules)
@@ -259,6 +347,10 @@ def evaluate_alerts(
         seen.add(rule.rule_id)
 
     materialized = {alias: list(events) for alias, events in journals.items()}
+    extra: dict[str, list[TrainingObservation]] = {}
+    for observation in training_observations:
+        extra.setdefault(observation.account_alias, []).append(observation)
+    aliases = sorted(set(materialized) | set(extra))
     alerts: list[Alert] = []
     evaluated, not_evaluated = [], []
     for rule in rules:
@@ -267,6 +359,9 @@ def evaluate_alerts(
                 not_evaluated.append(rule.rule_id)
                 continue
             alerts.extend(_audit_alerts(rule, audit))
+        elif rule.kind in OBSERVATION_KINDS:
+            for alias in aliases:
+                alerts.extend(_stalled_alerts(rule, alias, materialized.get(alias, []), extra.get(alias, []), now))
         else:
             for alias in sorted(materialized):
                 alerts.extend(_journal_alerts(rule, alias, materialized[alias], now))
@@ -274,7 +369,7 @@ def evaluate_alerts(
 
     return AlertReport(
         evaluated_at=now.isoformat(),
-        accounts_checked=len(materialized),
+        accounts_checked=len(aliases),
         events_checked=sum(len(events) for events in materialized.values()),
         rules_evaluated=tuple(sorted(evaluated)),
         rules_not_evaluated=tuple(sorted(not_evaluated)),
@@ -287,10 +382,17 @@ def to_json(report: AlertReport) -> str:
 
 
 MARKDOWN_ATTEMPT_IDS = 5
+MARKDOWN_STALLED_DETAILS = 5
+STALLED_COUNT = "idle_crew"  # the count only training-stalled evidence carries
 
 
 def _md(text: str) -> str:
     return text.replace("|", "\\|").replace("\n", " ")
+
+
+def _shown(items: list[str], limit: int) -> str:
+    more = len(items) - limit
+    return ", ".join(items[:limit]) + (f" (+{more} more)" if more > 0 else "")
 
 
 def _evidence_cell(evidence: AlertEvidence) -> str:
@@ -299,9 +401,11 @@ def _evidence_cell(evidence: AlertEvidence) -> str:
         parts.append(f"window {evidence.window_start} to {evidence.window_end}")
     ids = evidence.attempt_ids
     if ids:
-        shown = ", ".join(f"`{attempt_id}`" for attempt_id in ids[:MARKDOWN_ATTEMPT_IDS])
-        more = len(ids) - MARKDOWN_ATTEMPT_IDS
-        parts.append("attempts " + shown + (f" (+{more} more)" if more > 0 else ""))
+        parts.append("attempts " + _shown([f"`{attempt_id}`" for attempt_id in ids], MARKDOWN_ATTEMPT_IDS))
+    if STALLED_COUNT in evidence.counts and evidence.details:
+        # Only training-stalled details are rendered: they name the crew (by pseudonym) a reader must act on.
+        parts.append("stalled: " + _shown([redact_secrets(detail) for detail in evidence.details],
+                                          MARKDOWN_STALLED_DETAILS))
     return _md("; ".join(part for part in parts if part))
 
 

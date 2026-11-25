@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Synthetic, sanitized fixture: fake item design ids and invented item names. -->
+<ItemService>
+  <ListItemDesigns2>
+    <ItemDesigns>
+      <ItemDesign ItemDesignId="9101" ItemName="WPN Common Consumable" ItemSubType="Consumable" Rarity="Common" />
+      <ItemDesign ItemDesignId="9102" ItemName="HP Hero Consumable" ItemSubType="Consumable" Rarity="Hero" />
+      <ItemDesign ItemDesignId="9103" ItemName="Shipment Hero Consumable" ItemSubType="Consumable" Rarity="Hero" />
+      <ItemDesign ItemDesignId="9104" ItemName="Gas Booster" ItemSubType="Equipment" Rarity="Elite" />
+    </ItemDesigns>
+  </ListItemDesigns2>
+</ItemService>

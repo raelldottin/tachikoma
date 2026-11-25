@@ -42,7 +42,7 @@ def child_env(**extra):
 
 # Path(__file__).resolve() and os.path.realpath(__file__) follow symlinks, so under Bazel's runfiles tree they
 # escape to the source checkout. Every test module and each file listed here must use os.path.abspath instead.
-FILE_RESOLUTION_GUARDED_FILES = ("scripts/ci.py",)
+FILE_RESOLUTION_GUARDED_FILES = ("scripts/ci.py", "scripts/mutation.py")
 # The one known runtime exception: sdk/simulation/game.py sets SCENARIO_DIR with Path(__file__).resolve() so the
 # bundled scenarios are found next to the installed module. It is outside the guard and recorded by a test below.
 FILE_RESOLUTION_RUNTIME_EXCEPTION = "sdk/simulation/game.py"
@@ -135,6 +135,7 @@ class TestIsolationTests(unittest.TestCase):
         self.assertEqual(file_resolution_violations(ci.ROOT), [])
 
     def test_file_resolution_guard_catches_planted_calls_and_missing_listed_files(self):
+        listed = ("scripts/ci.py",)
         with TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "tests" / "nested").mkdir(parents=True)
@@ -144,7 +145,7 @@ class TestIsolationTests(unittest.TestCase):
                 "ROOT = Path(os.path.abspath(__file__)).parents[1]\nTEXT = 'Path(__file__).resolve()'\n",
                 encoding="utf-8",
             )
-            self.assertEqual(file_resolution_violations(root), [])
+            self.assertEqual(file_resolution_violations(root, listed), [])
 
             (root / "tests" / "test_planted.py").write_text(
                 "import os\nREPO = Path(__file__).resolve().parents[1]\n", encoding="utf-8"
@@ -156,7 +157,7 @@ class TestIsolationTests(unittest.TestCase):
                 "ROOT = pathlib.Path(__file__).resolve().parent\n", encoding="utf-8"
             )
             self.assertEqual(
-                file_resolution_violations(root),
+                file_resolution_violations(root, listed),
                 [
                     "tests/nested/helper.py:1: resolves __file__ through symlinks",
                     "tests/test_planted.py:2: resolves __file__ through symlinks",

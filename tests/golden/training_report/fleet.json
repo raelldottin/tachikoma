@@ -1,0 +1,199 @@
+{
+  "accounts": [
+    {
+      "account_alias": "alpha",
+      "crew": [],
+      "observations": 0,
+      "records": 20,
+      "snapshots": 0,
+      "totals": {
+        "by_action": {
+          "add_training": {
+            "attempted": 5,
+            "contradicted": 1,
+            "failed": 1,
+            "failed_or_unknown": 1,
+            "not_observed": 1,
+            "unknown": 1,
+            "verified": 2
+          },
+          "finish_training": {
+            "attempted": 2,
+            "contradicted": 0,
+            "failed": 0,
+            "failed_or_unknown": 1,
+            "not_observed": 0,
+            "unknown": 1,
+            "verified": 1
+          },
+          "use_consumable": {
+            "attempted": 3,
+            "contradicted": 0,
+            "failed": 0,
+            "failed_or_unknown": 0,
+            "not_observed": 1,
+            "unknown": 0,
+            "verified": 2
+          }
+        },
+        "consumables_used": {
+          "501": 3
+        },
+        "contract_violations": {
+          "action_missing_param": 7,
+          "non_bool_in_room": 5,
+          "unknown_reason_code": 1
+        },
+        "crew_at_tp_cap": null,
+        "dry_runs": 1,
+        "failed_or_unknown_rate": 0.2,
+        "finishes": 1,
+        "idle_crew_hours": null,
+        "outcomes": {
+          "attempted": 10,
+          "contradicted": 1,
+          "failed": 1,
+          "failed_or_unknown": 2,
+          "not_observed": 2,
+          "unknown": 2,
+          "verified": 5
+        },
+        "skip_reasons": {
+          "execute_gate_refused": 1,
+          "fatigued": 2,
+          "other": 1,
+          "precondition_failed": 1,
+          "tp_cap_reached": 1,
+          "uncertain_prior_attempt": 1,
+          "unknown_reason_code": 1
+        },
+        "tp_gained": null
+      },
+      "window_end": "2027-04-03T11:24:00+00:00",
+      "window_start": "2027-04-03T02:00:00+00:00"
+    },
+    {
+      "account_alias": "bravo",
+      "crew": [
+        {
+          "at_tp_cap": false,
+          "crew": "crew-8dca3eb0",
+          "idle_hours": 12.0,
+          "idle_streak_hours": 0.0,
+          "tp_gained": 5
+        },
+        {
+          "at_tp_cap": true,
+          "crew": "crew-f63ac07d",
+          "idle_hours": 12.0,
+          "idle_streak_hours": 12.0,
+          "tp_gained": 0
+        }
+      ],
+      "observations": 7,
+      "records": 1,
+      "snapshots": 3,
+      "totals": {
+        "by_action": {
+          "add_training": {
+            "attempted": 1,
+            "contradicted": 0,
+            "failed": 0,
+            "failed_or_unknown": 0,
+            "not_observed": 0,
+            "unknown": 0,
+            "verified": 1
+          }
+        },
+        "consumables_used": {},
+        "contract_violations": {},
+        "crew_at_tp_cap": 1,
+        "dry_runs": 0,
+        "failed_or_unknown_rate": 0.0,
+        "finishes": 0,
+        "idle_crew_hours": 24.0,
+        "outcomes": {
+          "attempted": 1,
+          "contradicted": 0,
+          "failed": 0,
+          "failed_or_unknown": 0,
+          "not_observed": 0,
+          "unknown": 0,
+          "verified": 1
+        },
+        "skip_reasons": {},
+        "tp_gained": 5
+      },
+      "window_end": "2027-04-03T06:00:00+00:00",
+      "window_start": "2027-04-03T06:00:00+00:00"
+    }
+  ],
+  "duplicates_dropped": 0,
+  "fleet": {
+    "by_action": {
+      "add_training": {
+        "attempted": 6,
+        "contradicted": 1,
+        "failed": 1,
+        "failed_or_unknown": 1,
+        "not_observed": 1,
+        "unknown": 1,
+        "verified": 3
+      },
+      "finish_training": {
+        "attempted": 2,
+        "contradicted": 0,
+        "failed": 0,
+        "failed_or_unknown": 1,
+        "not_observed": 0,
+        "unknown": 1,
+        "verified": 1
+      },
+      "use_consumable": {
+        "attempted": 3,
+        "contradicted": 0,
+        "failed": 0,
+        "failed_or_unknown": 0,
+        "not_observed": 1,
+        "unknown": 0,
+        "verified": 2
+      }
+    },
+    "consumables_used": {
+      "501": 3
+    },
+    "contract_violations": {
+      "action_missing_param": 7,
+      "non_bool_in_room": 5,
+      "unknown_reason_code": 1
+    },
+    "crew_at_tp_cap": 1,
+    "dry_runs": 1,
+    "failed_or_unknown_rate": 0.1818,
+    "finishes": 1,
+    "idle_crew_hours": 24.0,
+    "outcomes": {
+      "attempted": 11,
+      "contradicted": 1,
+      "failed": 1,
+      "failed_or_unknown": 2,
+      "not_observed": 2,
+      "unknown": 2,
+      "verified": 6
+    },
+    "skip_reasons": {
+      "execute_gate_refused": 1,
+      "fatigued": 2,
+      "other": 1,
+      "precondition_failed": 1,
+      "tp_cap_reached": 1,
+      "uncertain_prior_attempt": 1,
+      "unknown_reason_code": 1
+    },
+    "tp_gained": 5
+  },
+  "generated_at": "2027-04-03T12:00:00+00:00",
+  "snapshot_training_points": true,
+  "snapshots_provided": true,
+  "training_room_design_ids_provided": true
+}
