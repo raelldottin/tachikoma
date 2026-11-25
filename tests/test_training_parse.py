@@ -227,6 +227,19 @@ class TestCollections(unittest.TestCase):
                 self.assertEqual(classify_payload(raw, "TrainingDesign"), expected)
         self.assertEqual(classify_payload({"Designs": None}, "TrainingDesign", "Designs"), "empty")
 
+    def test_classify_payload_nested_error_message_beats_container(self) -> None:
+        # An errorMessage nested beside the container (the live envelope shape) still marks the response broken,
+        # whether the container is empty or holds records.
+        for key in ("@errorMessage", "errorMessage"):
+            empty = {"Svc": {"Op": {key: "x", "Characters": None}}}
+            filled = {"Svc": {"Op": {key: "x", "Characters": {"Character": {"@CharacterId": "1"}}}}}
+            for raw in (empty, filled):
+                with self.subTest(key=key, raw=raw):
+                    self.assertEqual(classify_payload(raw, "Character"), "error")
+        self.assertEqual(classify_payload({"Svc": {"Op": {"Characters": None}}}, "Character"), "empty")
+        ok = {"Svc": {"Op": {"Characters": {"Character": {"@CharacterId": "1"}}}}}
+        self.assertEqual(classify_payload(ok, "Character"), "ok")
+
     def test_classify_payload_empty_envelope_for_every_item_key(self) -> None:
         # Regression: the default container was item_key + "s", so an empty <Researches/> read as "Researchs" and
         # was reported as a broken response.
@@ -604,6 +617,12 @@ class TestRoomsResearch(unittest.TestCase):
                         "@Level": "2",
                     },
                     {"@ResearchDesignId": "30", "@ResearchName": "Advanced Training"},
+                    {
+                        "@ResearchDesignId": "13",
+                        "@ResearchName": "Fitness Lv2",
+                        "@RootResearchDesignId": "10",
+                        "@Level": "3",
+                    },
                 ]
             }
         }
@@ -620,6 +639,7 @@ class TestRoomsResearch(unittest.TestCase):
         self.assertEqual(levels(done("12", **{"@ResearchLevel": "5"})), {"Fitness": 5})  # record level first
         self.assertEqual(levels(done("21")), {"Education": 2})  # design @Level, root grouping
         self.assertEqual(levels(done("20")), {"Education": 1})  # name suffix
+        self.assertEqual(levels(done("13")), {"Fitness": 3})  # design @Level beats a conflicting name suffix
         self.assertEqual(levels(done("30")), {"Advanced Training": 1})  # default 1
         self.assertEqual(levels(done("999"), done("x")), {})  # unknown ids ignored
         self.assertEqual(dict(parse_research_levels(None, designs)), {})

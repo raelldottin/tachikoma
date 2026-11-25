@@ -11,7 +11,7 @@ import random
 import typing
 import unittest
 from collections import Counter
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, tzinfo
 from pathlib import Path
 from unittest import mock
 
@@ -149,6 +149,25 @@ class TestModel(unittest.TestCase):
         with self.assertRaises(ValueError):
             TrainingContext(datetime(2026, 1, 1), (), (), {}, {}, {})
         self.assertEqual(TrainingContext(NOW, (), (), {}, {}, {}).now, NOW)
+
+    def test_rejects_tzinfo_whose_utcoffset_is_none(self) -> None:
+        # A tzinfo can be attached yet report no offset; such a datetime is still naive for comparisons.
+        class NoOffset(tzinfo):
+            def utcoffset(self, dt: datetime | None) -> timedelta | None:
+                return None
+
+            def dst(self, dt: datetime | None) -> timedelta | None:
+                return None
+
+            def tzname(self, dt: datetime | None) -> str | None:
+                return None
+
+        floating = datetime(2026, 1, 1, 12, 0, tzinfo=NoOffset())
+        self.assertIsNotNone(floating.tzinfo)
+        with self.assertRaisesRegex(ValueError, "training_end must be a timezone-aware datetime"):
+            mk_crew(training_design_id=1, training_end=floating)
+        with self.assertRaisesRegex(ValueError, "now must be a timezone-aware datetime"):
+            TrainingContext(floating, (), (), {}, {}, {})
 
     def test_context_freezes_inputs(self) -> None:
         stats = {"HpImprovement": 3}
@@ -700,6 +719,16 @@ class TestSkipCodes(unittest.TestCase):
             with self.subTest(fatigue=fatigue):
                 self.assertSkip(plan_one(mk_crew(fatigue=fatigue)), "fatigued")
         self.assertEqual(summary(plan_one(mk_crew(fatigue=99))), [("start", 1, "Read Expert Weapon Theory")])
+
+    def test_skip_fatigued_honours_strategy_limit(self) -> None:
+        # The fatigue limit is strategy data, not a literal 100: a lower limit must move the boundary with it.
+        strategy = dataclasses.replace(DEFAULT_STRATEGY, max_training_fatigue=50)
+        self.assertEqual(
+            summary(plan_one(mk_crew(fatigue=49), strategy=strategy)), [("start", 1, "Read Expert Weapon Theory")]
+        )
+        for fatigue in (50, 99):
+            with self.subTest(fatigue=fatigue):
+                self.assertSkip(plan_one(mk_crew(fatigue=fatigue), strategy=strategy), "fatigued", f"fatigue {fatigue} >= 50")
 
     def test_skip_design_missing_no_design(self) -> None:
         # Regression: the original sent AddTraining with trainingDesignId=None when no design matched.
