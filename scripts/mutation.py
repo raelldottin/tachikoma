@@ -13,6 +13,12 @@ also on errors, Ctrl-C and SIGTERM. Known limitation: if this process is SIGKILL
 own sessions are orphaned, and an infinite-loop mutant keeps running until it is killed by hand.
 
 A `# pragma: no mutate` comment excludes every mutant whose source span covers its line.
+
+A target can restrict mutation to some functions ("functions": qualnames such as Class.method, nested scopes
+included) and choose operators ("operators", or --operators), including the opt-in arithmetic and minmax operators
+that the default set leaves out. "aggregate": true on a glob target such as sdk/training/**/*.py gates the glob's
+combined score instead of each file's. A passing run at least two points above min_score prints a `ratchet:` line
+with the floor to record, and --summary appends a Markdown report (for $GITHUB_STEP_SUMMARY).
 """
 
 from __future__ import annotations
@@ -45,11 +51,15 @@ ROOT = Path(os.path.abspath(__file__)).parent.parent
 DEFAULT_CONFIG = "automation/mutation/config.json"
 DEFAULT_COPY_PATHS = ("sdk", "tests", "scripts/ci.py")
 OPERATORS = ("compare", "boundary", "negate", "boolop", "constant", "strip_at", "return", "delete")
+# Opt-in operators (a target's "operators" key, --operators): not in the default set, so recorded floors stay valid.
+EXTRA_OPERATORS = ("arithmetic", "minmax")
+ALL_OPERATORS = OPERATORS + EXTRA_OPERATORS
 STATUSES = ("killed", "survived", "timeout", "incompetent", "equivalent")
 RUN_STATUSES = {"passed": "survived", "failed": "killed", "timeout": "timeout"}
 BASELINE_TIMEOUT = 300.0
 MIN_TIMEOUT, TIMEOUT_FACTOR = 10.0, 5.0
 KILL_GRACE = 10.0
+RATCHET_MARGIN = 0.02
 CHILD_TMP = ".mutation-tmp"
 OUTPUT_TAIL = 4000
 CHILD_ENV_DROPPED = (
@@ -64,7 +74,8 @@ PRAGMA_RE = re.compile(r"#\s*pragma:\s*no\s+mutate\b")
 RAN_RE = re.compile(r"^Ran (\d+) tests? in ", re.MULTILINE)
 AT_STRING_RE = re.compile(r"""^(["'])@(.*)\1$""", re.DOTALL)
 TEST_MODULE_RE = re.compile(r"^[A-Za-z_][\w.]*$")
-MUTANT_ID_RE = re.compile(rf"^(?P<path>.+):\d+:\d+:(?:{'|'.join(OPERATORS)}):\d+$")
+MUTANT_ID_RE = re.compile(rf"^(?P<path>.+):\d+:\d+:(?:{'|'.join(ALL_OPERATORS)}):\d+$")
+QUALNAME_RE = re.compile(r"^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*$")
 GLOB_CHARACTERS = frozenset("*?[")
 
 COMPARE_FLIPS: dict[type[ast.cmpop], str] = {
@@ -79,10 +90,21 @@ COMPARE_FLIPS: dict[type[ast.cmpop], str] = {
     ast.In: "not in",
     ast.NotIn: "in",
 }
+ARITHMETIC_SWAPS: dict[type[ast.operator], str] = {
+    ast.Add: "-",
+    ast.Sub: "+",
+    ast.Mult: "/",
+    ast.Div: "*",
+    ast.FloorDiv: "/",
+    ast.Mod: "*",
+    ast.Pow: "*",
+}
+MINMAX_SWAPS = {"min": "max", "max": "min"}
 ATOMIC_TESTS = (ast.Name, ast.Attribute, ast.Call, ast.Subscript, ast.Constant)
 DATA_TABLE_VALUES = (ast.Dict, ast.List, ast.Tuple, ast.Set)
 DELETABLE_STATEMENTS = (ast.Assign, ast.AugAssign, ast.Raise)
 FUNCTION_SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef)
+NAMED_SCOPES = (*FUNCTION_SCOPES, ast.ClassDef)
 Located = ast.expr | ast.stmt
 
 
@@ -102,7 +124,8 @@ class BaselineError(MutationError):
 class Mutant:
     """One fault: replace source[(line, col):(end_line, end_col)], which must equal original, with replacement.
 
-    Lines are 1-based and columns are 0-based character offsets.
+    Lines are 1-based and columns are 0-based character offsets. scope is the qualname of the innermost enclosing
+    def or class, nested names joined by "." (`Class.method`, `outer.inner`); "" at module level.
     """
 
     path: str
@@ -114,6 +137,7 @@ class Mutant:
     index: int
     original: str
     replacement: str
+    scope: str = ""
 
     @property
     def id(self) -> str:
@@ -131,6 +155,7 @@ class Mutant:
             "index": self.index,
             "original": self.original,
             "replacement": self.replacement,
+            "scope": self.scope,
         }
 
 
@@ -218,7 +243,7 @@ def strip_at_replacement(text: str, value: str) -> str:
 
 
 class _Collector:
-    """Walks one parsed module and collects candidate mutants as (line, col, end_line, end_col, op, repl)."""
+    """Walks one parsed module and collects candidate mutants as (line, col, end_line, end_col, op, repl, scope)."""
 
     def __init__(self, source: str, tree: ast.Module, mutate_data_tables: bool):
         self.source = source
@@ -226,7 +251,8 @@ class _Collector:
         self.offsets = line_offsets(self.lines)
         self.tree = tree
         self.mutate_data_tables = mutate_data_tables
-        self.candidates: list[tuple[int, int, int, int, str, str]] = []
+        self.candidates: list[tuple[int, int, int, int, str, str, str]] = []
+        self.scope = ""
         self.skipped: set[int] = set()
         self.tables: set[int] = set()
         self.owned: set[int] = set()
@@ -256,7 +282,7 @@ class _Collector:
         return self.text(self.start(node), self.end(node))
 
     def add(self, operator: str, start: tuple[int, int], end: tuple[int, int], replacement: str) -> None:
-        self.candidates.append((start[0], start[1], end[0], end[1], operator, replacement))
+        self.candidates.append((start[0], start[1], end[0], end[1], operator, replacement, self.scope))
 
     def add_node(self, operator: str, node: Located, replacement: str) -> None:
         self.add(operator, self.start(node), self.end(node), replacement)
@@ -299,7 +325,7 @@ class _Collector:
                 self.mark(node.value)
 
     # Traversal ---------------------------------------------------------------------------------------------
-    def collect(self) -> list[tuple[int, int, int, int, str, str]]:
+    def collect(self) -> list[tuple[int, int, int, int, str, str, str]]:
         self.mark_skipped_contexts()
         self.visit(self.tree, in_function=False)
         return [
@@ -324,8 +350,13 @@ class _Collector:
             in_function = True
         elif isinstance(node, ast.ClassDef):
             in_function = False
+        enclosing = self.scope
+        if isinstance(node, NAMED_SCOPES):
+            # Everything below a def or class, its decorators and default values included, is in its scope.
+            self.scope = f"{enclosing}.{node.name}" if enclosing else node.name
         for child in ast.iter_child_nodes(node):
             self.visit(child, in_function)
+        self.scope = enclosing
 
     def visit_Compare(self, node: ast.Compare) -> None:
         operands = [node.left, *node.comparators]
@@ -378,6 +409,22 @@ class _Collector:
         else:
             self.add_node("return", value, "None")
 
+    def visit_BinOp(self, node: ast.BinOp) -> None:
+        replacement = ARITHMETIC_SWAPS.get(type(node.op))
+        span = None if replacement is None else self.operator_tokens(node.left, node.right)
+        if replacement is not None and span is not None:
+            self.add("arithmetic", span[0], span[1], replacement)
+
+    def visit_AugAssign(self, node: ast.AugAssign) -> None:
+        replacement = ARITHMETIC_SWAPS.get(type(node.op))
+        span = None if replacement is None else self.operator_tokens(node.target, node.value)
+        if replacement is not None and span is not None:
+            self.add("arithmetic", span[0], span[1], replacement + "=")
+
+    def visit_Call(self, node: ast.Call) -> None:
+        if isinstance(node.func, ast.Name) and node.func.id in MINMAX_SWAPS:
+            self.add_node("minmax", node.func, MINMAX_SWAPS[node.func.id])
+
     def visit_Constant(self, node: ast.Constant) -> None:
         exempt_table = id(node) in self.tables and not self.mutate_data_tables
         if id(node) not in self.owned and not exempt_table:
@@ -388,11 +435,54 @@ class _Collector:
             self.add_node("strip_at", node, strip_at_replacement(self.node_text(node), node.value))
 
 
-def generate_mutants(path, source: str | None = None, *, mutate_data_tables: bool = False) -> list[Mutant]:
+def scope_names(tree: ast.Module) -> set[str]:
+    """The qualname of every def and class in the module, nested names joined by "."."""
+    names: set[str] = set()
+
+    def walk(node: ast.AST, prefix: str) -> None:
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, NAMED_SCOPES):
+                name = f"{prefix}.{child.name}" if prefix else child.name
+                names.add(name)
+                walk(child, name)
+            else:
+                walk(child, prefix)
+
+    walk(tree, "")
+    return names
+
+
+def check_operators(operators: Iterable[str] | None) -> tuple[str, ...]:
+    """The selected operator names (default: OPERATORS); a name outside ALL_OPERATORS is a ConfigError."""
+    if operators is None:
+        return OPERATORS
+    selected = tuple(operators)
+    unknown = sorted(set(selected) - set(ALL_OPERATORS))
+    if unknown:
+        raise ConfigError(f"unknown operator(s) {unknown}; choose from {list(ALL_OPERATORS)}")
+    return selected
+
+
+def in_scopes(scope: str, functions: tuple[str, ...]) -> bool:
+    return any(scope == name or scope.startswith(name + ".") for name in functions)
+
+
+def generate_mutants(
+    path,
+    source: str | None = None,
+    *,
+    mutate_data_tables: bool = False,
+    functions: Iterable[str] | None = None,
+    operators: Iterable[str] | None = None,
+) -> list[Mutant]:
     """Every mutant of one module, in deterministic (line, col, operator) order.
 
-    path names the module in mutant ids (as POSIX); source defaults to the file's UTF-8 text.
+    path names the module in mutant ids (as POSIX); source defaults to the file's UTF-8 text. operators selects from
+    ALL_OPERATORS (default: OPERATORS). functions keeps only mutants whose scope equals or is nested inside one of the
+    listed qualnames; a name that matches no def or class in the module is a ConfigError. Neither filter changes the
+    id of a mutant it keeps.
     """
+    selected = check_operators(operators)
     if source is None:
         source = read_source(Path(path))
     display = PurePath(path).as_posix()
@@ -400,16 +490,24 @@ def generate_mutants(path, source: str | None = None, *, mutate_data_tables: boo
         tree = ast.parse(source, filename=display)
     except SyntaxError as error:
         raise ConfigError(f"{display}: cannot parse: {error}") from None
+    scopes = None if functions is None else tuple(functions)
+    if scopes is not None:
+        known = scope_names(tree)
+        missing = [name for name in scopes if name not in known]
+        if missing:
+            raise ConfigError(f"{display}: function(s) {missing} match no def or class (give qualnames: Class.method)")
     collector = _Collector(source, tree, mutate_data_tables)
-    candidates = sorted(collector.collect(), key=lambda item: (item[0], item[1], OPERATORS.index(item[4])))
+    candidates = sorted(collector.collect(), key=lambda item: (item[0], item[1], ALL_OPERATORS.index(item[4])))
     mutants = []
     seen: dict[tuple[int, int, str], int] = {}
-    for line, col, end_line, end_col, operator, replacement in candidates:
+    for line, col, end_line, end_col, operator, replacement, scope in candidates:
         key = (line, col, operator)
         index = seen.get(key, 0)
         seen[key] = index + 1
+        if operator not in selected or (scopes is not None and not in_scopes(scope, scopes)):
+            continue
         original = collector.text((line, col), (end_line, end_col))
-        mutants.append(Mutant(display, line, col, end_line, end_col, operator, index, original, replacement))
+        mutants.append(Mutant(display, line, col, end_line, end_col, operator, index, original, replacement, scope))
     return mutants
 
 
@@ -428,7 +526,11 @@ def apply_mutant(source: str, mutant: Mutant) -> str:
 # Configuration ------------------------------------------------------------------------------------------------
 @dataclass(frozen=True)
 class TargetConfig:
-    """One configured target: a repo-relative module path (or glob) and the dotted test modules that cover it."""
+    """One configured target: a repo-relative module path (or glob) and the dotted test modules that cover it.
+
+    functions and operators restrict generation (see generate_mutants). aggregate (glob targets only) gates the
+    glob's combined score instead of each file's; expand_targets records the glob as group on each of its files.
+    """
 
     path: str
     tests: tuple[str, ...]
@@ -436,6 +538,10 @@ class TargetConfig:
     equivalent: tuple[str, ...] = ()
     timeout: float | None = None
     mutate_data_tables: bool = False
+    functions: tuple[str, ...] | None = None
+    operators: tuple[str, ...] | None = None
+    aggregate: bool = False
+    group: str | None = None
 
 
 @dataclass(frozen=True)
@@ -445,7 +551,17 @@ class Config:
 
 
 TOP_LEVEL_KEYS = {"schema_version", "description", "copy", "targets"}
-TARGET_KEYS = {"path", "tests", "min_score", "equivalent", "timeout", "mutate_data_tables"}
+TARGET_KEYS = {
+    "path",
+    "tests",
+    "min_score",
+    "equivalent",
+    "timeout",
+    "mutate_data_tables",
+    "functions",
+    "operators",
+    "aggregate",
+}
 
 
 def is_number(value: object) -> bool:
@@ -501,6 +617,24 @@ def parse_target(entry: object, where: str) -> TargetConfig:
     mutate_data_tables = entry.get("mutate_data_tables", False)
     if not isinstance(mutate_data_tables, bool):
         raise ConfigError(f"{where}.mutate_data_tables: expected true or false")
+    functions = None
+    if "functions" in entry:
+        functions = check_unique_strings(entry["functions"], f"{where}.functions", allow_empty=False)
+        for name in functions:
+            if not QUALNAME_RE.match(name):
+                raise ConfigError(f"{where}.functions: {name!r} is not a qualname (name, Class.method, outer.inner)")
+    operators = None
+    if "operators" in entry:
+        operators = check_unique_strings(entry["operators"], f"{where}.operators", allow_empty=False)
+        try:
+            check_operators(operators)
+        except ConfigError as error:
+            raise ConfigError(f"{where}.operators: {error}") from None
+    aggregate = entry.get("aggregate", False)
+    if not isinstance(aggregate, bool):
+        raise ConfigError(f"{where}.aggregate: expected true or false")
+    if aggregate and not GLOB_CHARACTERS & set(path):
+        raise ConfigError(f"{where}.aggregate: needs a glob path such as 'sdk/training/**/*.py'")
     return TargetConfig(
         path,
         tests,
@@ -508,6 +642,9 @@ def parse_target(entry: object, where: str) -> TargetConfig:
         equivalent,
         None if timeout is None else float(timeout),
         mutate_data_tables,
+        functions,
+        operators,
+        aggregate,
     )
 
 
@@ -567,7 +704,8 @@ def expand_targets(config: Config, repo_root) -> list[TargetConfig]:
                 raise ConfigError(f"{name} is matched by more than one target ({owners[name]!r}, {target.path!r})")
             owners[name] = target.path
             equivalent = tuple(item for item in target.equivalent if mutant_id_path(item) == name)
-            expanded.append(replace(target, path=name, equivalent=equivalent))
+            group = target.path if target.aggregate else None
+            expanded.append(replace(target, path=name, equivalent=equivalent, group=group))
     return expanded
 
 
@@ -598,6 +736,9 @@ class MutantResult:
 
 @dataclass(frozen=True)
 class Report:
+    """The outcome of one target. partial: only some mutants ran (`only`), so no ratchet hint. part_of: the glob of
+    an aggregate target this file belongs to; such a report is informational and the combined report is gated."""
+
     target: str
     tests: tuple[str, ...]
     results: tuple[MutantResult, ...]
@@ -605,11 +746,38 @@ class Report:
     timeout: float
     min_score: float = 0.0
     stale_equivalent: tuple[str, ...] = ()
+    partial: bool = False
+    part_of: str | None = None
+
+    @classmethod
+    def combine(cls, target: str, reports: Iterable[Report], min_score: float) -> Report:
+        """One gated report over every result of an aggregate target's per-file reports."""
+        reports = list(reports)
+        return cls(
+            target,
+            reports[0].tests if reports else (),
+            tuple(result for report in reports for result in report.results),
+            sum(report.baseline_seconds for report in reports),
+            max((report.timeout for report in reports), default=0.0),
+            min_score,
+            tuple(mutant_id for report in reports for mutant_id in report.stale_equivalent),
+            any(report.partial for report in reports),
+        )
 
     @property
     def counts(self) -> dict[str, int]:
         counts = {"total": len(self.results)}
         counts.update({status: sum(result.status == status for result in self.results) for status in STATUSES})
+        return counts
+
+    @property
+    def counts_by_operator(self) -> dict[str, dict[str, int]]:
+        """Status counts per operator that has results, in ALL_OPERATORS order."""
+        counts: dict[str, dict[str, int]] = {}
+        for operator in ALL_OPERATORS:
+            statuses = [result.status for result in self.results if result.mutant.operator == operator]
+            if statuses:
+                counts[operator] = {status: statuses.count(status) for status in STATUSES}
         return counts
 
     @property
@@ -622,8 +790,28 @@ class Report:
     @property
     def passed(self) -> bool:
         """Without a score only a zero minimum passes: an unmeasured target cannot meet a positive one."""
+        if self.part_of is not None:
+            return True
         score = self.score
         return self.min_score <= 0.0 if score is None else score >= self.min_score
+
+    @property
+    def headroom(self) -> float | None:
+        """score - min_score; None without a score or for an aggregate member."""
+        score = self.score
+        return None if score is None or self.part_of is not None else score - self.min_score
+
+    @property
+    def ratchet_hint(self) -> str | None:
+        """After a complete, passing run at least RATCHET_MARGIN above min_score: the floor to record instead."""
+        headroom = self.headroom
+        if headroom is None or self.partial or not self.passed or headroom < RATCHET_MARGIN - 1e-9:
+            return None
+        score = self.score or 0.0
+        floor = math.floor(score * 100 + 1e-9) / 100
+        if floor <= self.min_score:
+            return None
+        return f"ratchet: {self.target} scored {score:.3f}; raise min_score from {self.min_score:g} to {floor:.2f}"
 
     @property
     def survivors(self) -> tuple[MutantResult, ...]:
@@ -631,30 +819,66 @@ class Report:
 
     def to_dict(self) -> dict:
         return {
+            "schema_version": 1,
             "target": self.target,
             "tests": list(self.tests),
             "min_score": self.min_score,
             "score": self.score,
             "passed": self.passed,
+            "headroom": self.headroom,
+            "part_of": self.part_of,
             "counts": self.counts,
+            "counts_by_operator": self.counts_by_operator,
             "baseline_seconds": round(self.baseline_seconds, 3),
             "timeout_seconds": self.timeout,
             "stale_equivalent": list(self.stale_equivalent),
             "mutants": [result.to_dict() for result in self.results],
         }
 
+    def summary_line(self) -> str:
+        counts = self.counts
+        return f"{counts['total']} mutants: " + ", ".join(f"{counts[status]} {status}" for status in STATUSES)
+
     def format_text(self) -> str:
         counts = self.counts
         summary = ", ".join(f"{counts[status]} {status}" for status in STATUSES)
-        verdict = "PASS" if self.passed else "FAIL"
         score = "n/a (no scored mutants)" if self.score is None else f"{self.score * 100:.1f}%"
-        lines = [
-            f"{self.target}: {counts['total']} mutants, {summary}",
-            f"score {score} (minimum {self.min_score * 100:.1f}%) {verdict}",
-        ]
+        if self.part_of is not None:
+            gate = f"score {score} (gated as part of {self.part_of})"
+        else:
+            gate = f"score {score} (minimum {self.min_score * 100:.1f}%) {'PASS' if self.passed else 'FAIL'}"
+        lines = [f"{self.target}: {counts['total']} mutants, {summary}", gate]
         for result in self.survivors:
             lines.append(f"survived {result.mutant.id}")
             lines.append(result.diff.rstrip("\n"))
+        return "\n".join(lines) + "\n"
+
+    def format_markdown(self) -> str:
+        """A GitHub-flavoured Markdown section: verdict, score, per-operator table, ratchet hint, survivor diffs."""
+        if self.part_of is not None:
+            verdict = f"gated as part of `{self.part_of}`"
+        else:
+            verdict = "PASS" if self.passed else "FAIL"
+        score, headroom = self.score, self.headroom
+        detail = f"minimum {self.min_score * 100:.1f}%"
+        if headroom is not None:
+            detail += f", headroom {headroom * 100:+.1f} points"
+        shown = "**n/a** (no scored mutants)" if score is None else f"**{score * 100:.1f}%**"
+        lines = [f"### `{self.target}`: {verdict}", "", f"Score {shown} ({detail}); {self.summary_line()}.", ""]
+        lines.append("| operator | " + " | ".join(STATUSES) + " |")
+        lines.append("| --- |" + " ---: |" * len(STATUSES))
+        for operator, counts in self.counts_by_operator.items():
+            lines.append(f"| {operator} | " + " | ".join(str(counts[status]) for status in STATUSES) + " |")
+        if self.ratchet_hint:
+            lines += ["", self.ratchet_hint]
+        survivors = self.survivors
+        if survivors:
+            noun = "surviving mutant" if len(survivors) == 1 else "surviving mutants"
+            lines += ["", f"<details><summary>{len(survivors)} {noun}</summary>", ""]
+            for result in survivors:
+                fence = "`" * max([3, *(len(run) + 1 for run in re.findall(r"`+", result.diff))])
+                lines += [f"`{result.mutant.id}`", "", f"{fence}diff", result.diff.rstrip("\n"), fence, ""]
+            lines.append("</details>")
         return "\n".join(lines) + "\n"
 
 
@@ -797,7 +1021,11 @@ def find_test_module(name: str, root: Path) -> str | None:
     return None
 
 
-def validate_run(rel: str, tests: tuple[str, ...], root: Path, copy_paths: tuple[str, ...]) -> None:
+def validate_run(
+    rel: str, tests: tuple[str, ...], root: Path, copy_paths: tuple[str, ...], *, default_runner: bool = True
+) -> None:
+    """Check paths before anything runs. scripts/ci.py and the test modules are required on disk and in the copy
+    only for the default SubprocessTestRunner: a custom test_runner may run its suites from elsewhere."""
     for entry in copy_paths:
         if not (root / entry).exists():
             raise ConfigError(f"copy path not found: {entry}")
@@ -805,8 +1033,10 @@ def validate_run(rel: str, tests: tuple[str, ...], root: Path, copy_paths: tuple
         raise ConfigError(f"target not found: {rel}")
     if not tests:
         raise ConfigError(f"no tests mapped to {rel}")
-    required = {"scripts/ci.py": "scripts/ci.py", rel: f"target {rel}"}
-    for name in tests:
+    required = {rel: f"target {rel}"}
+    if default_runner:
+        required["scripts/ci.py"] = "scripts/ci.py"
+    for name in tests if default_runner else ():
         module = find_test_module(name, root)
         if module is None:
             raise ConfigError(f"test module not found: {name}")
@@ -859,28 +1089,39 @@ def run_mutants(
     mutants: list[Mutant] | None = None,
     only: Iterable[str] | None = None,
     mutate_data_tables: bool = False,
+    functions: Iterable[str] | None = None,
+    operators: Iterable[str] | None = None,
     test_runner: TestRunner | None = None,
     scratch_dir=None,
     progress: Callable[[MutantResult], None] | None = None,
 ) -> Report:
-    """Mutate one target and run its mapped tests against every mutant in temporary repository copies."""
+    """Mutate one target and run its mapped tests against every mutant in temporary repository copies.
+
+    Caller-supplied mutants replace the generated list, but `only` and the stale-equivalent check still use every
+    mutant generated for the file (with functions and operators applied). No mutants to run is a ConfigError.
+    """
     root = Path(os.path.abspath(repo_root))
     rel = resolve_target(target, root)
     tests = tuple(tests)
     copy_paths = tuple(copy_paths)
-    validate_run(rel, tests, root, copy_paths)
+    validate_run(rel, tests, root, copy_paths, default_runner=test_runner is None)
     source = read_source(root / rel)
+    generated = generate_mutants(
+        rel, source, mutate_data_tables=mutate_data_tables, functions=functions, operators=operators
+    )
     if mutants is None:
-        mutants = generate_mutants(rel, source, mutate_data_tables=mutate_data_tables)
-    generated_ids = {mutant.id for mutant in mutants}
+        mutants = generated
+    if not mutants:
+        raise ConfigError(f"{rel}: no mutants to run (check the target's functions and operators)")
+    known_ids = {mutant.id for mutant in generated} | {mutant.id for mutant in mutants}
     if only is not None:
         wanted = set(only)
-        unknown = sorted(wanted - generated_ids)
+        unknown = sorted(wanted - known_ids)
         if unknown:
             raise ConfigError(f"unknown mutant id(s) for {rel}: {', '.join(unknown)}")
         mutants = [mutant for mutant in mutants if mutant.id in wanted]
     equivalent = tuple(equivalent)
-    stale = tuple(mutant_id for mutant_id in equivalent if mutant_id not in generated_ids)
+    stale = tuple(mutant_id for mutant_id in equivalent if mutant_id not in known_ids)
     runner = test_runner if test_runner is not None else SubprocessTestRunner()
 
     results: list[MutantResult | None] = [None] * len(mutants)
@@ -973,7 +1214,7 @@ def run_mutants(
     finished = tuple(result for result in results if result is not None)
     if len(finished) != len(results):
         raise MutationError(f"{rel}: {len(results) - len(finished)} mutant(s) produced no result")
-    return Report(rel, tests, finished, baseline.seconds, effective_timeout, min_score, stale)
+    return Report(rel, tests, finished, baseline.seconds, effective_timeout, min_score, stale, only is not None)
 
 
 # Command line -------------------------------------------------------------------------------------------------
@@ -1008,7 +1249,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--jobs", type=positive_int, default=min(4, os.cpu_count() or 1), help="parallel test runs")
     parser.add_argument("--timeout", type=positive_float, help="seconds per mutant run (default: 5x baseline, min 10)")
     parser.add_argument("--only", nargs="+", help="run only these mutant ids")
+    parser.add_argument("--operators", nargs="+", choices=ALL_OPERATORS, help="operators to apply (default: config)")
     parser.add_argument("--json", help="write a JSON report to this file (exit 0 or 1 only)")
+    parser.add_argument("--summary", help="append a Markdown summary to this file, such as $GITHUB_STEP_SUMMARY")
     parser.add_argument("--scratch-dir", help="directory for temporary repository copies (default: system temp)")
     parser.add_argument("--list", action="store_true", help="print the mutants and run nothing")
     parser.add_argument("--quiet", action="store_true", help="no progress lines on stderr")
@@ -1042,6 +1285,13 @@ def select_targets(args: argparse.Namespace, root: Path) -> tuple[tuple[str, ...
     return config.copy, [selected]
 
 
+def apply_operators(args: argparse.Namespace, targets: list[TargetConfig]) -> list[TargetConfig]:
+    """--operators replaces every selected target's operators."""
+    if not args.operators:
+        return targets
+    return [replace(target, operators=tuple(dict.fromkeys(args.operators))) for target in targets]
+
+
 def only_by_target(only: list[str] | None, targets: list[TargetConfig]) -> dict[str, list[str]] | None:
     if only is None:
         return None
@@ -1059,8 +1309,7 @@ def list_mutants(root: Path, targets: list[TargetConfig], only: dict[str, list[s
     for target in targets:
         if only is not None and target.path not in only:
             continue
-        source = read_source(root / target.path)
-        mutants = generate_mutants(target.path, source, mutate_data_tables=target.mutate_data_tables)
+        mutants = target_mutants(root, target)
         if only is not None:
             wanted = set(only[target.path])
             unknown = sorted(wanted - {mutant.id for mutant in mutants})
@@ -1082,44 +1331,82 @@ def progress_printer(total: int) -> Callable[[MutantResult], None]:
     return report
 
 
+def target_mutants(root: Path, target: TargetConfig) -> list[Mutant]:
+    return generate_mutants(
+        target.path,
+        read_source(root / target.path),
+        mutate_data_tables=target.mutate_data_tables,
+        functions=target.functions,
+        operators=target.operators,
+    )
+
+
 def mutant_total(root: Path, target: TargetConfig, only: list[str] | None) -> int:
     if only is not None:
         return len(only)
-    source = read_source(root / target.path)
-    return len(generate_mutants(target.path, source, mutate_data_tables=target.mutate_data_tables))
+    return len(target_mutants(root, target))
+
+
+def print_report(report: Report) -> None:
+    for mutant_id in report.stale_equivalent:
+        print(f"warning: {report.target}: stale equivalent id {mutant_id} matches no mutant", file=sys.stderr)
+    print(report.format_text(), end="", flush=True)
+    if report.ratchet_hint:
+        print(report.ratchet_hint, file=sys.stderr, flush=True)
 
 
 def run_targets(args: argparse.Namespace, root: Path) -> list[Report]:
+    """Run every selected target; after the last file of an aggregate glob, add and print its combined report."""
     copy_paths, targets = select_targets(args, root)
+    targets = apply_operators(args, targets)
     only = only_by_target(args.only, targets)
     if args.list:
         list_mutants(root, targets, only)
         return []
     reports = []
-    for target in targets:
+    members: list[Report] = []
+    for position, target in enumerate(targets):
         target_only = None if only is None else only.get(target.path)
-        if only is not None and target_only is None:
-            continue
-        progress = None if args.quiet else progress_printer(mutant_total(root, target, target_only))
-        report = run_mutants(
-            target.path,
-            target.tests,
-            repo_root=root,
-            jobs=args.jobs,
-            timeout=args.timeout or target.timeout,
-            equivalent=target.equivalent,
-            min_score=target.min_score,
-            copy_paths=copy_paths,
-            only=target_only,
-            mutate_data_tables=target.mutate_data_tables,
-            scratch_dir=args.scratch_dir,
-            progress=progress,
-        )
-        for mutant_id in report.stale_equivalent:
-            print(f"warning: {report.target}: stale equivalent id {mutant_id} matches no mutant", file=sys.stderr)
-        print(report.format_text(), end="", flush=True)
-        reports.append(report)
+        if only is None or target_only is not None:
+            report = run_target(args, root, copy_paths, target, target_only)
+            if target.group is not None:
+                report = replace(report, part_of=target.group)
+                members.append(report)
+            print_report(report)
+            reports.append(report)
+        following = targets[position + 1] if position + 1 < len(targets) else None
+        if target.group is not None and members and (following is None or following.group != target.group):
+            combined = Report.combine(target.group, members, target.min_score)
+            print_report(combined)
+            reports.append(combined)
+            members = []
     return reports
+
+
+def run_target(
+    args: argparse.Namespace,
+    root: Path,
+    copy_paths: tuple[str, ...],
+    target: TargetConfig,
+    target_only: list[str] | None,
+) -> Report:
+    progress = None if args.quiet else progress_printer(mutant_total(root, target, target_only))
+    return run_mutants(
+        target.path,
+        target.tests,
+        repo_root=root,
+        jobs=args.jobs,
+        timeout=args.timeout or target.timeout,
+        equivalent=target.equivalent,
+        min_score=target.min_score,
+        copy_paths=copy_paths,
+        only=target_only,
+        mutate_data_tables=target.mutate_data_tables,
+        functions=target.functions,
+        operators=target.operators,
+        scratch_dir=args.scratch_dir,
+        progress=progress,
+    )
 
 
 def raise_keyboard_interrupt(signum, frame):
@@ -1150,6 +1437,14 @@ def main(argv: list[str] | None = None) -> int:
             Path(os.path.abspath(args.json)).write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
         except OSError as error:
             print(f"mutation: cannot write {args.json}: {error}", file=sys.stderr)
+            return 2
+    if args.summary and not args.list:
+        sections = "\n".join(report.format_markdown() for report in reports)
+        try:
+            with open(os.path.abspath(args.summary), "a", encoding="utf-8") as summary:
+                summary.write(f"\n## Mutation testing\n\n{sections}")
+        except OSError as error:
+            print(f"mutation: cannot write {args.summary}: {error}", file=sys.stderr)
             return 2
     return 0 if passed else 1
 

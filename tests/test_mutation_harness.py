@@ -404,6 +404,133 @@ class GenerationTests(unittest.TestCase):
                 compile(mutation.apply_mutant(source, mutant), TOY_PATH, "exec", dont_inherit=True)
 
 
+SCOPED_SOURCE = (
+    "x = 1\n"
+    "def outer(a):\n"
+    "    y = 2\n"
+    "    def inner():\n"
+    "        return 3\n"
+    "    return inner\n"
+    "class C:\n"
+    "    z = 4\n"
+    "    def m(self):\n"
+    "        return 5\n"
+    "    async def n(self):\n"
+    "        return 6\n"
+)
+ALL_OPERATORS = mutation.OPERATORS + mutation.EXTRA_OPERATORS
+
+
+class ScopeAndOperatorTests(unittest.TestCase):
+    """Function scoping (Mutant.scope, functions=) and operator selection (operators=, the opt-in operators)."""
+
+    def test_every_mutant_records_its_enclosing_qualname(self):
+        self.assertEqual(
+            [(m.id, m.scope) for m in gen(SCOPED_SOURCE)],
+            [
+                ("m.py:1:4:constant:0", ""),
+                ("m.py:3:4:delete:0", "outer"),
+                ("m.py:3:8:constant:0", "outer"),
+                ("m.py:5:15:return:0", "outer.inner"),
+                ("m.py:6:11:return:0", "outer"),
+                ("m.py:8:8:constant:0", "C"),
+                ("m.py:10:15:return:0", "C.m"),
+                ("m.py:12:15:return:0", "C.n"),
+            ],
+        )
+        self.assertEqual(gen(SCOPED_SOURCE)[3].to_dict()["scope"], "outer.inner")
+
+    def test_functions_keeps_mutants_in_or_nested_inside_a_listed_qualname(self):
+        everything = {m.id: m for m in gen(SCOPED_SOURCE)}
+        cases = {
+            ("outer",): ["m.py:3:4:delete:0", "m.py:3:8:constant:0", "m.py:5:15:return:0", "m.py:6:11:return:0"],
+            ("outer.inner",): ["m.py:5:15:return:0"],
+            ("C",): ["m.py:8:8:constant:0", "m.py:10:15:return:0", "m.py:12:15:return:0"],
+            ("C.n", "outer.inner"): ["m.py:5:15:return:0", "m.py:12:15:return:0"],
+        }
+        for functions, expected in cases.items():
+            with self.subTest(functions=functions):
+                selected = gen(SCOPED_SOURCE, functions=functions)
+                self.assertEqual([m.id for m in selected], expected)
+                self.assertEqual(selected, [everything[mutant_id] for mutant_id in expected])
+        self.assertEqual([m.id for m in gen("def ab():\n    return 1\n", functions=["ab"])], ["m.py:2:11:return:0"])
+        self.assertEqual(gen("def ab():\n    return 1\ndef a():\n    pass\n", functions=["a"]), [])
+
+    def test_a_function_that_matches_no_def_is_a_config_error(self):
+        for name in ("x", "inner", "C.missing", "outer.inner.deeper", "Outer"):
+            with self.subTest(name=name):
+                with self.assertRaisesRegex(mutation.ConfigError, "match no def or class"):
+                    gen(SCOPED_SOURCE, functions=[name])
+        main_guard = 'def f():\n    return 1\nif __name__ == "__main__":\n    def g():\n        return 2\n'
+        self.assertEqual(gen(main_guard, functions=["g"]), [])
+
+    def test_operators_selects_and_unknown_names_are_config_errors(self):
+        self.assertEqual(
+            [m.id for m in gen(SCOPED_SOURCE, operators=["return"])],
+            ["m.py:5:15:return:0", "m.py:6:11:return:0", "m.py:10:15:return:0", "m.py:12:15:return:0"],
+        )
+        with self.assertRaisesRegex(mutation.ConfigError, "unknown operator"):
+            gen(SCOPED_SOURCE, operators=["nope"])
+        self.assertEqual(set(mutation.OPERATORS) & set(mutation.EXTRA_OPERATORS), set())
+        self.assertEqual(mutation.EXTRA_OPERATORS, ("arithmetic", "minmax"))
+
+    def test_arithmetic_is_opt_in_and_swaps_only_the_operator_token(self):
+        self.assertEqual(gen("x = a + b\n"), [])
+        pairs = {"+": "-", "-": "+", "*": "/", "/": "*", "//": "/", "%": "*", "**": "*"}
+        for operator, swapped in pairs.items():
+            with self.subTest(operator=operator):
+                self.assertEqual(
+                    mutated(f"x = a {operator} b\n", operators=["arithmetic"]),
+                    [("m.py:1:6:arithmetic:0", f"x = a {swapped} b\n")],
+                )
+        self.assertEqual(
+            mutated("def f(t, v):\n    t += v\n    t //= v\n    t **= v\n", operators=["arithmetic"]),
+            [
+                ("m.py:2:6:arithmetic:0", "def f(t, v):\n    t -= v\n    t //= v\n    t **= v\n"),
+                ("m.py:3:6:arithmetic:0", "def f(t, v):\n    t += v\n    t /= v\n    t **= v\n"),
+                ("m.py:4:6:arithmetic:0", "def f(t, v):\n    t += v\n    t //= v\n    t *= v\n"),
+            ],
+        )
+        self.assertEqual(
+            mutated("x = (a) * (b)\n", operators=["arithmetic"]), [("m.py:1:8:arithmetic:0", "x = (a) / (b)\n")]
+        )
+        self.assertEqual(mutated("x = a - -b\n", operators=["arithmetic"]), [("m.py:1:6:arithmetic:0", "x = a + -b\n")])
+        self.assertEqual(
+            mutated("x = a * b + c\n", operators=["arithmetic"]),
+            [("m.py:1:6:arithmetic:0", "x = a / b + c\n"), ("m.py:1:10:arithmetic:0", "x = a * b - c\n")],
+        )
+        for source in ("x = a << b\n", "x = a | b\n", "x = a @ b\n", "x = a & b\n", 'x = f"{a + b}"\n'):
+            with self.subTest(source=source):
+                self.assertEqual(gen(source, operators=["arithmetic"]), [])
+
+    def test_minmax_swaps_calls_to_the_bare_builtins(self):
+        self.assertEqual(gen("x = min(a, b)\n"), [])
+        self.assertEqual(
+            mutated("x = min(a, b) + max(c)\n", operators=["minmax"]),
+            [("m.py:1:4:minmax:0", "x = max(a, b) + max(c)\n"), ("m.py:1:16:minmax:0", "x = min(a, b) + min(c)\n")],
+        )
+        for source in ("x = o.min(a)\n", "x = min\n", "x = sorted(a)\n"):
+            with self.subTest(source=source):
+                self.assertEqual(gen(source, operators=["minmax"]), [])
+
+    def test_extra_operators_sort_after_the_defaults_and_leave_default_ids_unchanged(self):
+        self.assertEqual(
+            [m.id for m in gen("def f(a):\n    return min(a)\n", operators=ALL_OPERATORS)],
+            ["m.py:2:11:return:0", "m.py:2:11:minmax:0"],
+        )
+        source = toy_source()
+        everything = mutation.generate_mutants(TOY_PATH, source, operators=ALL_OPERATORS)
+        self.assertEqual([m for m in everything if m.operator in mutation.OPERATORS], self.default_toy())
+        self.assertEqual(
+            [(m.id, m.original, m.replacement) for m in everything if m.operator not in mutation.OPERATORS],
+            [(f"{TOY_PATH}:23:14:arithmetic:0", "+=", "-=")],
+        )
+        self.assertTrue(mutation.MUTANT_ID_RE.match(f"{TOY_PATH}:23:14:arithmetic:0"))
+
+    def default_toy(self):
+        return mutation.generate_mutants(TOY_PATH, toy_source())
+
+
 VALID_TARGET = {"path": TOY_PATH, "tests": ["tests.mutation_toys.strong_suite"], "min_score": 0.5}
 
 
@@ -505,6 +632,47 @@ class ConfigTests(unittest.TestCase):
                 with self.assertRaisesRegex(mutation.ConfigError, "missing.json"):
                     mutation.load_config(Path(tmp) / "missing.json")
 
+    def test_functions_operators_and_aggregate_keys(self):
+        glob = "tests/mutation_toys/*_target.py"
+        payload = {
+            "schema_version": 1,
+            "targets": [
+                dict(VALID_TARGET, functions=["grade", "C.m"], operators=["compare", "arithmetic"]),
+                {"path": glob, "tests": ["tests.a"], "min_score": 0.5, "aggregate": True},
+            ],
+        }
+        with TemporaryDirectory() as tmp:
+            config = mutation.load_config(write_config(tmp, payload))
+        first, second = config.targets
+        self.assertEqual(
+            (first.functions, first.operators, first.aggregate), (("grade", "C.m"), ("compare", "arithmetic"), False)
+        )
+        self.assertEqual((second.functions, second.operators, second.aggregate), (None, None, True))
+        self.assertTrue(mutation.MUTANT_ID_RE.match(f"{TOY_PATH}:23:14:arithmetic:0"))
+
+        def config(**target):
+            return {"schema_version": 1, "targets": [dict(VALID_TARGET, **target)]}
+
+        cases = {
+            "functions not a list": config(functions="grade"),
+            "functions empty": config(functions=[]),
+            "functions duplicate": config(functions=["grade", "grade"]),
+            "functions not a qualname": config(functions=["a b"]),
+            "functions trailing dot": config(functions=["C."]),
+            "operators unknown": config(operators=["nope"]),
+            "operators empty": config(operators=[]),
+            "aggregate string": {
+                "schema_version": 1,
+                "targets": [{"path": glob, "tests": ["tests.a"], "min_score": 0, "aggregate": "yes"}],
+            },
+            "aggregate without a glob": config(aggregate=True),
+        }
+        with TemporaryDirectory() as tmp:
+            for name, bad in cases.items():
+                with self.subTest(case=name):
+                    with self.assertRaises(mutation.ConfigError):
+                        mutation.load_config(write_config(tmp, bad))
+
     def test_glob_targets_expand_to_sorted_files_and_empty_globs_fail(self):
         loop_id, toy_id = f"{LOOP_PATH}:7:8:delete:0", f"{TOY_PATH}:5:13:compare:0"
         target = mutation.TargetConfig("tests/mutation_toys/*_target.py", ("tests.a",), 0.5, (toy_id, loop_id))
@@ -532,6 +700,17 @@ class ConfigTests(unittest.TestCase):
             twice = (target, mutation.TargetConfig(TOY_PATH, ("tests.a",), 0.5))
             with self.assertRaisesRegex(mutation.ConfigError, "more than one"):
                 mutation.expand_targets(mutation.Config(TOY_COPY, twice), REPO)
+
+
+def make_results(path="m.py", operator="constant", **counts):
+    """MutantResults with distinct ids: counts maps a status to how many results have it, in STATUSES order."""
+    results = []
+    for status in mutation.STATUSES:
+        for _ in range(counts.get(status, 0)):
+            mutant = mutation.Mutant(path, 1, 0, 1, 1, operator, len(results), "1", "2")
+            diff = f"--- a/{path}\n+++ b/{path}\n@@ -1 +1 @@\n-x = 1\n+x = 2\n" if status == "survived" else ""
+            results.append(mutation.MutantResult(mutant, status, 0.01, diff))
+    return tuple(results)
 
 
 class FakeRunner:
@@ -710,7 +889,6 @@ class FakeRunnerTests(unittest.TestCase):
             "outside the root": ("../escape.py", ("tests.mutation_toys.weak_suite",), {}, "outside"),
             "parent segment": ("tests/../tests/mutation_toys/toy_target.py", ("tests.a",), {}, r"\.\."),
             "missing target": ("tests/mutation_toys/nope.py", ("tests.mutation_toys.weak_suite",), {}, "not found"),
-            "missing test module": (TOY_PATH, ("tests.mutation_toys.no_such_suite",), {}, "test module not found"),
             "missing copy path": (
                 TOY_PATH,
                 ("tests.mutation_toys.weak_suite",),
@@ -743,6 +921,214 @@ class FakeRunnerTests(unittest.TestCase):
             FakeRunner(), tests=("tests.mutation_toys.weak_suite.WeakToyTests",), only=[self.expected[0].id]
         )
         self.assertEqual(dotted.tests, ("tests.mutation_toys.weak_suite.WeakToyTests",))
+
+    def test_default_runner_requires_ci_py_and_test_modules_but_a_custom_runner_does_not(self):
+        default_cases = {
+            "missing test module": (("tests.mutation_toys.no_such_suite",), TOY_COPY, "test module not found"),
+            "ci.py not copied": (("tests.mutation_toys.weak_suite",), ("tests",), "scripts/ci.py is not covered"),
+        }
+        for name, (tests, copy_paths, message) in default_cases.items():
+            with self.subTest(case=name), patch.object(mutation.subprocess, "Popen") as popen:
+                with self.assertRaisesRegex(mutation.ConfigError, message):
+                    mutation.run_mutants(
+                        TOY_PATH, tests, repo_root=self.repo, copy_paths=copy_paths, scratch_dir=self.scratch
+                    )
+                popen.assert_not_called()
+        runner = FakeRunner()
+        report = mutation.run_mutants(
+            TOY_PATH,
+            ("benchmark:crew-training",),
+            repo_root=self.repo,
+            copy_paths=("tests/mutation_toys",),
+            scratch_dir=self.scratch,
+            test_runner=runner,
+            only=[self.expected[0].id],
+        )
+        self.assertEqual(report.counts["killed"], 1)
+        self.assertEqual({call[2] for call in runner.calls}, {("benchmark:crew-training",)})
+        with self.assertRaisesRegex(mutation.ConfigError, "not covered"):
+            mutation.run_mutants(
+                TOY_PATH, ("x",), repo_root=self.repo, copy_paths=("scripts/ci.py",), test_runner=FakeRunner()
+            )
+
+    def test_functions_and_operators_reach_run_mutants(self):
+        runner = FakeRunner(status="failed")
+        report = self.run_toy(runner, functions=["tally"], operators=["delete", "arithmetic"])
+        self.assertEqual(
+            [result.mutant.id for result in report.results],
+            [
+                f"{TOY_PATH}:21:4:delete:0",
+                f"{TOY_PATH}:23:8:delete:0",
+                f"{TOY_PATH}:23:14:arithmetic:0",
+                f"{TOY_PATH}:24:4:delete:0",
+            ],
+        )
+        self.assertEqual({result.mutant.scope for result in report.results}, {"tally"})
+        self.assertEqual(len(runner.calls), 5)
+        self.assertIn(
+            "total -= value", runner.calls[1][0] + runner.calls[2][0] + runner.calls[3][0] + runner.calls[4][0]
+        )
+        for keywords, message in (
+            ({"functions": ["nope"]}, "match no def or class"),
+            ({"operators": ["nope"]}, "unknown operator"),
+        ):
+            with self.subTest(keywords=keywords):
+                untouched = FakeRunner()
+                with self.assertRaisesRegex(mutation.ConfigError, message):
+                    self.run_toy(untouched, **keywords)
+                self.assertEqual(untouched.calls, [])
+
+    def test_zero_generated_mutants_is_a_config_error(self):
+        for keywords in ({"functions": ["sign"]}, {"functions": ["grade"], "operators": ["minmax"]}):
+            with self.subTest(keywords=keywords):
+                runner = FakeRunner()
+                with self.assertRaisesRegex(mutation.ConfigError, "no mutants"):
+                    self.run_toy(runner, **keywords)
+                self.assertEqual(runner.calls, [])
+
+    def test_caller_supplied_mutants_check_only_and_stale_against_the_whole_file(self):
+        subset = self.expected[:2]
+        stale = f"{TOY_PATH}:999:0:delete:0"
+        report = self.run_toy(
+            FakeRunner(),
+            mutants=subset,
+            equivalent=[self.expected[10].id, stale],
+            only=[self.expected[1].id, self.expected[12].id],
+        )
+        self.assertEqual([result.mutant.id for result in report.results], [self.expected[1].id])
+        self.assertEqual(report.stale_equivalent, (stale,))
+        with self.assertRaisesRegex(mutation.ConfigError, "unknown mutant id"):
+            self.run_toy(FakeRunner(), mutants=subset, only=[f"{TOY_PATH}:1:0:delete:0"])
+
+    def test_mixed_statuses_give_the_exact_score_and_denominator(self):
+        broken = mutation.Mutant(TOY_PATH, 5, 13, 5, 15, "compare", 1, ">=", "(")
+        verdicts = {
+            mutation.apply_mutant(self.source, self.expected[1]): "failed",
+            mutation.apply_mutant(self.source, self.expected[2]): "timeout",
+        }
+        runner = FakeRunner(status=lambda text: verdicts.get(text, "passed"))
+        report = self.run_toy(
+            runner, mutants=[*self.expected[:6], broken], equivalent=[self.expected[0].id], min_score=0.3
+        )
+        self.assertEqual(
+            report.counts,
+            {"total": 7, "killed": 1, "survived": 3, "timeout": 1, "incompetent": 1, "equivalent": 1},
+        )
+        # (killed 1 + timeout 1) / (total 7 - incompetent 1 - equivalent 1)
+        self.assertEqual(report.score, 2 / 5)
+        self.assertAlmostEqual(report.headroom, 0.1)
+        self.assertTrue(report.passed)
+        zero = dict.fromkeys(mutation.STATUSES, 0)
+        self.assertEqual(
+            list(report.counts_by_operator.items()),
+            [
+                ("compare", dict(zero, killed=1, incompetent=1)),
+                ("boundary", dict(zero, timeout=1, survived=1)),
+                ("negate", dict(zero, equivalent=1)),
+                ("return", dict(zero, survived=2)),
+            ],
+        )
+        payload = report.to_dict()
+        self.assertEqual(payload["schema_version"], 1)
+        self.assertEqual(payload["counts_by_operator"], report.counts_by_operator)
+        self.assertAlmostEqual(payload["headroom"], 0.1)
+        self.assertEqual(report.ratchet_hint, f"ratchet: {TOY_PATH} scored 0.400; raise min_score from 0.3 to 0.40")
+
+    def test_main_prints_the_ratchet_hint_and_appends_a_markdown_summary(self):
+        config = write_config(self.tmp, {"schema_version": 1, "copy": list(TOY_COPY), "targets": [VALID_TARGET]})
+        summary = self.tmp / "summary.md"
+        summary.write_text("# Earlier step\n", encoding="utf-8")
+        results = make_results(TOY_PATH, killed=9, survived=1)
+        crafted = mutation.Report(TOY_PATH, ("tests.mutation_toys.strong_suite",), results, 1.0, 10.0, min_score=0.5)
+        with patch.object(mutation, "run_mutants", return_value=crafted) as run:
+            code, stdout, stderr = run_main(
+                ["--repo-root", self.repo, "--config", config, "--quiet", "--summary", summary]
+            )
+        self.assertEqual(code, 0, stderr)
+        self.assertIn(f"ratchet: {TOY_PATH} scored 0.900; raise min_score from 0.5 to 0.90\n", stderr)
+        self.assertNotIn("ratchet", stdout)
+        text = summary.read_text(encoding="utf-8")
+        self.assertTrue(text.startswith("# Earlier step\n\n## Mutation testing\n\n"), text)
+        self.assertIn(crafted.format_markdown(), text)
+        self.assertEqual(run.call_args.kwargs["operators"], None)
+        self.assertEqual(run.call_args.kwargs["functions"], None)
+        with patch.object(mutation, "run_mutants", return_value=crafted):
+            unwritable = run_main(["--repo-root", self.repo, "--config", config, "--quiet", "--summary", self.tmp])
+        self.assertEqual(unwritable[0], 2)
+        self.assertIn("cannot write", unwritable[2])
+
+    def test_operators_and_functions_reach_the_command_line_and_list(self):
+        def listed(*arguments, **target):
+            config = write_config(
+                self.tmp, {"schema_version": 1, "copy": list(TOY_COPY), "targets": [dict(VALID_TARGET, **target)]}
+            )
+            code, stdout, stderr = run_main(["--repo-root", self.repo, "--config", config, "--list", *arguments])
+            self.assertEqual(code, 0, stderr)
+            return stdout.splitlines()
+
+        arithmetic = [f"{TOY_PATH}:23:14:arithmetic:0  '+=' -> '-='"]
+        self.assertEqual(listed("--operators", "arithmetic"), arithmetic)
+        self.assertEqual(listed(operators=["arithmetic"]), arithmetic)
+        self.assertEqual(listed("--operators", "arithmetic", operators=["delete"]), arithmetic)
+        self.assertEqual(
+            listed(functions=["is_member"], operators=["compare"]),
+            [f"{TOY_PATH}:11:16:compare:0  'in' -> 'not in'", f"{TOY_PATH}:11:36:compare:0  'is not' -> 'is'"],
+        )
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as raised:
+            mutation.main(["--repo-root", str(self.repo), "--operators", "nope", "--list"])
+        self.assertEqual(raised.exception.code, 2)
+        config = write_config(
+            self.tmp, {"schema_version": 1, "copy": list(TOY_COPY), "targets": [dict(VALID_TARGET, functions=["nope"])]}
+        )
+        code, _, stderr = run_main(["--repo-root", self.repo, "--config", config, "--quiet"])
+        self.assertEqual(code, 2)
+        self.assertIn("match no def or class", stderr)
+
+    def test_aggregate_glob_gates_the_combined_score(self):
+        glob = "tests/mutation_toys/*_target.py"
+        originals = {name: (self.repo / name).read_bytes() for name in (TOY_PATH, LOOP_PATH)}
+
+        class SplitRunner:
+            """Kills every toy_target mutant and lets every loop_target mutant survive."""
+
+            def __call__(self, workspace, tests, timeout):
+                changed = [name for name, data in originals.items() if (Path(workspace) / name).read_bytes() != data]
+                status = "failed" if changed == [TOY_PATH] else "passed"
+                return mutation.RunResult(status, 0.5 if not changed else 0.01, "", tests_run=5)
+
+        def run(min_score, aggregate=True):
+            target = {"path": glob, "tests": ["tests.mutation_toys.weak_suite"], "min_score": min_score}
+            if aggregate:
+                target["aggregate"] = True
+            config = write_config(self.tmp, {"schema_version": 1, "copy": list(TOY_COPY), "targets": [target]})
+            report_path = self.tmp / "aggregate.json"
+            arguments = ["--repo-root", self.repo, "--config", config, "--quiet", "--scratch-dir", self.scratch]
+            with patch.object(mutation, "SubprocessTestRunner", SplitRunner):
+                code, stdout, stderr = run_main([*arguments, "--json", report_path])
+            return code, stdout, stderr, json.loads(report_path.read_text(encoding="utf-8"))
+
+        code, stdout, stderr, payload = run(0.6)
+        self.assertEqual(code, 0, stderr)
+        self.assertTrue(payload["passed"])
+        self.assertEqual([report["target"] for report in payload["reports"]], [LOOP_PATH, TOY_PATH, glob])
+        loop, toy, combined = payload["reports"]
+        self.assertEqual((loop["score"], loop["passed"], loop["part_of"]), (0.0, True, glob))
+        self.assertEqual((toy["score"], toy["part_of"]), (1.0, glob))
+        self.assertEqual(combined["counts"]["total"], 35)
+        self.assertAlmostEqual(combined["score"], 24 / 35)
+        self.assertEqual((combined["passed"], combined["part_of"], combined["min_score"]), (True, None, 0.6))
+        self.assertIn(f"score 0.0% (gated as part of {glob})", stdout)
+        self.assertIn(f"{glob}: 35 mutants, 24 killed, 11 survived", stdout)
+        self.assertIn("score 68.6% (minimum 60.0%) PASS", stdout)
+        self.assertIn(f"ratchet: {glob} scored 0.686; raise min_score from 0.6 to 0.68\n", stderr)
+
+        failing = run(0.7)
+        self.assertEqual(failing[0], 1)
+        self.assertFalse(failing[3]["reports"][-1]["passed"])
+        separate = run(0.6, aggregate=False)
+        self.assertEqual(separate[0], 1)
+        self.assertEqual([report["target"] for report in separate[3]["reports"]], [LOOP_PATH, TOY_PATH])
+        self.assertEqual([report["passed"] for report in separate[3]["reports"]], [False, True])
 
     def test_main_returns_130_on_interrupt(self):
         config = write_config(self.tmp, {"schema_version": 1, "copy": list(TOY_COPY), "targets": [VALID_TARGET]})
@@ -875,8 +1261,20 @@ class EndToEndToyRuns(unittest.TestCase):
                 "timeout_seconds",
                 "stale_equivalent",
                 "mutants",
+                "schema_version",
+                "counts_by_operator",
+                "headroom",
+                "part_of",
             },
         )
+        self.assertEqual(report["schema_version"], 1)
+        self.assertAlmostEqual(report["headroom"], 14 / 24 - 0.9)
+        by_operator = report["counts_by_operator"]
+        self.assertEqual(list(by_operator), [op for op in mutation.OPERATORS if op in by_operator])
+        self.assertEqual(
+            by_operator["boundary"], {"killed": 0, "survived": 2, "timeout": 0, "incompetent": 0, "equivalent": 0}
+        )
+        self.assertEqual(sum(sum(counts.values()) for counts in by_operator.values()), 24)
         self.assertEqual(report["target"], TOY_PATH)
         self.assertEqual(report["tests"], ["tests.mutation_toys.weak_suite"])
         self.assertEqual(report["min_score"], 0.9)
@@ -884,6 +1282,11 @@ class EndToEndToyRuns(unittest.TestCase):
         self.assertEqual(report["stale_equivalent"], [])
         self.assertEqual(set(report["counts"]), {"total", "killed", "survived", "timeout", "incompetent", "equivalent"})
         keys = {"id", "path", "line", "col", "end_line", "end_col", "operator", "index", "original", "replacement"}
+        keys.add("scope")
+        self.assertEqual(
+            sorted({mutant["scope"] for mutant in report["mutants"]}),
+            ["describe", "grade", "is_member", "require", "tally"],
+        )
         for mutant in report["mutants"]:
             self.assertEqual(set(mutant), keys | {"status", "seconds", "diff"})
             self.assertEqual(bool(mutant["diff"]), mutant["status"] == "survived", mutant["id"])
@@ -1149,6 +1552,92 @@ class ReviewRegressionTests(unittest.TestCase):
         self.assertEqual(stdout.splitlines(), [f"{chosen}  '>=' -> '<'"])
 
 
+class ReportTests(unittest.TestCase):
+    """Report fields for gating and ratcheting: headroom, ratchet_hint, aggregation and the Markdown summary."""
+
+    def report(self, min_score, **counts):
+        partial = counts.pop("partial", False)
+        part_of = counts.pop("part_of", None)
+        results = make_results(**counts)
+        return mutation.Report("m.py", ("tests.a",), results, 1.0, 10.0, min_score, partial=partial, part_of=part_of)
+
+    def test_ratchet_hint_needs_a_passing_complete_run_two_points_above_the_floor(self):
+        self.assertEqual(
+            self.report(0.85, killed=9, survived=1).ratchet_hint,
+            "ratchet: m.py scored 0.900; raise min_score from 0.85 to 0.90",
+        )
+        self.assertEqual(
+            self.report(0.88, killed=9, survived=1).ratchet_hint,
+            "ratchet: m.py scored 0.900; raise min_score from 0.88 to 0.90",
+        )
+        self.assertEqual(
+            self.report(0.2, killed=29, survived=71).ratchet_hint,
+            "ratchet: m.py scored 0.290; raise min_score from 0.2 to 0.29",
+        )
+        self.assertEqual(
+            self.report(0, killed=1).ratchet_hint, "ratchet: m.py scored 1.000; raise min_score from 0 to 1.00"
+        )
+        for name, report in {
+            "headroom below 0.02": self.report(0.89, killed=9, survived=1),
+            "failing": self.report(0.95, killed=9, survived=1),
+            "no score": self.report(0.0, incompetent=2),
+            "partial run": self.report(0.5, killed=9, survived=1, partial=True),
+            "aggregate member": self.report(0.5, killed=9, survived=1, part_of="sdk/x/*.py"),
+        }.items():
+            with self.subTest(case=name):
+                self.assertIsNone(report.ratchet_hint)
+        self.assertAlmostEqual(self.report(0.85, killed=9, survived=1).headroom, 0.05)
+        self.assertAlmostEqual(self.report(0.95, killed=9, survived=1).headroom, -0.05)
+        self.assertIsNone(self.report(0.0, incompetent=2).headroom)
+
+    def test_aggregate_members_are_not_gated_and_combine_sums_every_result(self):
+        member = self.report(0.95, killed=1, survived=1, part_of="sdk/x/*.py")
+        self.assertTrue(member.passed)
+        self.assertIsNone(member.headroom)
+        self.assertIn("score 50.0% (gated as part of sdk/x/*.py)", member.format_text())
+        self.assertEqual(member.to_dict()["part_of"], "sdk/x/*.py")
+        stale = "m2.py:9:0:delete:0"
+        other = mutation.Report(
+            "m2.py", ("tests.a",), make_results("m2.py", killed=2, timeout=1), 2.0, 12.0, 0.95, (stale,)
+        )
+        combined = mutation.Report.combine("sdk/x/*.py", [member, other], 0.7)
+        self.assertEqual(combined.target, "sdk/x/*.py")
+        self.assertEqual(combined.counts["total"], 5)
+        self.assertEqual(combined.score, 4 / 5)
+        self.assertTrue(combined.passed)
+        self.assertEqual((combined.baseline_seconds, combined.timeout), (3.0, 12.0))
+        self.assertEqual(combined.stale_equivalent, (stale,))
+        self.assertIsNone(combined.part_of)
+        self.assertFalse(mutation.Report.combine("sdk/x/*.py", [member, other], 0.85).passed)
+
+    def test_markdown_summary(self):
+        report = self.report(0.85, killed=9, survived=1)
+        markdown = report.format_markdown()
+        self.assertTrue(markdown.startswith("### `m.py`: PASS\n\n"), markdown)
+        self.assertIn(
+            "Score **90.0%** (minimum 85.0%, headroom +5.0 points); 10 mutants: 9 killed, 1 survived, 0 timeout, "
+            "0 incompetent, 0 equivalent.\n",
+            markdown,
+        )
+        self.assertIn(
+            "| operator | killed | survived | timeout | incompetent | equivalent |\n"
+            "| --- | ---: | ---: | ---: | ---: | ---: |\n"
+            "| constant | 9 | 1 | 0 | 0 | 0 |\n",
+            markdown,
+        )
+        self.assertIn("ratchet: m.py scored 0.900; raise min_score from 0.85 to 0.90\n", markdown)
+        self.assertIn("<details><summary>1 surviving mutant</summary>\n", markdown)
+        self.assertIn("`m.py:1:0:constant:9`\n\n```diff\n--- a/m.py\n", markdown)
+        self.assertTrue(markdown.endswith("</details>\n"), markdown)
+        failing = self.report(0.95, killed=1, survived=2).format_markdown()
+        self.assertTrue(failing.startswith("### `m.py`: FAIL\n"), failing)
+        self.assertIn("headroom -61.7 points", failing)
+        self.assertIn("2 surviving mutants", failing)
+        empty = self.report(0.5, incompetent=1).format_markdown()
+        self.assertIn("Score **n/a** (no scored mutants) (minimum 50.0%)", empty)
+        self.assertNotIn("<details>", empty)
+
+
 class RepositoryWiringTests(unittest.TestCase):
     def test_toy_suites_are_not_collected_by_discovery(self):
         self.assertEqual(sorted(path.name for path in TOYS.glob("test*.py")), [])
@@ -1213,25 +1702,54 @@ class RepositoryWiringTests(unittest.TestCase):
         self.assertIn("--tests tests.test_a tests.test_b", mapped)
 
     @skip_unless_dependency(yaml, "PyYAML is not installed")
-    def test_workflow_mutation_job_is_non_blocking(self):
-        path = REPO / ".github" / "workflows" / "python-tests.yml"
-        workflow = yaml.load(path.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
+    def test_workflow_mutation_job_runs_only_for_blocking_ci_and_is_non_blocking(self):
+        def load(name):
+            path = REPO / ".github" / "workflows" / name
+            return yaml.load(path.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
+
+        workflow = load("python-tests.yml")
+        run_input = workflow["on"]["workflow_call"]["inputs"]["run-mutation"]
+        self.assertEqual((run_input["type"], run_input["default"]), ("boolean", "false"))
+        callers = {name: load(name)["jobs"]["tests"] for name in ("blocking-ci.yml", "postmerge-ci.yml", "release.yml")}
+        for name, caller in callers.items():
+            with self.subTest(caller=name):
+                self.assertEqual(caller["uses"], "./.github/workflows/python-tests.yml")
+        self.assertEqual(callers["blocking-ci.yml"]["with"]["run-mutation"], "true")
+        self.assertNotIn("run-mutation", callers["postmerge-ci.yml"].get("with", {}))
+        self.assertNotIn("run-mutation", callers["release.yml"].get("with", {}))
+
         job = workflow["jobs"]["mutation"]
-        # A job timeout or a failed setup step must not fail the reusable workflow, and so `CI required`.
-        self.assertEqual(job.get("continue-on-error"), "true")
+        self.assertEqual(job["if"], "${{ inputs.run-mutation }}")
+        # Job-level continue-on-error is not relied on: its effect on a reusable workflow's needs.<job>.result is
+        # uncertain. The step carries it instead, and times out before the job does.
+        self.assertNotIn("continue-on-error", job)
         self.assertNotIn("strategy", job)
         steps = [step for step in job["steps"] if "scripts/mutation.py" in step.get("run", "")]
         self.assertEqual(len(steps), 1)
         (step,) = steps
         self.assertEqual(step.get("continue-on-error"), "true")
-        # The step times out before the job does, so a slow run is reported, not a job failure.
         self.assertLess(int(step["timeout-minutes"]), int(job["timeout-minutes"]))
+        for fragment in ("--jobs 4", "--json mutation.json", '--summary "$GITHUB_STEP_SUMMARY"'):
+            self.assertIn(fragment, step["run"])
         # Exit 1 (score below min_score) is a warning; exit 2 (config, baseline or harness error) stays visible.
         self.assertIn("::warning", step["run"])
         self.assertIn("::error", step["run"])
         others = [other for other in job["steps"] if other is not step]
         self.assertFalse([other for other in others if "continue-on-error" in other])
-        self.assertFalse([other for other in job["steps"] if "pip" in other.get("run", "")])
+
+        # The same cached dependency install as the tests job, so client.py targets can import requests.
+        tests_steps = workflow["jobs"]["tests"]["steps"]
+        install = "python -m pip install -r .github/requirements-ci.txt"
+        self.assertEqual([other.get("run") for other in job["steps"]].count(install), 1)
+        self.assertIn(install, [other.get("run") for other in tests_steps])
+
+        def setup(steps):
+            (found,) = [other for other in steps if other.get("uses", "").startswith("actions/setup-python@")]
+            return found
+
+        self.assertEqual(setup(job["steps"])["uses"], setup(tests_steps)["uses"])
+        for key in ("cache", "cache-dependency-path"):
+            self.assertEqual(setup(job["steps"])["with"][key], setup(tests_steps)["with"][key])
 
 
 if __name__ == "__main__":

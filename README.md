@@ -23,8 +23,15 @@ SHA-256 checksums. These validation workflows use mocked game traffic.
 Mutation testing is advisory: `make mutation` mutates each module listed in
 `automation/mutation/config.json` (or one module, `make mutation
 TARGET=sdk/crew_leveling.py`) inside a temporary copy, runs only its mapped
-tests, and fails below the module's recorded minimum score. CI reports the
-score without blocking merges.
+tests, and fails below the module's recorded minimum score. A target can
+limit mutation to some functions (`"functions": ["Class.method"]`), choose
+operators (`"operators"`, or `--operators`, including the opt-in `arithmetic`
+and `minmax`), and gate a glob such as `sdk/training/**/*.py` on its combined
+score (`"aggregate": true`). A passing score at least two points above its
+minimum prints a `ratchet:` line naming the new floor to record, and
+`--summary PATH` appends a Markdown report. Blocking CI (the `run-mutation`
+input of `python-tests.yml`) reports the score in the job summary without
+blocking merges; post-merge and release runs skip it.
 
 See [.github/workflows/README.md](.github/workflows/README.md) for the
 check coverage, lint baseline, local commands, and branch-protection setup.

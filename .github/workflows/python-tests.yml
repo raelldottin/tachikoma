@@ -9,6 +9,10 @@ on:
       python-versions:
         type: string
         default: '["3.13"]'
+      # Only Blocking CI sets this; post-merge and release runs skip the advisory mutation job.
+      run-mutation:
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -50,10 +54,11 @@ jobs:
 
   mutation:
     name: Mutation score (advisory)
+    if: ${{ inputs.run-mutation }}
     runs-on: ubuntu-latest
+    # The mutation step carries continue-on-error and times out (15 minutes) before the job does, so a low score,
+    # a harness error or a slow run is reported without failing this reusable workflow or `CI required`.
     timeout-minutes: 20
-    # Advisory: a job timeout or a failed setup step must not fail this reusable workflow or `CI required`.
-    continue-on-error: true
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -61,6 +66,11 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.13"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            .github/requirements-ci.txt
+      - run: python -m pip install -r .github/requirements-ci.txt
       # Exit 1 (a score below min_score) becomes a warning annotation; exit 2 (config, baseline or harness error)
       # an error annotation, so a broken harness stays visible. Neither can fail `CI required`.
       - name: Mutation testing (non-blocking)
@@ -68,7 +78,7 @@ jobs:
         timeout-minutes: 15
         run: |
           status=0
-          python scripts/mutation.py --jobs 4 || status=$?
+          python scripts/mutation.py --jobs 4 --json mutation.json --summary "$GITHUB_STEP_SUMMARY" || status=$?
           if [ "$status" -eq 1 ]; then
             echo "::warning title=Mutation score::a target scored below its min_score (advisory)"
           elif [ "$status" -ne 0 ]; then

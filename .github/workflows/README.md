@@ -62,10 +62,27 @@ No repository settings are changed merely by adding these files.
   job timeouts, cache pip downloads, and disable checkout credential
   persistence. Validation defaults to `contents: read`.
 - `python-tests.yml` also runs an advisory mutation job (`scripts/mutation.py`,
-  Ubuntu / Python 3.13). The job and its step use `continue-on-error: true`,
-  so a score below a target's `min_score` in `automation/mutation/config.json`
-  (a warning annotation), a harness error (exit 2, an error annotation) or a
-  timeout is reported but cannot fail `CI required`.
+  Ubuntu / Python 3.13) when its `run-mutation` input is true. Only Blocking CI
+  passes `run-mutation: true`; post-merge and release runs skip the job. The
+  job installs `.github/requirements-ci.txt` with the same pip cache as the
+  tests job. The mutation step uses `continue-on-error: true` and a 15-minute
+  timeout inside the job's 20-minute timeout, so a score below a target's
+  `min_score` in `automation/mutation/config.json` (a warning annotation), a
+  harness error (exit 2, an error annotation) or a slow run is reported but
+  cannot fail `CI required`. The job itself has no `continue-on-error`, so a
+  failed checkout, setup or dependency install still fails it.
+- The mutation step writes `mutation.json` and, through
+  `--summary "$GITHUB_STEP_SUMMARY"`, appends a Markdown report to the job
+  summary: each target's score, minimum and headroom, per-operator counts,
+  surviving mutants and any `ratchet:` hint. A ratchet hint appears when a
+  passing target scores at least two points above its `min_score`; it names
+  the new floor (the score rounded down to two decimals) to record in the
+  config.
+- Config targets can also set `functions` (qualnames such as
+  `PixelStarshipsApi.addTraining`; nested functions and methods are included),
+  `operators` (from the defaults plus the opt-in `arithmetic` and `minmax`) and
+  `aggregate: true`, which gates a glob such as `sdk/training/**/*.py` on its
+  combined score while still printing each file's report.
 
 ## Lint debt is explicit
 
