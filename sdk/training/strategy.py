@@ -21,7 +21,16 @@ This preserves the original ``Client.manageTraining`` strategy with its defects 
 - Consumables are a fallback only. They are considered when nothing is startable for a crew that has a known role,
   sits in a training room and is under its TP cap; an out-of-stock item falls through to the Skip that would
   otherwise apply. ``DEFAULT_STRATEGY.consumables`` is empty until ``with_consumables`` attaches the item ids
-  found by ``sdk.training.parse.parse_consumable_designs``.
+  found by ``sdk.training.parse.parse_consumable_designs``. An item boosts the stat of the design the crew would
+  train in its current band, else the crew's highest positive stat (``sdk.training.planner.target_stat``).
+- Research gate values are tuples of (exact research name, minimum level >= 0) alternatives; () means ungated.
+- A role slot lists its trainings by tier (tier 1 first); it may list more than the bands use, but every band's tier
+  must index each role's training list for that slot (the single rule).
+
+Deliberate changes from Client.manageTraining (details in ``sdk.training.planner``'s docstring): finished iff
+training_end <= now (no per-tier elapsed-time gates); new fatigue gate; captain = capacity reaches the captain cap;
+FinishTraining whenever a design id is set and end <= now; exact room-name matching; design_missing also covers zero
+capacity; parse keeps its own envelope walker (no ``sdk.client`` import).
 """
 
 from __future__ import annotations
@@ -56,7 +65,10 @@ STAT_CODES: Mapping[str, str] = frozen_mapping(
 
 @dataclass(frozen=True)
 class RoleSlot:
-    """A room type and the training names for tiers 1, 2, 3 (any sequence; stored as a tuple)."""
+    """A room type and the training names by tier, tier 1 first (any sequence; stored as a tuple).
+
+    The list may be longer than the bands use; ``TrainingStrategy`` checks that every band's tier indexes it.
+    """
 
     room_type: str
     trainings: tuple[str, ...]
@@ -129,6 +141,7 @@ class TrainingStrategy:
         object.__setattr__(self, "exceptional_tp_caps", frozen_mapping(self.exceptional_tp_caps))
         object.__setattr__(self, "captain_tp_caps", frozen_mapping(self.captain_tp_caps))
         self._validate_bands()
+        self._validate_research_gates()
         self._validate_roles()
         self._validate_band_tiers()
         self._validate_consumables()
@@ -143,6 +156,12 @@ class TrainingStrategy:
                 trainings = role.slot(band.slot).trainings
                 if not 1 <= band.tier <= len(trainings):
                     raise ValueError(f"band {band.slot} T{band.tier} has no training in role {role.name!r}")
+
+    def _validate_research_gates(self) -> None:
+        """Each gate is a tuple of (exact research name, level >= 0) pairs; () is ungated."""
+        for key, alternatives in self.research_gates.items():
+            if not isinstance(alternatives, tuple) or not all(_gate_pair(pair) for pair in alternatives):
+                raise ValueError(f"research gate {key!r} needs a tuple of (name, level >= 0) pairs: {alternatives!r}")
 
     def _validate_consumables(self) -> None:
         """Consumable keys name a stat code and a known tier; item ids are positive ints; rules can fire."""
@@ -180,8 +199,6 @@ class TrainingStrategy:
             for slot in (role.primary, role.secondary):
                 if slot.room_type not in room_types:
                     raise ValueError(f"role {role.name!r} names unknown room type {slot.room_type!r}")
-                if len(slot.trainings) != 3:
-                    raise ValueError(f"role {role.name!r} must name exactly 3 trainings per slot: {slot.trainings!r}")
             for character in role.characters:
                 if character in owner:
                     raise ValueError(f"{character!r} is in roles {owner[character]!r} and {role.name!r}")
@@ -204,6 +221,13 @@ class TrainingStrategy:
 
 def _positive_int(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
+def _gate_pair(pair: object) -> bool:
+    if not isinstance(pair, tuple) or len(pair) != 2:
+        return False
+    name, level = pair
+    return isinstance(name, str) and isinstance(level, int) and not isinstance(level, bool) and level >= 0
 
 
 RARITY_STARS: Mapping[str, int] = frozen_mapping(

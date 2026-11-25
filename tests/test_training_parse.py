@@ -108,10 +108,20 @@ class TestScalars(unittest.TestCase):
     def test_to_int_truncates_non_whole_numbers_toward_zero(self) -> None:
         # Truncation, not rounding: a level or quantity of "7.6" never reads as 8.
         cases = (("7.6", 7), ("7.4", 7), (" 2.999 ", 2), ("-3.5", -3), ("-0.9", 0), (7.9, 7), (-7.9, -7))
-        cases += (("1e3", 1000), ("2.5e1", 25))
+        cases += (("+7", 7), ("+7.5", 7), ("0012", 12), ("9" * 30 + ".9", int("9" * 30)))
         for value, expected in cases:
             with self.subTest(value=value):
                 self.assertEqual(to_int(value), expected)
+
+    def test_to_int_accepts_only_ascii_decimal_text(self) -> None:
+        # Regression (review #17): int()/float() also accept underscores, Unicode digits, exponents and hex-ish
+        # spellings, so "1_000" read as 1000 and "٣" as 3. Only [sign] ASCII digits [. ASCII digits] parse.
+        rejected = ("1_000", "1_0.5", "٣", "１２", "7٣", "1e3", "2.5e1", "1E3", "0x10", "7.", ".5", "+-7", "- 7")
+        rejected += ("7 8", "1.2.3", "∞", "")
+        for value in rejected:
+            with self.subTest(value=value):
+                self.assertEqual(to_int(value), 0)
+                self.assertEqual(to_int(value, default=-9), -9)
 
     def test_parse_datetime_table(self) -> None:
         invalid = (None, "", "   ", "garbage", "2026-13-01T00:00:00", "2026-01-01", 20260101)
@@ -226,6 +236,37 @@ class TestCollections(unittest.TestCase):
             with self.subTest(raw=raw):
                 self.assertEqual(classify_payload(raw, "TrainingDesign"), expected)
         self.assertEqual(classify_payload({"Designs": None}, "TrainingDesign", "Designs"), "empty")
+
+    def test_classify_payload_error_message_inside_a_list(self) -> None:
+        # Regression (review #11): errorMessage detection only walked dicts, so an error beside records in a list
+        # (several sibling elements) read as "ok".
+        records = {"Characters": {"Character": [{"@CharacterId": "1"}]}}
+        for key in ("@errorMessage", "errorMessage"):
+            cases = (
+                {"Svc": {"Op": [{key: "x"}]}},
+                {**records, "Errors": [{key: "x"}]},
+                {**records, "Errors": [[{"Deeper": {key: "x"}}]]},
+            )
+            for raw in cases:
+                with self.subTest(key=key, raw=raw):
+                    self.assertEqual(classify_payload(raw, "Character"), "error")
+        self.assertEqual(classify_payload({**records, "Notes": [{"@message": "x"}, "text"]}, "Character"), "ok")
+
+    def test_classify_payload_item_without_records_is_an_error(self) -> None:
+        # Regression (review #12): an item element holding text instead of records read as "empty" (no data), which
+        # an executor treats as nothing to do; it is an unexpected schema.
+        junk_values = ("text", ["a", "b"], [None, "a"], 7, [7])
+        for value in junk_values:
+            for raw in ({"TrainingDesigns": {"TrainingDesign": value}}, {"Svc": {"TrainingDesign": value}}):
+                with self.subTest(raw=raw):
+                    self.assertEqual(classify_payload(raw, "TrainingDesign"), "error")
+        for value in (None, [], [None]):
+            with self.subTest(value=value):
+                self.assertEqual(
+                    classify_payload({"TrainingDesigns": {"TrainingDesign": value}}, "TrainingDesign"), "empty"
+                )
+        mixed = {"TrainingDesigns": {"TrainingDesign": ["junk", {"@TrainingDesignId": "1"}]}}
+        self.assertEqual(classify_payload(mixed, "TrainingDesign"), "ok")
 
     def test_classify_payload_nested_error_message_beats_container(self) -> None:
         # An errorMessage nested beside the container (the live envelope shape) still marks the response broken,
@@ -389,7 +430,11 @@ class TestTrainingDesigns(unittest.TestCase):
         self.assertIsNone(required("0"))
         self.assertIsNone(required(""))
         self.assertEqual(required("40"), "Advanced Training")
-        self.assertEqual(required("41"), "Advanced Training")
+        # Regression (review #2): the level was dropped ("Advanced Training Lv2" read as the family name, so Lv1
+        # satisfied it); the exact research design name is kept.
+        self.assertEqual(required("41"), "Advanced Training Lv2")
+        nameless = {"ResearchDesign": {"@ResearchDesignId": "42", "@RootResearchDesignId": "40"}}
+        self.assertEqual(required("42", nameless), "research_design:42")
         self.assertEqual(required("77"), "research_design:77")  # unresolvable: fails closed
         self.assertEqual(required("40", None), "research_design:40")
 
@@ -516,6 +561,13 @@ class TestCrew(unittest.TestCase):
             ({"@TrainingDesignId": "0", "@TrainingEndDate": ""}, (None, None)),
             ({"@TrainingDesignId": "", "@TrainingEndDate": "garbage"}, (None, None)),
             ({}, (None, None)),
+            # Regression (review #5): an empty or missing end date means idle (the design id is dropped, matching
+            # the server snapshot); a present but unparseable one keeps the id so the planner sees "unknown".
+            ({"@TrainingDesignId": "31", "@TrainingEndDate": ""}, (None, None)),
+            ({"@TrainingDesignId": "31", "@TrainingEndDate": "   "}, (None, None)),
+            ({"@TrainingDesignId": "31"}, (None, None)),
+            ({"@TrainingDesignId": "31", "@TrainingEndDate": "garbage"}, (31, None)),
+            ({"@TrainingDesignId": "31", "@TrainingEndDate": "2026-13-01T00:00:00"}, (31, None)),
             (
                 {"@TrainingDesignId": "31", "@TrainingEndDate": "2026-01-01T10:00:00.1234567"},
                 (31, datetime(2026, 1, 1, 10, 0, 0, 123456, tzinfo=UTC)),
@@ -528,6 +580,19 @@ class TestCrew(unittest.TestCase):
                 self.assertEqual((crew.training_design_id, crew.training_end), expected)
                 if crew.training_end is not None:
                     self.assertIs(crew.training_end.tzinfo, UTC)
+
+    def test_crew_duplicate_character_id_first_record_wins(self) -> None:
+        # Regression (review #8): a repeated @CharacterId produced two CrewStates for one character (two plans,
+        # possibly two trainings); the first record wins, as for every other id-keyed join.
+        records = [
+            CHARACTER,
+            {**CHARACTER, "@CharacterName": "Impostor", "@Level": "1"},
+            {**CHARACTER, "@CharacterId": "1002"},
+        ]
+        crew = parse_crew(characters_envelope(records), CHARACTER_DESIGNS)
+        self.assertEqual(
+            [(c.character_id, c.name, c.level) for c in crew], [(1001, "Delish", 20), (1002, "Delish", 20)]
+        )
 
     def test_crew_skips_bad_character_ids(self) -> None:
         missing = {key: value for key, value in CHARACTER.items() if key != "@CharacterId"}
@@ -594,6 +659,10 @@ class TestRoomsResearch(unittest.TestCase):
         researches = {"Research": {"@ResearchDesignId": "10", "@ResearchState": "Completed"}}
         self.assertEqual(dict(parse_research_levels(researches, research_designs)), {"Fitness": 1})
 
+        records = [CHARACTER, {**CHARACTER, "@CharacterDesignId": "502"}]
+        (crew,) = parse_crew(characters_envelope(records), CHARACTER_DESIGNS)
+        self.assertEqual(crew.training_capacity, 150)
+
         item_designs = {
             "ItemDesign": [
                 {"@ItemDesignId": "9", "@ItemName": "Common Weapon Consumable"},
@@ -633,17 +702,47 @@ class TestRoomsResearch(unittest.TestCase):
         def done(design_id: str, **extra: str) -> dict:
             return {"@ResearchDesignId": design_id, "@ResearchState": "Completed", **extra}
 
-        self.assertEqual(levels(done("11")), {"Fitness": 2})
-        self.assertEqual(levels(done("11"), done("12"), done("10")), {"Fitness": 3})  # max wins
+        # Each completed design counts under its family (max level) and under its own exact name (review #2).
+        self.assertEqual(levels(done("11")), {"Fitness": 2, "Fitness Lv2": 2})
+        all_fitness = {"Fitness": 3, "Fitness Lv2": 2, "Fitness Lv3": 3}
+        self.assertEqual(levels(done("11"), done("12"), done("10")), all_fitness)  # max wins
         self.assertEqual(levels({"@ResearchDesignId": "12", "@ResearchState": "Researching"}), {})
-        self.assertEqual(levels(done("12", **{"@ResearchLevel": "5"})), {"Fitness": 5})  # record level first
-        self.assertEqual(levels(done("21")), {"Education": 2})  # design @Level, root grouping
-        self.assertEqual(levels(done("20")), {"Education": 1})  # name suffix
-        self.assertEqual(levels(done("13")), {"Fitness": 3})  # design @Level beats a conflicting name suffix
+        record_level = {"Fitness": 5, "Fitness Lv3": 5}
+        self.assertEqual(levels(done("12", **{"@ResearchLevel": "5"})), record_level)  # record level first
+        self.assertEqual(levels(done("21")), {"Education": 2, "Education II": 2})  # design @Level, root grouping
+        self.assertEqual(levels(done("20")), {"Education": 1, "Education Level 1": 1})  # name suffix
+        # design @Level beats a conflicting name suffix; a shared exact name keeps its highest level
+        self.assertEqual(levels(done("13")), {"Fitness": 3, "Fitness Lv2": 3})
+        self.assertEqual(levels(done("11"), done("13")), {"Fitness": 3, "Fitness Lv2": 3})
         self.assertEqual(levels(done("30")), {"Advanced Training": 1})  # default 1
+        self.assertEqual(levels(done("12", **{"@ResearchLevel": "-2"})), {"Fitness": 3, "Fitness Lv3": 3})
         self.assertEqual(levels(done("999"), done("x")), {})  # unknown ids ignored
         self.assertEqual(dict(parse_research_levels(None, designs)), {})
         self.assertEqual(dict(parse_research_levels({"Research": done("11")}, None)), {})
+
+    def test_level_suffix_needs_a_word_boundary(self) -> None:
+        # Regression (review #10): "Sublevel 2" split into family "Sub" at level 2 and "Wolv2" into "Wo" at 2.
+        designs = {
+            "ResearchDesign": [
+                {"@ResearchDesignId": "1", "@ResearchName": "Sublevel 2"},
+                {"@ResearchDesignId": "2", "@ResearchName": "Wolv2"},
+                {"@ResearchDesignId": "3", "@ResearchName": "Fitness Lv.3"},
+                {"@ResearchDesignId": "4", "@ResearchName": "Fitness lv 4"},
+                {"@ResearchDesignId": "5", "@ResearchName": "Education LEVEL5"},
+                {"@ResearchDesignId": "6", "@ResearchName": "Shield Lv٣"},
+            ]
+        }
+
+        def level_of(design_id: str) -> dict:
+            researches = {"Research": {"@ResearchDesignId": design_id, "@ResearchState": "Completed"}}
+            return dict(parse_research_levels(researches, designs))
+
+        self.assertEqual(level_of("1"), {"Sublevel 2": 1})
+        self.assertEqual(level_of("2"), {"Wolv2": 1})
+        self.assertEqual(level_of("3"), {"Fitness": 3, "Fitness Lv.3": 3})
+        self.assertEqual(level_of("4"), {"Fitness": 4, "Fitness lv 4": 4})
+        self.assertEqual(level_of("5"), {"Education": 5, "Education LEVEL5": 5})
+        self.assertEqual(level_of("6"), {"Shield Lv٣": 1})  # non-ASCII digits are not a level
 
 
 class TestItems(unittest.TestCase):
@@ -698,7 +797,6 @@ class TestItems(unittest.TestCase):
         )
         self.assertEqual(dict(parse_consumable_designs(None)), {})
 
-
     def test_consumable_designs_full_stat_words(self) -> None:
         # Regression: only REPAIR was recognised as a full stat word; WEAPON, PILOT, ... were silently ignored.
         words = ("Weapon", "Science", "Engine", "Pilot", "Hp", "Attack", "Ability", "Stamina", "Repair")
@@ -735,7 +833,9 @@ class TestFixtures(unittest.TestCase):
 
     def test_build_context_fixture_golden(self) -> None:
         ctx = fixture_context()
-        self.assertEqual(dict(ctx.research_levels), {"Fitness": 2, "Education": 3})
+        self.assertEqual(
+            dict(ctx.research_levels), {"Fitness": 2, "Fitness Lv2": 2, "Education": 3, "Education Lv3": 3}
+        )
         self.assertEqual(dict(ctx.items), {9101: 2, 9102: 1, 9104: 7})
         self.assertEqual(ctx.rooms[13], "Galaxy Gym Annex")
         self.assertEqual(ctx.now, FIXTURE_NOW)
@@ -778,6 +878,57 @@ class TestFixtures(unittest.TestCase):
         rows = summarize(plan_training(ctx))
         self.assertIn(("start", 1009, 108), rows)
         self.assertNotIn(("skip", 1009, "research_missing"), rows)
+
+    def test_design_research_gate_needs_the_exact_level(self) -> None:
+        # Regression (review #2): a design requiring "Fitness Lv3" was satisfied by Fitness Lv1 because only the
+        # family name was kept. Crew 1001 (weapons, 20%) trains design 101, gated here on research 12.
+        research_designs = {
+            "ResearchDesigns": {
+                "ResearchDesign": [
+                    {"@ResearchDesignId": "10", "@ResearchName": "Fitness", "@RootResearchDesignId": "10"},
+                    {"@ResearchDesignId": "11", "@ResearchName": "Fitness Lv2", "@RootResearchDesignId": "10"},
+                    {"@ResearchDesignId": "12", "@ResearchName": "Fitness Lv3", "@RootResearchDesignId": "10"},
+                ]
+            }
+        }
+        training = load("training_designs_list.xml")
+        records = training["TrainingService"]["ListAllTrainingDesigns2"]["TrainingDesigns"]["TrainingDesign"]
+        self.assertEqual(records[0]["@TrainingDesignId"], "101")
+        records[0]["@RequiredResearchDesignId"] = "12"
+
+        def plan_with(*completed: str) -> list[tuple]:
+            researches = {"Research": [{"@ResearchDesignId": rid, "@ResearchState": "Completed"} for rid in completed]}
+            ctx = fixture_context(
+                training_designs_raw=training, research_designs_raw=research_designs, researches_raw=researches
+            )
+            self.assertEqual({d.id: d.required_research for d in ctx.designs}[101], "Fitness Lv3")
+            return [row for row in summarize(plan_training(ctx)) if row[1] == 1001]
+
+        self.assertEqual(plan_with("10"), [("skip", 1001, "research_missing")])
+        self.assertEqual(plan_with("10", "11"), [("skip", 1001, "research_missing")])
+        self.assertEqual(plan_with("10", "11", "12"), [("start", 1001, 101)])
+        self.assertEqual(plan_with("12"), [("start", 1001, 101)])
+
+    def test_build_context_builds_the_research_catalog_once(self) -> None:
+        # Regression (review #20): build_context derived the research catalog twice (designs and levels).
+        with mock.patch.object(parse_module, "_research_catalog", wraps=parse_module._research_catalog) as spy:
+            ctx = fixture_context()
+        self.assertEqual(spy.call_count, 1)
+        self.assertEqual(ctx.research_levels, fixture_context().research_levels)
+        self.assertEqual(ctx.designs, fixture_context().designs)
+
+    def test_unparseable_training_end_plans_as_training_in_progress(self) -> None:
+        # Review #5 end to end: crew 1004's end date is garbled; it keeps its design id and is never re-planned.
+        characters = load("characters.xml")
+        records = characters["CharacterService"]["ListAllCharactersOfUser"]["Characters"]["Character"]
+        self.assertEqual(records[3]["@CharacterId"], "1004")
+        records[3]["@TrainingEndDate"] = "2026-03-01T13:15:30junk"
+        ctx = fixture_context(characters_raw=characters)
+        crew = next(member for member in ctx.crew if member.character_id == 1004)
+        self.assertEqual((crew.training_design_id, crew.training_end), (101, None))
+        decisions = plan_training(ctx, with_consumables(DEFAULT_STRATEGY, {("WPN", "Common"): 9101}))
+        self.assertIn(Skip(1004, "training_in_progress", "training end unknown"), decisions)
+        self.assertFalse(any(getattr(d, "character_id", None) == 1004 and not isinstance(d, Skip) for d in decisions))
 
     def test_build_context_parses_rooms_once(self) -> None:
         # Regression: build_context parsed the room payloads twice (once for crew names, once for ctx.rooms).

@@ -38,10 +38,14 @@ from sdk.training.planner import (
     pick_consumable,
     pick_design,
     plan_training,
+    remaining_stock,
     replan_after_finish,
     research_ok,
+    resolve_room_name,
     role_for,
     room_type_for,
+    target_stat,
+    training_state,
 )
 from sdk.training.strategy import (
     DEFAULT_STRATEGY,
@@ -293,6 +297,18 @@ class TestBands(unittest.TestCase):
         short_role = Role("short", frozenset({"Shorty"}), short_slot, RoleSlot("gym", ("C", "D", "E")))
         with self.subTest("two-training slot"), self.assertRaises(ValueError):
             dataclasses.replace(DEFAULT_STRATEGY, roles=(*DEFAULT_STRATEGY.roles, short_role))
+
+    def test_role_slot_may_name_more_trainings_than_the_bands_use(self) -> None:
+        # Regression (review #22): a hard-coded "exactly 3 trainings" rule duplicated the band-tier check and
+        # rejected a slot listing an extra (unused) training; the band-tier index check is the single rule.
+        long_role = Role(
+            "long",
+            frozenset({"Longy"}),
+            RoleSlot("academy", ("A", "B", "C", "D")),
+            RoleSlot("gym", ("E", "F", "G", "H")),
+        )
+        strategy = dataclasses.replace(DEFAULT_STRATEGY, roles=(*DEFAULT_STRATEGY.roles, long_role))
+        self.assertEqual(role_for("Longy", strategy), long_role)
 
     def test_strategy_sorts_bands_once(self) -> None:
         shuffled = dataclasses.replace(DEFAULT_STRATEGY, bands=tuple(reversed(DEFAULT_STRATEGY.bands)))
@@ -579,8 +595,11 @@ class TestDesigns(unittest.TestCase):
 
 class TestStats(unittest.TestCase):
     def test_highest_stat_ties_canonical(self) -> None:
-        self.assertEqual(highest_stat({}), "HpImprovement")
-        self.assertEqual(highest_stat({"StaminaImprovement": 0}), "HpImprovement")
+        # Regression (review #4): an all-zero crew read as HP, so it was handed an HP consumable.
+        self.assertIsNone(highest_stat({}))
+        self.assertIsNone(highest_stat({"StaminaImprovement": 0}))
+        self.assertIsNone(highest_stat({"HpImprovement": -2, "PilotImprovement": 0}))
+        self.assertEqual(highest_stat({"HpImprovement": -2, "PilotImprovement": 1}), "PilotImprovement")
         self.assertEqual(highest_stat({"RepairImprovement": 4, "WeaponImprovement": 4}), "RepairImprovement")
         self.assertEqual(highest_stat({"WeaponImprovement": 4, "RepairImprovement": 4}), "RepairImprovement")
         self.assertEqual(highest_stat({"HpImprovement": 1, "StaminaImprovement": 9}), "StaminaImprovement")
@@ -611,13 +630,48 @@ class TestPickConsumable(unittest.TestCase):
     def test_pick_consumable_stock(self) -> None:
         crew = mk_crew(stats={"WeaponImprovement": 10}, fatigue=0)
         configured = dataclasses.replace(DEFAULT_STRATEGY, consumables={("WPN", "Common"): 9001})
-        self.assertIsNone(pick_consumable(crew, 10, {9001: 5}, DEFAULT_STRATEGY))
-        self.assertIsNone(pick_consumable(crew, 10, {9001: 0}, configured))
-        self.assertIsNone(pick_consumable(crew, 10, {}, configured))
-        decision = pick_consumable(crew, 10, {9001: 1}, configured)
+        self.assertIsNone(pick_consumable(crew, 10, {9001: 5}, (), DEFAULT_STRATEGY))
+        self.assertIsNone(pick_consumable(crew, 10, {9001: 0}, (), configured))
+        self.assertIsNone(pick_consumable(crew, 10, {}, (), configured))
+        decision = pick_consumable(crew, 10, {9001: 1}, (), configured)
         self.assertIsInstance(decision, UseConsumable)
         assert decision is not None
         self.assertEqual((decision.character_id, decision.item_design_id), (1, 9001))
+
+    def test_target_stat_prefers_the_band_design_stat(self) -> None:
+        # Regression (review #4/#24): the consumable boosted the crew's highest stat and TrainingDesign.stat was
+        # never read. The target is the stat of the design the crew would train in its current band (looked up for
+        # the band slot's room type), else the highest positive stat, else nothing.
+        weapon_t1 = TrainingDesign(
+            41, "Read Expert Weapon Theory", 1, "WeaponImprovement", timedelta(hours=1), None, None
+        )
+        hp_heavy = mk_crew(stats={"HpImprovement": 20})  # weapons crew at 20%: primary T1, academy
+        self.assertEqual(target_stat(hp_heavy, (weapon_t1,), DEFAULT_STRATEGY), "WeaponImprovement")
+        self.assertEqual(target_stat(hp_heavy, (), DEFAULT_STRATEGY), "HpImprovement")
+        self.assertIsNone(target_stat(mk_crew(), (), DEFAULT_STRATEGY))
+        self.assertEqual(target_stat(mk_crew(), (weapon_t1,), DEFAULT_STRATEGY), "WeaponImprovement")
+        # A design without a stat, or with a stat that is not a canonical one, falls back to the crew's stats.
+        for stat in (None, "Bogus"):
+            with self.subTest(stat=stat):
+                odd = dataclasses.replace(weapon_t1, stat=stat)
+                self.assertEqual(target_stat(hp_heavy, (odd,), DEFAULT_STRATEGY), "HpImprovement")
+                self.assertIsNone(target_stat(mk_crew(), (odd,), DEFAULT_STRATEGY))
+        # Lowest id among duplicates, exactly as pick_design does for StartTraining.
+        twin = dataclasses.replace(weapon_t1, id=40, stat="RepairImprovement")
+        self.assertEqual(target_stat(hp_heavy, (weapon_t1, twin), DEFAULT_STRATEGY), "RepairImprovement")
+        # The design is looked up for the band slot's room type, not the crew's current room.
+        gym_only = dataclasses.replace(weapon_t1, required_room_type="gym")
+        self.assertEqual(target_stat(hp_heavy, (gym_only,), DEFAULT_STRATEGY), "HpImprovement")
+        sprite = mk_crew(name="Galactic Sprite", room_name="Academy")  # engines: primary T1 trains in the gym
+        bench = TrainingDesign(42, "Bench Press", 1, "AttackImprovement", timedelta(hours=1), None, "gym")
+        self.assertEqual(target_stat(sprite, (bench,), DEFAULT_STRATEGY), "AttackImprovement")
+        # No band (complete), unknown role or no capacity: only the crew's own stats count.
+        done = mk_crew(total=95, stat="PilotImprovement")
+        self.assertEqual(target_stat(done, (weapon_t1,), DEFAULT_STRATEGY), "PilotImprovement")
+        stranger = mk_crew(name="Nobody", stats={"HpImprovement": 3})
+        self.assertEqual(target_stat(stranger, (weapon_t1,), DEFAULT_STRATEGY), "HpImprovement")
+        no_capacity = mk_crew(capacity=0, stats={"HpImprovement": 3})
+        self.assertEqual(target_stat(no_capacity, (weapon_t1,), DEFAULT_STRATEGY), "HpImprovement")
 
 
 TRAINING_NAMES = tuple(
@@ -728,7 +782,9 @@ class TestSkipCodes(unittest.TestCase):
         )
         for fatigue in (50, 99):
             with self.subTest(fatigue=fatigue):
-                self.assertSkip(plan_one(mk_crew(fatigue=fatigue), strategy=strategy), "fatigued", f"fatigue {fatigue} >= 50")
+                self.assertSkip(
+                    plan_one(mk_crew(fatigue=fatigue), strategy=strategy), "fatigued", f"fatigue {fatigue} >= 50"
+                )
 
     def test_skip_design_missing_no_design(self) -> None:
         # Regression: the original sent AddTraining with trainingDesignId=None when no design matched.
@@ -859,9 +915,20 @@ class TestTimeGate(unittest.TestCase):
         crew = mk_crew(training_design_id=DESIGN_IDS["Weapons PHD"], training_end=NOW + timedelta(hours=3))
         self.assertEqual(summary(plan_one(crew)), [("skip", 1, "training_in_progress")])
 
-    def test_design_id_without_end_is_idle(self) -> None:
-        crew = mk_crew(training_design_id=DESIGN_IDS["Weapons PHD"], training_end=None)
-        self.assertEqual(summary(plan_one(crew)), [("start", 1, "Read Expert Weapon Theory")])
+    def test_design_id_without_end_is_unknown_and_never_starts(self) -> None:
+        # Regression (review #5): a training whose end date did not parse read as idle, so the planner started a
+        # second training (or used a consumable) on a crew that may still be training. Unknown fails closed.
+        crew = mk_crew(total=10, stat="WeaponImprovement", training_design_id=DESIGN_IDS["Weapons PHD"])
+        self.assertEqual(training_state(crew, NOW), "unknown")
+        for strategy, research in ((DEFAULT_STRATEGY, FULL_RESEARCH), (CONSUMABLE_STRATEGY, {})):
+            with self.subTest(consumables=bool(strategy.consumables)):
+                decisions = plan_cons(crew, strategy=strategy, research=research)
+                self.assertEqual(decisions, (Skip(1, "training_in_progress", "training end unknown"),))
+        # Earlier precedence steps still win over the unknown state.
+        stranger = dataclasses.replace(crew, name="Nobody")
+        self.assertEqual(summary(plan_one(stranger)), [("skip", 1, "unknown_role")])
+        capped = dataclasses.replace(crew, rarity="Unique", stats={"WeaponImprovement": 70})
+        self.assertEqual(summary(plan_one(capped)), [("skip", 1, "tp_cap_reached")])
 
     def test_end_without_design_id_is_idle(self) -> None:
         for design_id in (None, 0):
@@ -876,9 +943,7 @@ class TestTimeGate(unittest.TestCase):
         before = mk_crew(1, total=50, training_design_id=weapon_t1, training_end=ended)
         other = mk_crew(2, "Cyber Duck", room_name="GYM")
         ctx = mk_ctx(before, other, designs=ALL_DESIGNS, research=FULL_RESEARCH)
-        self.assertEqual(
-            summary(plan_training(ctx))[:2], [("finish", 1), ("start", 1, "Read Expert Weapon Theory")]
-        )
+        self.assertEqual(summary(plan_training(ctx))[:2], [("finish", 1), ("start", 1, "Read Expert Weapon Theory")])
         # The rebuilt crew may still carry the finished training's id and end date; neither may trigger a re-finish.
         rebuilt = mk_crew(1, total=51, training_design_id=weapon_t1, training_end=ended)
         self.assertEqual(summary(replan_after_finish(ctx, rebuilt)), [("start", 1, "Weapons Summit")])
@@ -887,6 +952,55 @@ class TestTimeGate(unittest.TestCase):
         starved = mk_ctx(before, designs=ALL_DESIGNS, research={}, items={grey: 1})
         rebuilt_low = mk_crew(1, total=20, stat="WeaponImprovement", training_design_id=weapon_t1, training_end=ended)
         self.assertEqual(summary(replan_after_finish(starved, rebuilt_low, CONSUMABLE_STRATEGY)), [("use", 1, grey)])
+
+    def test_finished_crew_yields_scarce_stock_to_unfinished_crew(self) -> None:
+        # Regression (review #1/#26): a finished crew's advisory primary (pre-finish stats) reserved the only Hero
+        # unit, so a later crew that needed it was skipped and the executor's replan could waste or double-book it.
+        # Finished crew are now planned after every other crew, against the stock the first pass left.
+        hero = CONSUMABLE_IDS[("WPN", "Hero")]
+        ended = {"training_design_id": DESIGN_IDS["Weapons PHD"], "training_end": NOW - timedelta(minutes=5)}
+        heavy = {"total": 95, "fatigue": 100, "room_name": "GYM", "stat": "WeaponImprovement"}
+        done = mk_crew(1, **heavy, **ended)
+        waiting = mk_crew(2, **heavy)
+        ctx = mk_ctx(done, waiting, designs=ALL_DESIGNS, research=FULL_RESEARCH, items={hero: 1})
+        plan = plan_training(ctx, CONSUMABLE_STRATEGY)
+        self.assertEqual(summary(plan), [("finish", 1), ("skip", 1, "complete"), ("use", 2, hero)])
+        # Two finished crew compete in ctx order, after the unfinished one.
+        late = mk_crew(3, **heavy, **ended)
+        ctx3 = mk_ctx(late, done, waiting, designs=ALL_DESIGNS, research=FULL_RESEARCH, items={hero: 2})
+        self.assertEqual(
+            summary(plan_training(ctx3, CONSUMABLE_STRATEGY)),
+            [("finish", 3), ("use", 3, hero), ("finish", 1), ("skip", 1, "complete"), ("use", 2, hero)],
+        )
+        # The executor's replan sees only the stock the plan left for finished crew.
+        stock = remaining_stock(ctx.items, plan, exclude_character_ids=(1,))
+        self.assertEqual(dict(stock), {hero: 0})
+        rebuilt = mk_crew(1, **heavy)
+        replanned = replan_after_finish(ctx, rebuilt, CONSUMABLE_STRATEGY, items=stock)
+        self.assertEqual(summary(replanned), [("skip", 1, "complete")])
+        self.assertEqual(summary(replan_after_finish(ctx, rebuilt, CONSUMABLE_STRATEGY)), [("use", 1, hero)])
+        self.assertEqual(summary(replan_after_finish(ctx, rebuilt, CONSUMABLE_STRATEGY, None)), [("use", 1, hero)])
+
+    def test_remaining_stock(self) -> None:
+        grey, hero = CONSUMABLE_IDS[("WPN", "Common")], CONSUMABLE_IDS[("WPN", "Hero")]
+        plan = (
+            FinishTraining(3, "r"),
+            UseConsumable(3, grey, "r"),
+            UseConsumable(1, grey, "r"),
+            Skip(2, "complete", ""),
+            UseConsumable(2, hero, "r"),
+            StartTraining(4, 101, "r"),
+        )
+        items = {grey: 3, hero: 1, 77: 2}
+        self.assertEqual(dict(remaining_stock(items, plan)), {grey: 1, hero: 0, 77: 2})
+        self.assertEqual(dict(remaining_stock(items, plan, exclude_character_ids=(3,))), {grey: 2, hero: 0, 77: 2})
+        self.assertEqual(dict(remaining_stock(items, plan, exclude_character_ids={3, 2})), {grey: 2, hero: 1, 77: 2})
+        self.assertEqual(dict(remaining_stock(items, ())), items)
+        # Never below zero, and items the input does not hold are not invented.
+        self.assertEqual(dict(remaining_stock({grey: 1}, plan)), {grey: 0})
+        self.assertEqual(items, {grey: 3, hero: 1, 77: 2})
+        with self.assertRaises(TypeError):
+            remaining_stock(items, plan)[grey] = 5  # type: ignore[index]
 
     def test_finish_precedes_any_primary(self) -> None:
         crew = mk_crew(name="Nobody", training_design_id=7, training_end=NOW - timedelta(seconds=1))
@@ -931,6 +1045,17 @@ class TestDesignRoomLeakage(unittest.TestCase):
         self.assertEqual(summary(plan_one(crew, rooms={11: "Galaxy Gym"})), [("start", 1, "Steam Yoga")])
         named = mk_crew(1, "Cyber Duck", room_name="Bridge", room_id=11)
         self.assertEqual(summary(plan_one(named, rooms={11: "Galaxy Gym"})), [("skip", 1, "not_in_training_room")])
+
+    def test_blank_room_name_falls_back_to_ctx_rooms(self) -> None:
+        # Regression (review #13): a whitespace-only room name hid the room id lookup and read as no training room.
+        ctx = mk_ctx(designs=ALL_DESIGNS, rooms={11: "Galaxy Gym"})
+        for blank in ("", " ", "\t "):
+            with self.subTest(blank=blank):
+                crew = mk_crew(1, "Cyber Duck", room_name=blank, room_id=11)
+                self.assertEqual(resolve_room_name(crew, ctx), "Galaxy Gym")
+                self.assertEqual(summary(plan_one(crew, rooms={11: "Galaxy Gym"})), [("start", 1, "Steam Yoga")])
+        self.assertIsNone(resolve_room_name(mk_crew(room_name=" ", room_id=None), ctx))
+        self.assertEqual(resolve_room_name(mk_crew(room_name=" GYM ", room_id=11), ctx), " GYM ")
 
     def test_galaxy_gym_exact_planner(self) -> None:
         annex = mk_crew(name="Cyber Duck", room_name="Galaxy Gym Annex")
@@ -1037,10 +1162,39 @@ class TestConsumables(unittest.TestCase):
         )
 
     def test_grey_during_in_progress_in_other_slot_room(self) -> None:
-        # Precedence: in-progress (step 5, with fallback) is decided before the slot-room check (step 7).
+        # Precedence: in-progress (step 5, with fallback) is decided before the slot-room check (step 7). The
+        # target is the stat of the gym design the engines crew's primary T1 band trains.
         running = {"training_design_id": 1, "training_end": NOW + timedelta(hours=1)}
         crew = mk_crew(name="Galactic Sprite", total=0, room_name="Academy", **running)
-        self.assertEqual(summary(plan_cons(crew)), [("use", 1, CONSUMABLE_IDS[("HP", "Common")])])
+        bench = mk_design(DESIGN_IDS["Bench Press"], "Bench Press", required_room_type="gym")
+        designs = (*ALL_DESIGNS, dataclasses.replace(bench, id=5, stat="AttackImprovement"))
+        self.assertEqual(summary(plan_cons(crew, designs=designs)), [("use", 1, CONSUMABLE_IDS[("ATK", "Common")])])
+        # All-zero stats and no design stat: nothing to boost, so the Skip stands.
+        self.assertEqual(summary(plan_cons(crew)), [("skip", 1, "training_in_progress")])
+
+    def test_consumable_targets_the_band_design_stat(self) -> None:
+        # Regression (review #4): an HP-heavy weapons crew got an HP item although its training trains weapons.
+        weapon_t1 = DESIGN_IDS["Read Expert Weapon Theory"]
+        designs = tuple(
+            dataclasses.replace(design, stat="WeaponImprovement") if design.id == weapon_t1 else design
+            for design in ALL_DESIGNS
+        )
+        crew = mk_crew(total=20, stat="HpImprovement")
+        self.assertEqual(
+            summary(plan_cons(crew, research={}, designs=designs)), [("use", 1, CONSUMABLE_IDS[("WPN", "Common")])]
+        )
+        self.assertEqual(summary(plan_cons(crew, research={})), [("use", 1, CONSUMABLE_IDS[("HP", "Common")])])
+
+    def test_zero_stat_crew_without_design_stat_gets_no_consumable(self) -> None:
+        # Regression (review #4): an all-zero weapons crew read as HP-heavy and was handed an HP item.
+        crew = mk_crew(total=0)
+        self.assertEqual(summary(plan_cons(crew, research={})), [("skip", 1, "research_missing")])
+        designs = (mk_design(5, "Read Expert Weapon Theory"),)
+        self.assertEqual(summary(plan_cons(crew, research=FULL_RESEARCH, designs=())), [("skip", 1, "design_missing")])
+        weapon = (dataclasses.replace(designs[0], stat="WeaponImprovement"),)
+        self.assertEqual(
+            summary(plan_cons(crew, research={}, designs=weapon)), [("use", 1, CONSUMABLE_IDS[("WPN", "Common")])]
+        )
 
     def test_no_consumable_at_or_above_cap(self) -> None:
         for total in (70, 71):
@@ -1151,6 +1305,9 @@ class TestStructure(unittest.TestCase):
         lab = Role("lab", frozenset({"Zed"}), RoleSlot("lab", ("A", "B", "C")), RoleSlot("gym", ("D", "E", "F")))
         gates = dict(DEFAULT_STRATEGY.research_gates)
         del gates[("secondary", 1)]
+        gates_full = dict(DEFAULT_STRATEGY.research_gates)
+        valid_gates = {**gates_full, ("primary", 1): (("Fitness", 0), ("Education", 2))}
+        self.assertEqual(dataclasses.replace(DEFAULT_STRATEGY, research_gates=valid_gates).research_gates, valid_gates)
         invalid = {
             "unknown room type in role": {"roles": (*DEFAULT_STRATEGY.roles, lab)},
             "band without research gate": {"research_gates": gates},
@@ -1168,6 +1325,16 @@ class TestStructure(unittest.TestCase):
             "exceptional cap not keyed by (stars, name)": {"exceptional_tp_caps": {"Mistycball": 100}},
             "non-positive exceptional cap": {"exceptional_tp_caps": {(4, "Mistycball"): 0}},
             "non-positive captain cap": {"captain_tp_caps": {6: -1}},
+            # Regression (review #15): a malformed research gate built fine, then raised or never matched at plan time.
+            "research gate as a bare pair": {"research_gates": {**gates_full, ("primary", 1): ("Fitness", 1)}},
+            "research gate as a list": {"research_gates": {**gates_full, ("primary", 1): [("Fitness", 1)]}},
+            "research gate pair as a list": {"research_gates": {**gates_full, ("primary", 1): (["Fitness", 1],)}},
+            "research gate triple": {"research_gates": {**gates_full, ("primary", 1): (("Fitness", 1, 2),)}},
+            "research gate name not a str": {"research_gates": {**gates_full, ("primary", 1): ((7, 1),)}},
+            "research gate level a str": {"research_gates": {**gates_full, ("primary", 1): (("Fitness", "1"),)}},
+            "research gate level a bool": {"research_gates": {**gates_full, ("primary", 1): (("Fitness", True),)}},
+            "research gate level negative": {"research_gates": {**gates_full, ("primary", 1): (("Fitness", -1),)}},
+            "research gate level a float": {"research_gates": {**gates_full, ("primary", 1): (("Fitness", 1.0),)}},
         }
         for label, changes in invalid.items():
             with self.subTest(label), self.assertRaises(ValueError):
@@ -1240,18 +1407,21 @@ class TestStructure(unittest.TestCase):
             "pick_consumable",
             "pick_design",
             "plan_training",
+            "remaining_stock",
             "replan_after_finish",
             "research_ok",
             "resolve_room_name",
             "role_for",
             "room_type_for",
+            "target_stat",
             "total_points",
             "training_state",
         }
         self.assertEqual(set(planner_module.__all__), expected)
         # Regression: helpers defaulted to DEFAULT_STRATEGY, so a caller planning with another strategy could
         # silently look bands, rooms or caps up in the default one.
-        for name in ("band_for", "effective_cap", "pick_consumable", "research_ok", "role_for", "room_type_for"):
+        helpers = ("band_for", "effective_cap", "pick_consumable", "research_ok", "role_for", "room_type_for")
+        for name in (*helpers, "target_stat"):
             with self.subTest(helper=name):
                 parameter = inspect.signature(getattr(planner_module, name)).parameters["strategy"]
                 self.assertIs(parameter.default, inspect.Parameter.empty)
@@ -1277,6 +1447,24 @@ class TestStructure(unittest.TestCase):
                     builders.append((path.name, node.name))
         self.assertEqual(builders, [("model.py", "frozen_mapping")])
 
+    def test_mapping_proxy_only_inside_frozen_mapping(self) -> None:
+        # Regression (review #25): parse.py built read-only mappings with MappingProxyType directly, bypassing the
+        # package's single normaliser (model.frozen_mapping).
+        for path in sorted(PACKAGE_DIR.glob("*.py")):
+            if path.name == "model.py":
+                continue
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            used = {
+                node.id if isinstance(node, ast.Name) else node.attr
+                for node in ast.walk(tree)
+                if isinstance(node, (ast.Name, ast.Attribute))
+            }
+            imported = {
+                alias.name for node in ast.walk(tree) if isinstance(node, ast.ImportFrom) for alias in node.names
+            }
+            with self.subTest(file=path.name):
+                self.assertNotIn("MappingProxyType", used | imported)
+
     def test_package_exports_public_api(self) -> None:
         import sdk.training as package
 
@@ -1298,6 +1486,7 @@ class TestStructure(unittest.TestCase):
             "Skip",
             "SKIP_CODES",
             "replan_after_finish",
+            "remaining_stock",
             "classify_payloads",
         }
         self.assertIsInstance(package.__all__, tuple)
@@ -1383,6 +1572,7 @@ ORACLE_PRECEDENCE = (
     ("not_in_training_room", False, lambda facts: facts["room_type"] is None),
     ("design_missing", False, lambda facts: facts["capacity"] <= 0),
     ("tp_cap_reached", False, lambda facts: facts["total"] >= facts["cap"]),
+    ("training_in_progress", False, lambda facts: facts["training_unknown"]),
     ("training_in_progress", True, lambda facts: facts["in_progress"]),
     ("complete", True, lambda facts: facts["band"] is None),
     ("not_in_training_room", False, lambda facts: facts["slot_room"] != facts["room_type"]),
@@ -1401,7 +1591,8 @@ def _require_oracle_strategy(strategy) -> None:
 
 
 def _oracle_facts(ctx: TrainingContext, strategy, crew: CrewState) -> dict:
-    room_name = crew.room_name or (ctx.rooms.get(crew.room_id) if crew.room_id is not None else None)
+    own_room = crew.room_name if crew.room_name and crew.room_name.strip() else None
+    room_name = own_room or (ctx.rooms.get(crew.room_id) if crew.room_id is not None else None)
     room_type = ORACLE_ROOM_TYPES.get(room_name.strip()) if room_name else None
     role = ORACLE_ROLE_OF.get(crew.name)
     total = sum(crew.stats.values())
@@ -1419,8 +1610,10 @@ def _oracle_facts(ctx: TrainingContext, strategy, crew: CrewState) -> dict:
         level = ORACLE_RESEARCH_GATES[band]
         best_level = max(ctx.research_levels.get("Fitness", 0), ctx.research_levels.get("Education", 0))
         gate_met = level == 0 or best_level >= level
+        # Looked up for the band slot's room type: the room the crew trains in (equal to its own room whenever a
+        # StartTraining is possible) and the design whose stat a consumable targets.
         for candidate in ctx.designs:
-            if candidate.name == name and candidate.required_room_type in (None, room_type):
+            if candidate.name == name and candidate.required_room_type in (None, slot_room):
                 if design is None or candidate.id < design.id:
                     design = candidate
         if design is not None:
@@ -1428,6 +1621,11 @@ def _oracle_facts(ctx: TrainingContext, strategy, crew: CrewState) -> dict:
             design_research_met = needed is None or ctx.research_levels.get(needed, 0) >= 1
     end = crew.training_end
     has_training = bool(crew.training_design_id) and end is not None
+    design_stat = design.stat if design is not None and design.stat in ORACLE_STAT_CODES else None
+    best_stat, best_value = None, 0  # highest positive stat; ties keep the earliest in ORACLE_STAT_ORDER
+    for stat in ORACLE_STAT_ORDER:
+        if crew.stats.get(stat, 0) > best_value:
+            best_stat, best_value = stat, crew.stats.get(stat, 0)
     return {
         "role": role,
         "room_type": room_type,
@@ -1441,18 +1639,22 @@ def _oracle_facts(ctx: TrainingContext, strategy, crew: CrewState) -> dict:
         "fatigue": crew.fatigue,
         "design": design,
         "design_research_met": design_research_met,
+        "target_stat": design_stat or best_stat,
+        "training_unknown": bool(crew.training_design_id) and end is None,
         "in_progress": has_training and end > ctx.now,
         "finished": has_training and end <= ctx.now,
     }
 
 
-def _oracle_consumable(strategy, crew: CrewState, pct: int, stock: dict[int, int]) -> int | None:
-    """Item for the first rule whose window holds (pct, fatigue) and whose highest-stat item is still in stock."""
-    best = ORACLE_STAT_ORDER[0]
-    for stat in ORACLE_STAT_ORDER[1:]:
-        if crew.stats.get(stat, 0) > crew.stats.get(best, 0):
-            best = stat
-    code = ORACLE_STAT_CODES[best]
+def _oracle_consumable(strategy, crew: CrewState, facts: dict, stock: dict[int, int]) -> int | None:
+    """Item for the first rule whose window holds (pct, fatigue) and whose target-stat item is still in stock.
+
+    The target is the band design's (canonical) stat, else the highest positive stat; no target, no item.
+    """
+    if facts["target_stat"] is None:
+        return None
+    code = ORACLE_STAT_CODES[facts["target_stat"]]
+    pct = facts["pct"]
     for tier, low, high, fatigue_low, fatigue_high in ORACLE_CONSUMABLE_RULES:
         in_percent = low <= pct and (high is None or pct <= high)
         in_fatigue = fatigue_low <= crew.fatigue and (fatigue_high is None or crew.fatigue <= fatigue_high)
@@ -1469,7 +1671,7 @@ def oracle_primary(ctx: TrainingContext, strategy, crew: CrewState, stock: dict[
     if outcome == "start":
         return ("start", facts["design"].id)
     if fallback:
-        item = _oracle_consumable(strategy, crew, facts["pct"], stock)
+        item = _oracle_consumable(strategy, crew, facts, stock)
         if item is not None:
             return ("use", item)
     return ("skip", outcome)
@@ -1485,14 +1687,30 @@ def decision_shape(decision) -> tuple:
     return ("other", decision)
 
 
+def oracle_primaries(ctx: TrainingContext, strategy) -> list[tuple]:
+    """Expected primary per crew (ctx order). Stock flows in two passes: every crew whose training is not finished,
+    in ctx order, then the finished crew in ctx order, each pass seeing what the earlier crew left."""
+    finished = [_oracle_facts(ctx, strategy, crew)["finished"] for crew in ctx.crew]
+    expected: list[tuple] = [()] * len(ctx.crew)
+    stock = dict(ctx.items)
+    for second_pass in (False, True):
+        for index, crew in enumerate(ctx.crew):
+            if finished[index] != second_pass:
+                continue
+            expected[index] = oracle_primary(ctx, strategy, crew, stock)
+            if expected[index][0] == "use":
+                stock[expected[index][1]] -= 1
+    return expected
+
+
 def plan_violations(ctx: TrainingContext, strategy, decisions) -> list[str]:
     """Check a plan against the oracle: structure, per-crew expected decision, and shared consumable stock."""
     _require_oracle_strategy(strategy)
     problems: list[str] = []
     decisions = list(decisions)
-    stock = dict(ctx.items)
+    expected_primaries = oracle_primaries(ctx, strategy)
     position = 0
-    for crew in ctx.crew:
+    for index, crew in enumerate(ctx.crew):
         cid = crew.character_id
         finished = _oracle_facts(ctx, strategy, crew)["finished"]
         has_finish = (
@@ -1514,12 +1732,10 @@ def plan_violations(ctx: TrainingContext, strategy, decisions) -> list[str]:
             problems.append(f"{cid}: expected a primary decision, found {primary!r}")
             continue
         position += 1
-        expected = oracle_primary(ctx, strategy, crew, stock)
+        expected = expected_primaries[index]
         actual = decision_shape(primary)
         if actual != expected:
             problems.append(f"{cid}: planned {actual}, oracle expects {expected}")
-        if expected[0] == "use":
-            stock[expected[1]] -= 1
     if position != len(decisions):
         problems.append(f"{len(decisions) - position} decisions after the last crew's primary")
     uses = Counter(decision.item_design_id for decision in decisions if isinstance(decision, UseConsumable))
@@ -1544,9 +1760,20 @@ def _bad_plan_cases() -> list[tuple[str, TrainingContext, tuple]]:
     no_research_2 = mk_crew(2, total=10, stat="WeaponImprovement")
     mixed = mk_crew(1, stats={"WeaponImprovement": 6, "HpImprovement": 4})
     second = mk_crew(2, "Cyber Duck", room_name="GYM")
+    unknown_end = mk_crew(1, total=10, stat="WeaponImprovement", training_design_id=7)
+    zero = mk_crew(1)
+    hero = CONSUMABLE_IDS[("WPN", "Hero")]
+    heavy = {"total": 95, "fatigue": 100, "room_name": "GYM", "stat": "WeaponImprovement"}
+    done_heavy = mk_crew(1, **heavy, **finished)
+    waiting_heavy = mk_crew(2, **heavy)
+    weapon_stat = tuple(
+        dataclasses.replace(design, stat="WeaponImprovement") if design.id == weapon_id else design
+        for design in ALL_DESIGNS
+    )
+    hp_heavy = mk_crew(1, total=20, stat="HpImprovement")
 
-    def ctx(*crew: CrewState, items=None, research=FULL_RESEARCH) -> TrainingContext:
-        return mk_ctx(*crew, designs=ALL_DESIGNS, research=research, items=items)
+    def ctx(*crew: CrewState, items=None, research=FULL_RESEARCH, designs=ALL_DESIGNS) -> TrainingContext:
+        return mk_ctx(*crew, designs=designs, research=research, items=items)
 
     start = StartTraining(1, weapon_id, "r")
     stocked = {item_id: 3 for item_id in CONSUMABLE_IDS.values()}
@@ -1585,6 +1812,32 @@ def _bad_plan_cases() -> list[tuple[str, TrainingContext, tuple]]:
             ctx(idle, second),
             (StartTraining(2, DESIGN_IDS["Steam Yoga"], "r"), start),
         ),
+        (
+            "finished crew served before an unfinished one",
+            ctx(done_heavy, waiting_heavy, items={hero: 1}),
+            (FinishTraining(1, "r"), UseConsumable(1, hero, "r"), Skip(2, "complete", "")),
+        ),
+        ("start while training end unknown", ctx(unknown_end), (start,)),
+        (
+            "finish while training end unknown",
+            ctx(unknown_end),
+            (FinishTraining(1, "r"), Skip(1, "training_in_progress", "")),
+        ),
+        (
+            "consumable while training end unknown",
+            ctx(unknown_end, items=stocked, research={}),
+            (UseConsumable(1, grey, "r"),),
+        ),
+        (
+            "consumable for an all-zero crew",
+            ctx(zero, items=stocked, research={}),
+            (UseConsumable(1, CONSUMABLE_IDS[("HP", "Common")], "r"),),
+        ),
+        (
+            "item for the highest stat instead of the design stat",
+            ctx(hp_heavy, items=stocked, research={}, designs=weapon_stat),
+            (UseConsumable(1, CONSUMABLE_IDS[("HP", "Common")], "r"),),
+        ),
     ]
 
 
@@ -1614,7 +1867,8 @@ def make_designs(rng: random.Random, strategy=PROPERTY_STRATEGY) -> tuple[Traini
         for _ in range(copies):
             room = rng.choice(("academy", "gym")) if rng.random() < 0.10 else None
             research = "Advanced Training" if rng.random() < 0.3 else None
-            designs.append(TrainingDesign(next(ids), name, 1, None, timedelta(hours=1), research, room))
+            stat = rng.choice((None, "Bogus", "Bogus", "Bogus", *CANONICAL_STATS)) if rng.random() < 0.6 else None
+            designs.append(TrainingDesign(next(ids), name, 1, stat, timedelta(hours=1), research, room))
     rng.shuffle(designs)
     return tuple(designs)
 
@@ -1639,17 +1893,22 @@ def make_crew(rng: random.Random, cid: int, strategy=PROPERTY_STRATEGY, now: dat
         slot = next(slot for _low, high, slot, _tier in ORACLE_BANDS if target <= high)
         room_type = EXPECTED_ROLE_TABLE[role][0 if slot == "primary" else 2]
         room = rng.choice(GEN_ROOMS_BY_TYPE[room_type])
+    hero_ready = role is not None and rng.random() < 0.08
+    if hero_ready:
+        # Hero-consumable candidates (complete, fatigued, under the cap) are rare otherwise; finished crew plan last.
+        capacity, total = 100, rng.choice((90, 93, 99))
+        room = rng.choice(("Academy", "Lunar College", "GYM", "Galaxy Gym"))
     rooms: dict[int, str] = {}
     room_mode = rng.random()
     if room_mode < 0.6:
         room_id, room_name = None, room
     elif room_mode < 0.9:
-        room_id, room_name = 1000 + cid, None
+        room_id, room_name = 1000 + cid, rng.choice((None, None, "", "  "))  # a blank name defers to the id
         if room is not None:
             rooms[room_id] = room
     else:
         room_id, room_name = 5000 + cid, None  # id with no ctx.rooms entry
-    fatigue = rng.choice((0, 0, 0, rng.randint(1, 99), 99, 100, 150))
+    fatigue = rng.choice((100, 150)) if hero_ready else rng.choice((0, 0, 0, rng.randint(1, 99), 99, 100, 150))
     mode = rng.choice(("idle", "running", "finished", "id_no_end", "end_no_id"))
     design_id = rng.choice((101, 150, 777))
     seconds = rng.choice((0, 1, rng.randint(2, 86400)))
@@ -1667,7 +1926,7 @@ def make_crew(rng: random.Random, cid: int, strategy=PROPERTY_STRATEGY, now: dat
         character_id=cid,
         name=name,
         design_id=cid + 500,
-        rarity=rng.choice(GEN_RARITIES),
+        rarity="Legendary" if hero_ready else rng.choice(GEN_RARITIES),
         level=rng.randint(1, 40),
         room_id=room_id,
         room_name=room_name,
@@ -1694,21 +1953,26 @@ def make_context(rng: random.Random, strategy=PROPERTY_STRATEGY) -> TrainingCont
         crew[-1] = dataclasses.replace(crew[-1], character_id=crew[0].character_id)  # duplicate character id
     elif copy_mode > 0.75:
         # Contention: a consumable-ready first crew (training, fatigue 0, low percent) plus its twin under a fresh
-        # id, so both want the same item and a stock of 1 cannot serve them both.
+        # id, so both want the same item and a stock of 1 cannot serve them both. When the first crew's training
+        # has finished, the (still running) twin plans first and the finished crew gets what is left.
+        first_end = now + timedelta(hours=1) if rng.random() < 0.5 else now - timedelta(minutes=1)
+        ready_name = rng.choice(GEN_ROLE_NAMES)
+        ready_room = GEN_ROOMS_BY_TYPE[EXPECTED_ROLE_TABLE[ORACLE_ROLE_OF[ready_name]][0]][0]  # its primary room
         ready = dataclasses.replace(
             crew[0],
-            name=rng.choice(GEN_ROLE_NAMES),
+            name=ready_name,
             room_id=None,
-            room_name=rng.choice(("Academy", "GYM")),
+            room_name=ready_room,
             rarity="Legendary",
             training_capacity=100,
-            stats=_split_total(rng, rng.randint(0, 29)),
+            stats=_split_total(rng, 0 if rng.random() < 0.25 else rng.randint(1, 29)),  # 0: nothing to boost
             fatigue=0,
             training_design_id=101,
-            training_end=now + timedelta(hours=1),
+            training_end=first_end,
         )
         crew[0] = ready
-        crew.append(dataclasses.replace(ready, character_id=ready.character_id + 10000))
+        twin_end = now + timedelta(hours=1)
+        crew.append(dataclasses.replace(ready, character_id=ready.character_id + 10000, training_end=twin_end))
     research = {name: rng.randint(0, 3) for name in ("Fitness", "Education", "Advanced Training")}
     if rng.random() < 0.25:
         research = {}  # a new ship: every research gate is unmet
@@ -1749,18 +2013,25 @@ class TestPlannerProperties(unittest.TestCase):
             with self.subTest(seed=seed):
                 self.assertEqual(plan_violations(ctx, PROPERTY_STRATEGY, plan_training(ctx, PROPERTY_STRATEGY)), [])
 
-    def test_plan_composes_per_crew_when_stock_is_uncontended(self) -> None:
-        # Consumable stock is shared in crew order, so planning crew one at a time only matches the whole plan when
-        # no item can run out: every stocked item gets one unit per crew here. Contention has its own tests.
+    def test_plan_composes_per_crew_in_two_passes(self) -> None:
+        # Planning crew one at a time reproduces the whole plan, contended stock included, when the stock flows the
+        # planner's way: crew whose training is not finished first (ctx order), then the finished crew (ctx order),
+        # each single-crew plan seeing the stock the earlier ones left (remaining_stock).
         for seed in SEEDS:
             ctx = make_context(random.Random(seed))
-            plenty = {item: len(ctx.crew) if quantity else 0 for item, quantity in ctx.items.items()}
-            ctx = dataclasses.replace(ctx, items=plenty)
-            pieces: list = []
-            for member in ctx.crew:
-                pieces.extend(plan_training(dataclasses.replace(ctx, crew=(member,)), PROPERTY_STRATEGY))
+            finished = [training_state(member, ctx.now) == "finished" for member in ctx.crew]
+            stock = ctx.items
+            pieces: dict[int, tuple] = {}
+            for second_pass in (False, True):
+                for index, member in enumerate(ctx.crew):
+                    if finished[index] == second_pass:
+                        pieces[index] = plan_training(
+                            dataclasses.replace(ctx, crew=(member,), items=stock), PROPERTY_STRATEGY
+                        )
+                        stock = remaining_stock(stock, pieces[index])
+            composed = tuple(decision for index in range(len(ctx.crew)) for decision in pieces[index])
             with self.subTest(seed=seed):
-                self.assertEqual(plan_training(ctx, PROPERTY_STRATEGY), tuple(pieces))
+                self.assertEqual(plan_training(ctx, PROPERTY_STRATEGY), composed)
 
     def test_plan_deterministic_over_seeds(self) -> None:
         for seed in SEEDS:
@@ -1786,7 +2057,21 @@ class TestPlannerProperties(unittest.TestCase):
                 seen[type(decision).__name__] += 1
                 if isinstance(decision, FinishTraining):
                     seen[f"finish then {type(decisions[index + 1]).__name__}"] += 1
-            for member, primary, fallback in zip(ctx.crew, primaries(decisions), without_items):
+            plenty_primaries = primaries(plan_training(dataclasses.replace(ctx, items=plenty), PROPERTY_STRATEGY))
+            used_by_unfinished = {
+                primary.item_design_id
+                for member, primary in zip(ctx.crew, primaries(decisions))
+                if isinstance(primary, UseConsumable) and training_state(member, ctx.now) != "finished"
+            }
+            for member, primary, fallback, wanted in zip(
+                ctx.crew, primaries(decisions), without_items, plenty_primaries
+            ):
+                facts = _oracle_facts(ctx, PROPERTY_STRATEGY, member)
+                if isinstance(wanted, UseConsumable) and not isinstance(primary, UseConsumable):
+                    if facts["finished"] and wanted.item_design_id in used_by_unfinished:
+                        seen["finished crew yielded stock to an unfinished one"] += 1
+                if member.room_name is not None and not member.room_name.strip() and facts["room_type"] is not None:
+                    seen["blank room name resolved by id"] += 1
                 end = member.training_end
                 if end is not None and end.utcoffset() != timedelta(0):
                     seen["non-UTC training_end"] += 1
@@ -1794,6 +2079,12 @@ class TestPlannerProperties(unittest.TestCase):
                     seen[primary.reason_code] += 1
                 # Variants come from the consumable-free plan, so a Skip a consumable replaced still counts.
                 if isinstance(fallback, Skip):
+                    if fallback.detail == "training end unknown":
+                        seen["training end unknown"] += 1
+                    eligible = fallback.reason_code in ("training_in_progress", "research_missing", "design_missing")
+                    zero_window = facts["pct"] is not None and facts["pct"] <= 29 and member.fatigue == 0
+                    if eligible and zero_window and not facts["training_unknown"] and facts["target_stat"] is None:
+                        seen["no target stat, no consumable"] += 1
                     if fallback.reason_code == "not_in_training_room":
                         seen["move to" if fallback.detail.startswith("move to ") else "no training room"] += 1
                     if fallback.reason_code == "design_missing":
@@ -1808,6 +2099,11 @@ class TestPlannerProperties(unittest.TestCase):
                 if isinstance(primary, UseConsumable):
                     seen[f"{TIER_OF_ITEM[primary.item_design_id]} consumable"] += 1
                     seen[f"consumable replaced {fallback.reason_code}"] += 1
+                    design = facts["design"]
+                    from_design = design is not None and design.stat in STAT_CODES
+                    seen["consumable for the design stat" if from_design else "consumable for the highest stat"] += 1
+                    if design is not None and design.stat == "Bogus":
+                        seen["consumable despite a non-canonical design stat"] += 1
         expected = [*SKIP_CODES, "FinishTraining", "StartTraining", "UseConsumable", "Skip"]
         expected += [f"start {slot} T{tier}" for _low, _high, slot, tier in ORACLE_BANDS]
         expected += ["finish then StartTraining", "finish then Skip", "finish then UseConsumable"]
@@ -1818,6 +2114,10 @@ class TestPlannerProperties(unittest.TestCase):
             for code in ("training_in_progress", "complete", "research_missing", "design_missing")
         ]
         expected += ["non-UTC training_end", "duplicate character id", "contended stock changed the plan"]
+        expected += ["finished crew yielded stock to an unfinished one", "blank room name resolved by id"]
+        expected += ["training end unknown", "no target stat, no consumable"]
+        expected += ["consumable for the design stat", "consumable for the highest stat"]
+        expected += ["consumable despite a non-canonical design stat"]
         for label in expected:
             with self.subTest(label=label):
                 self.assertGreaterEqual(seen[label], 3, dict(seen))

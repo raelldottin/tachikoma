@@ -9,15 +9,20 @@ Assumed live attributes (only @TrainingDesignId/@TrainingName are confirmed by t
 - TrainingDesign: @Rank (tier), @Duration (seconds), @RequiredResearchDesignId ("0" = none), @RequiredRoomType,
   and per-stat chances @HpChance ... @StaminaChance (stat = highest positive chance, ties in canonical order).
 - Character: @CharacterId, @CharacterName, @CharacterDesignId, @Level, @RoomId, @Fatigue, @TrainingDesignId
-  ("0" = none), @TrainingEndDate ("" = idle), and the nine @*Improvement stats.
+  ("0" = none), @TrainingEndDate, and the nine @*Improvement stats. An empty or missing @TrainingEndDate means idle
+  (the design id is dropped too, matching the server snapshot); a present but unparseable one keeps the design id
+  with ``training_end`` None, which the planner treats as "training end unknown" (fails closed). A repeated
+  @CharacterId keeps its first record.
 - CharacterDesign: @TrainingCapacity, @Rarity. Room: @RoomId, @RoomDesignId. RoomDesign: @RoomName.
 - Research: @ResearchDesignId, @ResearchState ("Completed" counts), optional @ResearchLevel.
   ResearchDesign: @ResearchName, @RootResearchDesignId, optional @Level. Item: @ItemDesignId, @Quantity.
   ItemDesign: @ItemName, @ItemSubType, @Rarity.
 
-Research names are normalised to a family: the root design's @ResearchName with a trailing "Lv N"/"Level N"
-removed, valued at the highest completed level. A design's required research that cannot be resolved becomes
-"research_design:<id>", which no research level matches, so it fails closed. An unknown @RequiredRoomType becomes
+Research levels are recorded twice per completed design: under its family (the root design's @ResearchName with a
+trailing whitespace-separated "Lv N"/"Level N" removed, valued at the highest completed level) for the strategy's
+band gates, and under its own exact @ResearchName for design gates. A TrainingDesign's required research is that
+exact name (e.g. "Fitness Lv3"), so a lower level never satisfies it. A required research that cannot be resolved
+becomes "research_design:<id>", which no research level matches, so it fails closed. An unknown @RequiredRoomType becomes
 None (fails open): the server enforces rooms and the original code never checked it.
 """
 
@@ -27,17 +32,23 @@ import math
 import re
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
-from types import MappingProxyType
 
-from sdk.training.model import CANONICAL_STATS, CrewState, TrainingContext, TrainingDesign
+from sdk.training.model import CANONICAL_STATS, CrewState, TrainingContext, TrainingDesign, frozen_mapping
 from sdk.training.strategy import RARITY_STARS, ROOM_ACADEMY, ROOM_GYM, STAT_CODES
 
 
-def to_int(value: object, default: int = 0) -> int:
-    """Best-effort integer: ints pass through, numeric strings parse ("7", " 7 ", "7.0"); anything else -> default.
+# Optional sign, ASCII digits, optional "." and ASCII digits. int()/float() would also take "1_000", Unicode digits,
+# exponents and "inf"; none of those is a server number.
+_NUMBER_RE = re.compile(r"[+-]?[0-9]+(?:\.[0-9]+)?")
 
-    Non-whole values truncate toward zero ("7.6" -> 7, "-3.5" -> -3), so a level or quantity never rounds up.
-    Bools are not counts and take the default; NaN, infinities and overflowing values take the default too.
+
+def to_int(value: object, default: int = 0) -> int:
+    """Best-effort integer: ints pass through, decimal strings parse ("7", " 7 ", "+7", "7.0"); else -> default.
+
+    Strings must be an optional sign, ASCII digits and an optional "." with ASCII digits (surrounding whitespace is
+    ignored); underscores, Unicode digits, exponents and hex take the default. Non-whole values truncate toward zero
+    ("7.6" -> 7, "-3.5" -> -3), so a level or quantity never rounds up. Bools are not counts and take the default;
+    NaN, infinities and values beyond int()'s digit limit take the default too.
     """
     if isinstance(value, bool):
         return default
@@ -45,12 +56,10 @@ def to_int(value: object, default: int = 0) -> int:
         return value
     if isinstance(value, str):
         text = value.strip()
+        if _NUMBER_RE.fullmatch(text) is None:
+            return default
         try:
-            return int(text)
-        except ValueError:
-            pass
-        try:
-            value = float(text)
+            return int(text.partition(".")[0])
         except ValueError:
             return default
     if isinstance(value, float) and math.isfinite(value):
@@ -126,7 +135,7 @@ PAYLOAD_ERROR = "error"
 
 
 # Item key -> the element that wraps its records in live payloads ("Research" is *not* "Researchs").
-_CONTAINERS: Mapping[str, str] = MappingProxyType(
+_CONTAINERS: Mapping[str, str] = frozen_mapping(
     {
         "Character": "Characters",
         "CharacterDesign": "CharacterDesigns",
@@ -141,7 +150,7 @@ _CONTAINERS: Mapping[str, str] = MappingProxyType(
 )
 
 # classify_payloads keyword -> item key: build_context's payload keywords plus item_designs_raw (consumables).
-_PAYLOAD_ITEM_KEYS: Mapping[str, str] = MappingProxyType(
+_PAYLOAD_ITEM_KEYS: Mapping[str, str] = frozen_mapping(
     {
         "characters_raw": "Character",
         "character_designs_raw": "CharacterDesign",
@@ -159,15 +168,18 @@ _PAYLOAD_ITEM_KEYS: Mapping[str, str] = MappingProxyType(
 def classify_payload(raw: object, item_key: str, container_key: str | None = None) -> str:
     """Tell "no data" apart from "broken response" (ORIGINAL_REQUEST R5).
 
-    error: not a dict, an ``errorMessage`` anywhere, or neither the item nor its container is present
-    (unexpected schema). empty: the container is present but holds no records. ok: at least one record.
-    The container defaults to the known live name for ``item_key`` (e.g. "Research" -> "Researches"), else
-    ``item_key + "s"``.
+    error: not a dict, an ``errorMessage`` anywhere (inside dicts or lists), an item element holding something other
+    than records (text, numbers, a list without records), or neither the item nor its container is present
+    (unexpected schema). empty: the container (or a bare item element) is present but holds no records. ok: at least
+    one record. The container defaults to the known live name for ``item_key`` (e.g. "Research" -> "Researches"),
+    else ``item_key + "s"``.
     """
-    if not isinstance(raw, dict) or _has_key(raw, ("@errorMessage", "errorMessage"), 0):
+    if not isinstance(raw, dict) or _has_error(raw, 0):
         return PAYLOAD_ERROR
     if extract_collection(raw, item_key):
         return PAYLOAD_OK
+    if _has_junk_item(raw, item_key, 0):
+        return PAYLOAD_ERROR
     container = container_key or _CONTAINERS.get(item_key, item_key + "s")
     if _has_key(raw, (item_key, container), 0):
         return PAYLOAD_EMPTY
@@ -185,7 +197,7 @@ def classify_payloads(**raws: object) -> Mapping[str, str]:
     unknown = sorted(set(raws) - set(_PAYLOAD_ITEM_KEYS))
     if unknown:
         raise TypeError(f"classify_payloads() got unexpected keyword arguments: {unknown}")
-    return MappingProxyType({name: classify_payload(raw, _PAYLOAD_ITEM_KEYS[name]) for name, raw in raws.items()})
+    return frozen_mapping({name: classify_payload(raw, _PAYLOAD_ITEM_KEYS[name]) for name, raw in raws.items()})
 
 
 def _has_key(data: object, keys: tuple[str, ...], depth: int) -> bool:
@@ -196,8 +208,37 @@ def _has_key(data: object, keys: tuple[str, ...], depth: int) -> bool:
     return any(_has_key(value, keys, depth + 1) for value in data.values())
 
 
+_ERROR_KEYS = ("@errorMessage", "errorMessage")
+
+
+def _has_error(data: object, depth: int) -> bool:
+    """An errorMessage key anywhere: dicts and lists (several sibling elements) are both searched."""
+    if depth > _MAX_DEPTH:
+        return False
+    if isinstance(data, dict):
+        return any(key in data for key in _ERROR_KEYS) or any(_has_error(value, depth + 1) for value in data.values())
+    if isinstance(data, list):
+        return any(_has_error(value, depth + 1) for value in data)
+    return False
+
+
+def _is_junk(value: object) -> bool:
+    """Item-element content that is neither records nor empty: text, numbers, or a list holding such members."""
+    if isinstance(value, list):
+        return any(member is not None and not isinstance(member, dict) for member in value)
+    return value is not None and not isinstance(value, dict)
+
+
+def _has_junk_item(data: object, item_key: str, depth: int) -> bool:
+    if not isinstance(data, dict) or depth > _MAX_DEPTH:
+        return False
+    if item_key in data and _is_junk(data[item_key]):
+        return True
+    return any(_has_junk_item(value, item_key, depth + 1) for value in data.values())
+
+
 _MAX_DURATION_SECONDS = 10 * 365 * 86400
-_ROOM_TYPE_WORDS = MappingProxyType({"gym": ROOM_GYM, "academy": ROOM_ACADEMY})
+_ROOM_TYPE_WORDS = frozen_mapping({"gym": ROOM_GYM, "academy": ROOM_ACADEMY})
 
 
 def _text(value: object) -> str:
@@ -218,7 +259,8 @@ def _room_type_word(value: object) -> str | None:
     return _ROOM_TYPE_WORDS.get(_text(value).lower())
 
 
-_LEVEL_SUFFIX_RE = re.compile(r"\s*(?:lv\.?|level)\s*(\d+)\s*$", re.IGNORECASE)
+# "Lv"/"Lv."/"Level" must start a word ("Sublevel 2" and "Wolv2" are names, not levels); ASCII digits only.
+_LEVEL_SUFFIX_RE = re.compile(r"\s*\b(?:lv\.?|level)\s*([0-9]+)\s*$", re.IGNORECASE)
 
 
 def _split_level(name: str) -> tuple[str, int]:
@@ -229,40 +271,47 @@ def _split_level(name: str) -> tuple[str, int]:
     return name[: match.start()].strip(), to_int(match.group(1))
 
 
-def _research_catalog(research_designs_raw: object) -> dict[int, tuple[str, int]]:
-    """ResearchDesign id -> (family name, design level).
+def _research_catalog(research_designs_raw: object) -> dict[int, tuple[str, str, int]]:
+    """ResearchDesign id -> (family name, exact name, design level).
 
     The family is the root design's @ResearchName (via @RootResearchDesignId, else the design's own name) with a
-    trailing "Lv N"/"Level N" removed. The level is @Level when positive, else the own name's suffix, else 0.
+    trailing "Lv N"/"Level N" removed. The exact name is the design's own stripped @ResearchName (a nameless design
+    uses "research_design:<id>"). The level is @Level when positive, else the own name's suffix, else 0.
     """
     records = _by_id(research_designs_raw, "ResearchDesign", "@ResearchDesignId")
-    catalog: dict[int, tuple[str, int]] = {}
+    catalog: dict[int, tuple[str, str, int]] = {}
     for design_id, record in records.items():
-        own_family, own_level = _split_level(_text(record.get("@ResearchName")))
+        own_name = _text(record.get("@ResearchName"))
+        own_family, own_level = _split_level(own_name)
         root = records.get(to_int(record.get("@RootResearchDesignId")))
         root_family = _split_level(_text(root.get("@ResearchName")))[0] if root is not None else ""
-        family = root_family or own_family or f"research_design:{design_id}"
+        fallback = f"research_design:{design_id}"
+        family = root_family or own_family or fallback
         level = to_int(record.get("@Level"))
-        catalog[design_id] = (family, level if level > 0 else own_level)
+        catalog[design_id] = (family, own_name or fallback, level if level > 0 else own_level)
     return catalog
 
 
-def _required_research(research_id: int, catalog: dict[int, tuple[str, int]]) -> str | None:
+def _required_research(research_id: int, catalog: dict[int, tuple[str, str, int]]) -> str | None:
     if research_id <= 0:
         return None
     if research_id in catalog:
-        return catalog[research_id][0]
+        return catalog[research_id][1]
     return f"research_design:{research_id}"
 
 
 def parse_training_designs(raw: object, research_designs: object = None) -> tuple[TrainingDesign, ...]:
     """TrainingDesign records -> model designs, in payload order; records without a positive id are skipped.
 
-    @RequiredResearchDesignId "0"/missing -> None; otherwise the research family name from ``research_designs``,
-    or "research_design:<id>" when it cannot be resolved (no research of that name exists, so it fails closed).
-    @Duration (seconds) is clamped to 0..10 years: a negative value becomes 0, never a negative timedelta.
+    @RequiredResearchDesignId "0"/missing -> None; otherwise the exact research design name from
+    ``research_designs`` (e.g. "Fitness Lv3"), or "research_design:<id>" when it cannot be resolved (no research of
+    that name exists, so it fails closed). @Duration (seconds) is clamped to 0..10 years: a negative value becomes
+    0, never a negative timedelta.
     """
-    catalog = _research_catalog(research_designs)
+    return _parse_training_designs(raw, _research_catalog(research_designs))
+
+
+def _parse_training_designs(raw: object, catalog: dict[int, tuple[str, str, int]]) -> tuple[TrainingDesign, ...]:
     designs: list[TrainingDesign] = []
     for record in extract_collection(raw, "TrainingDesign"):
         design_id = to_int(record.get("@TrainingDesignId"))
@@ -295,7 +344,7 @@ def parse_rooms(rooms_raw: object, room_designs_raw: object) -> Mapping[int, str
         name = names.get(to_int(record.get("@RoomDesignId")), "")
         if name:
             rooms[room_id] = name
-    return MappingProxyType(rooms)
+    return frozen_mapping(rooms)
 
 
 def parse_crew(
@@ -307,7 +356,8 @@ def parse_crew(
     """Character records joined with their CharacterDesign (capacity, rarity) and room name.
 
     A character whose design is missing gets capacity 0 and rarity "" (never another design's values); one without
-    a positive @CharacterId is skipped. Stat keys are stored without the XML '@'; missing/malformed stats are 0.
+    a positive @CharacterId is skipped and a repeated @CharacterId keeps its first record. Stat keys are stored
+    without the XML '@'; missing/malformed stats are 0. Training fields: see the module docstring.
     """
     return _parse_crew(characters_raw, character_designs_raw, parse_rooms(rooms_raw, room_designs_raw))
 
@@ -317,14 +367,13 @@ def _parse_crew(
 ) -> tuple[CrewState, ...]:
     designs = _by_id(character_designs_raw, "CharacterDesign", "@CharacterDesignId")
     crew: list[CrewState] = []
-    for record in extract_collection(characters_raw, "Character"):
-        character_id = to_int(record.get("@CharacterId"))
-        if character_id <= 0:
-            continue
+    for character_id, record in _by_id(characters_raw, "Character", "@CharacterId").items():
         design_id = to_int(record.get("@CharacterDesignId"))
         design = designs.get(design_id, {})
         room_id = to_int(record.get("@RoomId"))
-        training_design_id = to_int(record.get("@TrainingDesignId"))
+        raw_end = record.get("@TrainingEndDate")
+        no_end = raw_end is None or (isinstance(raw_end, str) and not raw_end.strip())
+        training_design_id = 0 if no_end else to_int(record.get("@TrainingDesignId"))
         crew.append(
             CrewState(
                 character_id=character_id,
@@ -338,19 +387,23 @@ def _parse_crew(
                 training_capacity=to_int(design.get("@TrainingCapacity")),
                 fatigue=to_int(record.get("@Fatigue")),
                 training_design_id=training_design_id if training_design_id > 0 else None,
-                training_end=parse_datetime(record.get("@TrainingEndDate")),
+                training_end=parse_datetime(raw_end),
             )
         )
     return tuple(crew)
 
 
 def parse_research_levels(researches_raw: object, research_designs_raw: object) -> Mapping[str, int]:
-    """Research family name -> highest completed level.
+    """Research family name -> highest completed level, plus each completed design's exact name -> its level.
 
     Only @ResearchState == "Completed" records count; records whose design id is unknown are ignored.
     Level precedence: the record's @ResearchLevel, then the design's @Level, then a "Lv N" name suffix, then 1.
+    The family keys serve the strategy's band gates; the exact names serve TrainingDesign.required_research.
     """
-    catalog = _research_catalog(research_designs_raw)
+    return _parse_research_levels(researches_raw, _research_catalog(research_designs_raw))
+
+
+def _parse_research_levels(researches_raw: object, catalog: dict[int, tuple[str, str, int]]) -> Mapping[str, int]:
     levels: dict[str, int] = {}
     for record in extract_collection(researches_raw, "Research"):
         if _text(record.get("@ResearchState")) != "Completed":
@@ -358,12 +411,13 @@ def parse_research_levels(researches_raw: object, research_designs_raw: object) 
         entry = catalog.get(to_int(record.get("@ResearchDesignId")))
         if entry is None:
             continue
-        family, design_level = entry
+        family, exact, design_level = entry
         level = to_int(record.get("@ResearchLevel"))
         if level <= 0:
             level = design_level if design_level > 0 else 1
-        levels[family] = max(levels.get(family, 0), level)
-    return MappingProxyType(levels)
+        for name in (family, exact):
+            levels[name] = max(levels.get(name, 0), level)
+    return frozen_mapping(levels)
 
 
 def parse_items(items_raw: object) -> Mapping[int, int]:
@@ -375,16 +429,16 @@ def parse_items(items_raw: object) -> Mapping[int, int]:
             continue
         quantity = to_int(record.get("@Quantity")) if "@Quantity" in record else 1
         stock[design_id] = stock.get(design_id, 0) + max(quantity, 0)
-    return MappingProxyType(stock)
+    return frozen_mapping(stock)
 
 
-_STAT_TOKENS = MappingProxyType(
+_STAT_TOKENS = frozen_mapping(
     {
         **{code: code for code in STAT_CODES.values()},
         **{stat.removesuffix("Improvement").upper(): code for stat, code in STAT_CODES.items()},
     }
 )
-_TIER_TOKENS = MappingProxyType({tier.upper(): tier for tier in RARITY_STARS})
+_TIER_TOKENS = frozen_mapping({tier.upper(): tier for tier in RARITY_STARS})
 
 
 def parse_consumable_designs(item_designs_raw: object) -> Mapping[tuple[str, str], int]:
@@ -406,7 +460,7 @@ def parse_consumable_designs(item_designs_raw: object) -> Mapping[tuple[str, str
         tier = tier or _TIER_TOKENS.get(_text(record.get("@Rarity")).upper())
         if code is not None and tier is not None:
             found.setdefault((code, tier), design_id)
-    return MappingProxyType(found)
+    return frozen_mapping(found)
 
 
 def build_context(
@@ -423,15 +477,17 @@ def build_context(
 ) -> TrainingContext:
     """Assemble a TrainingContext from raw payloads; ``now`` must be timezone-aware (the model rejects naive).
 
-    Rooms are parsed once and shared, so each crew's ``room_name`` and ``ctx.rooms`` come from one source.
+    Rooms are parsed once and shared, so each crew's ``room_name`` and ``ctx.rooms`` come from one source; the
+    research catalog is likewise built once for both the design gates and the research levels.
     """
     rooms = parse_rooms(rooms_raw, room_designs_raw)
+    catalog = _research_catalog(research_designs_raw)
     return TrainingContext(
         now=now,
         crew=_parse_crew(characters_raw, character_designs_raw, rooms),
-        designs=parse_training_designs(training_designs_raw, research_designs_raw),
+        designs=_parse_training_designs(training_designs_raw, catalog),
         rooms=rooms,
-        research_levels=parse_research_levels(researches_raw, research_designs_raw),
+        research_levels=_parse_research_levels(researches_raw, catalog),
         items=parse_items(items_raw),
     )
 
