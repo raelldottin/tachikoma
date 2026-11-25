@@ -252,6 +252,90 @@ LEDGER: tuple[LedgerEntry, ...] = validate_ledger(
             code=("sdk.client:Client.runBattleEndToEnd",),
         ),
         # ---------------------------------------------------------------
+        # Training, crew and item endpoints
+        # ---------------------------------------------------------------
+        LedgerEntry(
+            "endpoint.training.add-training",
+            "endpoint",
+            "TrainingService/AddTraining (trainingDesignId, characterId) starts a crew member's training",
+            (
+                Evidence(
+                    "unverified",
+                    CLIENT,
+                    note=(
+                        "addTraining wrapper only; no sanitized capture is committed. The add_training action "
+                        "reconciles it from the crew member's @TrainingDesignId and @TrainingEndDate."
+                    ),
+                ),
+            ),
+            code=("sdk.client:Client.addTraining",),
+        ),
+        LedgerEntry(
+            "endpoint.training.finish-training",
+            "endpoint",
+            "TrainingService/FinishTraining (characterId) collects a crew member's ended training",
+            (
+                Evidence(
+                    "unverified",
+                    CLIENT,
+                    note=(
+                        "finishTraining wrapper only; no sanitized capture is committed. Whether the server "
+                        "clears an ended training without this call, and what it charges for one not yet ended, "
+                        "are unverified."
+                    ),
+                ),
+            ),
+            code=("sdk.client:Client.finishTraining",),
+        ),
+        LedgerEntry(
+            "endpoint.crew.upgrade-character",
+            "endpoint",
+            "CharacterService/UpgradeCharacter (characterId) levels a crew member up",
+            (
+                Evidence(
+                    "unverified",
+                    CLIENT,
+                    note="upgradeCharacter wrapper only; no sanitized capture is committed.",
+                ),
+            ),
+            code=("sdk.client:Client.upgradeCharacter",),
+        ),
+        LedgerEntry(
+            "endpoint.item.activate-item3",
+            "endpoint",
+            "ItemService/ActivateItem3 (itemId, targetId) uses one item instance on a target, such as a crew member",
+            (
+                Evidence(
+                    "unverified",
+                    CLIENT,
+                    note=(
+                        "activateItem3 wrapper only; live-unverified: no sanitized capture is committed, so the "
+                        "request parameters and the reply are not confirmed. useConsumable resolves the item "
+                        "instance from the client's cached items by item design id and calls it."
+                    ),
+                ),
+            ),
+            code=("sdk.client:Client.activateItem3", "sdk.client:Client.useConsumable"),
+        ),
+        LedgerEntry(
+            "endpoint.crew.list-all-characters-of-user",
+            "endpoint",
+            "CharacterService/ListAllCharactersOfUser lists the account's crew; the snapshot reads the "
+            "nine stat improvement attributes Client.manageTraining names from it",
+            (
+                Evidence(
+                    "unverified",
+                    CLIENT,
+                    note=(
+                        "Called by --capture-reads (see tests/fixtures/live_sanitized/README.md), but no "
+                        "character capture is committed, so the stat improvement and training attribute "
+                        "names are not confirmed on a live record."
+                    ),
+                ),
+            ),
+            code=("sdk.client:Client.listAllCharactersOfUser",),
+        ),
+        # ---------------------------------------------------------------
         # Marketplace path
         # ---------------------------------------------------------------
         LedgerEntry(

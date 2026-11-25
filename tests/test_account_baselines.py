@@ -38,13 +38,29 @@ ROOMS = [
 ]
 CREW = [
     {"@CharacterId": "c1", "@CharacterDesignId": "300", "@CharacterName": "Crew One", "@Level": "10",
-     "@Fatigue": "0", "@RoomId": "r1", "@TrainingEndDate": "2026-11-10T14:00:00", "@TrainingDesignId": "7"},
+     "@Fatigue": "0", "@RoomId": "r1", "@TrainingEndDate": "2026-11-10T14:00:00", "@TrainingDesignId": "7",
+     "@HpImprovement": "1", "@PilotImprovement": "2", "@RepairImprovement": "4", "@WeaponImprovement": "8",
+     "@ScienceImprovement": "16", "@EngineImprovement": "32", "@AttackImprovement": "64",
+     "@AbilityImprovement": "128", "@StaminaImprovement": "256", "@TrainingCapacity": "600"},
     {"@CharacterId": "c2", "@CharacterDesignId": "301", "@CharacterName": "Crew Two", "@Level": "4",
      "@Fatigue": "12", "@RoomId": "r2"},
 ]
 RESEARCH = {"@ResearchDesignId": "500", "@ResearchState": "Completed"}
 INVENTORY = [{"@ItemDesignId": "900", "@Quantity": "3"}, {"@ItemDesignId": "901", "@Quantity": "x"}]
 RESOURCES = {"minerals": "1000", "gas": "2000", "starbux": "15"}
+# The ten crew keys format version 2 added, spelled out literally.
+STAT_KEYS = (
+    "hp_improvement",
+    "pilot_improvement",
+    "repair_improvement",
+    "weapon_improvement",
+    "science_improvement",
+    "engine_improvement",
+    "attack_improvement",
+    "ability_improvement",
+    "stamina_improvement",
+    "training_capacity",
+)
 
 
 def full_snapshot(alias="alpha", observed_at=T0, **overrides):
@@ -106,6 +122,25 @@ class BaselineContentTests(BaselineTestCase):
         self.assertEqual(record["inventory"][1], {"item_design_id": "901", "quantity": None})
         self.assertEqual(set(record["completeness"]), set(SECTIONS))
         self.assertTrue(all(value == "complete" for value in record["completeness"].values()))
+
+    def test_crew_records_hold_exactly_the_documented_keys(self):
+        record = self.read_json(write_baseline(full_snapshot(), self.dir, SERVER_VERSION))
+        self.assertEqual(record["format_version"], 2)
+        expected = {
+            "character_id", "design_id", "name", "level", "fatigue", "room_id", "training_observed",
+            "training_design_id", "training_end", "hp_improvement", "pilot_improvement", "repair_improvement",
+            "weapon_improvement", "science_improvement", "engine_improvement", "attack_improvement",
+            "ability_improvement", "stamina_improvement", "training_capacity",
+        }
+        for row in record["crew"]:
+            with self.subTest(character=row["character_id"]):
+                self.assertEqual(set(row), expected)
+        self.assertEqual(record["crew"][0]["hp_improvement"], 1)
+        self.assertEqual(record["crew"][0]["stamina_improvement"], 256)
+        self.assertEqual(record["crew"][0]["training_capacity"], 600)
+        for key in STAT_KEYS:
+            with self.subTest(stat=key):
+                self.assertIsNone(record["crew"][1][key])
 
     def test_unobserved_sections_are_null_and_recorded_missing(self):
         snapshot = build_snapshot("alpha", T0, "synthetic-fixture", rooms=ROOMS)
@@ -250,6 +285,28 @@ class BaselineRoundTripTests(BaselineTestCase):
         self.assertEqual(delta.room_design, {"r2": ("21", "22")})
         self.assertEqual(delta.elapsed_seconds, 3600)
 
+    def test_version_1_file_still_loads_with_stats_unobserved(self):
+        snapshot = full_snapshot()
+        record = self.read_json(write_baseline(snapshot, self.dir, SERVER_VERSION))
+        record["format_version"] = 1
+        for row in record["crew"]:
+            for key in STAT_KEYS:
+                del row[key]
+        path = self.dir / "version-1.json"
+        path.write_text(json.dumps(record), encoding="utf-8")
+        loaded = load_baseline(path)
+        for member in loaded.crew:
+            for key in STAT_KEYS:
+                with self.subTest(character=member.character_id, stat=key):
+                    self.assertIsNone(getattr(member, key))
+        unobserved = {key: None for key in STAT_KEYS}
+        self.assertEqual(loaded, replace(snapshot, crew=tuple(replace(m, **unobserved) for m in snapshot.crew)))
+        # True == 1 in Python; a boolean version is refused even on an otherwise valid version 1 file.
+        record["format_version"] = True
+        path.write_text(json.dumps(record), encoding="utf-8")
+        with self.assertRaises(BaselineError):
+            load_baseline(path)
+
     def test_malformed_or_unsafe_files_are_refused(self):
         good = self.read_json(write_baseline(full_snapshot(), self.dir, SERVER_VERSION))
 
@@ -257,6 +314,11 @@ class BaselineRoundTripTests(BaselineTestCase):
             record = dict(good)
             record.update(changes)
             return record
+
+        def crew_variant(**row_changes):
+            first = {key: value for key, value in good["crew"][0].items() if row_changes.get(key, 0) is not None}
+            first.update({key: value for key, value in row_changes.items() if value is not None})
+            return [first, *good["crew"][1:]]
 
         cases = {
             "unknown key": variant(player_name="SyntheticCaptain"),
@@ -270,6 +332,18 @@ class BaselineRoundTripTests(BaselineTestCase):
             "boolean as number": variant(trophies=True),
             "bad completeness": variant(completeness={**good["completeness"], "ship": "unknown"}),
             "planted e-mail": variant(notes=[SYNTHETIC_EMAIL]),
+            "version 1 with version 2 crew keys": variant(format_version=1),
+            "version 2 missing stamina_improvement": variant(crew=crew_variant(stamina_improvement=None)),
+            "version 3": variant(format_version=3),
+            "version as boolean": variant(format_version=True),
+            "version as text": variant(format_version="2"),
+            # 2.0 == 2 and 1.0 == 1 in Python; a float version is refused like a boolean one.
+            "version 2 as float": variant(format_version=2.0),
+            "version 1 as float": variant(format_version=1.0, crew=[
+                {key: value for key, value in row.items() if key not in STAT_KEYS} for row in good["crew"]]),
+            "stat as boolean": variant(crew=crew_variant(hp_improvement=True)),
+            "stat as text": variant(crew=crew_variant(hp_improvement="1")),
+            "capacity as text": variant(crew=crew_variant(training_capacity="600")),
         }
         for index, (label, record) in enumerate(cases.items()):
             path = self.dir / f"case-{index}.txt"

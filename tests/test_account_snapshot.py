@@ -178,6 +178,15 @@ class DiffSnapshotTests(unittest.TestCase):
         # c2 never reported training, so it has no training delta.
         self.assertNotIn("c2", diff_snapshots(before, after).crew_training)
 
+    def test_any_zero_training_design_is_no_design(self):
+        # The game uses design 0 for "no training"; a zero written with more digits is the same placeholder, not a
+        # design id. Non-numeric text is kept as reported.
+        for value, expected in (("0", None), ("00", None), ("000", None), (" 0", None), ("0 ", None), (0, None),
+                                ("7", "7"), ("07", "07"), ("gas", "gas"), (" ", " "), ("", None)):
+            with self.subTest(training_design_id=value):
+                crew = [dict(CREW[0], **{"@TrainingEndDate": "", "@TrainingDesignId": value}), CREW[1]]
+                self.assertEqual(full_snapshot(crew=crew).crew_member("c1").training_design_id, expected)
+
     def test_cross_account_comparison_is_refused(self):
         with self.assertRaises(AccountMismatchError):
             diff_snapshots(full_snapshot("alpha"), full_snapshot("bravo", observed_at=T0 + timedelta(seconds=1)))
@@ -185,6 +194,102 @@ class DiffSnapshotTests(unittest.TestCase):
     def test_reversed_time_order_is_refused(self):
         with self.assertRaises(SnapshotInputError):
             diff_snapshots(full_snapshot(observed_at=T0 + timedelta(seconds=1)), full_snapshot())
+
+
+# The nine stat improvements a character record carries, spelled out literally (attribute -> field -> value). Distinct
+# powers of two make every total unique, so a dropped or doubled stat changes the sum.
+STAT_CASES = (
+    ("@HpImprovement", "hp_improvement", 1),
+    ("@PilotImprovement", "pilot_improvement", 2),
+    ("@RepairImprovement", "repair_improvement", 4),
+    ("@WeaponImprovement", "weapon_improvement", 8),
+    ("@ScienceImprovement", "science_improvement", 16),
+    ("@EngineImprovement", "engine_improvement", 32),
+    ("@AttackImprovement", "attack_improvement", 64),
+    ("@AbilityImprovement", "ability_improvement", 128),
+    ("@StaminaImprovement", "stamina_improvement", 256),
+)
+STATS = {attribute: str(value) for attribute, _, value in STAT_CASES}
+
+
+def crew_with_stats(stats=None, **extra):
+    """c1 with the given stat attributes (default all nine), c2 with none."""
+    return [dict(CREW[0], **(STATS if stats is None else stats), **extra), CREW[1]]
+
+
+class CrewTrainingStatsTests(unittest.TestCase):
+    def test_stat_improvements_are_read_into_fields_and_total(self):
+        member = full_snapshot(crew=crew_with_stats()).crew_member("c1")
+        for _, field_name, value in STAT_CASES:
+            with self.subTest(field=field_name):
+                self.assertEqual(getattr(member, field_name), value)
+        self.assertEqual(member.stat_total, 511)
+
+    def test_any_unobserved_stat_makes_the_total_unknown(self):
+        for attribute, field_name, _ in STAT_CASES:
+            with self.subTest(removed=attribute):
+                stats = {key: value for key, value in STATS.items() if key != attribute}
+                member = full_snapshot(crew=crew_with_stats(stats)).crew_member("c1")
+                self.assertIsNone(getattr(member, field_name))
+                self.assertIsNone(member.stat_total)
+            with self.subTest(unparseable=attribute):
+                member = full_snapshot(crew=crew_with_stats({**STATS, attribute: "x"})).crew_member("c1")
+                self.assertIsNone(getattr(member, field_name))
+                self.assertIsNone(member.stat_total)
+        self.assertIsNone(full_snapshot().crew_member("c2").stat_total)
+
+    def test_training_capacity_only_when_the_record_carries_it(self):
+        carried = full_snapshot(crew=crew_with_stats(**{"@TrainingCapacity": "600"}))
+        self.assertEqual(carried.crew_member("c1").training_capacity, 600)
+        self.assertIsNone(carried.crew_member("c2").training_capacity)
+        self.assertIsNone(full_snapshot(crew=crew_with_stats()).crew_member("c1").training_capacity)
+        # Capacity is a limit, not an improvement: it never counts toward the total.
+        self.assertEqual(carried.crew_member("c1").stat_total, 511)
+
+    def test_training_end_utc(self):
+        def end_of(value):
+            return full_snapshot(crew=crew_with_stats(**{"@TrainingEndDate": value})).crew_member("c1").training_end_utc
+
+        expected = datetime(2026, 11, 10, 13, 0, tzinfo=timezone.utc)
+        naive = end_of("2026-11-10T13:00:00")
+        self.assertEqual(naive, expected)
+        self.assertEqual(naive.utcoffset(), timedelta(0))
+        offset = end_of("2026-11-10T08:00:00-05:00")
+        self.assertEqual(offset, expected)
+        self.assertEqual(offset.utcoffset(), timedelta(0))
+        # Surrounding whitespace is stripped before parsing; blank text is no time.
+        self.assertEqual(end_of(" 2026-11-10T13:00:00\n"), expected)
+        for value in ("", "soon", "   "):
+            with self.subTest(value=value):
+                self.assertIsNone(end_of(value))
+        self.assertIsNone(full_snapshot().crew_member("c1").training_end_utc)
+
+    def test_to_dict_carries_stats_and_is_json_serialisable(self):
+        payload = json.loads(json.dumps(full_snapshot(crew=crew_with_stats()).to_dict()))
+        self.assertEqual(payload["crew"][0]["stamina_improvement"], 256)
+        self.assertEqual(payload["crew"][0]["hp_improvement"], 1)
+        self.assertIsNone(payload["crew"][0]["training_capacity"])
+        self.assertIsNone(payload["crew"][1]["hp_improvement"])
+
+    def test_stat_total_change_only_for_crew_observed_on_both_sides(self):
+        def delta(before_crew, after_crew):
+            before = full_snapshot(crew=before_crew)
+            after = full_snapshot(observed_at=T0 + timedelta(seconds=1), crew=after_crew)
+            return diff_snapshots(before, after).crew_stat_total
+
+        raised = crew_with_stats({**STATS, "@HpImprovement": "4"})
+        self.assertEqual(delta(crew_with_stats(), raised), {"c1": 3})
+        self.assertEqual(delta(raised, crew_with_stats()), {"c1": -3})
+        self.assertEqual(delta(crew_with_stats(), crew_with_stats()), {})
+        partial = crew_with_stats({key: value for key, value in STATS.items() if key != "@StaminaImprovement"})
+        self.assertEqual(delta(crew_with_stats(), partial), {})
+        self.assertEqual(delta(partial, raised), {})
+        self.assertEqual(delta(None, raised), {})
+        self.assertEqual(delta(crew_with_stats(), None), {})
+        self.assertNotIn("c2", delta(crew_with_stats(), raised))
+        # A crew member new after the call has no total before, so no change, however many stats it shows.
+        joined = crew_with_stats() + [{"@CharacterId": "c3", **STATS}]
+        self.assertEqual(delta(crew_with_stats(), joined), {})
 
 
 class HullUpgradeFieldTests(unittest.TestCase):

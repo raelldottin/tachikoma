@@ -10,6 +10,7 @@ from sdk.actions.catalog import ROOM_FILL_EMPTY_NOTE, ROOM_FILL_UNREAD_REASON
 from sdk.execution import ActionRunner, UncertainPriorAttemptError, call_arguments
 from sdk.journal import GameplayJournal, summarize
 from sdk.state import AccountMismatchError, build_snapshot
+from tests.test_action_catalog import DUE, STATS
 
 T0 = datetime(2026, 11, 10, 12, 0, tzinfo=timezone.utc)
 BASE = dict(
@@ -208,6 +209,77 @@ class RunnerTests(unittest.TestCase):
         self.runner.run("upgrade_room", {"room_id": "r1", "upgrade_room_design_id": "12"}, dry_run=True)
         summary = summarize(self.journal.read())["alpha"]
         self.assertEqual((summary["attempted"], summary["verified"], summary["skipped"]), (1, 1, 1))
+
+
+DUE_TRAINING = {"@CharacterId": "c1", "@Level": "3", "@TrainingEndDate": DUE,
+                "@TrainingDesignId": "7", **STATS}
+
+
+def finish_due_training(state):
+    state["crew"] = [{**DUE_TRAINING, "@TrainingEndDate": "", "@TrainingDesignId": "0", "@HpImprovement": "2"}]
+
+
+def use_item(state):
+    state["inventory"] = []
+
+
+class TrainingAndConsumableRunnerTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.journal = GameplayJournal(Path(self.tmp.name) / "events.jsonl")
+        self.clock = FakeClock()
+        self.world = FakeWorld(self.clock)
+        self.world.state["crew"] = [dict(DUE_TRAINING)]
+        self.world.state["inventory"] = [{"@ItemDesignId": "900", "@Quantity": "1"}]
+        self.runner = ActionRunner("alpha", self.world, self.world.snapshot, self.journal, clock=self.clock)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_finish_training_calls_the_client_with_the_character(self):
+        self.world.effect = finish_due_training
+        result = self.runner.run("finish_training", {"character_id": "c1"})
+        self.assertEqual(self.world.calls, [("finishTraining", ("c1",))])
+        self.assertEqual(result.outcome, "verified", result.reason)
+
+    def test_uncertain_finish_training_may_be_retried(self):
+        self.world.raise_on_call = TimeoutError("synthetic timeout")
+        self.assertEqual(self.runner.run("finish_training", {"character_id": "c1"}).outcome, "unknown")
+        self.world.raise_on_call = None
+        self.world.effect = finish_due_training
+        self.assertEqual(self.runner.run("finish_training", {"character_id": "c1"}).outcome, "verified")
+        self.assertEqual(len(self.world.calls), 2)
+
+    def test_a_second_finish_after_a_verified_one_is_skipped_without_a_call(self):
+        # Whether the server clears the training or leaves a placeholder end with no design, nothing is left to finish.
+        def placeholder(state):
+            state["crew"] = [{**DUE_TRAINING, "@TrainingEndDate": "0001-01-01T00:00:00", "@TrainingDesignId": "0",
+                              "@HpImprovement": "2"}]
+
+        for name, effect in (("cleared", finish_due_training), ("placeholder end", placeholder)):
+            with self.subTest(server=name):
+                self.world.state["crew"] = [dict(DUE_TRAINING)]
+                self.world.calls.clear()
+                self.world.effect = effect
+                self.assertEqual(self.runner.run("finish_training", {"character_id": "c1"}).outcome, "verified")
+                second = self.runner.run("finish_training", {"character_id": "c1"})
+                self.assertEqual(second.outcome, "skipped", second.reason)
+                self.assertEqual(self.world.calls, [("finishTraining", ("c1",))])
+
+    def test_use_consumable_passes_the_design_then_the_character(self):
+        self.world.effect = use_item
+        result = self.runner.run("use_consumable", {"item_design_id": "900", "character_id": "c1"})
+        self.assertEqual(self.world.calls, [("useConsumable", ("900", "c1"))])
+        self.assertEqual(result.outcome, "verified", result.reason)
+
+    def test_uncertain_use_consumable_blocks_a_retry(self):
+        params = {"item_design_id": "900", "character_id": "c1"}
+        self.world.raise_on_call = TimeoutError("synthetic timeout")
+        self.assertEqual(self.runner.run("use_consumable", params).outcome, "unknown")
+        self.world.raise_on_call = None
+        with self.assertRaises(UncertainPriorAttemptError):
+            self.runner.run("use_consumable", params)
+        self.assertEqual(len(self.world.calls), 1)
 
 
 def place_gas_collector(state):
