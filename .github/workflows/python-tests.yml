@@ -47,3 +47,19 @@ jobs:
           tests.test_crew_leveling
           tests.test_ship_layout
           tests.test_ci
+
+  mutation:
+    name: Mutation score (advisory)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.13"
+      # Advisory: a low score is reported here but cannot fail the reusable workflow or `CI required`.
+      - name: Mutation testing (non-blocking)
+        continue-on-error: true
+        run: python scripts/mutation.py --jobs 4

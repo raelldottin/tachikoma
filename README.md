@@ -20,6 +20,12 @@ matrix. Version tags such as `1.2.3` or `v1.2.3` validate the tagged source
 and prepare a draft GitHub release with a reproducible source archive and
 SHA-256 checksums. These validation workflows use mocked game traffic.
 
+Mutation testing is advisory: `make mutation` mutates each module listed in
+`automation/mutation/config.json` (or one module, `make mutation
+TARGET=sdk/crew_leveling.py`) inside a temporary copy, runs only its mapped
+tests, and fails below the module's recorded minimum score. CI reports the
+score without blocking merges.
+
 See [.github/workflows/README.md](.github/workflows/README.md) for the
 check coverage, lint baseline, local commands, and branch-protection setup.
 

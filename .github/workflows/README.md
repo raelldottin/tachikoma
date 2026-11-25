@@ -61,6 +61,10 @@ No repository settings are changed merely by adding these files.
 - New workflows pin external actions to full commit hashes, use bounded
   job timeouts, cache pip downloads, and disable checkout credential
   persistence. Validation defaults to `contents: read`.
+- `python-tests.yml` also runs an advisory mutation job (`scripts/mutation.py`,
+  Ubuntu / Python 3.13). Its step uses `continue-on-error: true`, so a score
+  below a target's `min_score` in `automation/mutation/config.json` is
+  reported but cannot fail `CI required`.
 
 ## Lint debt is explicit
 
@@ -139,6 +143,7 @@ python -m ruff format --check scripts/ci.py tests/test_ci.py
 python -m unittest tests.test_ci
 make automation-check
 make test
+make mutation
 actionlint
 git diff --check
 ```
