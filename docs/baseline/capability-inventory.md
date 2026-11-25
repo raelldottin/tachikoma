@@ -21,8 +21,8 @@ This inventory maps what the code contains today to the pillars in the [product 
 | Pillar | Methods | mocked-test | live-claimed | untested |
 | --- | --- | --- | --- | --- |
 | platform: transport, auth, session | 12 | 9 | 0 | 3 |
-| A: account intelligence (reads) | 36 | 19 | 0 | 17 |
-| B: autonomous progression | 28 | 16 | 0 | 12 |
+| A: account intelligence (reads) | 34 | 21 | 0 | 13 |
+| B: autonomous progression | 32 | 25 | 0 | 7 |
 | C: competitive PvP | 13 | 7 | 3 | 3 |
 | D: game economy | 9 | 5 | 0 | 4 |
 | E: multi-account orchestration | 0 | 0 | 0 | 0 |
@@ -37,11 +37,11 @@ The offline PvP assessment library in `sdk/pvp/` (pillar C) is pure analysis cod
 - No typed, account-scoped state snapshot exists. Reads return raw parsed XML dictionaries stored on the `Client` instance, so one `Client` object holds one account's state with no alias or observation time. Addressed by slice `r1-account-snapshot-model`.
 - No action has a declared postcondition. Mutating methods (39 of 98) report success from the HTTP response or not at all. Addressed by `r1-gameplay-action-catalog`.
 - There is no event journal. Outcomes go to the log file only. Addressed by `r1-gameplay-event-journal`.
-- Reads with no test coverage include achievements, star systems, situations, room actions, training updates and research level lookups (17 in pillar A).
+- Reads with no test coverage include achievements, star systems, situations, room actions and consumable design lookups (13 in pillar A).
 
 ### R2: automated growth engine
 
-- `addTraining`, `finishTraining`, `upgradeCharacter`, boost-gauge speed-ups, `rushResearchOrConstruction`, `useConsumable` and `activateItem3` are untested.
+- Boost-gauge speed-ups, `rushResearchOrConstruction`, mining drones and marker collection are untested. The training, crew upgrade and consumable wrappers (`addTraining`, `finishTraining`, `upgradeCharacter`, `useConsumable`, `activateItem3`) have mocked tests in `tests/test_training_endpoints.py`, but no captured live success reply yet: the reply element names they accept are assumed.
 - `run.py` executes a fixed daily sequence. There is no policy that ranks actions against resources, cooldowns or PvP readiness.
 
 ### R3: PvP automation engine
