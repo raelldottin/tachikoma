@@ -1,6 +1,7 @@
 """Tests for sdk.simulation: deterministic offline scenarios through the real stack. No network."""
 
 import copy
+import hashlib
 import json
 import random
 import socket
@@ -27,6 +28,7 @@ from sdk.simulation import (
 
 BASELINE_SCENARIOS = ("single-account", "two-accounts")
 FAULT_SCENARIOS = ("faults-contradicted-and-foreign", "faults-uncertain-outcomes")
+TRAINING_SCENARIOS = ("crew-training-faults", "crew-training-single-account")
 
 
 def run(name, **kwargs):
@@ -41,6 +43,34 @@ def reports(result):
     return result.progression_json, result.fleet_json, result.audit_json, result.calls, result.faults
 
 
+RECORDED_DIGESTS = {
+    "faults-contradicted-and-foreign": "4f16149f6ad11fa079823a02f4a17e8dd4930a003b9d84bdc04977e2a73779e6",
+    "faults-uncertain-outcomes": "a092cce0a874dc12396c5a5233a752c78821b8e043a90c7a72be0cfb9b1dd458",
+    "single-account": "cc0908d1aa9f2c04e9b53157ea1a2adaaaeeace84b86b5d1a1d60e26bd93b651",
+    "two-accounts": "583bb9db98e0e77a87d7fa9a977f11780db96dfdec78e6e1879c4fa130a2417f",
+}
+
+
+def report_digest(result):
+    """sha256 of a run's reports, calls and fired faults (FleetRun reprs are left out)."""
+    blob = json.dumps({"progression": result.progression_json, "fleet": result.fleet_json,
+                       "audit": result.audit_json, "calls": {k: list(v) for k, v in result.calls.items()},
+                       "faults": {k: list(v) for k, v in result.faults.items()}}, sort_keys=True)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
+# Golden digests of the crew-training scenarios: reports plus training_json (span, per-day crew and training rooms,
+# final crew, log). Regenerate with training_digest(run(name)[0]) only for an intended change.
+TRAINING_DIGESTS = {
+    "crew-training-faults": "deef264633d08c9c891e5e50390ce032e26d753e043a8a9b22870ef367895bf8",
+    "crew-training-single-account": "e5e2077bb62363c8c968da8dab5966441410c5fe1a5e8d48974a3387ad1b4b05",
+}
+
+
+def training_digest(result):
+    return hashlib.sha256((report_digest(result) + result.training_json).encode("utf-8")).hexdigest()
+
+
 def on_day(events, day):
     return [event for event in events if event.finished_at.startswith(f"2027-06-0{day + 1}")]
 
@@ -48,10 +78,10 @@ def on_day(events, day):
 class ScenarioTests(unittest.TestCase):
     def test_shipped_scenarios_exist(self):
         self.assertEqual(sorted(p.stem for p in SCENARIO_DIR.glob("*.json")),
-                         sorted(BASELINE_SCENARIOS + FAULT_SCENARIOS))
+                         sorted(BASELINE_SCENARIOS + FAULT_SCENARIOS + TRAINING_SCENARIOS))
 
     def test_same_scenario_and_seed_give_identical_reports(self):
-        for name in BASELINE_SCENARIOS + FAULT_SCENARIOS:
+        for name in BASELINE_SCENARIOS + FAULT_SCENARIOS + TRAINING_SCENARIOS:
             with self.subTest(name=name):
                 first, _ = run(name)
                 second, _ = run(name)
@@ -59,6 +89,37 @@ class ScenarioTests(unittest.TestCase):
                 self.assertEqual(first.fleet_json, second.fleet_json)
                 self.assertEqual(first.audit_json, second.audit_json)
                 self.assertEqual(first.calls, second.calls)
+                self.assertEqual((first.crew, first.training_log, first.training_json),
+                                 (second.crew, second.training_log, second.training_json))
+
+    def test_scenarios_without_crew_report_no_crew_and_no_training(self):
+        for name in BASELINE_SCENARIOS + FAULT_SCENARIOS:
+            with self.subTest(name=name):
+                result, _ = run(name)
+                aliases = load_scenario(name)["accounts"]
+                self.assertEqual(result.crew, {alias: () for alias in aliases})
+                self.assertEqual(result.training_log, {alias: () for alias in aliases})
+                training = json.loads(result.training_json)
+                self.assertEqual({key: training[key] for key in ("crew", "log")},
+                                 {"crew": {alias: [] for alias in aliases}, "log": {alias: [] for alias in aliases}})
+                days = load_scenario(name)["days"]
+                self.assertEqual(training["days"], {alias: [{"day": day, "at": f"2027-06-0{day + 1}T06:00:00",
+                                                             "crew": [], "training_rooms": {}} for day in range(days)]
+                                                    for alias in aliases})
+                self.assertEqual((training["started_at"], result.started_at), ("2027-06-01T06:00:00",) * 2)
+
+    def test_existing_scenarios_match_their_recorded_digests(self):
+        # Golden digests of the four pre-training scenarios, recorded on origin/main 1c9b19e. Adding crew training
+        # must not change one byte of their reports (an extra clock reading or a draw from the shared generator
+        # would). If a report format changes on purpose, regenerate each digest with report_digest(run(name)[0]).
+        for name, digest in RECORDED_DIGESTS.items():
+            with self.subTest(name=name):
+                self.assertEqual(report_digest(run(name)[0]), digest)
+
+    def test_crew_training_scenarios_match_their_recorded_digests(self):
+        for name, digest in TRAINING_DIGESTS.items():
+            with self.subTest(name=name):
+                self.assertEqual(training_digest(run(name)[0]), digest)
 
     def test_a_different_seed_changes_the_outcome(self):
         default, _ = run("single-account")
