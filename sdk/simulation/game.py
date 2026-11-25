@@ -32,12 +32,14 @@ from __future__ import annotations
 
 import json
 import random
+from collections import Counter
 from dataclasses import dataclass, field, replace
-from functools import partial
 from datetime import datetime, timedelta, timezone
+from functools import partial
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Optional
 
+from sdk.crew_leveling import parse_server_datetime
 from sdk.fleet import registry_from_dict
 from sdk.fleet.audit import audit_fleet
 from sdk.fleet.orchestrator import AccountContext, FleetOrchestrator, FleetRun
@@ -52,9 +54,12 @@ SCENARIO_DIR = Path(__file__).resolve().parent / "scenarios"
 
 
 class SimulatedClock:
-    """Advances one second per reading; jumps to day boundaries on request."""
+    """Advances one second per reading; jumps to day boundaries on request. The start must carry a UTC offset."""
 
     def __init__(self, start: datetime) -> None:
+        if start.tzinfo is None:
+            # Snapshots refuse naive times, so a naive start would fail mid-run; refuse it before anything runs.
+            raise ValueError(f"simulated clock start {start.isoformat()} has no UTC offset (give one, e.g. +00:00)")
         self.start = start
         self.now = start
 
@@ -143,6 +148,8 @@ class Fault:
             raise ValueError("fault 'reject' applies to addTraining, finishTraining or activateItem3")
         if kind == "contradicted-effect" and self.method != "addTraining":
             raise ValueError("fault 'contradicted-effect' applies to addTraining only")
+        if _is_int(self.training_design_id):  # a JSON number, like ids elsewhere in a scenario
+            object.__setattr__(self, "training_design_id", str(self.training_design_id))
         if kind == "contradicted-effect" and not (isinstance(self.training_design_id, str) and self.training_design_id):
             raise ValueError("fault 'contradicted-effect' needs the training_design_id it starts instead")
         if self.day is not None and not (_is_int(self.day) and self.day >= 0):
@@ -199,12 +206,13 @@ def _is_number(value: Any) -> bool:
 STATS = ("Hp", "Pilot", "Repair", "Weapon", "Science", "Engine", "Attack", "Ability", "Stamina")
 STAT_KEYS = tuple(f"@{stat}Improvement" for stat in STATS)
 # Every key of a simulated character record, with its default; a scenario crew record may give no other key.
-CREW_DEFAULTS = {"@CharacterId": "", "@CharacterDesignId": "", "@CharacterName": "", "@RoomId": "", "@Level": "1",
-                 "@Xp": "0", "@Fatigue": "0", "@TrainingDesignId": "0", "@TrainingEndDate": "",
+IDLE = "0"  # @TrainingDesignId of a crew member with no session
+UNASSIGNED = "0"  # @RoomId of a crew member in no room, as the live game sends it; never a room
+CREW_DEFAULTS = {"@CharacterId": "", "@CharacterDesignId": "", "@CharacterName": "", "@RoomId": UNASSIGNED,
+                 "@Level": "1", "@Xp": "0", "@Fatigue": "0", "@TrainingDesignId": IDLE, "@TrainingEndDate": "",
                  **{key: "0" for key in STAT_KEYS}}
 TRAINING_BLOCK_KEYS = {"fatigue_max", "fatigue_recovery_seconds", "character_designs", "training_designs",
                        "item_designs"}
-IDLE = "0"  # @TrainingDesignId of a crew member with no session
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S"  # @TrainingEndDate, in UTC without an offset, as the server sends it
 
 
@@ -216,10 +224,9 @@ def _container(key: str, records: list) -> Optional[dict]:
     return {key: records[0] if len(records) == 1 else records}
 
 
-def _records(container: Optional[Mapping[str, Any]], key: str) -> list:
-    """The records of a ``_container`` result, as a list."""
-    value = (container or {}).get(key, [])
-    return [value] if isinstance(value, Mapping) else list(value)
+def _strings(record: Mapping[str, Any]) -> dict:
+    """``record`` as xmltodict gives it: every value a string (a JSON number becomes its digits), a null left out."""
+    return {key: str(value) for key, value in record.items() if value is not None}
 
 
 def _same_id(value: Any, wanted: str) -> bool:
@@ -266,8 +273,13 @@ class TrainingRules:
 
     @classmethod
     def from_block(cls, block: Optional[Mapping[str, Any]], design: DesignData) -> "TrainingRules":
-        """Parse and check a ``training`` block (``None``: no crew training); a malformed one raises ValueError."""
-        block = block or {}
+        """Parse and check a ``training`` block (``None``: no crew training); a malformed one raises ValueError.
+
+        Design records are kept as the reads return them: strings only, like xmltodict's."""
+        if block is None:
+            block = {}
+        if not isinstance(block, Mapping):
+            raise ValueError(f"training block must be a mapping of keys to values, not {type(block).__name__}")
         unknown = sorted(set(block) - TRAINING_BLOCK_KEYS)
         if unknown:
             raise ValueError(f"training block has unknown keys: {', '.join(unknown)}")
@@ -276,7 +288,7 @@ class TrainingRules:
             listed = block.get(key, [])
             if not isinstance(listed, list) or not all(isinstance(record, Mapping) for record in listed):
                 raise ValueError(f"training block: {key} must be a list of records")
-            records = [dict(record) for record in listed]
+            records = [_strings(record) for record in listed]
             if any(record.get(id_key) in (None, "") for record in records):
                 raise ValueError(f"training block: a {key} record has no {id_key}")
             ids = [str(record.get(id_key)) for record in records]
@@ -331,7 +343,7 @@ def _int_field(record: Mapping[str, Any], key: str, label: str, *, minimum: int 
 
 
 def _unique(ids: list, what: str) -> None:
-    duplicates = sorted({value for value in ids if ids.count(value) > 1})
+    duplicates = sorted(value for value, count in Counter(ids).items() if count > 1)
     if duplicates:
         raise ValueError(f"{what} {', '.join(duplicates)}")
 
@@ -340,25 +352,9 @@ def _item_error(message: str) -> dict:
     return {"ItemService": {"ActivateItem3": {"@errorMessage": message}}}
 
 
-def _utc(moment: datetime) -> datetime:
-    """``moment`` in UTC; a naive one (a scenario ``start`` without an offset) is taken as UTC, never local time."""
-    return moment.replace(tzinfo=timezone.utc) if moment.tzinfo is None else moment.astimezone(timezone.utc)
-
-
 def _format_time(moment: datetime) -> str:
-    return _utc(moment).strftime(TIME_FORMAT)
-
-
-def _parse_time(text: str) -> datetime:
-    return datetime.strptime(text, TIME_FORMAT).replace(tzinfo=timezone.utc)
-
-
-def _is_time(text: str) -> bool:
-    try:
-        _parse_time(text)
-    except ValueError:
-        return False
-    return True
+    """``moment`` (aware: ``SimulatedClock`` refuses a naive start) in UTC, as the server writes times."""
+    return moment.astimezone(timezone.utc).strftime(TIME_FORMAT)
 
 
 @dataclass
@@ -375,7 +371,11 @@ class _Member:
 def parse_crew(alias: str, rules: TrainingRules, crew: Iterable[Mapping[str, Any]], rooms: Iterable[Mapping[str, Any]],
                now: datetime) -> dict[str, _Member]:
     """An account's scenario ``crew`` as members by character id, each record completed with ``CREW_DEFAULTS``;
-    a malformed record raises ValueError."""
+    a malformed record raises ValueError.
+
+    Two live shapes are normalised: an empty ``@RoomId`` becomes ``UNASSIGNED``, and an idle record keeping its last
+    session's ``@TrainingEndDate`` loses it. A loaded session is taken as the server reported it: its room and
+    research are not re-checked."""
     crew = [{**CREW_DEFAULTS, **{key: str(value) for key, value in raw.items()}} for raw in crew]
     _unique([record["@CharacterId"] for record in crew], f"account {alias}: duplicate @CharacterId")
     room_ids = {str(room.get("@RoomId")) for room in rooms if room.get("@RoomId") is not None}
@@ -390,16 +390,20 @@ def parse_crew(alias: str, rules: TrainingRules, crew: Iterable[Mapping[str, Any
         unknown = sorted(set(record) - set(CREW_DEFAULTS))
         total = sum(_int_field(record, key, label) for key in STAT_KEYS)
         fatigue = _int_field(record, "@Fatigue", label)
-        end_fits = _is_time(record["@TrainingEndDate"]) if assigned != IDLE else not record["@TrainingEndDate"]
+        record["@RoomId"] = record["@RoomId"] or UNASSIGNED
+        end = parse_server_datetime(record["@TrainingEndDate"])
+        if assigned == IDLE and end is not None:
+            record["@TrainingEndDate"] = ""
+        end_fits = end is not None if assigned != IDLE else not record["@TrainingEndDate"]
         for problem in (unknown and f"unknown keys: {', '.join(unknown)}",
                         total > character.capacity and f"stats total {total} is over the training capacity {character.capacity}",
-                        record["@RoomId"] and record["@RoomId"] not in room_ids
+                        record["@RoomId"] != UNASSIGNED and record["@RoomId"] not in room_ids
                         and f"unknown @RoomId {record['@RoomId']!r}",
                         fatigue > rules.fatigue_max and f"@Fatigue {fatigue} is above the maximum {rules.fatigue_max}",
                         assigned != IDLE and assigned not in rules.trainings
                         and f"unknown @TrainingDesignId {assigned!r}",
                         not end_fits and f"@TrainingEndDate {record['@TrainingEndDate']!r} does not fit "
-                                         f"@TrainingDesignId {assigned!r} (a {TIME_FORMAT} time, or empty when idle)"):
+                                         f"@TrainingDesignId {assigned!r} (a {TIME_FORMAT} time; idle crew may leave it empty)"):
             if problem:
                 raise ValueError(f"{label}: {problem}")
         members[record["@CharacterId"]] = _Member(record, character.capacity, fatigue, now, fatigue)
@@ -411,7 +415,8 @@ class CrewTraining:
 
     It reads no clock (every call takes ``now``) and keeps none of the game's other state: a call that depends on
     rooms, research or an item is handed them. It draws only from its own generator, once per finished session.
-    ``begin``, ``refuse``, ``finish`` and ``consume`` each append one entry to ``log``, stamped with ``day``.
+    ``begin``, ``refuse``, ``finish`` and ``consume`` each append one entry to ``log``, stamped with the scenario
+    ``day`` they are handed (the game's, the one its faults count by).
     """
 
     def __init__(self, rules: TrainingRules, members: dict[str, _Member], design: DesignData,
@@ -420,7 +425,6 @@ class CrewTraining:
         self.members = members
         self.rng = rng
         self.upgrade_from = {room.design_id: room.upgrade_from for room in design.rooms}
-        self.day = 0  # the scenario day, which the game sets at each day boundary
         self.log: list[dict] = []
 
     # -- observation -----------------------------------------------------------------
@@ -463,9 +467,10 @@ class CrewTraining:
         if self._training(member):
             return "busy", f"already training {member.record['@TrainingDesignId']}"
         room_id = member.record["@RoomId"]
-        room = next((room for room in rooms if _same_id(room.get("@RoomId"), room_id)), {})
+        room = {} if room_id == UNASSIGNED else next(
+            (room for room in rooms if _same_id(room.get("@RoomId"), room_id)), {})
         if design_id not in self.trains(room):
-            return "wrong-room", f"room {room_id or '(none)'} does not train {design_id}"
+            return "wrong-room", f"room {'(none)' if room_id == UNASSIGNED else room_id} does not train {design_id}"
         if room.get("@RoomStatus") == "Upgrading":
             return "room-upgrading", f"room {room_id} is being upgraded"
         if design.research is not None and not any(
@@ -474,11 +479,11 @@ class CrewTraining:
             return "no-research", f"research {design.research} is not completed"
         return None
 
-    def refuse(self, character_id: str, design_id: str, now: datetime, code: str, detail: str) -> dict:
+    def refuse(self, character_id: str, design_id: str, now: datetime, day: int, code: str, detail: str) -> dict:
         """Log a start refused with ``check_start``'s (code, detail)."""
-        return self._entry("start", character_id, design_id, now, code, detail, requested=design_id)
+        return self._entry("start", character_id, design_id, now, day, code, detail, requested=design_id)
 
-    def begin(self, character_id: str, design_id: str, now: datetime, *, requested: str) -> dict:
+    def begin(self, character_id: str, design_id: str, now: datetime, day: int, *, requested: str) -> dict:
         """Start ``design_id``, for a request of ``requested`` that ``check_start`` passed (they differ only when
         the server starts another design)."""
         member, design = self.members[character_id], self.rules.trainings[design_id]
@@ -486,24 +491,24 @@ class CrewTraining:
         self._set_fatigue(member, member.fatigue_at_start + design.fatigue, now)
         end = _format_time(now + timedelta(seconds=design.duration))
         member.record.update({"@TrainingDesignId": design_id, "@TrainingEndDate": end})
-        return self._entry("start", character_id, design_id, now, requested=requested, end=end)
+        return self._entry("start", character_id, design_id, now, day, requested=requested, end=end)
 
-    def finish(self, character_id: str, now: datetime) -> dict:
+    def finish(self, character_id: str, now: datetime, day: int) -> dict:
         member = self.members.get(character_id)
         session = member.record["@TrainingDesignId"] if member is not None and self._training(member) else None
         refusal = (("unknown-character", "unknown character") if member is None
                    else ("idle", "not training") if session is None
                    else ("early", f"still training until {member.record['@TrainingEndDate']}")
-                   if _utc(now) < _parse_time(member.record["@TrainingEndDate"]) else None)
+                   if now < parse_server_datetime(member.record["@TrainingEndDate"]) else None)
         if refusal:
-            return self._entry("finish", character_id, session, now, *refusal)
+            return self._entry("finish", character_id, session, now, day, *refusal)
         design, top = self.rules.trainings[session], self.rules.fatigue_max
         raw = self.rng.randint(design.low, design.high)
         gain = self._add(member, design.stat, raw * (top - member.fatigue_at_start) // top)
         member.record.update({"@TrainingDesignId": IDLE, "@TrainingEndDate": ""})
-        return self._entry("finish", character_id, session, now, **gain)
+        return self._entry("finish", character_id, session, now, day, **gain)
 
-    def consume(self, character_id: str, item: Optional[Mapping[str, Any]], now: datetime) -> dict:
+    def consume(self, character_id: str, item: Optional[Mapping[str, Any]], now: datetime, day: int) -> dict:
         """Use one of ``item`` (an inventory record, or ``None`` for an unknown item id) on the member: its stat
         gain, capped like training, and its fatigue change. Allowed while training. The caller takes the item."""
         member = self.members.get(character_id)
@@ -514,20 +519,20 @@ class CrewTraining:
                    else ("out-of-stock", "out of stock") if int(item["@Quantity"]) < 1
                    else ("unknown-character", "unknown character") if member is None else None)
         if refusal:
-            return self._entry("consume", character_id, design_id, now, *refusal)
+            return self._entry("consume", character_id, design_id, now, day, *refusal)
         gain = self._add(member, design.stat, design.gain) if design.stat else {}
         self._set_fatigue(member, self.fatigue(member, now) + design.fatigue - design.recovery, now)
-        return self._entry("consume", character_id, design_id, now, **gain)
+        return self._entry("consume", character_id, design_id, now, day, **gain)
 
     def _training(self, member: _Member) -> bool:
         return member.record["@TrainingDesignId"] != IDLE
 
     def _set_fatigue(self, member: _Member, value: int, now: datetime) -> None:
-        """Set the fatigue at ``now`` (reads floor it at 0), keeping the progress toward the next recovered point
+        """Set the fatigue at ``now``, within 0 and the maximum, keeping the progress toward the next recovered point
         while the member is still recovering, so a change never delays recovery by itself."""
         period = timedelta(seconds=self.rules.recovery_seconds)
         carried = (now - member.since) % period if self.fatigue(member, now) > 0 else timedelta(0)
-        member.fatigue, member.since = min(value, self.rules.fatigue_max), now - carried
+        member.fatigue, member.since = max(0, min(value, self.rules.fatigue_max)), now - carried
 
     def _total(self, member: _Member) -> int:
         return sum(int(member.record[key]) for key in STAT_KEYS)
@@ -539,13 +544,13 @@ class CrewTraining:
         member.record[key] = str(int(member.record[key]) + added)
         return {"gain": {stat: added}, "capped": added < amount}
 
-    def _entry(self, op: str, character_id: str, design_id: Optional[str], now: datetime, code: str = "ok",
-               detail: str = "", *, requested: Optional[str] = None, end: Optional[str] = None,
+    def _entry(self, op: str, character_id: str, design_id: Optional[str], now: datetime, day: int,
+               code: str = "ok", detail: str = "", *, requested: Optional[str] = None, end: Optional[str] = None,
                gain: Optional[dict] = None, capped: bool = False) -> dict:
         member = self.members.get(character_id)
         known = member is not None
         design = (self.rules.items if op == "consume" else self.rules.trainings).get(design_id)
-        entry = {"seq": len(self.log) + 1, "at": _format_time(now), "day": self.day, "op": op,
+        entry = {"seq": len(self.log) + 1, "at": _format_time(now), "day": day, "op": op,
                  "character_id": character_id, "room_id": member.record["@RoomId"] if known else None,
                  "design_id": design_id, "requested_design_id": requested,
                  "stat": None if design is None else design.stat, "accepted": code == "ok", "code": code,
@@ -622,18 +627,20 @@ class SimulatedGame:
         for kind, amount in fault.spend.items():
             setattr(self, kind, max(getattr(self, kind) - amount, 0))
 
-    def _invoke(self, method: str, effect: Callable[..., Any], rejected: Callable[[], Any] = lambda: False) -> Any:
+    def _invoke(self, method: str, effect: Callable[[], Any], rejected: Callable[[], Any] = lambda: False,
+                contradicted: Optional[Callable[[str], Any]] = None) -> Any:
         """Call ``effect`` the way the server would, unless a fault changes it.
 
-        ``rejected`` gives the server's refusal (a ``reject`` fault; by default the Client's ``False``); a
-        ``contradicted-effect`` fault calls ``effect`` with its substitute design.
+        ``rejected`` gives the server's refusal (a ``reject`` fault; by default the Client's ``False``);
+        ``contradicted`` is the effect with another design, which a ``contradicted-effect`` fault calls with its
+        substitute (``Fault`` allows that kind on ``addTraining`` only, which passes it).
         """
         self.calls.append(method)
         fired = self._triggered(method)
         call_fault = next((f for f in fired if f.kind in CALL_FAULTS), None)
         outcome = next((f for f in fired if f.kind in OUTCOME_FAULTS), None)
         if outcome is not None:
-            effect = rejected if outcome.kind == "reject" else partial(effect, outcome.training_design_id)
+            effect = rejected if outcome.kind == "reject" else partial(contradicted, outcome.training_design_id)
         result = effect() if call_fault is None or call_fault.effect else None
         for fault in fired:
             if fault.kind == "concurrent-spend":
@@ -693,13 +700,13 @@ class SimulatedGame:
         return True
 
     def listItemsOfAShip(self) -> bool:
-        records = [dict(item) for item in self.inventory]
+        records = [_strings(item) for item in self.inventory]
         self.itemsOfAShip = {"ItemService": {"ListItemsOfAShip": {"Items": _container("Item", records)}}}
         return True
 
     def start_day(self, day: int) -> None:
         """Begin scenario day ``day``: finish timers, and count fault triggers and log training within it."""
-        self.day = self.training.day = day
+        self.day = day
         self.finish_day()
         now = self.clock.now  # read, not ticked, so economy timestamps stay as they were
         self.days.append({"day": day, "at": _format_time(now), "crew": tuple(self.training.records(now)),
@@ -731,19 +738,19 @@ class SimulatedGame:
     def addTraining(self, training_design_id: str, character_id: str) -> object:
         character_id, requested = str(character_id), str(training_design_id)
 
-        def start(substitute: Optional[str] = None) -> bool:
-            # A contradicted-effect fault passes ``substitute``: a request the server accepts starts that instead.
+        def start(design_id: str) -> bool:
+            # The server checks the request; one it accepts starts ``design_id`` (another design when contradicted).
             refusal = self.training.check_start(character_id, requested, self.rooms, self.research)
             if refusal:
-                return self.training.refuse(character_id, requested, self.clock.now, *refusal)["accepted"]
-            return self.training.begin(character_id, substitute or requested, self.clock.now,
+                return self.training.refuse(character_id, requested, self.clock.now, self.day, *refusal)["accepted"]
+            return self.training.begin(character_id, design_id, self.clock.now, self.day,
                                        requested=requested)["accepted"]
 
-        return self._invoke("addTraining", start)
+        return self._invoke("addTraining", partial(start, requested), contradicted=start)
 
     def finishTraining(self, character_id: str) -> object:
         def finish() -> bool:
-            entry = self.training.finish(str(character_id), self.clock.now)
+            entry = self.training.finish(str(character_id), self.clock.now, self.day)
             if entry["accepted"]:
                 self.trainingFinish = {"TrainingService": {"FinishTraining": {
                     "Character": self.training.record(str(character_id), self.clock.now)}}}
@@ -760,11 +767,9 @@ class SimulatedGame:
     def useConsumable(self, consumable_item_design_id: Any, character_id: Any) -> bool:
         """``Client.useConsumable``: the first listed item of that design, then ``activateItem3``.
 
-        The Client reuses its last item list; this one lists every time. Simulated item ids never change, so the
-        item chosen is the same."""
-        self.listItemsOfAShip()
-        items = _records(self.itemsOfAShip["ItemService"]["ListItemsOfAShip"]["Items"], "Item")
-        item_id = next((item.get("@ItemId") for item in items
+        The Client reuses its last item list; this one reads the inventory as it is. Simulated item ids never
+        change, so the item chosen is the same."""
+        item_id = next((item.get("@ItemId") for item in self.inventory
                         if _same_id(item.get("@ItemDesignId"), str(consumable_item_design_id))), None)
         if not item_id:
             return False
@@ -818,13 +823,13 @@ class SimulatedGame:
 
     def _activate_item(self, item_id: str, character_id: str) -> None:
         item = next((entry for entry in self.inventory if _same_id(entry.get("@ItemId"), item_id)), None)
-        entry = self.training.consume(character_id, item, self.clock.now)
+        entry = self.training.consume(character_id, item, self.clock.now, self.day)
         if not entry["accepted"]:
             self.item = _item_error(f"item {item_id}: {entry['detail']}")
             return
         item["@Quantity"] = str(int(item["@Quantity"]) - 1)
         self.item = {"ItemService": {"ActivateItem3": {
-            "Item": dict(item), "Character": self.training.record(character_id, self.clock.now)}}}
+            "Item": _strings(item), "Character": self.training.record(character_id, self.clock.now)}}}
 
     def _run_battle(self) -> bool:
         self.trophies += self.rng.choice((-1, 1)) * self.rng.randint(5, 30)
@@ -844,13 +849,17 @@ class ScenarioResult:
     # Per account: the crew records at the end of the run; the training state machine's log (one entry per
     # addTraining, finishTraining or item use that reached it); and per day, the crew and the training rooms
     # (room id -> training design ids) at the day's start. With the run's span (UTC, like the log's times),
-    # training_json holds them all, byte-stable per seed.
+    # the training_json property holds them all, byte-stable per seed.
     crew: Mapping[str, tuple[Mapping[str, str], ...]] = field(default_factory=dict)
     training_log: Mapping[str, tuple[Mapping[str, Any], ...]] = field(default_factory=dict)
     days: Mapping[str, tuple[Mapping[str, Any], ...]] = field(default_factory=dict)
     started_at: str = ""
     ended_at: str = ""
-    training_json: str = ""
+
+    @property
+    def training_json(self) -> str:
+        return json.dumps({"crew": self.crew, "log": self.training_log, "days": self.days,
+                           "started_at": self.started_at, "ended_at": self.ended_at}, sort_keys=True, indent=2)
 
     @property
     def initial_crew(self) -> dict[str, tuple[Mapping[str, str], ...]]:
@@ -922,10 +931,6 @@ def run_scenario(scenario: Mapping[str, Any], workdir: Path | str, *, seed: Opti
     journals = _renumber({alias: GameplayJournal(workdir / f"{alias}.jsonl").read() for alias in sorted(games)})
     audit = audit_fleet(registry, journals)
     all_events = [event for alias in sorted(journals) for event in journals[alias]]
-    crew = {alias: tuple(game.training.records(clock.now)) for alias, game in games.items()}
-    training_log = {alias: tuple(game.training.log) for alias, game in games.items()}
-    days = {alias: tuple(game.days) for alias, game in games.items()}
-    span = {"started_at": _format_time(clock.start), "ended_at": _format_time(clock.now)}
     return ScenarioResult(
         name=scenario.get("name", "scenario"),
         seed=seed,
@@ -935,9 +940,9 @@ def run_scenario(scenario: Mapping[str, Any], workdir: Path | str, *, seed: Opti
         audit_json=audit.to_json(),
         calls={alias: tuple(game.calls) for alias, game in games.items()},
         faults={alias: tuple(game.fired) for alias, game in games.items()},
-        crew=crew,
-        training_log=training_log,
-        days=days,
-        **span,
-        training_json=json.dumps({"crew": crew, "log": training_log, "days": days, **span}, sort_keys=True, indent=2),
+        crew={alias: tuple(game.training.records(clock.now)) for alias, game in games.items()},
+        training_log={alias: tuple(game.training.log) for alias, game in games.items()},
+        days={alias: tuple(game.days) for alias, game in games.items()},
+        started_at=_format_time(clock.start),
+        ended_at=_format_time(clock.now),
     )

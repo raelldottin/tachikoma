@@ -8,11 +8,9 @@ import collections
 import copy
 import json
 import math
-import os
 import random
 import re
 import tempfile
-import time
 import unittest
 from datetime import datetime, timedelta, timezone
 from fractions import Fraction
@@ -562,7 +560,7 @@ class TrainingFaultTests(unittest.TestCase):
             (dict(CONTRADICT, method="finishTraining"), "applies to addTraining only"),
             ({"kind": "contradicted-effect", "method": "addTraining"}, "needs the training_design_id"),
             (dict(CONTRADICT, training_design_id=""), "needs the training_design_id"),
-            (dict(CONTRADICT, training_design_id=7), "needs the training_design_id"),
+            (dict(CONTRADICT, training_design_id=False), "needs the training_design_id"),
             ({"kind": "raise", "method": "addTraining", "training_design_id": "t"},
              "inapplicable keys: training_design_id"),
             (dict(REJECT, effect=False), "inapplicable keys: effect"),
@@ -734,34 +732,6 @@ class ReviewRegressionTests(unittest.TestCase):
         provided = ClientSnapshotProvider(g, "alpha", clock=lambda: T0)()
         self.assertEqual([crew.character_id for crew in provided.crew], ["c1"])
 
-    def test_a_naive_scenario_start_is_read_as_utc(self):
-        # A start without an offset made finishTraining raise TypeError (naive against aware), and @TrainingEndDate
-        # followed the machine's timezone.
-        if not hasattr(time, "tzset"):
-            self.skipTest("time.tzset is not available")
-        previous = os.environ.get("TZ")
-
-        def restore():
-            if previous is None:
-                os.environ.pop("TZ", None)
-            else:
-                os.environ["TZ"] = previous
-            time.tzset()
-
-        self.addCleanup(restore)
-        os.environ["TZ"] = "America/New_York"
-        time.tzset()
-        state = {"rooms": [dict(room) for room in ROOMS], "crew": [member()]}
-        g = SimulatedGame("alpha", state, DESIGN, random.Random(0), SimulatedClock(T0.replace(tzinfo=None)),
-                          training=RULES)
-        self.assertIs(g.addTraining("t-atk", "c1"), True)
-        self.assertEqual(crew_record(g)["@TrainingEndDate"], "2027-06-01T07:00:00")
-        self.assertEqual(g.training.log[-1]["at"], "2027-06-01T06:00:00")
-        g.clock.advance(timedelta(seconds=3599))
-        self.assertIs(g.finishTraining("c1"), False)
-        g.clock.advance(timedelta(seconds=1))
-        self.assertIs(g.finishTraining("c1"), True)
-
     def test_a_research_requirement_of_zero_or_empty_means_none(self):
         # Live records say "no research" with "0" (or ""); they were refused as an unknown research design.
         for required in ("0", ""):
@@ -787,6 +757,122 @@ class ReviewRegressionTests(unittest.TestCase):
                  {"@ItemId": "i1", "@ItemDesignId": "2"})
         g = game(crew=(), training=None, inventory=loose)
         self.assertEqual(len(g.inventory), 2)
+
+
+def leaves(value):
+    """Every scalar inside a parsed response: what xmltodict yields is strings only."""
+    if isinstance(value, dict):
+        return [leaf for item in value.values() for leaf in leaves(item)]
+    if isinstance(value, list):
+        return [leaf for item in value for leaf in leaves(item)]
+    return [value]
+
+
+class FinalReviewRegressionTests(unittest.TestCase):
+    """Defects found in the final review, each pinned before its fix."""
+
+    def test_crew_in_no_room_has_room_id_zero_like_the_live_game(self):
+        # The live game marks crew in no room with @RoomId "0" (Client skips it with != "0"); the default was "" and
+        # "0" was refused as an unknown room.
+        roomless = member()
+        del roomless["@RoomId"]
+        for crew in (roomless, member(room="0"), member(room="")):
+            with self.subTest(room=crew.get("@RoomId")):
+                g = game(crew=(crew,))
+                self.assertEqual(crew_record(g)["@RoomId"], "0")
+                self.assertIs(g.addTraining("t-atk", "c1"), False)
+                entry = g.training.log[-1]
+                self.assertEqual((entry["code"], entry["room_id"], entry["detail"]),
+                                 ("wrong-room", "0", "room (none) does not train t-atk"))
+        # "0" is never a room, even if a scenario room claims that id.
+        zero = {"@RoomId": "0", "@RoomDesignId": "300", "@RoomStatus": "Normal"}
+        g = game(crew=(member(room="0"),), rooms=ROOMS + (zero,))
+        self.assertIs(g.addTraining("t-atk", "c1"), False)
+        self.assertEqual(g.training.log[-1]["code"], "wrong-room")
+
+    def test_an_idle_record_may_keep_its_last_end_date(self):
+        # Live idle records may keep the end of their last session; such a record was refused.
+        g = game(crew=(dict(member(), **{"@TrainingEndDate": "2027-05-31T08:00:00"}),))
+        self.assertEqual(crew_record(g)["@TrainingEndDate"], "")
+        (crew,) = g.snapshot().crew
+        self.assertEqual((crew.training_active, crew.training_end), (False, None))
+        self.assertIs(g.addTraining("t-atk", "c1"), True)
+        with self.assertRaisesRegex(ValueError, "crew c1: @TrainingEndDate 'soon' does not fit"):
+            game(crew=(dict(member(), **{"@TrainingEndDate": "soon"}),))
+
+    def test_a_substitute_design_id_may_be_a_json_number(self):
+        # Design ids may be JSON numbers elsewhere in a scenario; a numeric training_design_id was refused.
+        self.assertEqual(Fault.from_dict(dict(CONTRADICT, training_design_id=7)).training_design_id, "7")
+        seven = training_design("7", "Attack", "300", 3600, 0, 1, 1)
+        g = game(training=rules(training_designs=RULES["training_designs"] + [seven]),
+                 faults=(dict(CONTRADICT, training_design_id=7),))
+        self.assertIs(g.addTraining("t-atk", "c1"), True)
+        self.assertEqual(crew_record(g)["@TrainingDesignId"], "7")
+        for bad in (True, False, None, "", 7.0, ["7"]):
+            with self.subTest(bad=bad), self.assertRaisesRegex(ValueError, "needs the training_design_id"):
+                Fault.from_dict(dict(CONTRADICT, training_design_id=bad))
+
+    def test_design_and_item_reads_hold_strings_only(self):
+        # xmltodict yields strings only; scenario records with JSON numbers were returned unchanged.
+        numeric = {
+            "character_designs": [{"@CharacterDesignId": 1, "@TrainingCapacity": 20}],
+            "training_designs": [{"@TrainingDesignId": 11, "@TrainingStat": "Attack", "@Duration": 3600,
+                                  "@Fatigue": 0, "@MinGain": 1, "@MaxGain": 1, "@RequiredRoomDesignId": 300,
+                                  "@RequiredResearchDesignId": None}],
+            "item_designs": [{"@ItemDesignId": 901, "@ConsumableStat": "Attack", "@ConsumableGain": 1}],
+        }
+        g = game(crew=(member(design=1),), training=numeric,
+                 inventory=({"@ItemId": 7, "@ItemDesignId": 901, "@Quantity": 2},))
+        self.assertEqual(g.snapshot().inventory[0].quantity, 2)
+        for read, attribute in (("listAllTrainingDesigns2", "trainingDesigns"),
+                                ("listAllCharacterDesigns2", "allCharacterDesigns"),
+                                ("listItemsOfAShip", "itemsOfAShip"), ("listAllCharactersOfUser", "allCharactersOfUser")):
+            with self.subTest(read=read):
+                getattr(g, read)()
+                values = leaves(getattr(g, attribute))
+                self.assertTrue(values)
+                self.assertEqual([value for value in values if not isinstance(value, str)], [])
+        self.assertEqual(g.trainingDesigns["TrainingService"]["ListAllTrainingDesigns"]["TrainingDesigns"],
+                         {"TrainingDesign": {"@TrainingDesignId": "11", "@TrainingStat": "Attack", "@Duration": "3600",
+                                             "@Fatigue": "0", "@MinGain": "1", "@MaxGain": "1",
+                                             "@RequiredRoomDesignId": "300"}})
+        self.assertIs(g.useConsumable(901, "c1"), True)
+        self.assertEqual(activation(g)["Item"], {"@ItemId": "7", "@ItemDesignId": "901", "@Quantity": "1"})
+        self.assertEqual(g.snapshot().inventory[0].quantity, 1)
+        self.assertIs(g.addTraining(11, "c1"), True)
+
+    def test_a_training_block_that_is_not_a_mapping_is_refused(self):
+        # "training": [] was silently read as an empty block.
+        for block in ([], [["fatigue_max", 100]], "fatigue_max", 0, False):
+            with self.subTest(block=block), self.assertRaisesRegex(ValueError, "training block must be a mapping"):
+                game(crew=(), training=block)
+        self.assertEqual(game(crew=(), training=None).rules, game(crew=(), training={}).rules)
+
+    def test_stored_fatigue_never_goes_below_zero(self):
+        # A fatigue-recovery item stored a negative fatigue (reads floored it, so only the store showed it).
+        g = game(crew=(member(fatigue=30),), inventory=ITEMS)
+        self.assertIs(g.useConsumable(950, "c1"), True)  # recovers 50
+        self.assertEqual((g.training.members["c1"].fatigue, crew_record(g)["@Fatigue"]), (0, "0"))
+
+    def test_a_scenario_start_without_an_offset_is_refused_up_front(self):
+        # The docs said a naive start was read as UTC, but the first snapshot refused it mid-run.
+        scenario = load_scenario("single-account")
+        scenario["start"] = "2027-06-01T06:00:00"
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(ValueError, "start 2027-06-01T06:00:00 has no UTC offset"):
+                run_scenario(scenario, tmp)
+            self.assertEqual(list(Path(tmp).iterdir()), [])
+        with self.assertRaisesRegex(ValueError, "has no UTC offset"):
+            SimulatedClock(T0.replace(tzinfo=None))
+
+    def test_log_entries_take_their_day_from_the_game(self):
+        # The day was kept twice (the game's, for faults, and the training log's), so one could go stale.
+        g = game(inventory=ITEMS)
+        g.day = 2
+        g.addTraining("t-atk", "c1")
+        g.finishTraining("c1")
+        g.useConsumable(901, "c1")
+        self.assertEqual([entry["day"] for entry in g.training.log], [2, 2, 2])
 
 
 # The property loop's own model of the rules, written from the design above, not from the implementation.
@@ -1165,7 +1251,8 @@ class TrainingScenarioTests(unittest.TestCase):
             (crew(1, **{"@TrainingDesignId": "t-x"}), "crew 102: unknown @TrainingDesignId 't-x'"),
             (crew(1, **{"@TrainingEndDate": "tomorrow"}), "crew 102: @TrainingEndDate 'tomorrow' does not fit"),
             (crew(1, **{"@TrainingEndDate": ""}), "crew 102: @TrainingEndDate '' does not fit"),
-            (crew(0, **{"@TrainingEndDate": "2027-06-01T08:00:00"}), "crew 101: @TrainingEndDate '2027-06-01T08"),
+            (crew(0, **{"@TrainingEndDate": "2027-06-01"}), "crew 101: @TrainingEndDate '2027-06-01' does not fit"),
+            (lambda s: s.update(training=[]), "training block must be a mapping"),
             (design("character_designs", 0, **{"@TrainingCapacity": "0"}), "@TrainingCapacity must be an integer >= 1"),
             (remove("training", "character_designs", 0, "@TrainingCapacity"),
              "character design cd-recruit: @TrainingCapacity must be an integer >= 1, not None"),
