@@ -456,15 +456,15 @@ class TestCrewStatFormulas(unittest.TestCase):
         # 100 TP, 0 equipment → 100
         self.assertEqual(compute_final_stamina(100, 0), 100)
 
-    def test_hp_rounding_from_guide(self):
-        """Guide example: 10 HP crew with 15 TP → 11.5 (guide notes display
-        shows 11.45 as 11.5 but game rounds UP to 12)."""
+    def test_final_stat_leaves_rounding_to_the_caller(self):
+        """compute_final_stat returns the unrounded value; its docstring leaves the game's HP and
+        Attack/Repair rounding to the caller (sdk/crew_leveling.py, compute_final_stat)."""
         from sdk.crew_leveling import compute_final_stat
-        import math
 
-        raw = compute_final_stat(10, 15, 0)
-        # HP should be rounded UP per guide
-        self.assertEqual(math.ceil(raw), 12)
+        # 7 x 1.33 = 9.31: neither rounded up to 10 (HP) nor to one decimal place, 9.4 (Attack/Repair).
+        self.assertAlmostEqual(compute_final_stat(7, 33, 0), 9.31)
+        # 10 x 1.14 = 11.4: not rounded up to 12.
+        self.assertAlmostEqual(compute_final_stat(10, 14, 0), 11.4)
 
     def test_gunner_blueprint_example(self):
         """Guide mentions Robyna Hoots (3* gunner) with 10 HP and 39.4 Weapon.
@@ -478,13 +478,6 @@ class TestCrewStatFormulas(unittest.TestCase):
         # These are approximate — the guide says "not too shabby" for 10HP/39.4WPN
         result = compute_final_stat(20, 70, 5)
         self.assertAlmostEqual(result, 39.0, places=1)
-
-    def test_xp_from_pvp(self):
-        """XP from PVP = enemy_trophies / 10 (from guide Section 3)."""
-        # This is documented but not implemented as a function — verify formula
-        enemy_trophies = 1000
-        xp = enemy_trophies / 10
-        self.assertEqual(xp, 100)
 
 
 if __name__ == "__main__":

@@ -43,7 +43,8 @@ summary and uploads `mutation.json` as an artifact without blocking merges;
 post-merge and release runs skip it.
 
 See [.github/workflows/README.md](.github/workflows/README.md) for the
-check coverage, lint baseline, local commands, and branch-protection setup.
+check coverage, lint and hollow-test baselines, local commands, and
+branch-protection setup.
 
 ## Repository Contents
 

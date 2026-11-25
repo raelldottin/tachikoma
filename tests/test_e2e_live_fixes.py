@@ -10,6 +10,7 @@ import os
 from sdk.client import Client
 from sdk.device import Device
 import scripts.provision_account_secrets as provision_script
+from tests.test_runtime_guards import RUN_MAIN_STEPS, recording_client, run_main
 
 
 class TestE2ELiveFixes(unittest.TestCase):
@@ -255,10 +256,12 @@ class TestE2ELiveFixes(unittest.TestCase):
         self.client.session = MagicMock()
         self.client.session.request.return_value = mock_response
 
-        with patch("logging.warning") as mock_warn, patch("logging.error") as mock_err:
-            self.client.request("https://api.pixelstarships.com/MessageService/CollectReward2", "POST")
-            mock_warn.assert_called_once()
-            mock_err.assert_not_called()
+        with self.assertLogs(level="WARNING") as logs:
+            response = self.client.request("https://api.pixelstarships.com/MessageService/CollectReward2", "POST")
+
+        self.assertIs(response, mock_response)
+        self.assertEqual([record.levelname for record in logs.records], ["WARNING"])
+        self.assertIn("storage is full", logs.output[0])
 
     # 9. Provisioning Script Fixes
 
@@ -288,32 +291,49 @@ class TestE2ELiveFixes(unittest.TestCase):
                 self.assertEqual(cm.exception.code, 1)
                 mock_prov.assert_not_called()
 
-    # 9. Status Aggregation in run.py
 
-    def test_run_py_status_aggregation_failure(self):
-        """Proves that a failure in secondary operations propagates to runtime_failed."""
-        mock_client = MagicMock()
-        mock_client.grabFlyingStarbux = MagicMock()
-        mock_client.freeStarbuxToday = 10
-        mock_client.freeStarbuxMax = 5
-        mock_client.collectTaskReward = MagicMock(return_value=False)  # Secondary action fails!
-        mock_client.getCrewInfo = MagicMock(return_value=True)
-        mock_client.upgradeResearches = MagicMock(return_value=True)
-        mock_client.upgradeRooms = MagicMock(return_value=True)
-        mock_client.collectDailyReward = MagicMock(return_value=True)
-        mock_client.listActiveMarketplaceMessages = MagicMock(return_value=True)
-        mock_client.getMessages = MagicMock(return_value=True)
-        mock_client.manageTraining = MagicMock(return_value=True)
-        mock_client.upgradeCharacters = MagicMock(return_value=True)
-        mock_client.info = {"@Name": "TestBot"}
+class TestRunMainStatusAggregation(unittest.TestCase):
+    """run.main() decides the exit status from each step's outcome and keeps running the steps after a failure."""
 
-        runtime_failed = False
-        if mock_client.collectTaskReward() is False:
-            runtime_failed = True
-        if mock_client.getCrewInfo() is False:
-            runtime_failed = True
+    def test_collect_task_reward_false_is_benign_and_exits_0(self):
+        client = recording_client({"collectTaskReward": False})
 
-        self.assertTrue(runtime_failed)
+        with self.assertLogs(level="INFO") as logs:
+            code = run_main(client)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(client.step_calls, list(RUN_MAIN_STEPS))
+        self.assertIn("INFO:root:collectTaskReward returned False (expected if storage full)", logs.output)
+
+    def test_get_crew_info_false_fails_run_but_later_steps_still_run(self):
+        client = recording_client({"getCrewInfo": False})
+
+        self.assertEqual(run_main(client), 1)
+        self.assertEqual(client.step_calls, list(RUN_MAIN_STEPS))
+
+    def test_research_room_and_daily_reward_failures_fail_run_but_later_steps_still_run(self):
+        for step in ("upgradeResearches", "upgradeRooms", "collectDailyReward"):
+            with self.subTest(step=step):
+                client = recording_client({step: False})
+
+                self.assertEqual(run_main(client), 1)
+                self.assertEqual(client.step_calls, list(RUN_MAIN_STEPS))
+
+    def test_manage_training_false_fails_run_and_later_steps_still_run(self):
+        client = recording_client({"manageTraining": False})
+
+        self.assertEqual(run_main(client), 1)
+        self.assertEqual(client.step_calls, list(RUN_MAIN_STEPS))
+
+    def test_manage_training_exception_is_logged_and_later_steps_still_run(self):
+        client = recording_client({"manageTraining": RuntimeError("training exploded")})
+
+        with self.assertLogs(level="ERROR") as logs:
+            code = run_main(client)
+
+        self.assertEqual(code, 1)
+        self.assertEqual(client.step_calls, list(RUN_MAIN_STEPS))
+        self.assertIn("ERROR:root:manageTraining failed: training exploded", logs.output)
 
 
 if __name__ == "__main__":
