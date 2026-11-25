@@ -1,8 +1,11 @@
 """Pure, total, deterministic crew-training planner.
 
-``plan_training(ctx, strategy)`` folds ``_plan_crew`` over ``ctx.crew`` in order. Each crew gets exactly one primary
-decision (StartTraining | UseConsumable | Skip), optionally preceded by a FinishTraining. ``_plan_crew`` sees only
-its crew, the context and the strategy, so one crew can never leak state (room, design, stock) into another.
+``plan_training(ctx, strategy)`` plans ``ctx.crew`` in order. Each crew gets exactly one primary decision
+(StartTraining | UseConsumable | Skip), optionally preceded by a FinishTraining. A crew's decision depends only on
+that crew, the context and the strategy, with one deliberate exception: consumable stock is shared. Each
+UseConsumable reserves one unit, so later crew see the reduced stock and the plan never uses an item more often
+than ``ctx.items`` holds it (crew order decides who gets a scarce item). Room and design choices never leak between
+crew.
 
 Decision precedence per crew:
  1. training finished but not collected (design id set and end <= now) -> FinishTraining first, then continue
@@ -20,26 +23,31 @@ Decision precedence per crew:
 10. StartTraining
 
 Consumables are a fallback only: never instead of a startable training, never at/above the TP cap, never for an
-unknown role or outside a training room, and only when the strategy maps an item that is in stock.
+unknown role or outside a training room, and only when the strategy maps an item that is still in stock.
+
+After a FinishTraining:
+- The primary decision that follows a FinishTraining is advisory: it is based on the pre-finish stats, so it may
+  name the wrong tier. The executor must not run it as-is. It rebuilds that crew from the FinishTraining response
+  and replaces the advisory decision with ``replan_after_finish(ctx, rebuilt_crew, strategy)``, passing a ``ctx``
+  whose ``items`` reflect what earlier decisions already used.
 
 Notes:
 - Percent is the exact integer ceiling of ``total * 100 / training_capacity`` (the original float ``math.ceil`` was
   one too high for e.g. 7/100 and 55/100).
-- After a FinishTraining the primary decision is based on pre-finish stats. The executor should rebuild that crew
-  from the FinishTraining response and re-plan it with ``plan_training(replace(ctx, crew=(crew,)))``.
-- The same character id appearing twice in ``ctx.crew`` is planned twice, independently, in order.
+- The same character id appearing twice in ``ctx.crew`` is planned twice, in order.
 - ``TrainingDesign.tier`` is informational; the role table's training name is the authority.
+- The helpers below are public, supported API (see ``__all__``). Every helper that reads strategy data takes the
+  strategy as a required argument; only the entry points default to ``DEFAULT_STRATEGY``.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from datetime import datetime
 
-from sdk.crew_leveling import CAPTAIN_TP, get_tp_cap
 from sdk.training.model import (
     CANONICAL_STATS,
-    CrewState,
     SKIP_COMPLETE,
     SKIP_DESIGN_MISSING,
     SKIP_FATIGUED,
@@ -48,6 +56,7 @@ from sdk.training.model import (
     SKIP_TP_CAP_REACHED,
     SKIP_TRAINING_IN_PROGRESS,
     SKIP_UNKNOWN_ROLE,
+    CrewState,
     Decision,
     FinishTraining,
     Skip,
@@ -65,6 +74,24 @@ from sdk.training.strategy import (
     TrainingStrategy,
 )
 
+__all__ = (
+    "band_for",
+    "design_research_ok",
+    "effective_cap",
+    "highest_stat",
+    "percent",
+    "pick_consumable",
+    "pick_design",
+    "plan_training",
+    "replan_after_finish",
+    "research_ok",
+    "resolve_room_name",
+    "role_for",
+    "room_type_for",
+    "total_points",
+    "training_state",
+)
+
 TRAINING_IDLE = "idle"
 TRAINING_IN_PROGRESS = "in_progress"
 TRAINING_FINISHED = "finished"
@@ -77,21 +104,18 @@ def percent(total: int, capacity: int) -> int:
     return -(-total * 100 // capacity)
 
 
-def band_for(pct: int, strategy: TrainingStrategy = DEFAULT_STRATEGY) -> TierBand | None:
-    """Return the (slot, tier) band for ``pct``; None once training is complete.
+def band_for(pct: int, strategy: TrainingStrategy) -> TierBand | None:
+    """The (slot, tier) band for ``pct``; None once training is complete.
 
-    Percentages below the lowest band (only possible with negative stats) clamp to the lowest band.
+    ``strategy.bands`` is sorted and tiles 0..complete_percent-1 (validated), so a band always matches below
+    ``complete_percent``. Percentages below the lowest band (only possible with negative stats) clamp to it.
     """
     if pct >= strategy.complete_percent:
         return None
-    ordered = sorted(strategy.bands, key=lambda band: band.low)
-    for band in ordered:
-        if pct <= band.high:
-            return band
-    return None
+    return next(band for band in strategy.bands if pct <= band.high)
 
 
-def room_type_for(room_name: str | None, strategy: TrainingStrategy = DEFAULT_STRATEGY) -> str | None:
+def room_type_for(room_name: str | None, strategy: TrainingStrategy) -> str | None:
     """Canonical room type for an exact (whitespace-stripped, case-sensitive) room name, else None."""
     if not room_name:
         return None
@@ -107,32 +131,30 @@ def resolve_room_name(crew: CrewState, ctx: TrainingContext) -> str | None:
     return ctx.rooms.get(crew.room_id)
 
 
-def role_for(name: str, strategy: TrainingStrategy = DEFAULT_STRATEGY) -> Role | None:
+def role_for(name: str, strategy: TrainingStrategy) -> Role | None:
     """Role whose character set contains ``name`` exactly (strategy validation keeps it unique)."""
-    for role in strategy.roles:
-        if name in role.characters:
-            return role
-    return None
+    return next((role for role in strategy.roles if name in role.characters), None)
 
 
-def effective_cap(crew: CrewState, strategy: TrainingStrategy = DEFAULT_STRATEGY) -> int:
-    """Training-point cap: the design's capacity, further limited by the crew_leveling TP table when it applies.
+def effective_cap(crew: CrewState, strategy: TrainingStrategy) -> int:
+    """Training-point cap from strategy data only: the design's capacity, limited by the strategy's TP tables.
 
-    A 6-star crew whose design capacity reaches ``CAPTAIN_TP`` is treated as a captain, so the table allows 200 TP
-    instead of clamping it to the standard 6-star cap.
+    Stars come from ``strategy.rarity_stars`` (unknown rarity = 0 stars = capacity only). A crew whose stars have a
+    ``captain_tp_caps`` entry and whose capacity reaches it is a captain and gets that cap; otherwise an
+    ``exceptional_tp_caps[(stars, name)]`` entry wins over ``tp_caps[stars]``. A missing table entry leaves the
+    capacity as the cap.
     """
-    cap = crew.training_capacity
+    capacity = crew.training_capacity
     stars = strategy.rarity_stars.get(crew.rarity, 0)
-    is_captain = stars == 6 and cap >= CAPTAIN_TP
-    table_cap = get_tp_cap(stars, crew.name, is_captain=is_captain) if stars else 0
-    if table_cap > 0:
-        cap = min(cap, table_cap)
-    return cap
+    captain_cap = strategy.captain_tp_caps.get(stars)
+    if captain_cap is not None and capacity >= captain_cap:
+        table_cap = captain_cap
+    else:
+        table_cap = strategy.exceptional_tp_caps.get((stars, crew.name), strategy.tp_caps.get(stars))
+    return capacity if table_cap is None else min(capacity, table_cap)
 
 
-def research_ok(
-    band: TierBand, research_levels: Mapping[str, int], strategy: TrainingStrategy = DEFAULT_STRATEGY
-) -> bool:
+def research_ok(band: TierBand, research_levels: Mapping[str, int], strategy: TrainingStrategy) -> bool:
     """True when any gate alternative for the band is met (exact research-name keys); empty gate = ungated."""
     alternatives = strategy.research_gates[(band.slot, band.tier)]
     if not alternatives:
@@ -163,18 +185,19 @@ def highest_stat(stats: Mapping[str, int]) -> str:
 
 
 def pick_consumable(
-    crew: CrewState, pct: int, ctx: TrainingContext, strategy: TrainingStrategy = DEFAULT_STRATEGY
+    crew: CrewState, pct: int, stock: Mapping[int, int], strategy: TrainingStrategy
 ) -> UseConsumable | None:
-    """First consumable rule matching (pct, fatigue) whose item for the crew's highest stat is in stock.
+    """First consumable rule matching (pct, fatigue) whose item for the crew's highest stat is in ``stock``.
 
-    The caller decides *whether* a consumable may be considered (fallback only); this only checks rules and stock.
+    The caller decides *whether* a consumable may be considered (fallback only) and owns the stock bookkeeping;
+    this only checks rules and the stock it is given.
     """
     code = STAT_CODES[highest_stat(crew.stats)]
     for rule in strategy.consumable_rules:
         if not _rule_matches(rule, pct, crew.fatigue):
             continue
         item_design_id = strategy.consumables.get((code, rule.tier))
-        if item_design_id is not None and ctx.items.get(item_design_id, 0) > 0:
+        if item_design_id is not None and stock.get(item_design_id, 0) > 0:
             reason = f"{rule.tier} {code} consumable at {pct}% with fatigue {crew.fatigue}"
             return UseConsumable(crew.character_id, item_design_id, reason)
     return None
@@ -201,30 +224,42 @@ def total_points(stats: Mapping[str, int]) -> int:
 
 
 def plan_training(ctx: TrainingContext, strategy: TrainingStrategy = DEFAULT_STRATEGY) -> tuple[Decision, ...]:
-    """Plan every crew in ``ctx.crew`` order (see the module docstring for the per-crew precedence)."""
+    """Plan every crew in ``ctx.crew`` order (see the module docstring for the per-crew precedence and stock)."""
+    stock = dict(ctx.items)
     decisions: list[Decision] = []
     for crew in ctx.crew:
-        decisions.extend(_plan_crew(crew, ctx, strategy))
+        primary = _primary_decision(crew, ctx, strategy, stock)
+        if isinstance(primary, UseConsumable):
+            stock[primary.item_design_id] -= 1
+        if training_state(crew, ctx.now) == TRAINING_FINISHED:
+            decisions.append(FinishTraining(crew.character_id, f"training ended at {crew.training_end}"))
+        decisions.append(primary)
     return tuple(decisions)
 
 
-def _plan_crew(crew: CrewState, ctx: TrainingContext, strategy: TrainingStrategy) -> tuple[Decision, ...]:
-    """All decisions for one crew: an optional FinishTraining, then exactly one primary decision."""
-    primary = _primary_decision(crew, ctx, strategy)
-    if training_state(crew, ctx.now) == TRAINING_FINISHED:
-        finish = FinishTraining(crew.character_id, f"training ended at {crew.training_end}")
-        return (finish, primary)
-    return (primary,)
+def replan_after_finish(
+    ctx: TrainingContext, crew: CrewState, strategy: TrainingStrategy = DEFAULT_STRATEGY
+) -> tuple[Decision, ...]:
+    """The decision that replaces the advisory primary after a FinishTraining for ``crew``.
+
+    ``crew`` is the crew rebuilt from the FinishTraining response (fresh stats). Its training fields are cleared
+    before planning, so a response that still carries the finished training's id and end date can never produce
+    another FinishTraining (no finish loop). Only ``crew`` is planned; ``ctx`` supplies everything else, so pass
+    one whose ``items`` already reflect earlier decisions. Returns exactly one primary decision.
+    """
+    idle = replace(crew, training_design_id=None, training_end=None)
+    return plan_training(replace(ctx, crew=(idle,)), strategy)
 
 
-def _consumable_or(skip: Skip, crew: CrewState, pct: int, ctx: TrainingContext, strategy: TrainingStrategy) -> Decision:
-    """Consumable fallback: only reached when no training can start for an eligible crew."""
-    return pick_consumable(crew, pct, ctx, strategy) or skip
-
-
-def _primary_decision(crew: CrewState, ctx: TrainingContext, strategy: TrainingStrategy) -> Decision:
-    """Steps 2-10 of the module-level precedence."""
+def _primary_decision(
+    crew: CrewState, ctx: TrainingContext, strategy: TrainingStrategy, stock: Mapping[int, int]
+) -> Decision:
+    """Steps 2-10 of the module-level precedence; ``stock`` is what earlier crew left of ``ctx.items``."""
     cid = crew.character_id
+
+    def consumable_or(skip: Skip, pct: int) -> Decision:
+        return pick_consumable(crew, pct, stock, strategy) or skip
+
     role = role_for(crew.name, strategy)
     if role is None:
         return Skip(cid, SKIP_UNKNOWN_ROLE, f"{crew.name!r} has no training role")
@@ -232,36 +267,33 @@ def _primary_decision(crew: CrewState, ctx: TrainingContext, strategy: TrainingS
     room_type = room_type_for(room_name, strategy)
     if room_type is None:
         return Skip(cid, SKIP_NOT_IN_TRAINING_ROOM, f"room {room_name!r} is not a training room")
-    if crew.training_capacity <= 0:
+    capacity = crew.training_capacity
+    if capacity <= 0:
         return Skip(cid, SKIP_DESIGN_MISSING, "no training capacity")
     total = total_points(crew.stats)
-    pct = percent(total, crew.training_capacity)
+    pct = percent(total, capacity)
     cap = effective_cap(crew, strategy)
     if total >= cap:
-        return Skip(cid, SKIP_TP_CAP_REACHED, f"{total} TP >= cap {cap} TP ({pct}% of capacity {crew.training_capacity})")
+        return Skip(cid, SKIP_TP_CAP_REACHED, f"{total} TP >= cap {cap} TP ({pct}% of capacity {capacity})")
     if training_state(crew, ctx.now) == TRAINING_IN_PROGRESS:
-        skip = Skip(cid, SKIP_TRAINING_IN_PROGRESS, f"training ends at {crew.training_end}")
-        return _consumable_or(skip, crew, pct, ctx, strategy)
+        return consumable_or(Skip(cid, SKIP_TRAINING_IN_PROGRESS, f"training ends at {crew.training_end}"), pct)
     band = band_for(pct, strategy)
     if band is None:
-        skip = Skip(cid, SKIP_COMPLETE, f"{pct}% >= {strategy.complete_percent}%: training complete")
-        return _consumable_or(skip, crew, pct, ctx, strategy)
+        complete = f"{pct}% >= {strategy.complete_percent}%: training complete"
+        return consumable_or(Skip(cid, SKIP_COMPLETE, complete), pct)
     slot = role.slot(band.slot)
     if room_type != slot.room_type:
         return Skip(cid, SKIP_NOT_IN_TRAINING_ROOM, f"move to {slot.room_type}")
     if not research_ok(band, ctx.research_levels, strategy):
-        skip = Skip(cid, SKIP_RESEARCH_MISSING, f"{band.slot} T{band.tier} research gate not met")
-        return _consumable_or(skip, crew, pct, ctx, strategy)
+        return consumable_or(Skip(cid, SKIP_RESEARCH_MISSING, f"{band.slot} T{band.tier} research gate not met"), pct)
     if crew.fatigue >= strategy.max_training_fatigue:
-        skip = Skip(cid, SKIP_FATIGUED, f"fatigue {crew.fatigue} >= {strategy.max_training_fatigue}")
-        return _consumable_or(skip, crew, pct, ctx, strategy)
+        fatigued = f"fatigue {crew.fatigue} >= {strategy.max_training_fatigue}"
+        return consumable_or(Skip(cid, SKIP_FATIGUED, fatigued), pct)
     name = slot.trainings[band.tier - 1]
     design = pick_design(name, room_type, ctx.designs)
     if design is None:
-        skip = Skip(cid, SKIP_DESIGN_MISSING, f"no design named {name} for {room_type}")
-        return _consumable_or(skip, crew, pct, ctx, strategy)
+        return consumable_or(Skip(cid, SKIP_DESIGN_MISSING, f"no design named {name} for {room_type}"), pct)
     if not design_research_ok(design, ctx.research_levels):
-        skip = Skip(cid, SKIP_RESEARCH_MISSING, f"{name} requires research {design.required_research}")
-        return _consumable_or(skip, crew, pct, ctx, strategy)
-    reason = f"{band.slot} T{band.tier} {name} at {pct}% in {room_type}"
-    return StartTraining(cid, design.id, reason)
+        gated = f"{name} requires research {design.required_research}"
+        return consumable_or(Skip(cid, SKIP_RESEARCH_MISSING, gated), pct)
+    return StartTraining(cid, design.id, f"{band.slot} T{band.tier} {name} at {pct}% in {room_type}")

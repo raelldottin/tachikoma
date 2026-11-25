@@ -115,20 +115,67 @@ PAYLOAD_EMPTY = "empty"
 PAYLOAD_ERROR = "error"
 
 
+# Item key -> the element that wraps its records in live payloads ("Research" is *not* "Researchs").
+_CONTAINERS: Mapping[str, str] = MappingProxyType(
+    {
+        "Character": "Characters",
+        "CharacterDesign": "CharacterDesigns",
+        "TrainingDesign": "TrainingDesigns",
+        "Room": "Rooms",
+        "RoomDesign": "RoomDesigns",
+        "Research": "Researches",
+        "ResearchDesign": "ResearchDesigns",
+        "Item": "Items",
+        "ItemDesign": "ItemDesigns",
+    }
+)
+
+# classify_payloads keyword -> item key: build_context's payload keywords plus item_designs_raw (consumables).
+_PAYLOAD_ITEM_KEYS: Mapping[str, str] = MappingProxyType(
+    {
+        "characters_raw": "Character",
+        "character_designs_raw": "CharacterDesign",
+        "training_designs_raw": "TrainingDesign",
+        "rooms_raw": "Room",
+        "room_designs_raw": "RoomDesign",
+        "researches_raw": "Research",
+        "research_designs_raw": "ResearchDesign",
+        "items_raw": "Item",
+        "item_designs_raw": "ItemDesign",
+    }
+)
+
+
 def classify_payload(raw: object, item_key: str, container_key: str | None = None) -> str:
     """Tell "no data" apart from "broken response" (ORIGINAL_REQUEST R5).
 
     error: not a dict, an ``errorMessage`` anywhere, or neither the item nor its container is present
-    (unexpected schema). empty: the container (default ``item_key + "s"``) is present but holds no records.
-    ok: at least one record.
+    (unexpected schema). empty: the container is present but holds no records. ok: at least one record.
+    The container defaults to the known live name for ``item_key`` (e.g. "Research" -> "Researches"), else
+    ``item_key + "s"``.
     """
     if not isinstance(raw, dict) or _has_key(raw, ("@errorMessage", "errorMessage"), 0):
         return PAYLOAD_ERROR
     if extract_collection(raw, item_key):
         return PAYLOAD_OK
-    if _has_key(raw, (item_key, container_key or item_key + "s"), 0):
+    container = container_key or _CONTAINERS.get(item_key, item_key + "s")
+    if _has_key(raw, (item_key, container), 0):
         return PAYLOAD_EMPTY
     return PAYLOAD_ERROR
+
+
+def classify_payloads(**raws: object) -> Mapping[str, str]:
+    """``classify_payload`` for each given payload, keyed by the same keyword names ``build_context`` takes.
+
+    Keywords: characters_raw, character_designs_raw, training_designs_raw, rooms_raw, room_designs_raw,
+    researches_raw, research_designs_raw, items_raw, plus item_designs_raw. Each keyword's item key is pre-bound,
+    so a payload cannot be classified against the wrong record type. An unknown keyword raises TypeError (a
+    caller bug, not a data problem).
+    """
+    unknown = sorted(set(raws) - set(_PAYLOAD_ITEM_KEYS))
+    if unknown:
+        raise TypeError(f"classify_payloads() got unexpected keyword arguments: {unknown}")
+    return MappingProxyType({name: classify_payload(raw, _PAYLOAD_ITEM_KEYS[name]) for name, raw in raws.items()})
 
 
 def _has_key(data: object, keys: tuple[str, ...], depth: int) -> bool:
@@ -251,8 +298,13 @@ def parse_crew(
     A character whose design is missing gets capacity 0 and rarity "" (never another design's values); one without
     a positive @CharacterId is skipped. Stat keys are stored without the XML '@'; missing/malformed stats are 0.
     """
+    return _parse_crew(characters_raw, character_designs_raw, parse_rooms(rooms_raw, room_designs_raw))
+
+
+def _parse_crew(
+    characters_raw: object, character_designs_raw: object, rooms: Mapping[int, str]
+) -> tuple[CrewState, ...]:
     designs = _by_id(character_designs_raw, "CharacterDesign", "@CharacterDesignId")
-    rooms = parse_rooms(rooms_raw, room_designs_raw)
     crew: list[CrewState] = []
     for record in extract_collection(characters_raw, "Character"):
         character_id = to_int(record.get("@CharacterId"))
@@ -358,12 +410,16 @@ def build_context(
     research_designs_raw: object = None,
     items_raw: object = None,
 ) -> TrainingContext:
-    """Assemble a TrainingContext from raw payloads; ``now`` must be timezone-aware (the model rejects naive)."""
+    """Assemble a TrainingContext from raw payloads; ``now`` must be timezone-aware (the model rejects naive).
+
+    Rooms are parsed once and shared, so each crew's ``room_name`` and ``ctx.rooms`` come from one source.
+    """
+    rooms = parse_rooms(rooms_raw, room_designs_raw)
     return TrainingContext(
         now=now,
-        crew=parse_crew(characters_raw, character_designs_raw, rooms_raw, room_designs_raw),
+        crew=_parse_crew(characters_raw, character_designs_raw, rooms),
         designs=parse_training_designs(training_designs_raw, research_designs_raw),
-        rooms=parse_rooms(rooms_raw, room_designs_raw),
+        rooms=rooms,
         research_levels=parse_research_levels(researches_raw, research_designs_raw),
         items=parse_items(items_raw),
     )

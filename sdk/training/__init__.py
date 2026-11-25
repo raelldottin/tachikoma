@@ -31,6 +31,7 @@ from sdk.training.parse import (
     PAYLOAD_OK,
     build_context,
     classify_payload,
+    classify_payloads,
     extract_collection,
     parse_consumable_designs,
     parse_crew,
@@ -41,7 +42,7 @@ from sdk.training.parse import (
     parse_training_designs,
     to_int,
 )
-from sdk.training.planner import plan_training
+from sdk.training.planner import plan_training, replan_after_finish
 from sdk.training.strategy import (
     DEFAULT_STRATEGY,
     RARITY_STARS,
@@ -86,6 +87,7 @@ __all__ = (
     "UseConsumable",
     "build_context",
     "classify_payload",
+    "classify_payloads",
     "extract_collection",
     "parse_consumable_designs",
     "parse_crew",
@@ -95,6 +97,7 @@ __all__ = (
     "parse_rooms",
     "parse_training_designs",
     "plan_training",
+    "replan_after_finish",
     "to_int",
     "with_consumables",
 )

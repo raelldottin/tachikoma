@@ -11,9 +11,13 @@ This preserves the original ``Client.manageTraining`` strategy with its defects 
   They read as tier labels, so the hundreds digit is taken as the required level (an inference): primary T1 needs
   Fitness or Education >= 1, primary/secondary T2 >= 2, primary/secondary T3 >= 3, secondary T1 is ungated.
   The original also computed a "202" gate that nothing used; it is dropped.
-- Rarity -> stars for ``crew_leveling.get_tp_cap``: Common 1 ... Legendary 7. Unknown rarities (e.g. "Standard")
-  map to 0 and only the design's training capacity applies. A "Special" crew whose design capacity reaches
-  ``crew_leveling.CAPTAIN_TP`` is treated as a captain (200 TP); other "Special" crew use the standard 6-star cap.
+- TP caps are strategy data. ``rarity_stars`` maps rarity -> stars (Common 1 ... Legendary 7); ``tp_caps`` maps
+  stars -> cap, ``exceptional_tp_caps`` maps (stars, exact name) -> cap and ``captain_tp_caps`` maps stars -> the
+  captain cap. ``DEFAULT_STRATEGY`` holds frozen copies of ``sdk.crew_leveling``'s tables (TP_CAPS_BY_RARITY,
+  EXCEPTIONAL_4STAR_NAMES/TP at 4 stars, CAPTAIN_TP at 6 stars), which stay the canonical source of the defaults
+  (``crew_leveling.get_tp_cap``). Unknown rarities (e.g. "Standard") map to 0 stars and only the design's training
+  capacity applies. A crew whose stars have a captain cap and whose design capacity reaches it is treated as a
+  captain (a 6-star "Special" with capacity 200 gets 200 TP); other crew use the standard cap for their stars.
 - Consumables are a fallback only. They are considered when nothing is startable for a crew that has a known role,
   sits in a training room and is under its TP cap; an out-of-stock item falls through to the Skip that would
   otherwise apply. ``DEFAULT_STRATEGY.consumables`` is empty until ``with_consumables`` attaches the item ids
@@ -24,7 +28,9 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
-from types import MappingProxyType
+
+from sdk.crew_leveling import CAPTAIN_TP, EXCEPTIONAL_4STAR_NAMES, EXCEPTIONAL_4STAR_TP, TP_CAPS_BY_RARITY
+from sdk.training.model import frozen_mapping
 
 SLOT_PRIMARY = "primary"
 SLOT_SECONDARY = "secondary"
@@ -33,7 +39,7 @@ ROOM_GYM = "gym"
 TIER_GREY = "Common"
 TIER_HERO = "Hero"
 
-STAT_CODES: Mapping[str, str] = MappingProxyType(
+STAT_CODES: Mapping[str, str] = frozen_mapping(
     dict(
         WeaponImprovement="WPN",
         ScienceImprovement="SCI",
@@ -48,22 +54,28 @@ STAT_CODES: Mapping[str, str] = MappingProxyType(
 )
 
 
-def _frozen(mapping: Mapping) -> Mapping:
-    return MappingProxyType(dict(mapping))
-
-
 @dataclass(frozen=True)
 class RoleSlot:
+    """A room type and the training names for tiers 1, 2, 3 (any sequence; stored as a tuple)."""
+
     room_type: str
-    trainings: tuple[str, str, str]
+    trainings: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "trainings", tuple(self.trainings))
 
 
 @dataclass(frozen=True)
 class Role:
+    """Exact character names (any iterable; stored as a frozenset) and the room/trainings for each slot."""
+
     name: str
     characters: frozenset[str]
     primary: RoleSlot
     secondary: RoleSlot
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "characters", frozenset(self.characters))
 
     def slot(self, slot: str) -> RoleSlot:
         if slot == SLOT_PRIMARY:
@@ -101,19 +113,26 @@ class TrainingStrategy:
     rarity_stars: Mapping[str, int]
     consumable_rules: tuple[ConsumableRule, ...]
     consumables: Mapping[tuple[str, str], int]
+    tp_caps: Mapping[int, int]
+    exceptional_tp_caps: Mapping[tuple[int, str], int]
+    captain_tp_caps: Mapping[int, int]
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "roles", tuple(self.roles))
-        object.__setattr__(self, "room_types", _frozen(self.room_types))
-        object.__setattr__(self, "bands", tuple(self.bands))
-        object.__setattr__(self, "research_gates", _frozen(self.research_gates))
-        object.__setattr__(self, "rarity_stars", _frozen(self.rarity_stars))
+        object.__setattr__(self, "room_types", frozen_mapping(self.room_types))
+        object.__setattr__(self, "bands", tuple(sorted(self.bands, key=lambda band: band.low)))
+        object.__setattr__(self, "research_gates", frozen_mapping(self.research_gates))
+        object.__setattr__(self, "rarity_stars", frozen_mapping(self.rarity_stars))
         object.__setattr__(self, "consumable_rules", tuple(self.consumable_rules))
-        object.__setattr__(self, "consumables", _frozen(self.consumables))
+        object.__setattr__(self, "consumables", frozen_mapping(self.consumables))
+        object.__setattr__(self, "tp_caps", frozen_mapping(self.tp_caps))
+        object.__setattr__(self, "exceptional_tp_caps", frozen_mapping(self.exceptional_tp_caps))
+        object.__setattr__(self, "captain_tp_caps", frozen_mapping(self.captain_tp_caps))
         self._validate_bands()
         self._validate_roles()
         self._validate_band_tiers()
         self._validate_consumables()
+        self._validate_tp_caps()
 
     def _validate_band_tiers(self) -> None:
         """Every band must name a known slot and a tier that indexes each role's training list for that slot."""
@@ -126,10 +145,33 @@ class TrainingStrategy:
                     raise ValueError(f"band {band.slot} T{band.tier} has no training in role {role.name!r}")
 
     def _validate_consumables(self) -> None:
+        """Consumable keys name a stat code and a known tier; item ids are positive ints; rules can fire."""
         stat_codes = set(STAT_CODES.values())
-        for stat_code, tier in self.consumables:
+        for (stat_code, tier), item_design_id in self.consumables.items():
             if stat_code not in stat_codes or tier not in self.rarity_stars:
                 raise ValueError(f"invalid consumable key: {(stat_code, tier)!r}")
+            if not _positive_int(item_design_id):
+                raise ValueError(f"consumable {(stat_code, tier)!r} needs a positive int item id: {item_design_id!r}")
+        for rule in self.consumable_rules:
+            if rule.tier not in self.rarity_stars:
+                raise ValueError(f"consumable rule names unknown tier {rule.tier!r}")
+            for low, high, label in (
+                (rule.min_percent, rule.max_percent, "percent"),
+                (rule.min_fatigue, rule.max_fatigue, "fatigue"),
+            ):
+                if high is not None and low > high:
+                    raise ValueError(f"consumable rule {rule.tier!r} has an empty {label} window: {low}..{high}")
+
+    def _validate_tp_caps(self) -> None:
+        """Caps are positive ints keyed by star count ints; exceptional caps by (stars, exact name)."""
+        for label, table in (("tp_caps", self.tp_caps), ("captain_tp_caps", self.captain_tp_caps)):
+            for stars, cap in table.items():
+                if not _positive_int(stars) or not _positive_int(cap):
+                    raise ValueError(f"{label} needs positive int stars -> cap, got {stars!r}: {cap!r}")
+        for key, cap in self.exceptional_tp_caps.items():
+            valid_key = isinstance(key, tuple) and len(key) == 2 and _positive_int(key[0]) and isinstance(key[1], str)
+            if not valid_key or not _positive_int(cap):
+                raise ValueError(f"exceptional_tp_caps needs (stars, name) -> positive int cap, got {key!r}: {cap!r}")
 
     def _validate_roles(self) -> None:
         owner: dict[str, str] = {}
@@ -146,9 +188,8 @@ class TrainingStrategy:
                 owner[character] = role.name
 
     def _validate_bands(self) -> None:
-        ordered = sorted(self.bands, key=lambda band: band.low)
         expected_low = 0
-        for band in ordered:
+        for band in self.bands:
             if band.low != expected_low or band.high < band.low:
                 raise ValueError(f"tier bands must tile 0..{self.complete_percent - 1} without gaps: {band}")
             expected_low = band.high + 1
@@ -161,7 +202,11 @@ class TrainingStrategy:
             raise ValueError("max_training_fatigue must be positive")
 
 
-RARITY_STARS: Mapping[str, int] = MappingProxyType(
+def _positive_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
+RARITY_STARS: Mapping[str, int] = frozen_mapping(
     dict(Common=1, Elite=2, Unique=3, Epic=4, Hero=5, Special=6, Legendary=7)
 )
 
@@ -248,6 +293,9 @@ DEFAULT_STRATEGY = TrainingStrategy(
         ConsumableRule(TIER_HERO, min_percent=90, max_percent=None, min_fatigue=100, max_fatigue=None),
     ),
     consumables={},
+    tp_caps=TP_CAPS_BY_RARITY,
+    exceptional_tp_caps={(4, name): EXCEPTIONAL_4STAR_TP for name in sorted(EXCEPTIONAL_4STAR_NAMES)},
+    captain_tp_caps={6: CAPTAIN_TP},
 )
 
 

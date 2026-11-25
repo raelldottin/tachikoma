@@ -4,15 +4,20 @@ from __future__ import annotations
 
 import ast
 import dataclasses
+import inspect
 import math
 import os
 import random
+import typing
 import unittest
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest import mock
 
-from sdk.crew_leveling import CAPTAIN_TP, get_tp_cap
+import sdk.crew_leveling as crew_leveling
+from sdk.crew_leveling import CAPTAIN_TP, EXCEPTIONAL_4STAR_NAMES, EXCEPTIONAL_4STAR_TP, TP_CAPS_BY_RARITY, get_tp_cap
+from sdk.training import planner as planner_module
 from sdk.training.model import (
     CANONICAL_STATS,
     SKIP_CODES,
@@ -25,8 +30,6 @@ from sdk.training.model import (
     UseConsumable,
 )
 from sdk.training.planner import (
-    TRAINING_FINISHED,
-    TRAINING_IN_PROGRESS,
     band_for,
     design_research_ok,
     effective_cap,
@@ -35,12 +38,10 @@ from sdk.training.planner import (
     pick_consumable,
     pick_design,
     plan_training,
+    replan_after_finish,
     research_ok,
-    resolve_room_name,
     role_for,
     room_type_for,
-    total_points,
-    training_state,
 )
 from sdk.training.strategy import (
     DEFAULT_STRATEGY,
@@ -69,8 +70,12 @@ def mk_crew(
     fatigue: int = 0,
     training_design_id: int | None = None,
     training_end: datetime | None = None,
+    stat: str = "HpImprovement",
     stats: dict[str, int] | None = None,
 ) -> CrewState:
+    """A test crew whose ``total`` training points all sit in ``stat``; pass ``stats`` instead for a mix."""
+    if stats is not None and (total or stat != "HpImprovement"):
+        raise ValueError("mk_crew: pass either total/stat or stats, not both")
     return CrewState(
         character_id=cid,
         name=name,
@@ -79,7 +84,7 @@ def mk_crew(
         level=10,
         room_id=room_id,
         room_name=room_name,
-        stats={"HpImprovement": total} if stats is None else stats,
+        stats={stat: total} if stats is None else stats,
         training_capacity=capacity,
         fatigue=fatigue,
         training_design_id=training_design_id,
@@ -116,6 +121,21 @@ class TestModel(unittest.TestCase):
         with self.assertRaises(ValueError):
             mk_crew(stats={"@HpImprovement": 1})
         self.assertEqual(mk_crew(stats={"HpImprovement": 1}).stats["HpImprovement"], 1)
+
+    def test_crew_state_rejects_non_canonical_stat_keys(self) -> None:
+        # Regression: a mis-keyed stat ("Weapon") was accepted and then ignored by the TP total, so the crew read 0%.
+        for bad in ({"Weapon": 5}, {"weaponimprovement": 5}, {"HpImprovement": 1, "Hp": 2}, {"": 1}):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                mk_crew(stats=bad)
+        every = dict.fromkeys(CANONICAL_STATS, 1)
+        self.assertEqual(dict(mk_crew(stats=every).stats), every)
+
+    def test_mk_crew_rejects_total_together_with_stats(self) -> None:
+        with self.assertRaises(ValueError):
+            mk_crew(total=5, stats={"HpImprovement": 5})
+        with self.assertRaises(ValueError):
+            mk_crew(stat="WeaponImprovement", stats={"WeaponImprovement": 5})
+        self.assertEqual(dict(mk_crew(total=5, stat="WeaponImprovement").stats), {"WeaponImprovement": 5})
 
     def test_crew_state_rejects_naive_training_end(self) -> None:
         with self.assertRaises(ValueError):
@@ -210,7 +230,7 @@ class TestBands(unittest.TestCase):
         }
         for pct, expected in cases.items():
             with self.subTest(pct=pct):
-                band = band_for(pct)
+                band = band_for(pct, DEFAULT_STRATEGY)
                 self.assertEqual(None if band is None else (band.slot, band.tier), expected)
 
     def test_default_bands_contiguous_0_to_complete(self) -> None:
@@ -231,7 +251,6 @@ class TestBands(unittest.TestCase):
             with self.subTest(label), self.assertRaises(ValueError):
                 dataclasses.replace(DEFAULT_STRATEGY, bands=tuple(candidate))
 
-
     def test_strategy_rejects_band_tier_or_slot_outside_role_slots(self) -> None:
         # Regression: an unchecked tier picked trainings[-1] (tier 0) or raised IndexError (tier 4) inside the
         # supposedly total planner; an unknown slot raised from Role.slot at plan time.
@@ -248,16 +267,38 @@ class TestBands(unittest.TestCase):
                     bands=(bad, *bands[1:]),
                     research_gates={**gates, (bad.slot, bad.tier): ()},
                 )
-        short_role = Role("short", frozenset({"Shorty"}), RoleSlot("academy", ("A", "B")), RoleSlot("gym", ("C", "D", "E")))
+        short_slot = RoleSlot("academy", ("A", "B"))
+        short_role = Role("short", frozenset({"Shorty"}), short_slot, RoleSlot("gym", ("C", "D", "E")))
         with self.subTest("two-training slot"), self.assertRaises(ValueError):
             dataclasses.replace(DEFAULT_STRATEGY, roles=(*DEFAULT_STRATEGY.roles, short_role))
+
+    def test_strategy_sorts_bands_once(self) -> None:
+        shuffled = dataclasses.replace(DEFAULT_STRATEGY, bands=tuple(reversed(DEFAULT_STRATEGY.bands)))
+        self.assertEqual([band.low for band in shuffled.bands], [0, 51, 65, 72, 74, 85])
+        self.assertEqual(shuffled, DEFAULT_STRATEGY)
+        for pct, expected in ((0, ("primary", 1)), (72, ("secondary", 1)), (89, ("secondary", 3))):
+            with self.subTest(pct=pct):
+                found = band_for(pct, shuffled)
+                self.assertEqual((found.slot, found.tier) if found else None, expected)
+
+    def test_role_and_slot_normalise_their_sequences(self) -> None:
+        # Regression: a set of characters made the Role unhashable and a list of trainings stayed mutable.
+        slot = RoleSlot("gym", ["A", "B", "C"])  # type: ignore[arg-type]
+        role = Role("x", {"Zed"}, slot, RoleSlot("gym", ("D", "E", "F")))  # type: ignore[arg-type]
+        self.assertEqual(slot.trainings, ("A", "B", "C"))
+        self.assertIsInstance(slot.trainings, tuple)
+        self.assertEqual(role.characters, frozenset({"Zed"}))
+        self.assertIsInstance(role.characters, frozenset)
+        same = Role("x", frozenset({"Zed"}), RoleSlot("gym", ("A", "B", "C")), role.secondary)
+        self.assertEqual(hash(role), hash(same))
+        self.assertEqual(typing.get_type_hints(RoleSlot)["trainings"], tuple[str, ...])
 
 
 class TestRooms(unittest.TestCase):
     def test_room_type_none_empty(self) -> None:
         for name in (None, "", "  "):
             with self.subTest(name=name):
-                self.assertIsNone(room_type_for(name))
+                self.assertIsNone(room_type_for(name, DEFAULT_STRATEGY))
 
     def test_room_type_canonical_names(self) -> None:
         cases = {
@@ -269,14 +310,14 @@ class TestRooms(unittest.TestCase):
         }
         for name, expected in cases.items():
             with self.subTest(name=name):
-                self.assertEqual(room_type_for(name), expected)
+                self.assertEqual(room_type_for(name, DEFAULT_STRATEGY), expected)
 
     def test_room_type_substring_false_positives(self) -> None:
         # Regression: the original matched room names by case-sensitive substring.
         names = ("Galaxy Gym Annex", "Big GYM", "gym", "Gym", "academy", "Galexy Gym", "Lunar College 2", "Bridge")
         for name in names:
             with self.subTest(name=name):
-                self.assertIsNone(room_type_for(name))
+                self.assertIsNone(room_type_for(name, DEFAULT_STRATEGY))
 
 
 ROLE_CHARACTERS = {
@@ -295,6 +336,21 @@ ROLE_CHARACTERS = {
     ),
     "pilots": (),
 }
+GYM_STRENGTH = ("Bench Press", "Muscle Beach", "Olympic Weightlifting")
+# role -> (primary room type, primary trainings, secondary room type, secondary trainings), as literals.
+EXPECTED_ROLE_TABLE = {
+    "weapons": ("academy", ("Read Expert Weapon Theory", "Weapons Summit", "Weapons PHD"), "gym", GYM_STRENGTH),
+    "shields": ("academy", ("Big Book of Science", "Scientific Summit", "Science PHD"), "gym", GYM_STRENGTH),
+    "engines": (
+        "gym",
+        GYM_STRENGTH,
+        "academy",
+        ("Study Expert Engineering Manual", "Engineering Summit", "Engineering PHD"),
+    ),
+    "rushers": ("gym", ("Steam Yoga", "Crew vs Wild", "Space Marine"), "gym", GYM_STRENGTH),
+    "defenders": ("gym", GYM_STRENGTH, "gym", ("Kickbox", "BBJ", "Shaolin Tradition")),
+    "pilots": ("academy", ("Read Expert Pilot Handbook", "Pilot Summit", "Pilot Expert"), "gym", GYM_STRENGTH),
+}
 
 
 class TestRoles(unittest.TestCase):
@@ -302,17 +358,18 @@ class TestRoles(unittest.TestCase):
         for role_name, characters in ROLE_CHARACTERS.items():
             for character in characters:
                 with self.subTest(character=character):
-                    role = role_for(character)
+                    role = role_for(character, DEFAULT_STRATEGY)
                     self.assertIsNotNone(role)
                     assert role is not None
                     self.assertEqual(role.name, role_name)
-        rusher = role_for("Huge Hellaluya")
+        rusher = role_for("Huge Hellaluya", DEFAULT_STRATEGY)
         self.assertEqual(rusher.name if rusher else None, "rushers")
-        self.assertIsNone(role_for("Huge Hellaloya"))  # spelling regression: the original table had this typo
+        # Spelling regression: the original table had this typo.
+        self.assertIsNone(role_for("Huge Hellaloya", DEFAULT_STRATEGY))
 
     def test_role_for_unknown_and_pilots_empty(self) -> None:
-        self.assertIsNone(role_for(""))
-        self.assertIsNone(role_for("Nobody"))
+        self.assertIsNone(role_for("", DEFAULT_STRATEGY))
+        self.assertIsNone(role_for("Nobody", DEFAULT_STRATEGY))
         pilots = [role for role in DEFAULT_STRATEGY.roles if role.name == "pilots"]
         self.assertEqual(len(pilots), 1)
         self.assertEqual(pilots[0].characters, frozenset())
@@ -324,20 +381,6 @@ class TestRoles(unittest.TestCase):
             dataclasses.replace(DEFAULT_STRATEGY, roles=(*DEFAULT_STRATEGY.roles, clash))
 
     def test_default_role_table_golden(self) -> None:
-        gym = ("Bench Press", "Muscle Beach", "Olympic Weightlifting")
-        expected = {
-            "weapons": ("academy", ("Read Expert Weapon Theory", "Weapons Summit", "Weapons PHD"), "gym", gym),
-            "shields": ("academy", ("Big Book of Science", "Scientific Summit", "Science PHD"), "gym", gym),
-            "engines": (
-                "gym",
-                gym,
-                "academy",
-                ("Study Expert Engineering Manual", "Engineering Summit", "Engineering PHD"),
-            ),
-            "rushers": ("gym", ("Steam Yoga", "Crew vs Wild", "Space Marine"), "gym", gym),
-            "defenders": ("gym", gym, "gym", ("Kickbox", "BBJ", "Shaolin Tradition")),
-            "pilots": ("academy", ("Read Expert Pilot Handbook", "Pilot Summit", "Pilot Expert"), "gym", gym),
-        }
         actual = {
             role.name: (
                 role.primary.room_type,
@@ -347,7 +390,7 @@ class TestRoles(unittest.TestCase):
             )
             for role in DEFAULT_STRATEGY.roles
         }
-        self.assertEqual(actual, expected)
+        self.assertEqual(actual, EXPECTED_ROLE_TABLE)
         self.assertEqual(
             {role.name: role.characters for role in DEFAULT_STRATEGY.roles},
             {name: frozenset(chars) for name, chars in ROLE_CHARACTERS.items()},
@@ -358,8 +401,8 @@ class TestCaps(unittest.TestCase):
     def test_effective_cap_rarity_without_table_uses_capacity(self) -> None:
         for rarity in ("Standard", "", "Common", "Elite"):
             with self.subTest(rarity=rarity):
-                self.assertEqual(effective_cap(mk_crew(rarity=rarity, capacity=100)), 100)
-                self.assertEqual(effective_cap(mk_crew(rarity=rarity, capacity=250)), 250)
+                self.assertEqual(effective_cap(mk_crew(rarity=rarity, capacity=100), DEFAULT_STRATEGY), 100)
+                self.assertEqual(effective_cap(mk_crew(rarity=rarity, capacity=250), DEFAULT_STRATEGY), 250)
 
     def test_effective_cap_limited_by_tp_table(self) -> None:
         cases = (
@@ -374,26 +417,46 @@ class TestCaps(unittest.TestCase):
         )
         for name, rarity, capacity, expected in cases:
             with self.subTest(name=name, rarity=rarity, capacity=capacity):
-                self.assertEqual(effective_cap(mk_crew(name=name, rarity=rarity, capacity=capacity)), expected)
+                crew = mk_crew(name=name, rarity=rarity, capacity=capacity)
+                self.assertEqual(effective_cap(crew, DEFAULT_STRATEGY), expected)
 
     def test_effective_cap_special_captain_capacity_not_clamped(self) -> None:
         # Regression: a 6-star captain (design capacity 200) was clamped to the standard 6-star cap of 100, so it
         # stopped at 50% and never reached its secondary training.
-        self.assertEqual(effective_cap(mk_crew(rarity="Special", capacity=200)), 200)
-        self.assertEqual(effective_cap(mk_crew(rarity="Special", capacity=150)), 100)
+        self.assertEqual(effective_cap(mk_crew(rarity="Special", capacity=200), DEFAULT_STRATEGY), 200)
+        self.assertEqual(effective_cap(mk_crew(rarity="Special", capacity=150), DEFAULT_STRATEGY), 100)
         decisions = plan_one(mk_crew(rarity="Special", capacity=200, total=120, room_name="Academy"))
         self.assertEqual(summary(decisions), [("start", 1, "Weapons Summit")])
 
-    def test_effective_cap_delegates_to_get_tp_cap(self) -> None:
-        names = ("Delish", "Mistycball", "Huge Hellaluya")
+    def test_default_tp_tables_are_crew_leveling_copies(self) -> None:
+        # crew_leveling stays the canonical source of the default caps; the strategy holds frozen copies of them.
+        self.assertEqual(dict(DEFAULT_STRATEGY.tp_caps), TP_CAPS_BY_RARITY)
+        expected_exceptional = {(4, name): EXCEPTIONAL_4STAR_TP for name in EXCEPTIONAL_4STAR_NAMES}
+        self.assertEqual(dict(DEFAULT_STRATEGY.exceptional_tp_caps), expected_exceptional)
+        self.assertEqual(dict(DEFAULT_STRATEGY.captain_tp_caps), {6: CAPTAIN_TP})
+        # With a capacity that never binds, the strategy-driven cap is exactly get_tp_cap's table value.
         for rarity, stars in DEFAULT_STRATEGY.rarity_stars.items():
-            for name in names:
-                for capacity in (50, 100, 300):
-                    with self.subTest(rarity=rarity, name=name, capacity=capacity):
-                        table = get_tp_cap(stars, name, is_captain=stars == 6 and capacity >= CAPTAIN_TP)
-                        expected = min(capacity, table) if table > 0 else capacity
-                        crew = mk_crew(name=name, rarity=rarity, capacity=capacity)
-                        self.assertEqual(effective_cap(crew), expected)
+            for name in ("Delish", "Mistycball", "Huge Hellaluya"):
+                with self.subTest(rarity=rarity, name=name):
+                    crew = mk_crew(name=name, rarity=rarity, capacity=1000)
+                    table = get_tp_cap(stars, name, is_captain=stars == 6)
+                    self.assertEqual(effective_cap(crew, DEFAULT_STRATEGY), table or 1000)
+
+    def test_effective_cap_reads_only_the_strategy(self) -> None:
+        # Regression: the cap came from crew_leveling's module-level dicts, which a strategy could not override.
+        custom = dataclasses.replace(
+            DEFAULT_STRATEGY,
+            tp_caps={**DEFAULT_STRATEGY.tp_caps, 7: 50},
+            exceptional_tp_caps={(7, "Delish"): 60},
+            captain_tp_caps={},
+        )
+        self.assertEqual(effective_cap(mk_crew(name="Delish", rarity="Legendary", capacity=120), custom), 60)
+        self.assertEqual(effective_cap(mk_crew(name="Cyber Duck", rarity="Legendary", capacity=120), custom), 50)
+        self.assertEqual(effective_cap(mk_crew(name="Mistycball", rarity="Epic", capacity=120), custom), 80)
+        self.assertEqual(effective_cap(mk_crew(rarity="Special", capacity=200), custom), 100)
+        legendary = mk_crew(rarity="Legendary", capacity=120)
+        with mock.patch.dict(crew_leveling.TP_CAPS_BY_RARITY, {7: 1}):
+            self.assertEqual(effective_cap(legendary, DEFAULT_STRATEGY), 110)
 
 
 def band(slot: str, tier: int) -> TierBand:
@@ -402,21 +465,23 @@ def band(slot: str, tier: int) -> TierBand:
 
 class TestResearch(unittest.TestCase):
     def test_research_ok_secondary_t1_ungated(self) -> None:
-        self.assertTrue(research_ok(band("secondary", 1), {}))
+        self.assertTrue(research_ok(band("secondary", 1), {}, DEFAULT_STRATEGY))
 
     def test_research_gate_table(self) -> None:
         required = {("primary", 1): 1, ("primary", 2): 2, ("primary", 3): 3, ("secondary", 2): 2, ("secondary", 3): 3}
         for (slot, tier), level in required.items():
             with self.subTest(slot=slot, tier=tier):
-                self.assertFalse(research_ok(band(slot, tier), {"Fitness": level - 1}))
-                self.assertFalse(research_ok(band(slot, tier), {"Fitness": level - 1, "Education": level - 1}))
-                self.assertTrue(research_ok(band(slot, tier), {"Fitness": level}))
-                self.assertTrue(research_ok(band(slot, tier), {"Education": level}))
+                self.assertFalse(research_ok(band(slot, tier), {"Fitness": level - 1}, DEFAULT_STRATEGY))
+                both_short = {"Fitness": level - 1, "Education": level - 1}
+                self.assertFalse(research_ok(band(slot, tier), both_short, DEFAULT_STRATEGY))
+                self.assertTrue(research_ok(band(slot, tier), {"Fitness": level}, DEFAULT_STRATEGY))
+                self.assertTrue(research_ok(band(slot, tier), {"Education": level}, DEFAULT_STRATEGY))
 
     def test_research_exact_key_regression(self) -> None:
         # Regression: the original matched research by name prefix (startswith of the first word).
-        self.assertFalse(research_ok(band("primary", 1), {"Fitness Lv3": 3, "fitness": 3, "FitnessX": 3, "Fit": 3}))
-        self.assertTrue(research_ok(band("primary", 1), {"Education": 1}))
+        near_misses = {"Fitness Lv3": 3, "fitness": 3, "FitnessX": 3, "Fit": 3}
+        self.assertFalse(research_ok(band("primary", 1), near_misses, DEFAULT_STRATEGY))
+        self.assertTrue(research_ok(band("primary", 1), {"Education": 1}, DEFAULT_STRATEGY))
 
 
 def mk_design(
@@ -500,10 +565,10 @@ class TestPickConsumable(unittest.TestCase):
     def test_pick_consumable_stock(self) -> None:
         crew = mk_crew(stats={"WeaponImprovement": 10}, fatigue=0)
         configured = dataclasses.replace(DEFAULT_STRATEGY, consumables={("WPN", "Common"): 9001})
-        self.assertIsNone(pick_consumable(crew, 10, mk_ctx(crew, items={9001: 5}), DEFAULT_STRATEGY))
-        self.assertIsNone(pick_consumable(crew, 10, mk_ctx(crew, items={9001: 0}), configured))
-        self.assertIsNone(pick_consumable(crew, 10, mk_ctx(crew, items={}), configured))
-        decision = pick_consumable(crew, 10, mk_ctx(crew, items={9001: 1}), configured)
+        self.assertIsNone(pick_consumable(crew, 10, {9001: 5}, DEFAULT_STRATEGY))
+        self.assertIsNone(pick_consumable(crew, 10, {9001: 0}, configured))
+        self.assertIsNone(pick_consumable(crew, 10, {}, configured))
+        decision = pick_consumable(crew, 10, {9001: 1}, configured)
         self.assertIsInstance(decision, UseConsumable)
         assert decision is not None
         self.assertEqual((decision.character_id, decision.item_design_id), (1, 9001))
@@ -575,7 +640,8 @@ class TestSkipCodes(unittest.TestCase):
 
     def test_skip_tp_cap_reached(self) -> None:
         # Unique: TP table cap 70 at capacity 100.
-        self.assertSkip(plan_one(mk_crew(rarity="Unique", total=70)), "tp_cap_reached", "70 TP >= cap 70 TP (70% of capacity 100)")
+        detail = "70 TP >= cap 70 TP (70% of capacity 100)"
+        self.assertSkip(plan_one(mk_crew(rarity="Unique", total=70)), "tp_cap_reached", detail)
         self.assertSkip(plan_one(mk_crew(rarity="Unique", total=75)), "tp_cap_reached")
         self.assertSkip(plan_one(mk_crew(rarity="Legendary", capacity=60, total=60)), "tp_cap_reached")
 
@@ -747,6 +813,25 @@ class TestTimeGate(unittest.TestCase):
                 crew = mk_crew(training_design_id=design_id, training_end=NOW - timedelta(minutes=5))
                 self.assertEqual(summary(plan_one(crew)), [("start", 1, "Read Expert Weapon Theory")])
 
+    def test_replan_after_finish_uses_rebuilt_stats_and_never_refinishes(self) -> None:
+        # The primary that follows a FinishTraining is advisory (pre-finish stats); replan_after_finish replaces it.
+        weapon_t1 = DESIGN_IDS["Read Expert Weapon Theory"]
+        ended = NOW - timedelta(minutes=1)
+        before = mk_crew(1, total=50, training_design_id=weapon_t1, training_end=ended)
+        other = mk_crew(2, "Cyber Duck", room_name="GYM")
+        ctx = mk_ctx(before, other, designs=ALL_DESIGNS, research=FULL_RESEARCH)
+        self.assertEqual(
+            summary(plan_training(ctx))[:2], [("finish", 1), ("start", 1, "Read Expert Weapon Theory")]
+        )
+        # The rebuilt crew may still carry the finished training's id and end date; neither may trigger a re-finish.
+        rebuilt = mk_crew(1, total=51, training_design_id=weapon_t1, training_end=ended)
+        self.assertEqual(summary(replan_after_finish(ctx, rebuilt)), [("start", 1, "Weapons Summit")])
+        self.assertEqual(summary(replan_after_finish(ctx, rebuilt, DEFAULT_STRATEGY)), [("start", 1, "Weapons Summit")])
+        grey = CONSUMABLE_IDS[("WPN", "Common")]
+        starved = mk_ctx(before, designs=ALL_DESIGNS, research={}, items={grey: 1})
+        rebuilt_low = mk_crew(1, total=20, stat="WeaponImprovement", training_design_id=weapon_t1, training_end=ended)
+        self.assertEqual(summary(replan_after_finish(starved, rebuilt_low, CONSUMABLE_STRATEGY)), [("use", 1, grey)])
+
     def test_finish_precedes_any_primary(self) -> None:
         crew = mk_crew(name="Nobody", training_design_id=7, training_end=NOW - timedelta(seconds=1))
         self.assertEqual(summary(plan_one(crew)), [("finish", 1), ("skip", 1, "unknown_role")])
@@ -831,12 +916,12 @@ class TestConsumables(unittest.TestCase):
                 self.assertFalse(any(isinstance(d, UseConsumable) for d in decisions))
 
     def test_grey_when_research_missing(self) -> None:
-        crew = mk_crew(total=20, fatigue=0, stats={"WeaponImprovement": 20})
+        crew = mk_crew(total=20, fatigue=0, stat="WeaponImprovement")
         decisions = plan_cons(crew, research={})
         self.assertEqual(summary(decisions), [("use", 1, CONSUMABLE_IDS[("WPN", "Common")])])
 
     def test_grey_never_replaces_startable(self) -> None:
-        crew = mk_crew(total=20, fatigue=0, stats={"WeaponImprovement": 20})
+        crew = mk_crew(total=20, fatigue=0, stat="WeaponImprovement")
         self.assertEqual(summary(plan_cons(crew, research=FULL_RESEARCH)), [("start", 1, "Read Expert Weapon Theory")])
 
     def test_grey_boundaries(self) -> None:
@@ -845,7 +930,7 @@ class TestConsumables(unittest.TestCase):
         cases += ((20, 0, [("use", 1, grey)]), (20, 1, [("skip", 1, "research_missing")]))
         for total, fatigue, expected in cases:
             with self.subTest(total=total, fatigue=fatigue):
-                crew = mk_crew(total=total, fatigue=fatigue, stats={"WeaponImprovement": total})
+                crew = mk_crew(total=total, fatigue=fatigue, stat="WeaponImprovement")
                 self.assertEqual(summary(plan_cons(crew, research={})), expected)
 
     def test_hero_boundaries(self) -> None:
@@ -858,20 +943,20 @@ class TestConsumables(unittest.TestCase):
         )
         for total, fatigue, expected in cases:
             with self.subTest(total=total, fatigue=fatigue):
-                crew = mk_crew(total=total, fatigue=fatigue, room_name="GYM", stats={"WeaponImprovement": total})
+                crew = mk_crew(total=total, fatigue=fatigue, room_name="GYM", stat="WeaponImprovement")
                 self.assertEqual(summary(plan_cons(crew, research=FULL_RESEARCH)), expected)
 
     def test_consumable_out_of_stock_falls_back_to_skip(self) -> None:
         empty = {item_id: 0 for item_id in CONSUMABLE_IDS.values()}
         in_progress = {"training_design_id": 1, "training_end": NOW + timedelta(hours=1)}
         cases = (
-            (mk_crew(total=20, stats={"WeaponImprovement": 20}), {}, "research_missing"),
+            (mk_crew(total=20, stat="WeaponImprovement"), {}, "research_missing"),
             (
-                mk_crew(total=95, fatigue=100, room_name="GYM", stats={"WeaponImprovement": 95}),
+                mk_crew(total=95, fatigue=100, room_name="GYM", stat="WeaponImprovement"),
                 FULL_RESEARCH,
                 "complete",
             ),
-            (mk_crew(total=20, stats={"WeaponImprovement": 20}, **in_progress), FULL_RESEARCH, "training_in_progress"),
+            (mk_crew(total=20, stat="WeaponImprovement", **in_progress), FULL_RESEARCH, "training_in_progress"),
         )
         for crew, research, code in cases:
             for items in (empty, {}):
@@ -881,13 +966,13 @@ class TestConsumables(unittest.TestCase):
     def test_consumable_targets_highest_stat_rpr(self) -> None:
         # Regression: the original took the first non-zero stat and mapped Repair to STA.
         stats = {"HpImprovement": 2, "RepairImprovement": 9, "StaminaImprovement": 5}
-        crew = mk_crew(total=16, stats=stats)
+        crew = mk_crew(stats=stats)
         self.assertEqual(summary(plan_cons(crew, research={})), [("use", 1, CONSUMABLE_IDS[("RPR", "Common")])])
 
     def test_grey_during_in_progress(self) -> None:
         crew = mk_crew(
             total=10,
-            stats={"PilotImprovement": 10},
+            stat="PilotImprovement",
             training_design_id=1,
             training_end=NOW + timedelta(hours=1),
         )
@@ -904,7 +989,7 @@ class TestConsumables(unittest.TestCase):
     def test_no_consumable_at_or_above_cap(self) -> None:
         for total in (70, 71):
             with self.subTest(total=total):
-                crew = mk_crew(rarity="Unique", total=total, stats={"WeaponImprovement": total}, fatigue=100)
+                crew = mk_crew(rarity="Unique", total=total, stat="WeaponImprovement", fatigue=100)
                 self.assertEqual(summary(plan_cons(crew, research={})), [("skip", 1, "tp_cap_reached")])
         legendary = mk_crew(rarity="Legendary", capacity=95, total=95, fatigue=100, room_name="GYM")
         self.assertEqual(summary(plan_cons(legendary)), [("skip", 1, "tp_cap_reached")])
@@ -922,22 +1007,45 @@ class TestConsumables(unittest.TestCase):
 
     def test_no_consumable_when_in_wrong_slot_room(self) -> None:
         # Wrong-slot crews should move rooms; consumables are not a substitute for moving.
-        crew = mk_crew(total=20, room_name="GYM", stats={"WeaponImprovement": 20})
+        crew = mk_crew(total=20, room_name="GYM", stat="WeaponImprovement")
         self.assertEqual(summary(plan_cons(crew, research={})), [("skip", 1, "not_in_training_room")])
 
     def test_consumable_fallback_when_design_missing(self) -> None:
-        crew = mk_crew(total=20, stats={"WeaponImprovement": 20})
+        crew = mk_crew(total=20, stat="WeaponImprovement")
         decisions = plan_cons(crew, research=FULL_RESEARCH, designs=())
         self.assertEqual(summary(decisions), [("use", 1, CONSUMABLE_IDS[("WPN", "Common")])])
         gated = (mk_design(5, "Read Expert Weapon Theory", required_research="Advanced Training"),)
         decisions = plan_cons(crew, research=FULL_RESEARCH, designs=gated)
         self.assertEqual(summary(decisions), [("use", 1, CONSUMABLE_IDS[("WPN", "Common")])])
 
+    def test_consumable_stock_is_shared_across_crew_in_order(self) -> None:
+        # Regression: each crew saw the full stock, so 3 crew and 2 items planned 3 uses the server would reject.
+        grey = CONSUMABLE_IDS[("WPN", "Common")]
+        crews = [mk_crew(cid, total=20, stat="WeaponImprovement") for cid in (1, 2, 3)]
+        ctx = mk_ctx(*crews, designs=ALL_DESIGNS, research={}, items={grey: 2})
+        expected = [("use", 1, grey), ("use", 2, grey), ("skip", 3, "research_missing")]
+        self.assertEqual(summary(plan_training(ctx, CONSUMABLE_STRATEGY)), expected)
+        self.assertEqual(dict(ctx.items), {grey: 2})
+        self.assertEqual(plan_training(ctx, CONSUMABLE_STRATEGY), plan_training(ctx, CONSUMABLE_STRATEGY))
+
+    def test_exhausted_first_rule_item_falls_through_to_next_rule(self) -> None:
+        # Rules are tried in order; an item used up by an earlier crew lets a later matching rule fire.
+        grey, hero = CONSUMABLE_IDS[("WPN", "Common")], CONSUMABLE_IDS[("WPN", "Hero")]
+        rules = (
+            ConsumableRule("Common", min_percent=0, max_percent=None, min_fatigue=0, max_fatigue=None),
+            ConsumableRule("Hero", min_percent=0, max_percent=None, min_fatigue=0, max_fatigue=None),
+        )
+        strategy = dataclasses.replace(CONSUMABLE_STRATEGY, consumable_rules=rules)
+        crews = [mk_crew(cid, total=20, stat="WeaponImprovement") for cid in (1, 2, 3)]
+        ctx = mk_ctx(*crews, designs=ALL_DESIGNS, research={}, items={grey: 1, hero: 1})
+        expected = [("use", 1, grey), ("use", 2, hero), ("skip", 3, "research_missing")]
+        self.assertEqual(summary(plan_training(ctx, strategy)), expected)
+
     def test_fatigued_fallback_with_custom_rule(self) -> None:
         # Unreachable with the default rules (grey needs fatigue 0); rules are data, so the path stays.
         rule = ConsumableRule("Hero", min_percent=0, max_percent=None, min_fatigue=100, max_fatigue=None)
         strategy = dataclasses.replace(CONSUMABLE_STRATEGY, consumable_rules=(rule,))
-        crew = mk_crew(total=40, fatigue=100, stats={"ScienceImprovement": 40})
+        crew = mk_crew(total=40, fatigue=100, stat="ScienceImprovement")
         decisions = plan_cons(crew, strategy=strategy, research=FULL_RESEARCH)
         self.assertEqual(summary(decisions), [("use", 1, CONSUMABLE_IDS[("SCI", "Hero")])])
 
@@ -966,15 +1074,12 @@ class TestStructure(unittest.TestCase):
         primaries = [d for d in decisions if not isinstance(d, FinishTraining)]
         self.assertEqual([d.character_id for d in primaries], [5, 2, 9, 1])
 
-    def test_plan_deterministic_and_ctx_unchanged(self) -> None:
+    def test_plan_deterministic(self) -> None:
         crew = (mk_crew(1, "Delish"), mk_crew(2, "Cyber Duck", room_name="GYM", total=80))
         ctx = mk_ctx(*crew, designs=ALL_DESIGNS, research=FULL_RESEARCH, rooms={1: "GYM"}, items={1: 1})
-        snapshot = repr(ctx)
         first = plan_training(ctx)
-        second = plan_training(ctx)
-        self.assertEqual(first, second)
+        self.assertEqual(plan_training(ctx), first)
         self.assertIsInstance(first, tuple)
-        self.assertEqual(repr(ctx), snapshot)
 
     def test_with_consumables_returns_new_strategy(self) -> None:
         configured = with_consumables(DEFAULT_STRATEGY, {("WPN", "Common"): 42})
@@ -994,6 +1099,19 @@ class TestStructure(unittest.TestCase):
             "unknown room type in role": {"roles": (*DEFAULT_STRATEGY.roles, lab)},
             "band without research gate": {"research_gates": gates},
             "non-positive fatigue limit": {"max_training_fatigue": 0},
+            # Regression: a mistyped tier ("Grey") or an inverted window built fine and then never fired.
+            "consumable rule with unknown tier": {"consumable_rules": (ConsumableRule("Grey", 0, 29, 0, 0),)},
+            "consumable rule with inverted percent": {"consumable_rules": (ConsumableRule("Common", 30, 29, 0, 0),)},
+            "consumable rule with inverted fatigue": {"consumable_rules": (ConsumableRule("Common", 0, 29, 5, 4),)},
+            "consumable item id zero": {"consumables": {("WPN", "Common"): 0}},
+            "consumable item id negative": {"consumables": {("WPN", "Common"): -3}},
+            "consumable item id bool": {"consumables": {("WPN", "Common"): True}},
+            "consumable item id string": {"consumables": {("WPN", "Common"): "9001"}},
+            "non-positive tp cap": {"tp_caps": {3: 0}},
+            "tp cap keyed by rarity name": {"tp_caps": {"Unique": 70}},
+            "exceptional cap not keyed by (stars, name)": {"exceptional_tp_caps": {"Mistycball": 100}},
+            "non-positive exceptional cap": {"exceptional_tp_caps": {(4, "Mistycball"): 0}},
+            "non-positive captain cap": {"captain_tp_caps": {6: -1}},
         }
         for label, changes in invalid.items():
             with self.subTest(label), self.assertRaises(ValueError):
@@ -1006,6 +1124,9 @@ class TestStructure(unittest.TestCase):
             strategy.research_gates,
             strategy.rarity_stars,
             strategy.consumables,
+            strategy.tp_caps,
+            strategy.exceptional_tp_caps,
+            strategy.captain_tp_caps,
             STAT_CODES,
         )
         for mapping in mappings:
@@ -1020,7 +1141,15 @@ class TestStructure(unittest.TestCase):
 
     def test_training_package_imports_allowlist(self) -> None:
         allowed = {"__future__", "dataclasses", "datetime", "types", "typing", "collections.abc", "math", "re"}
-        allowed |= {"sdk.crew_leveling"}
+        # crew_leveling only seeds DEFAULT_STRATEGY's TP tables: strategy.py may copy its constants, and no module
+        # may call into it at plan time (its tables are mutable module globals).
+        leveling_constants = {"CAPTAIN_TP", "EXCEPTIONAL_4STAR_NAMES", "EXCEPTIONAL_4STAR_TP", "TP_CAPS_BY_RARITY"}
+        for path in sorted(PACKAGE_DIR.glob("*.py")):
+            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+                if isinstance(node, ast.ImportFrom) and node.module == "sdk.crew_leveling":
+                    with self.subTest(file=path.name, crew_leveling=True):
+                        self.assertEqual(path.name, "strategy.py")
+                        self.assertLessEqual({alias.name for alias in node.names}, leveling_constants)
         sources = sorted(PACKAGE_DIR.glob("*.py"))
         names = {path.name for path in sources}
         self.assertEqual(names, {"__init__.py", "model.py", "strategy.py", "parse.py", "planner.py"})
@@ -1041,7 +1170,56 @@ class TestStructure(unittest.TestCase):
                     continue
                 for module in modules:
                     with self.subTest(file=path.name, module=module):
-                        self.assertTrue(module in allowed or module.startswith("sdk.training."), module)
+                        in_package = module.startswith("sdk.training.")
+                        leveling = module == "sdk.crew_leveling" and path.name == "strategy.py"
+                        self.assertTrue(module in allowed or in_package or leveling, module)
+
+    def test_planner_helpers_are_public_and_take_the_strategy_explicitly(self) -> None:
+        expected = {
+            "band_for",
+            "design_research_ok",
+            "effective_cap",
+            "highest_stat",
+            "percent",
+            "pick_consumable",
+            "pick_design",
+            "plan_training",
+            "replan_after_finish",
+            "research_ok",
+            "resolve_room_name",
+            "role_for",
+            "room_type_for",
+            "total_points",
+            "training_state",
+        }
+        self.assertEqual(set(planner_module.__all__), expected)
+        # Regression: helpers defaulted to DEFAULT_STRATEGY, so a caller planning with another strategy could
+        # silently look bands, rooms or caps up in the default one.
+        for name in ("band_for", "effective_cap", "pick_consumable", "research_ok", "role_for", "room_type_for"):
+            with self.subTest(helper=name):
+                parameter = inspect.signature(getattr(planner_module, name)).parameters["strategy"]
+                self.assertIs(parameter.default, inspect.Parameter.empty)
+        for name in ("plan_training", "replan_after_finish"):
+            with self.subTest(entry_point=name):
+                parameter = inspect.signature(getattr(planner_module, name)).parameters["strategy"]
+                self.assertIs(parameter.default, DEFAULT_STRATEGY)
+
+    def test_single_frozen_mapping_helper(self) -> None:
+        # Regression: model.py and strategy.py each defined an identical MappingProxyType(dict(...)) helper.
+        builders = []
+        for path in sorted(PACKAGE_DIR.glob("*.py")):
+            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+                if isinstance(node, ast.FunctionDef) and any(
+                    isinstance(inner, ast.Return)
+                    and isinstance(inner.value, ast.Call)
+                    and getattr(inner.value.func, "id", "") == "MappingProxyType"
+                    and len(inner.value.args) == 1
+                    and isinstance(inner.value.args[0], ast.Call)
+                    and getattr(inner.value.args[0].func, "id", "") == "dict"
+                    for inner in ast.walk(node)
+                ):
+                    builders.append((path.name, node.name))
+        self.assertEqual(builders, [("model.py", "frozen_mapping")])
 
     def test_package_exports_public_api(self) -> None:
         import sdk.training as package
@@ -1063,6 +1241,8 @@ class TestStructure(unittest.TestCase):
             "UseConsumable",
             "Skip",
             "SKIP_CODES",
+            "replan_after_finish",
+            "classify_payloads",
         }
         self.assertIsInstance(package.__all__, tuple)
         self.assertLessEqual(required, set(package.__all__))
@@ -1086,125 +1266,183 @@ class TestStructure(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# Property suite: generator, independent invariant checker, and the seeds.
+# Property suite: generator, an independent oracle, and the seeds.
+# The oracle re-derives each crew's expected decision from test-local literals. Of the planner's helpers it reuses
+# only effective_cap (pinned above by literal tables), so a regression in percent, bands, rooms, roles, training
+# state, design choice, research gates, Skip precedence or consumable choice cannot hide in planner and oracle alike.
 # Module-level functions (no TestCase) so other test modules may import them.
 # ---------------------------------------------------------------------------
 
+# (low %, high %, slot, tier), ascending; percents below 0 clamp to the first row.
+ORACLE_BANDS = (
+    (0, 50, "primary", 1),
+    (51, 64, "primary", 2),
+    (65, 71, "primary", 3),
+    (72, 73, "secondary", 1),
+    (74, 84, "secondary", 2),
+    (85, 89, "secondary", 3),
+)
+ORACLE_COMPLETE_PERCENT = 90
+ORACLE_ROOM_TYPES = {"Academy": "academy", "Lunar College": "academy", "GYM": "gym", "Galaxy Gym": "gym"}
+# (slot, tier) -> Fitness or Education level the band needs; 0 = ungated.
+ORACLE_RESEARCH_GATES = {
+    ("primary", 1): 1,
+    ("primary", 2): 2,
+    ("primary", 3): 3,
+    ("secondary", 1): 0,
+    ("secondary", 2): 2,
+    ("secondary", 3): 3,
+}
+ORACLE_FATIGUE_LIMIT = 100
+ORACLE_STAT_ORDER = (
+    "HpImprovement",
+    "PilotImprovement",
+    "RepairImprovement",
+    "WeaponImprovement",
+    "ScienceImprovement",
+    "EngineImprovement",
+    "AttackImprovement",
+    "AbilityImprovement",
+    "StaminaImprovement",
+)
+ORACLE_STAT_CODES = {
+    "HpImprovement": "HP",
+    "PilotImprovement": "PLT",
+    "RepairImprovement": "RPR",
+    "WeaponImprovement": "WPN",
+    "ScienceImprovement": "SCI",
+    "EngineImprovement": "ENG",
+    "AttackImprovement": "ATK",
+    "AbilityImprovement": "ABL",
+    "StaminaImprovement": "STA",
+}
+# (tier, min %, max %, min fatigue, max fatigue), tried in order; None = unbounded.
+ORACLE_CONSUMABLE_RULES = (("Common", 0, 29, 0, 0), ("Hero", 90, None, 100, None))
+ORACLE_ROLE_OF = {character: role for role, characters in ROLE_CHARACTERS.items() for character in characters}
 
-def _startable_design(ctx: TrainingContext, strategy, crew: CrewState) -> TrainingDesign | None:
-    """Independent re-derivation (public helpers only) of the design the crew could start now, if any."""
-    role = role_for(crew.name, strategy)
-    room_type = room_type_for(resolve_room_name(crew, ctx), strategy)
-    if role is None or room_type is None or crew.training_capacity <= 0:
-        return None
-    total = total_points(crew.stats)
-    if total >= effective_cap(crew, strategy) or training_state(crew, ctx.now) == TRAINING_IN_PROGRESS:
-        return None
-    if crew.fatigue >= strategy.max_training_fatigue:
-        return None
-    found = band_for(percent(total, crew.training_capacity), strategy)
-    if found is None:
-        return None
-    slot = role.slot(found.slot)
-    if slot.room_type != room_type or not research_ok(found, ctx.research_levels, strategy):
-        return None
-    design = pick_design(slot.trainings[found.tier - 1], room_type, ctx.designs)
-    if design is None or not design_research_ok(design, ctx.research_levels):
-        return None
-    return design
+# The primary decision's precedence as a literal list: (outcome, consumable fallback allowed, predicate on facts).
+# The first row whose predicate holds decides. Later predicates may assume earlier ones were false.
+ORACLE_PRECEDENCE = (
+    ("unknown_role", False, lambda facts: facts["role"] is None),
+    ("not_in_training_room", False, lambda facts: facts["room_type"] is None),
+    ("design_missing", False, lambda facts: facts["capacity"] <= 0),
+    ("tp_cap_reached", False, lambda facts: facts["total"] >= facts["cap"]),
+    ("training_in_progress", True, lambda facts: facts["in_progress"]),
+    ("complete", True, lambda facts: facts["band"] is None),
+    ("not_in_training_room", False, lambda facts: facts["slot_room"] != facts["room_type"]),
+    ("research_missing", True, lambda facts: not facts["gate_met"]),
+    ("fatigued", True, lambda facts: facts["fatigue"] >= ORACLE_FATIGUE_LIMIT),
+    ("design_missing", True, lambda facts: facts["design"] is None),
+    ("research_missing", True, lambda facts: not facts["design_research_met"]),
+    ("start", False, lambda facts: True),
+)
 
 
-def _skip_consistent(ctx: TrainingContext, strategy, crew: CrewState, code: str) -> bool:
-    role = role_for(crew.name, strategy)
-    room_type = room_type_for(resolve_room_name(crew, ctx), strategy)
-    total = total_points(crew.stats)
-    pct = percent(total, crew.training_capacity) if crew.training_capacity > 0 else None
-    found = band_for(pct, strategy) if pct is not None else None
-    slot = role.slot(found.slot) if role is not None and found is not None else None
-    design = (
-        pick_design(slot.trainings[found.tier - 1], room_type, ctx.designs) if slot and found and room_type else None
-    )
-    if code == "unknown_role":
-        return role is None
-    if code == "not_in_training_room":
-        return room_type is None or (slot is not None and slot.room_type != room_type)
-    if code == "design_missing":
-        return crew.training_capacity <= 0 or (slot is not None and design is None)
-    if code == "tp_cap_reached":
-        return crew.training_capacity > 0 and total >= effective_cap(crew, strategy)
-    if code == "training_in_progress":
-        return training_state(crew, ctx.now) == TRAINING_IN_PROGRESS
-    if code == "complete":
-        return pct is not None and pct >= strategy.complete_percent
-    if code == "research_missing":
-        return found is not None and (
-            not research_ok(found, ctx.research_levels, strategy)
-            or (design is not None and not design_research_ok(design, ctx.research_levels))
-        )
-    if code == "fatigued":
-        return crew.fatigue >= strategy.max_training_fatigue
-    return False
+def _require_oracle_strategy(strategy) -> None:
+    """The oracle's literals describe DEFAULT_STRATEGY; only the consumable item ids may differ."""
+    if dataclasses.replace(strategy, consumables={}) != DEFAULT_STRATEGY:
+        raise ValueError("the oracle only models DEFAULT_STRATEGY (plus consumable item ids)")
 
 
-def _primary_violations(ctx: TrainingContext, strategy, crew: CrewState, decision) -> list[str]:
-    cid = crew.character_id
-    problems: list[str] = []
-    role = role_for(crew.name, strategy)
-    room_type = room_type_for(resolve_room_name(crew, ctx), strategy)
-    total = total_points(crew.stats)
-    eligible = role is not None and room_type is not None and crew.training_capacity > 0
-    eligible = eligible and total < effective_cap(crew, strategy)
-    startable = _startable_design(ctx, strategy, crew)
-    designs_by_id = {design.id: design for design in ctx.designs}
+def _oracle_facts(ctx: TrainingContext, strategy, crew: CrewState) -> dict:
+    room_name = crew.room_name or (ctx.rooms.get(crew.room_id) if crew.room_id is not None else None)
+    room_type = ORACLE_ROOM_TYPES.get(room_name.strip()) if room_name else None
+    role = ORACLE_ROLE_OF.get(crew.name)
+    total = sum(crew.stats.values())
+    capacity = crew.training_capacity
+    pct = -(-total * 100 // capacity) if capacity > 0 else None
+    band = None
+    if pct is not None and pct < ORACLE_COMPLETE_PERCENT:
+        band = next((slot, tier) for _low, high, slot, tier in ORACLE_BANDS if pct <= high)
+    slot_room = design = None
+    gate_met = design_research_met = False
+    if band is not None and role is not None:
+        primary_room, primary_names, secondary_room, secondary_names = EXPECTED_ROLE_TABLE[role]
+        slot_room, names = (primary_room, primary_names) if band[0] == "primary" else (secondary_room, secondary_names)
+        name = names[band[1] - 1]
+        level = ORACLE_RESEARCH_GATES[band]
+        best_level = max(ctx.research_levels.get("Fitness", 0), ctx.research_levels.get("Education", 0))
+        gate_met = level == 0 or best_level >= level
+        for candidate in ctx.designs:
+            if candidate.name == name and candidate.required_room_type in (None, room_type):
+                if design is None or candidate.id < design.id:
+                    design = candidate
+        if design is not None:
+            needed = design.required_research
+            design_research_met = needed is None or ctx.research_levels.get(needed, 0) >= 1
+    end = crew.training_end
+    has_training = bool(crew.training_design_id) and end is not None
+    return {
+        "role": role,
+        "room_type": room_type,
+        "capacity": capacity,
+        "total": total,
+        "cap": effective_cap(crew, strategy),
+        "pct": pct,
+        "band": band,
+        "slot_room": slot_room,
+        "gate_met": gate_met,
+        "fatigue": crew.fatigue,
+        "design": design,
+        "design_research_met": design_research_met,
+        "in_progress": has_training and end > ctx.now,
+        "finished": has_training and end <= ctx.now,
+    }
+
+
+def _oracle_consumable(strategy, crew: CrewState, pct: int, stock: dict[int, int]) -> int | None:
+    """Item for the first rule whose window holds (pct, fatigue) and whose highest-stat item is still in stock."""
+    best = ORACLE_STAT_ORDER[0]
+    for stat in ORACLE_STAT_ORDER[1:]:
+        if crew.stats.get(stat, 0) > crew.stats.get(best, 0):
+            best = stat
+    code = ORACLE_STAT_CODES[best]
+    for tier, low, high, fatigue_low, fatigue_high in ORACLE_CONSUMABLE_RULES:
+        in_percent = low <= pct and (high is None or pct <= high)
+        in_fatigue = fatigue_low <= crew.fatigue and (fatigue_high is None or crew.fatigue <= fatigue_high)
+        item = strategy.consumables.get((code, tier))
+        if in_percent and in_fatigue and item is not None and stock.get(item, 0) > 0:
+            return item
+    return None
+
+
+def oracle_primary(ctx: TrainingContext, strategy, crew: CrewState, stock: dict[int, int]) -> tuple:
+    """The expected primary decision as ("start", design id) | ("use", item id) | ("skip", reason code)."""
+    facts = _oracle_facts(ctx, strategy, crew)
+    outcome, fallback = next((outcome, fallback) for outcome, fallback, holds in ORACLE_PRECEDENCE if holds(facts))
+    if outcome == "start":
+        return ("start", facts["design"].id)
+    if fallback:
+        item = _oracle_consumable(strategy, crew, facts["pct"], stock)
+        if item is not None:
+            return ("use", item)
+    return ("skip", outcome)
+
+
+def decision_shape(decision) -> tuple:
     if isinstance(decision, StartTraining):
-        design = designs_by_id.get(decision.training_design_id)
-        if design is None:
-            problems.append(f"{cid}: start with design id {decision.training_design_id} not in ctx")
-        if not eligible:
-            problems.append(f"{cid}: start for an ineligible crew (role/room/capacity/cap)")
-        if training_state(crew, ctx.now) == TRAINING_IN_PROGRESS:
-            problems.append(f"{cid}: start while training in progress")
-        if crew.fatigue >= strategy.max_training_fatigue:
-            problems.append(f"{cid}: start while fatigued")
-        if startable is None or design is None or design.id != startable.id:
-            problems.append(f"{cid}: start does not match the startable design {startable}")
-    elif isinstance(decision, UseConsumable):
-        if not eligible:
-            problems.append(f"{cid}: consumable for an ineligible crew")
-        if ctx.items.get(decision.item_design_id, 0) <= 0:
-            problems.append(f"{cid}: consumable {decision.item_design_id} out of stock")
-        if decision.item_design_id not in set(strategy.consumables.values()):
-            problems.append(f"{cid}: consumable {decision.item_design_id} not configured")
-        if startable is not None:
-            problems.append(f"{cid}: consumable used instead of a startable training")
-        pct = percent(total, crew.training_capacity) if crew.training_capacity > 0 else 0
-        found = band_for(pct, strategy)
-        # Moving rooms only matters once the crew is free; a running training may take a consumable anywhere.
-        free = training_state(crew, ctx.now) != TRAINING_IN_PROGRESS
-        if free and role is not None and found is not None and role.slot(found.slot).room_type != room_type:
-            problems.append(f"{cid}: consumable used instead of moving rooms")
-    elif isinstance(decision, Skip):
-        if startable is not None:
-            problems.append(f"{cid}: skipped ({decision.reason_code}) a startable training")
-        if not _skip_consistent(ctx, strategy, crew, decision.reason_code):
-            problems.append(f"{cid}: skip code {decision.reason_code} inconsistent with crew state")
-    else:
-        problems.append(f"{cid}: unexpected primary decision {decision!r}")
-    return problems
+        return ("start", decision.training_design_id)
+    if isinstance(decision, UseConsumable):
+        return ("use", decision.item_design_id)
+    if isinstance(decision, Skip):
+        return ("skip", decision.reason_code)
+    return ("other", decision)
 
 
 def plan_violations(ctx: TrainingContext, strategy, decisions) -> list[str]:
-    """Check plan invariants independently of the planner's control flow."""
+    """Check a plan against the oracle: structure, per-crew expected decision, and shared consumable stock."""
+    _require_oracle_strategy(strategy)
     problems: list[str] = []
-    remaining = list(decisions)
+    decisions = list(decisions)
+    stock = dict(ctx.items)
     position = 0
     for crew in ctx.crew:
         cid = crew.character_id
-        finished = training_state(crew, ctx.now) == TRAINING_FINISHED
+        finished = _oracle_facts(ctx, strategy, crew)["finished"]
         has_finish = (
-            position < len(remaining)
-            and isinstance(remaining[position], FinishTraining)
-            and remaining[position].character_id == cid
+            position < len(decisions)
+            and isinstance(decisions[position], FinishTraining)
+            and decisions[position].character_id == cid
         )
         if has_finish:
             position += 1
@@ -1212,17 +1450,26 @@ def plan_violations(ctx: TrainingContext, strategy, decisions) -> list[str]:
                 problems.append(f"{cid}: finish while training is not finished")
         elif finished:
             problems.append(f"{cid}: finished training not collected first")
-        if position >= len(remaining):
+        if position >= len(decisions):
             problems.append(f"{cid}: missing primary decision")
             continue
-        primary = remaining[position]
+        primary = decisions[position]
         if isinstance(primary, FinishTraining) or primary.character_id != cid:
             problems.append(f"{cid}: expected a primary decision, found {primary!r}")
             continue
         position += 1
-        problems.extend(_primary_violations(ctx, strategy, crew, primary))
-    if position != len(remaining):
-        problems.append(f"{len(remaining) - position} decisions after the last crew's primary")
+        expected = oracle_primary(ctx, strategy, crew, stock)
+        actual = decision_shape(primary)
+        if actual != expected:
+            problems.append(f"{cid}: planned {actual}, oracle expects {expected}")
+        if expected[0] == "use":
+            stock[expected[1]] -= 1
+    if position != len(decisions):
+        problems.append(f"{len(decisions) - position} decisions after the last crew's primary")
+    uses = Counter(decision.item_design_id for decision in decisions if isinstance(decision, UseConsumable))
+    for item, count in sorted(uses.items()):
+        if count > ctx.items.get(item, 0):
+            problems.append(f"item {item}: {count} UseConsumable decisions but only {ctx.items.get(item, 0)} in stock")
     return problems
 
 
@@ -1235,13 +1482,18 @@ def _bad_plan_cases() -> list[tuple[str, TrainingContext, tuple]]:
     capped = mk_crew(1, rarity="Unique", total=70)
     done = mk_crew(1, **finished)
     busy = mk_crew(1, total=40, **running)
-    no_research = mk_crew(1, total=10, stats={"WeaponImprovement": 10})
+    busy_fatigued = mk_crew(1, total=40, fatigue=100, **running)
+    capped_complete = mk_crew(1, rarity="Unique", total=95, room_name="GYM")
+    no_research = mk_crew(1, total=10, stat="WeaponImprovement")
+    no_research_2 = mk_crew(2, total=10, stat="WeaponImprovement")
+    mixed = mk_crew(1, stats={"WeaponImprovement": 6, "HpImprovement": 4})
     second = mk_crew(2, "Cyber Duck", room_name="GYM")
 
     def ctx(*crew: CrewState, items=None, research=FULL_RESEARCH) -> TrainingContext:
         return mk_ctx(*crew, designs=ALL_DESIGNS, research=research, items=items)
 
     start = StartTraining(1, weapon_id, "r")
+    stocked = {item_id: 3 for item_id in CONSUMABLE_IDS.values()}
     return [
         ("start at cap", ctx(capped), (start,)),
         ("finish after primary", ctx(done), (start, FinishTraining(1, "r"))),
@@ -1255,6 +1507,23 @@ def _bad_plan_cases() -> list[tuple[str, TrainingContext, tuple]]:
         ("use instead of startable", ctx(no_research, items={grey: 3}), (UseConsumable(1, grey, "r"),)),
         ("skip a startable crew", ctx(idle), (Skip(1, "fatigued", ""),)),
         ("wrong skip code", ctx(idle, research={}), (Skip(1, "tp_cap_reached", ""),)),
+        ("fatigued outranks in progress", ctx(busy_fatigued), (Skip(1, "fatigued", ""),)),
+        ("complete outranks tp cap", ctx(capped_complete), (Skip(1, "complete", ""),)),
+        (
+            "hero item outside its window",
+            ctx(no_research, items=stocked, research={}),
+            (UseConsumable(1, CONSUMABLE_IDS[("WPN", "Hero")], "r"),),
+        ),
+        (
+            "item for a lower stat",
+            ctx(mixed, items=stocked, research={}),
+            (UseConsumable(1, CONSUMABLE_IDS[("HP", "Common")], "r"),),
+        ),
+        (
+            "stock over-committed across crew",
+            ctx(no_research, no_research_2, items={grey: 1}, research={}),
+            (UseConsumable(1, grey, "r"), UseConsumable(2, grey, "r")),
+        ),
         (
             "wrong crew order",
             ctx(idle, second),
@@ -1264,12 +1533,15 @@ def _bad_plan_cases() -> list[tuple[str, TrainingContext, tuple]]:
 
 
 BASE_NOW = datetime(2026, 1, 1, tzinfo=UTC)
-EDGE_PERCENTS = (0, 29, 30, 50, 51, 64, 65, 71, 72, 73, 74, 84, 85, 89, 90, 95)
+EDGE_PERCENTS = (0, 29, 30, 50, 51, 64, 65, 68, 71, 72, 73, 74, 84, 85, 87, 89, 90, 95)
 GEN_ROOMS = ("Academy", "Lunar College", "GYM", "Galaxy Gym", "Galaxy Gym Annex", "gym", "Bridge", None)
+GEN_ROOMS_BY_TYPE = {"academy": ("Academy", "Lunar College"), "gym": ("GYM", "Galaxy Gym")}
 GEN_CAPACITIES = (20, 100, 150, 200, 300)
 GEN_RARITIES = (*DEFAULT_STRATEGY.rarity_stars, "Standard")
 GEN_ROLE_NAMES = tuple(sorted(name for role in DEFAULT_STRATEGY.roles for name in role.characters))
+GEN_OFFSETS = (timedelta(hours=-7), timedelta(hours=5, minutes=30), timedelta(hours=9))
 PROPERTY_STRATEGY = with_consumables(DEFAULT_STRATEGY, CONSUMABLE_IDS)
+TIER_OF_ITEM = {item_id: tier for (_code, tier), item_id in CONSUMABLE_IDS.items()}
 SEEDS = range(500)
 
 
@@ -1285,7 +1557,7 @@ def make_designs(rng: random.Random, strategy=PROPERTY_STRATEGY) -> tuple[Traini
         copies = 2 if rng.random() < 0.10 else 1
         for _ in range(copies):
             room = rng.choice(("academy", "gym")) if rng.random() < 0.10 else None
-            research = "Advanced Training" if rng.random() < 0.10 else None
+            research = "Advanced Training" if rng.random() < 0.3 else None
             designs.append(TrainingDesign(next(ids), name, 1, None, timedelta(hours=1), research, room))
     rng.shuffle(designs)
     return tuple(designs)
@@ -1301,7 +1573,16 @@ def _split_total(rng: random.Random, total: int) -> dict[str, int]:
 def make_crew(rng: random.Random, cid: int, strategy=PROPERTY_STRATEGY, now: datetime = BASE_NOW):
     """One random crew plus the ctx.rooms entries it needs (room id fallback)."""
     name = rng.choice(GEN_ROLE_NAMES) if rng.random() < 0.8 else f"Rando{cid}"
+    capacity = 0 if rng.random() < 0.05 else rng.choice(GEN_CAPACITIES)
+    target = rng.choice(EDGE_PERCENTS) if rng.random() < 0.5 else rng.randint(0, 110)
+    total = max(0, target * max(capacity, 1) // 100 + rng.choice((-1, 0, 0, 1)))
     room = rng.choice(GEN_ROOMS)
+    role = ORACLE_ROLE_OF.get(name)
+    if role is not None and target < ORACLE_COMPLETE_PERCENT and rng.random() < 0.6:
+        # Bias towards the room the target band trains in, so starts and consumables are common enough to check.
+        slot = next(slot for _low, high, slot, _tier in ORACLE_BANDS if target <= high)
+        room_type = EXPECTED_ROLE_TABLE[role][0 if slot == "primary" else 2]
+        room = rng.choice(GEN_ROOMS_BY_TYPE[room_type])
     rooms: dict[int, str] = {}
     room_mode = rng.random()
     if room_mode < 0.6:
@@ -1312,9 +1593,6 @@ def make_crew(rng: random.Random, cid: int, strategy=PROPERTY_STRATEGY, now: dat
             rooms[room_id] = room
     else:
         room_id, room_name = 5000 + cid, None  # id with no ctx.rooms entry
-    capacity = 0 if rng.random() < 0.05 else rng.choice(GEN_CAPACITIES)
-    target = rng.choice(EDGE_PERCENTS) if rng.random() < 0.5 else rng.randint(0, 110)
-    total = max(0, target * max(capacity, 1) // 100 + rng.choice((-1, 0, 0, 1)))
     fatigue = rng.choice((0, 0, 0, rng.randint(1, 99), 99, 100, 150))
     mode = rng.choice(("idle", "running", "finished", "id_no_end", "end_no_id"))
     design_id = rng.choice((101, 150, 777))
@@ -1326,6 +1604,9 @@ def make_crew(rng: random.Random, cid: int, strategy=PROPERTY_STRATEGY, now: dat
         "id_no_end": (design_id, None),
         "end_no_id": (rng.choice((None, 0)), now - timedelta(seconds=seconds)),
     }[mode]
+    end = training[1]
+    if end is not None and rng.random() < 0.2:
+        end = end.astimezone(timezone(rng.choice(GEN_OFFSETS)))  # same instant, non-UTC offset
     crew = CrewState(
         character_id=cid,
         name=name,
@@ -1338,7 +1619,7 @@ def make_crew(rng: random.Random, cid: int, strategy=PROPERTY_STRATEGY, now: dat
         training_capacity=capacity,
         fatigue=fatigue,
         training_design_id=training[0],
-        training_end=training[1],
+        training_end=end,
     )
     return crew, rooms
 
@@ -1352,9 +1633,35 @@ def make_context(rng: random.Random, strategy=PROPERTY_STRATEGY) -> TrainingCont
         member, member_rooms = make_crew(rng, cid, strategy, now)
         crew.append(member)
         rooms.update(member_rooms)
+    copy_mode = rng.random()
+    if len(crew) > 1 and copy_mode < 0.15:
+        crew[-1] = dataclasses.replace(crew[-1], character_id=crew[0].character_id)  # duplicate character id
+    elif copy_mode > 0.75:
+        # Contention: a consumable-ready first crew (training, fatigue 0, low percent) plus its twin under a fresh
+        # id, so both want the same item and a stock of 1 cannot serve them both.
+        ready = dataclasses.replace(
+            crew[0],
+            name=rng.choice(GEN_ROLE_NAMES),
+            room_id=None,
+            room_name=rng.choice(("Academy", "GYM")),
+            rarity="Legendary",
+            training_capacity=100,
+            stats=_split_total(rng, rng.randint(0, 29)),
+            fatigue=0,
+            training_design_id=101,
+            training_end=now + timedelta(hours=1),
+        )
+        crew[0] = ready
+        crew.append(dataclasses.replace(ready, character_id=ready.character_id + 10000))
     research = {name: rng.randint(0, 3) for name in ("Fitness", "Education", "Advanced Training")}
-    items = {item_id: rng.choice((0, 0, 1, 3)) for item_id in sorted(strategy.consumables.values())}
+    if rng.random() < 0.25:
+        research = {}  # a new ship: every research gate is unmet
+    items = {item_id: rng.choice((0, 1, 1, 3)) for item_id in sorted(strategy.consumables.values())}
     return TrainingContext(now, tuple(crew), designs, rooms, research, items)
+
+
+def primaries(decisions) -> list:
+    return [decision for decision in decisions if not isinstance(decision, FinishTraining)]
 
 
 class TestPlannerProperties(unittest.TestCase):
@@ -1363,6 +1670,18 @@ class TestPlannerProperties(unittest.TestCase):
             with self.subTest(label):
                 self.assertEqual(plan_violations(ctx, CONSUMABLE_STRATEGY, plan_training(ctx, CONSUMABLE_STRATEGY)), [])
                 self.assertNotEqual(plan_violations(ctx, CONSUMABLE_STRATEGY, bad_plan), [])
+
+    def test_violation_checker_flags_over_committed_stock_explicitly(self) -> None:
+        grey = CONSUMABLE_IDS[("WPN", "Common")]
+        crews = [mk_crew(cid, total=10, stat="WeaponImprovement") for cid in (1, 2)]
+        ctx = mk_ctx(*crews, designs=ALL_DESIGNS, items={grey: 1})
+        problems = plan_violations(ctx, CONSUMABLE_STRATEGY, (UseConsumable(1, grey, "r"), UseConsumable(2, grey, "r")))
+        self.assertIn(f"item {grey}: 2 UseConsumable decisions but only 1 in stock", problems)
+
+    def test_oracle_rejects_strategies_it_does_not_model(self) -> None:
+        ctx = mk_ctx(mk_crew(), designs=ALL_DESIGNS)
+        with self.assertRaises(ValueError):
+            plan_violations(ctx, dataclasses.replace(DEFAULT_STRATEGY, max_training_fatigue=50), ())
 
     def test_generator_seed_deterministic(self) -> None:
         self.assertEqual(make_context(random.Random(7)), make_context(random.Random(7)))
@@ -1374,9 +1693,13 @@ class TestPlannerProperties(unittest.TestCase):
             with self.subTest(seed=seed):
                 self.assertEqual(plan_violations(ctx, PROPERTY_STRATEGY, plan_training(ctx, PROPERTY_STRATEGY)), [])
 
-    def test_plan_composes_per_crew(self) -> None:
+    def test_plan_composes_per_crew_when_stock_is_uncontended(self) -> None:
+        # Consumable stock is shared in crew order, so planning crew one at a time only matches the whole plan when
+        # no item can run out: every stocked item gets one unit per crew here. Contention has its own tests.
         for seed in SEEDS:
             ctx = make_context(random.Random(seed))
+            plenty = {item: len(ctx.crew) if quantity else 0 for item, quantity in ctx.items.items()}
+            ctx = dataclasses.replace(ctx, items=plenty)
             pieces: list = []
             for member in ctx.crew:
                 pieces.extend(plan_training(dataclasses.replace(ctx, crew=(member,)), PROPERTY_STRATEGY))
@@ -1392,32 +1715,56 @@ class TestPlannerProperties(unittest.TestCase):
                 self.assertEqual(plan_training(make_context(random.Random(seed)), PROPERTY_STRATEGY), first)
 
     def test_generator_covers_everything(self) -> None:
-        skip_codes: Counter[str] = Counter()
-        decision_types: Counter[str] = Counter()
-        start_bands: Counter[tuple[str, int]] = Counter()
-        finish_pairs: Counter[str] = Counter()
+        seen: Counter[str] = Counter()
         for seed in SEEDS:
             ctx = make_context(random.Random(seed))
             decisions = plan_training(ctx, PROPERTY_STRATEGY)
-            crew_by_id = {member.character_id: member for member in ctx.crew}
+            without_items = primaries(plan_training(ctx, DEFAULT_STRATEGY))
+            plenty = {item: len(ctx.crew) if quantity else 0 for item, quantity in ctx.items.items()}
+            if plan_training(dataclasses.replace(ctx, items=plenty), PROPERTY_STRATEGY) != decisions:
+                seen["contended stock changed the plan"] += 1
+            ids = [member.character_id for member in ctx.crew]
+            if len(ids) != len(set(ids)):
+                seen["duplicate character id"] += 1
             for index, decision in enumerate(decisions):
-                decision_types[type(decision).__name__] += 1
-                if isinstance(decision, Skip):
-                    skip_codes[decision.reason_code] += 1
-                if isinstance(decision, StartTraining):
-                    member = crew_by_id[decision.character_id]
-                    found = band_for(percent(total_points(member.stats), member.training_capacity))
-                    assert found is not None
-                    start_bands[(found.slot, found.tier)] += 1
+                seen[type(decision).__name__] += 1
                 if isinstance(decision, FinishTraining):
-                    finish_pairs[type(decisions[index + 1]).__name__] += 1
-        for code in SKIP_CODES:
-            with self.subTest(code=code):
-                self.assertGreaterEqual(skip_codes[code], 5, dict(skip_codes))
-        self.assertEqual(set(decision_types), {"FinishTraining", "StartTraining", "UseConsumable", "Skip"})
-        self.assertEqual(set(start_bands), {(band.slot, band.tier) for band in DEFAULT_STRATEGY.bands})
-        self.assertGreater(finish_pairs["StartTraining"], 0)
-        self.assertGreater(finish_pairs["Skip"], 0)
+                    seen[f"finish then {type(decisions[index + 1]).__name__}"] += 1
+            for member, primary, fallback in zip(ctx.crew, primaries(decisions), without_items):
+                end = member.training_end
+                if end is not None and end.utcoffset() != timedelta(0):
+                    seen["non-UTC training_end"] += 1
+                if isinstance(primary, Skip):
+                    seen[primary.reason_code] += 1
+                # Variants come from the consumable-free plan, so a Skip a consumable replaced still counts.
+                if isinstance(fallback, Skip):
+                    if fallback.reason_code == "not_in_training_room":
+                        seen["move to" if fallback.detail.startswith("move to ") else "no training room"] += 1
+                    if fallback.reason_code == "design_missing":
+                        no_capacity = fallback.detail == "no training capacity"
+                        seen["no capacity" if no_capacity else "no design"] += 1
+                    if fallback.reason_code == "research_missing":
+                        design_gate = "requires research" in fallback.detail
+                        seen["design research" if design_gate else "band research"] += 1
+                if isinstance(primary, StartTraining):
+                    slot, tier = _oracle_facts(ctx, PROPERTY_STRATEGY, member)["band"]
+                    seen[f"start {slot} T{tier}"] += 1
+                if isinstance(primary, UseConsumable):
+                    seen[f"{TIER_OF_ITEM[primary.item_design_id]} consumable"] += 1
+                    seen[f"consumable replaced {fallback.reason_code}"] += 1
+        expected = [*SKIP_CODES, "FinishTraining", "StartTraining", "UseConsumable", "Skip"]
+        expected += [f"start {slot} T{tier}" for _low, _high, slot, tier in ORACLE_BANDS]
+        expected += ["finish then StartTraining", "finish then Skip", "finish then UseConsumable"]
+        expected += ["move to", "no training room", "no capacity", "no design", "design research", "band research"]
+        expected += ["Common consumable", "Hero consumable"]
+        expected += [
+            f"consumable replaced {code}"
+            for code in ("training_in_progress", "complete", "research_missing", "design_missing")
+        ]
+        expected += ["non-UTC training_end", "duplicate character id", "contended stock changed the plan"]
+        for label in expected:
+            with self.subTest(label=label):
+                self.assertGreaterEqual(seen[label], 3, dict(seen))
 
 
 if __name__ == "__main__":

@@ -2,19 +2,23 @@ from __future__ import annotations
 
 """Tests for sdk.training.parse — tolerant XML-dict to training model conversion (synthetic fixtures only)."""
 
+import inspect
 import os
 import random
 import unittest
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest import mock
 
 import xmltodict
 
 from sdk.training.model import CrewState, FinishTraining, Skip, StartTraining, TrainingDesign, UseConsumable
+import sdk.training.parse as parse_module
 from sdk.training.parse import (
     build_context,
     classify_payload,
+    classify_payloads,
     extract_collection,
     parse_consumable_designs,
     parse_crew,
@@ -35,6 +39,23 @@ FIXTURE_NOW = datetime(2026, 3, 1, 12, 0, tzinfo=UTC)
 
 def load(name: str) -> dict:
     return xmltodict.parse((FIXTURES / name).read_text(encoding="utf-8"), xml_attribs=True)
+
+
+def summarize(decisions) -> list[tuple]:
+    """(kind, character id, reason code | design id | item id) per decision; wording-independent."""
+    rows: list[tuple] = []
+    for decision in decisions:
+        if isinstance(decision, FinishTraining):
+            rows.append(("finish", decision.character_id, None))
+        elif isinstance(decision, StartTraining):
+            rows.append(("start", decision.character_id, decision.training_design_id))
+        elif isinstance(decision, UseConsumable):
+            rows.append(("use", decision.character_id, decision.item_design_id))
+        elif isinstance(decision, Skip):
+            rows.append(("skip", decision.character_id, decision.reason_code))
+        else:
+            rows.append(("other", decision))
+    return rows
 
 
 def fixture_context():
@@ -131,6 +152,54 @@ class TestCollections(unittest.TestCase):
             with self.subTest(raw=raw):
                 self.assertEqual(classify_payload(raw, "TrainingDesign"), expected)
         self.assertEqual(classify_payload({"Designs": None}, "TrainingDesign", "Designs"), "empty")
+
+    def test_classify_payload_empty_envelope_for_every_item_key(self) -> None:
+        # Regression: the default container was item_key + "s", so an empty <Researches/> read as "Researchs" and
+        # was reported as a broken response.
+        containers = {
+            "Character": "Characters",
+            "CharacterDesign": "CharacterDesigns",
+            "TrainingDesign": "TrainingDesigns",
+            "Room": "Rooms",
+            "RoomDesign": "RoomDesigns",
+            "Research": "Researches",
+            "ResearchDesign": "ResearchDesigns",
+            "Item": "Items",
+            "ItemDesign": "ItemDesigns",
+        }
+        for item_key, container in containers.items():
+            with self.subTest(item_key=item_key):
+                self.assertEqual(classify_payload({"Service": {"List": {container: None}}}, item_key), "empty")
+                self.assertEqual(classify_payload({"Service": {"List": {container: {}}}}, item_key), "empty")
+                record = {"Service": {"List": {container: {item_key: {"@Id": "1"}}}}}
+                self.assertEqual(classify_payload(record, item_key), "ok")
+                self.assertEqual(classify_payload({"Service": {"List": {"Other": None}}}, item_key), "error")
+        ship = load("ship_empty.xml")
+        self.assertEqual(classify_payload(ship, "Research"), "empty")
+        self.assertEqual(classify_payload(ship, "Room"), "empty")
+
+    def test_classify_payloads_binds_item_keys_to_build_context_names(self) -> None:
+        context_names = set(inspect.signature(build_context).parameters) - {"now"}
+        everything = classify_payloads(**{name: None for name in context_names | {"item_designs_raw"}})
+        self.assertEqual(set(everything), context_names | {"item_designs_raw"})
+        self.assertEqual(set(everything.values()), {"error"})
+        ship = load("ship_empty.xml")
+        result = classify_payloads(
+            rooms_raw=ship,
+            researches_raw=ship,
+            training_designs_raw=load("training_designs_list.xml"),
+            characters_raw=load("training_designs_error.xml"),
+        )
+        expected = {
+            "rooms_raw": "empty",
+            "researches_raw": "empty",
+            "training_designs_raw": "ok",
+            "characters_raw": "error",
+        }
+        self.assertEqual(dict(result), expected)
+        self.assertEqual(dict(classify_payloads()), {})
+        with self.assertRaises(TypeError):
+            classify_payloads(research_raw=ship)  # mistyped keyword
 
 
 def designs_envelope(records) -> dict:
@@ -527,27 +596,37 @@ class TestFixtures(unittest.TestCase):
         self.assertEqual(dict(ctx.items), {9101: 2, 9102: 1, 9104: 7})
         self.assertEqual(ctx.rooms[13], "Galaxy Gym Annex")
         self.assertEqual(ctx.now, FIXTURE_NOW)
-        expected = (
-            StartTraining(1001, 101, "primary T1 Read Expert Weapon Theory at 20% in academy"),
-            FinishTraining(1002, "training ended at 2026-03-01 11:30:00+00:00"),
-            StartTraining(1002, 103, "primary T2 Crew vs Wild at 55% in gym"),
-            Skip(1003, "not_in_training_room", "room 'Galaxy Gym Annex' is not a training room"),
-            Skip(1004, "training_in_progress", "training ends at 2026-03-01 13:15:30.123456+00:00"),
-            Skip(1005, "not_in_training_room", "room None is not a training room"),
-            StartTraining(1006, 106, "primary T1 Big Book of Science at 50% in academy"),
-            Skip(1007, "unknown_role", "'Rando Crew' has no training role"),
-            Skip(1008, "design_missing", "no training capacity"),
-            Skip(1009, "research_missing", "Space Marine requires research Advanced Training"),
-        )
-        self.assertEqual(plan_training(ctx), expected)
+        # Summaries only: the planner's reason/detail wording is pinned in test_training_planner, not here.
+        expected = [
+            ("start", 1001, 101),
+            ("finish", 1002, None),
+            ("start", 1002, 103),
+            ("skip", 1003, "not_in_training_room"),
+            ("skip", 1004, "training_in_progress"),
+            ("skip", 1005, "not_in_training_room"),
+            ("start", 1006, 106),
+            ("skip", 1007, "unknown_role"),
+            ("skip", 1008, "design_missing"),
+            ("skip", 1009, "research_missing"),
+        ]
+        self.assertEqual(summarize(plan_training(ctx)), expected)
 
     def test_build_context_fixture_golden_with_consumables(self) -> None:
         consumables = parse_consumable_designs(load("item_designs.xml"))
         self.assertEqual(dict(consumables), {("WPN", "Common"): 9101, ("HP", "Hero"): 9102})
         decisions = plan_training(fixture_context(), with_consumables(DEFAULT_STRATEGY, consumables))
-        by_crew = {d.character_id: d for d in decisions if not isinstance(d, FinishTraining)}
-        self.assertEqual(by_crew[1004], UseConsumable(1004, 9101, "Common WPN consumable at 10% with fatigue 0"))
-        self.assertEqual(sum(isinstance(d, UseConsumable) for d in decisions), 1)
+        rows = summarize(decisions)
+        self.assertIn(("use", 1004, 9101), rows)
+        self.assertEqual([row for row in rows if row[0] == "use"], [("use", 1004, 9101)])
+
+    def test_build_context_parses_rooms_once(self) -> None:
+        # Regression: build_context parsed the room payloads twice (once for crew names, once for ctx.rooms).
+        with mock.patch.object(parse_module, "parse_rooms", wraps=parse_module.parse_rooms) as spy:
+            ctx = fixture_context()
+        self.assertEqual(spy.call_count, 1)
+        for crew in ctx.crew:
+            with self.subTest(character_id=crew.character_id):
+                self.assertEqual(crew.room_name, ctx.rooms.get(crew.room_id) if crew.room_id is not None else None)
 
 
 FUZZ_KEYS = (

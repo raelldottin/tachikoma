@@ -4,7 +4,9 @@
   Because of those mapping fields the objects compare by value but are not hashable.
 - Datetimes (``CrewState.training_end``, ``TrainingContext.now``) must be timezone-aware; naive values raise
   ValueError. ``sdk.training.parse`` always produces aware UTC datetimes.
-- ``CrewState.stats`` keys are the nine bare ``*Improvement`` names, never the XML ``@``-prefixed attributes.
+- ``CrewState.stats`` keys must be among the nine bare ``*Improvement`` names (``CANONICAL_STATS``); the XML
+  ``@``-prefixed attributes and any other key raise ValueError, so a mis-keyed caller fails loudly instead of
+  planning every crew at 0%.
 - ``Skip.reason_code`` must be one of ``SKIP_CODES`` (a closed set).
 """
 
@@ -50,7 +52,8 @@ SKIP_CODES: frozenset[str] = frozenset(
 )
 
 
-def _frozen_mapping(value: Mapping) -> Mapping:
+def frozen_mapping(value: Mapping) -> Mapping:
+    """A read-only copy of ``value`` (the package's one mapping normaliser)."""
     return MappingProxyType(dict(value))
 
 
@@ -86,10 +89,13 @@ class CrewState:
     training_end: datetime | None
 
     def __post_init__(self) -> None:
-        bad = sorted(key for key in self.stats if key.startswith("@"))
-        if bad:
-            raise ValueError(f"stat keys must not carry the XML '@' prefix: {bad}")
-        object.__setattr__(self, "stats", _frozen_mapping(self.stats))
+        prefixed = sorted(key for key in self.stats if key.startswith("@"))
+        if prefixed:
+            raise ValueError(f"stat keys must not carry the XML '@' prefix: {prefixed}")
+        unknown = sorted(set(self.stats) - set(CANONICAL_STATS))
+        if unknown:
+            raise ValueError(f"stat keys must be among CANONICAL_STATS, got {unknown}")
+        object.__setattr__(self, "stats", frozen_mapping(self.stats))
         if self.training_end is not None:
             _require_aware(self.training_end, "training_end")
 
@@ -118,9 +124,9 @@ class TrainingContext:
         _require_aware(self.now, "now")
         object.__setattr__(self, "crew", tuple(self.crew))
         object.__setattr__(self, "designs", tuple(self.designs))
-        object.__setattr__(self, "rooms", _frozen_mapping(self.rooms))
-        object.__setattr__(self, "research_levels", _frozen_mapping(self.research_levels))
-        object.__setattr__(self, "items", _frozen_mapping(self.items))
+        object.__setattr__(self, "rooms", frozen_mapping(self.rooms))
+        object.__setattr__(self, "research_levels", frozen_mapping(self.research_levels))
+        object.__setattr__(self, "items", frozen_mapping(self.items))
 
 
 @dataclass(frozen=True)
