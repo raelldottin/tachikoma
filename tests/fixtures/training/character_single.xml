@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Synthetic, sanitized fixture: a single Character element (xmltodict yields a dict, not a list). -->
+<CharacterService>
+  <ListAllCharactersOfUser>
+    <Characters>
+      <Character CharacterId="2001" CharacterName="Delish" CharacterDesignId="501" Level="10" RoomId="11" Fatigue="0" TrainingDesignId="0" TrainingEndDate="" HpImprovement="0" PilotImprovement="0" RepairImprovement="0" WeaponImprovement="5" ScienceImprovement="0" EngineImprovement="0" AttackImprovement="0" AbilityImprovement="0" StaminaImprovement="0" />
+    </Characters>
+  </ListAllCharactersOfUser>
+</CharacterService>

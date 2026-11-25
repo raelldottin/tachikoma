@@ -370,6 +370,26 @@ class EarlyStopTests(OfflineTestCase):
                 make_plan(stop_thresholds=thresholds)
 
 
+class SnapshotRecordTests(OfflineTestCase):
+    def test_crew_stat_improvements_and_capacity_survive_a_round_trip(self):
+        stats = {"@HpImprovement": "1", "@PilotImprovement": "2", "@RepairImprovement": "4",
+                 "@WeaponImprovement": "8", "@ScienceImprovement": "16", "@EngineImprovement": "32",
+                 "@AttackImprovement": "64", "@AbilityImprovement": "128", "@StaminaImprovement": "256"}
+        crew = [{"@CharacterId": "c1", "@TrainingEndDate": "", "@TrainingCapacity": "600", **stats},
+                {"@CharacterId": "c2"}]
+        snapshot = build_snapshot(ALIAS, NOW, "synthetic-fixture", crew=crew)
+        loaded = tr.snapshot_from_dict(json.loads(json.dumps(snapshot.to_dict())))
+        self.assertEqual(loaded, snapshot)
+        self.assertEqual((loaded.crew[0].stat_total, loaded.crew[0].training_capacity), (511, 600))
+        self.assertIsNone(loaded.crew[1].stat_total)
+
+    def test_non_integer_stat_is_refused(self):
+        record = build_snapshot(ALIAS, NOW, "synthetic-fixture", crew=[{"@CharacterId": "c1"}]).to_dict()
+        record["crew"][0]["hp_improvement"] = "1"
+        with self.assertRaises(tr.TrialInputError):
+            tr.snapshot_from_dict(record)
+
+
 class CommandLineTests(OfflineTestCase):
     # Verifies: S07-R7, S07-R8
     def test_cli_writes_json_and_markdown_from_files(self):
