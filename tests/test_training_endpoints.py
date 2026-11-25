@@ -613,9 +613,10 @@ class TestResearchLevel(EndpointCase):
 
     def test_lists_are_fetched_once_when_absent(self):
         self.given(researches(("1", "900", "Completed")), research_designs(("900", "Fitness 201")))
-        for minimum in (101, 201, 202, 203):
-            self.client.hasResearch("Fitness", minimum)
-            self.client.hasResearch("Education", minimum)
+        answers = [(self.client.hasResearch("Fitness", minimum), self.client.hasResearch("Education", minimum))
+                   for minimum in (101, 201, 202, 203)]
+        # The cached lists keep answering correctly, not just quietly: Fitness 201 is done, Education never started.
+        self.assertEqual(answers, [(True, False), (True, False), (False, False), (False, False)])
         self.assertEqual(self.client.listAllResearches.call_count, 1)
         self.assertEqual(self.client.listAllResearchDesigns2.call_count, 1)
 
