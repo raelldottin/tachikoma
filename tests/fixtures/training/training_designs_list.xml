@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Synthetic, sanitized fixture: fake ids; only in-game training design names. -->
+<TrainingService>
+  <ListAllTrainingDesigns2>
+    <TrainingDesigns>
+      <TrainingDesign TrainingDesignId="101" TrainingName="Read Expert Weapon Theory" Rank="1" Duration="3600" RequiredResearchDesignId="0" RequiredRoomType="Academy" WeaponChance="80" HpChance="5" />
+      <TrainingDesign TrainingDesignId="102" TrainingName="Steam Yoga" Rank="1" Duration="3600" RequiredResearchDesignId="0" StaminaChance="70" />
+      <TrainingDesign TrainingDesignId="103" TrainingName="Crew vs Wild" Rank="2" Duration="11700" RequiredResearchDesignId="0" StaminaChance="50" HpChance="50" />
+      <TrainingDesign TrainingDesignId="104" TrainingName="Bench Press" Rank="1" Duration="3600" RequiredResearchDesignId="0" RequiredRoomType="Gym" HpChance="10" AttackChance="60" StaminaChance="30" />
+      <TrainingDesign TrainingDesignId="105" TrainingName="Muscle Beach" Rank="2" Duration="11700" RequiredResearchDesignId="0" AttackChance="70" />
+      <TrainingDesign TrainingDesignId="106" TrainingName="Big Book of Science" Rank="1" Duration="3600" RequiredResearchDesignId="0" RequiredRoomType="Academy" ScienceChance="80" />
+      <TrainingDesign TrainingDesignId="107" TrainingName="Scientific Summit" Rank="2" Duration="11700" RequiredResearchDesignId="0" ScienceChance="70" />
+      <TrainingDesign TrainingDesignId="108" TrainingName="Space Marine" Rank="3" Duration="44100" RequiredResearchDesignId="40" HpChance="40" AttackChance="40" />
+    </TrainingDesigns>
+  </ListAllTrainingDesigns2>
+</TrainingService>

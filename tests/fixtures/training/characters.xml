@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Synthetic, sanitized fixture: fake character/design/room ids; crew names are in-game character design names
+     used by the role table, plus one invented name. Relative to the test clock 2026-03-01T12:00:00Z. -->
+<CharacterService>
+  <ListAllCharactersOfUser>
+    <Characters>
+      <!-- idle weapons crew in the Academy: starts primary T1 -->
+      <Character CharacterId="1001" CharacterName="Delish" CharacterDesignId="501" Level="20" RoomId="11" Fatigue="0" TrainingDesignId="0" TrainingEndDate="" HpImprovement="0" PilotImprovement="0" RepairImprovement="0" WeaponImprovement="20" ScienceImprovement="0" EngineImprovement="0" AttackImprovement="0" AbilityImprovement="0" StaminaImprovement="0" />
+      <!-- rusher whose training ended 30 minutes ago in Galaxy Gym: finish, then primary T2 -->
+      <Character CharacterId="1002" CharacterName="Huge Hellaluya" CharacterDesignId="502" Level="25" RoomId="12" Fatigue="0" TrainingDesignId="104" TrainingEndDate="2026-03-01T11:30:00" HpImprovement="20" PilotImprovement="0" RepairImprovement="0" WeaponImprovement="0" ScienceImprovement="0" EngineImprovement="0" AttackImprovement="15" AbilityImprovement="0" StaminaImprovement="20" />
+      <!-- rusher in "Galaxy Gym Annex": not a training room (no substring matching) -->
+      <Character CharacterId="1003" CharacterName="Cyber Duck" CharacterDesignId="501" Level="15" RoomId="13" Fatigue="0" TrainingDesignId="0" TrainingEndDate="" HpImprovement="5" PilotImprovement="0" RepairImprovement="0" WeaponImprovement="0" ScienceImprovement="0" EngineImprovement="0" AttackImprovement="0" AbilityImprovement="0" StaminaImprovement="0" />
+      <!-- weapons crew mid-training; end carries 7 fractional digits -->
+      <Character CharacterId="1004" CharacterName="Galactic Succubus" CharacterDesignId="501" Level="18" RoomId="11" Fatigue="0" TrainingDesignId="101" TrainingEndDate="2026-03-01T13:15:30.1234567" HpImprovement="0" PilotImprovement="0" RepairImprovement="0" WeaponImprovement="10" ScienceImprovement="0" EngineImprovement="0" AttackImprovement="0" AbilityImprovement="0" StaminaImprovement="0" />
+      <!-- engines crew with no RoomId -->
+      <Character CharacterId="1005" CharacterName="Galactic Sprite" CharacterDesignId="501" Level="12" Fatigue="0" TrainingDesignId="0" TrainingEndDate="" HpImprovement="0" PilotImprovement="0" RepairImprovement="0" WeaponImprovement="0" ScienceImprovement="0" EngineImprovement="30" AttackImprovement="0" AbilityImprovement="0" StaminaImprovement="0" />
+      <!-- shields crew in Lunar College with a malformed stat (counts as 0) -->
+      <Character CharacterId="1006" CharacterName="Mistycball" CharacterDesignId="503" Level="22" RoomId="15" Fatigue="0" TrainingDesignId="0" TrainingEndDate="" HpImprovement="abc" PilotImprovement="0" RepairImprovement="0" WeaponImprovement="0" ScienceImprovement="40" EngineImprovement="0" AttackImprovement="0" AbilityImprovement="0" StaminaImprovement="0" />
+      <!-- invented name: no training role -->
+      <Character CharacterId="1007" CharacterName="Rando Crew" CharacterDesignId="501" Level="5" RoomId="14" Fatigue="0" TrainingDesignId="0" TrainingEndDate="" HpImprovement="0" PilotImprovement="0" RepairImprovement="0" WeaponImprovement="0" ScienceImprovement="0" EngineImprovement="0" AttackImprovement="0" AbilityImprovement="0" StaminaImprovement="0" />
+      <!-- character design 999 is not in the design list: capacity 0 -->
+      <Character CharacterId="1008" CharacterName="Cyber Duck" CharacterDesignId="999" Level="9" RoomId="14" Fatigue="0" TrainingDesignId="0" TrainingEndDate="" HpImprovement="3" PilotImprovement="0" RepairImprovement="0" WeaponImprovement="0" ScienceImprovement="0" EngineImprovement="0" AttackImprovement="0" AbilityImprovement="0" StaminaImprovement="0" />
+      <!-- rusher at 66% in GYM: Space Marine needs Advanced Training, which is still being researched -->
+      <Character CharacterId="1009" CharacterName="Cyber Duck" CharacterDesignId="501" Level="30" RoomId="14" Fatigue="0" TrainingDesignId="0" TrainingEndDate="" HpImprovement="30" PilotImprovement="0" RepairImprovement="0" WeaponImprovement="0" ScienceImprovement="0" EngineImprovement="0" AttackImprovement="20" AbilityImprovement="0" StaminaImprovement="16" />
+    </Characters>
+  </ListAllCharactersOfUser>
+</CharacterService>

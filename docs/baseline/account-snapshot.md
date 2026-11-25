@@ -18,6 +18,7 @@
 
 - `None` means unknown, never "no change".
 - `crew_training` lists `(design, end)` changes, but only for crew whose training was observed in both snapshots.
+- `crew_stat_total` lists the change in a crew member's `stat_total` (the sum of the nine stat improvements), but only for crew observed in both snapshots with every stat known on both sides, and only when it changed.
 - A keyed section that is missing on either side is listed in `unknown_sections`, and its mapping is empty. A missing section is therefore never reported as rooms or items being removed.
 - An item absent from an observed inventory counts as quantity 0. An item with an unparseable quantity yields `None`.
 
@@ -28,7 +29,7 @@
 | `trophies` | `User/@Trophy` |
 | `hull_level` | `Ship/@ShipLevel` |
 | `rooms` | `Room/@RoomId`, `@RoomDesignId`, `@RoomStatus` |
-| `crew` | `@CharacterId`, `@CharacterDesignId`, `@CharacterName`, `@Level`, `@Fatigue`, `@RoomId`, `@TrainingEndDate`, `@TrainingDesignId` (training is observed only when `@TrainingEndDate` is present; empty means idle, and `0` means no design) |
+| `crew` | `@CharacterId`, `@CharacterDesignId`, `@CharacterName`, `@Level`, `@Fatigue`, `@RoomId`, `@TrainingEndDate`, `@TrainingDesignId` (training is observed only when `@TrainingEndDate` is present; empty means idle, and any zero (`0`, `00`, ` 0`) means no design; other text is kept as reported); the stat improvements `@HpImprovement`, `@PilotImprovement`, `@RepairImprovement`, `@WeaponImprovement`, `@ScienceImprovement`, `@EngineImprovement`, `@AttackImprovement`, `@AbilityImprovement`, `@StaminaImprovement` (each `None` when absent or unparseable; `stat_total` is their sum, or `None` if any is unknown); `@TrainingCapacity`, read only if the character record carries it (capacity is a per-design value from `listAllCharacterDesigns2`, which the provider does not read, so it is normally `None`). `training_end_utc` parses `@TrainingEndDate` as a UTC server time, or `None` when it is empty or unreadable |
 | `research` | `Research/@ResearchDesignId`, `@ResearchState` |
 | `inventory` | `@ItemDesignId`, `@Quantity` |
 | `resources` | `minerals`, `gas`, `starbux`, supplied by the caller from `Client` totals |
@@ -64,13 +65,13 @@ These attribute names come from existing client code and mocked tests. Whether t
 - **Load.** `load_baseline(path)` returns an `AccountSnapshot` equal to the one written, so `diff_snapshots(load_baseline(path), later)` works. `load_baseline_file(path)` also returns the recorded `game_version`. Loading is strict: an unknown or missing key, a wrong type, a time not in UTC, or a section whose data disagrees with its completeness raises `BaselineError`.
 - **Sanitized.** Nothing is written or loaded if the text fails the secret scan below. The error names the rule that matched, never the value. The snapshot whitelist already leaves out e-mail, tokens, device keys, the raw user id and the player's name. `game_identity` is kept, because it is a keyed fingerprint; a raw user id there is refused.
 
-### Format (version 1)
+### Format (version 2)
 
 Keys are sorted and indented by two spaces, so the same snapshot always produces the same bytes.
 
 | Key | Value |
 | --- | --- |
-| `format`, `format_version` | `"tachikoma-account-baseline"`, `1` |
+| `format`, `format_version` | `"tachikoma-account-baseline"`, `2` |
 | `account_alias` | The lowercase alias; one account per file |
 | `observed_at` | ISO 8601 time in UTC (`+00:00`), with microseconds when present |
 | `game_version` | Game version of the observation, or `null` |
@@ -81,10 +82,12 @@ Keys are sorted and indented by two spaces, so the same snapshot always produces
 | `resources` | `{"minerals", "gas", "starbux"}`, each an integer or `null` |
 | `rooms` | List of `{"room_id", "design_id", "status"}`, or `null` when the section is missing |
 | `research` | List of `{"design_id", "state"}`, or `null` |
-| `crew` | List of `{"character_id", "design_id", "name", "level", "fatigue", "room_id", "training_observed", "training_design_id", "training_end"}`, or `null` |
+| `crew` | List of `{"character_id", "design_id", "name", "level", "fatigue", "room_id", "training_observed", "training_design_id", "training_end", "hp_improvement", "pilot_improvement", "repair_improvement", "weapon_improvement", "science_improvement", "engine_improvement", "attack_improvement", "ability_improvement", "stamina_improvement", "training_capacity"}`, or `null` |
 | `inventory` | List of `{"item_design_id", "quantity"}`, or `null` |
 | `completeness` | Every section (`profile`, `ship`, `resources`, `crew`, `rooms`, `research`, `inventory`) mapped to `complete`, `partial` or `missing` |
 | `notes` | Builder notes, such as skipped records |
+
+Version 1 files still load; their crew records lack the ten stat keys, which load as `null`. Files are always written as version 2, which code from before version 2 cannot read.
 
 A list section is `null` exactly when its completeness is `missing`. An observed section with no records is `[]`. Values inside a record are `null` when unparseable, never `0`. A room's level is not a separate field: the room design id identifies it. `crew.name` is the crew member's name, not the player's.
 
