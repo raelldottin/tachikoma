@@ -813,6 +813,7 @@ CHARACTER_DESIGNS = "/CharacterService/ListAllCharacterDesigns2"
 ROOMS = "/RoomService/ListRoomsViaAccessToken"
 TRAINING_DESIGNS = "/TrainingService/ListAllTrainingDesigns2"
 RESEARCHES = "/ResearchService/ListAllResearches"
+RESEARCH_DESIGNS = "/ResearchService/ListAllResearchDesigns2"
 FINISH_TRAINING = "/TrainingService/FinishTraining"
 ADD_TRAINING = "/TrainingService/AddTraining"
 
@@ -887,9 +888,26 @@ def _characters_reply(characters):
     return _reply("CharacterService", "ListAllCharactersOfUser", "Characters", "Character", characters)
 
 
-def _research_reply(level):
-    research = {"@ResearchName": "Fitness Lab", "@ResearchLevel": level}
-    return _reply("ResearchService", "ListAllResearches", "Researches", "Research", [research])
+# Fitness course -> research design id. Per-account ListAllResearches records carry only the design id and state;
+# the course name ("Fitness 203") lives on the ListAllResearchDesigns2 design, so the client joins the two.
+FITNESS_DESIGNS = {"101": "7", "201": "8", "202": "9", "203": "10"}
+
+
+def _research_reply(*completed_courses):
+    """ListAllResearches with the given Fitness courses completed; no courses means no training research."""
+    research = [
+        {"@ResearchId": f"70{index}", "@ResearchDesignId": FITNESS_DESIGNS[course], "@ResearchState": "Completed"}
+        for index, course in enumerate(completed_courses)
+    ]
+    return _reply("ResearchService", "ListAllResearches", "Researches", "Research", research)
+
+
+def _research_designs_reply():
+    designs = [
+        {"@ResearchDesignId": design_id, "@ResearchName": f"Fitness {course}", "@RootResearchDesignId": "7"}
+        for course, design_id in FITNESS_DESIGNS.items()
+    ]
+    return _reply("ResearchService", "ListAllResearchDesigns", "ResearchDesigns", "ResearchDesign", designs)
 
 
 def _training_designs_reply(designs):
@@ -941,7 +959,7 @@ class TestTrainingShapeGuards(unittest.TestCase):
             {
                 SETTINGS: (
                     '<SettingService><GetLatestSetting><Setting CharacterDesignVersion="7" '
-                    'TrainingDesignVersion="3"/></GetLatestSetting></SettingService>'
+                    'TrainingDesignVersion="3" ResearchDesignVersion="5"/></GetLatestSetting></SettingService>'
                 ),
                 CHARACTERS: _characters_reply(self.ROSTER),
                 CHARACTER_DESIGNS: _reply(
@@ -967,6 +985,7 @@ class TestTrainingShapeGuards(unittest.TestCase):
                 ),
                 TRAINING_DESIGNS: _training_designs_reply(self.TRAINING),
                 RESEARCHES: _research_reply("203"),
+                RESEARCH_DESIGNS: _research_designs_reply(),
             }
         )
         self.client = self.new_client()
@@ -1010,7 +1029,7 @@ class TestTrainingShapeGuards(unittest.TestCase):
             self.assertRegex(start_date, r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d$")
 
     def test_without_training_research_only_ungated_secondary_training_is_sent(self):
-        self.recorder.replies[RESEARCHES] = _research_reply("0")
+        self.recorder.replies[RESEARCHES] = _research_reply()
 
         self.assertIs(self.client.manageTraining(), True)
 
@@ -1091,12 +1110,12 @@ class TestTrainingShapeGuards(unittest.TestCase):
                 self.assertEqual(logs.output, expected)
                 self.assertEqual(self.recorder.posts(), [])
 
-    def test_character_list_error_reads_as_an_empty_roster(self):
-        # KNOWN DEFECT: the errorMessage reply still carries <CharacterService>, so it is accepted as a roster
-        # with no crew and the run counts training as done. Wave 2 may return False here instead.
+    def test_character_list_error_is_not_read_as_an_empty_roster(self):
+        # Regression (fixed in #279): the errorMessage reply still carries <CharacterService>; it used to be accepted
+        # as a roster with no crew, so the run counted training as done. listAllCharactersOfUser now refuses it.
         self.recorder.replies[CHARACTERS] = _error_reply(CHARACTERS)
 
-        self.assertIs(self.client.manageTraining(), True)
+        self.assertIs(self.client.manageTraining(), False)
 
         self.assertEqual(self.recorder.posts(), [])
 
