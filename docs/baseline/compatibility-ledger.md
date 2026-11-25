@@ -53,14 +53,14 @@ from sdk.compat import check_compatibility
 print(check_compatibility("0.999.60").render_text())
 ```
 
-For the shipped ledger of 36 entries:
+For the shipped ledger of 41 entries:
 
 | Target | Current | Weak at target | Stale | Unknown version | Weak only | Clean | Client behind target |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `0.999.55` | 9 | 1 | 0 | 26 | 22 | 9 | no |
-| `0.999.59` | 6 | 1 | 3 | 26 | 22 | 6 | no |
-| `0.999.60` | 6 | 0 | 4 | 26 | 22 | 6 | yes |
-| `1.0` | 5 | 0 | 5 | 26 | 22 | 5 | yes |
+| `0.999.55` | 9 | 1 | 0 | 31 | 27 | 9 | no |
+| `0.999.59` | 6 | 1 | 3 | 31 | 27 | 6 | no |
+| `0.999.60` | 6 | 0 | 4 | 31 | 27 | 6 | yes |
+| `1.0` | 5 | 0 | 5 | 31 | 27 | 5 | yes |
 
 `rule.client.declared-version` is `unverified`, so it is never `current`: up to `0.999.59` it is `weak_at_target`, and above that it is `stale`.
 
@@ -91,6 +91,18 @@ All five are `dynamically-demonstrated` at `1.0`, observed 2026-11-12, citing [t
 | `rule.battle.outcome-observed` | rule | `unverified`, `docs/baseline/action-catalog.md`: a finalise response is never evidence of a win, and live outcomes stay unknown |
 
 The live claim is README Battle Flow's statement that the three battle endpoints were verified with 5 accounts in CI run 31752041641, dated by commit 5377204. The [capability inventory](capability-inventory.md) classes it `live-claimed`: documentation, not re-verified. It records no game version, so every battle entry has an unknown version, even though `sdk/client.py` declared `0.999.59` at the time.
+
+### Training, crew and item endpoints
+
+| Entry | Kind | Evidence |
+| --- | --- | --- |
+| `endpoint.training.add-training` | endpoint | `unverified`, `sdk/client.py`: `TrainingService/AddTraining (trainingDesignId, characterId)`; the `add_training` action |
+| `endpoint.training.finish-training` | endpoint | `unverified`, `sdk/client.py`: `TrainingService/FinishTraining (characterId)`; the `finish_training` action |
+| `endpoint.crew.upgrade-character` | endpoint | `unverified`, `sdk/client.py`: `CharacterService/UpgradeCharacter (characterId)` |
+| `endpoint.item.activate-item3` | endpoint | `unverified`, `sdk/client.py`: `ItemService/ActivateItem3 (itemId, targetId)`, live-unverified (no capture confirms its parameters or reply); `useConsumable` (the `use_consumable` action) calls it |
+| `endpoint.crew.list-all-characters-of-user` | endpoint | `unverified`, `sdk/client.py`: `CharacterService/ListAllCharactersOfUser`; the stat improvement attribute names come from `Client.manageTraining` |
+
+Each entry cites only its `Client` wrapper. `run.py --capture-reads` calls `listAllCharactersOfUser` (see [the live captures](../../tests/fixtures/live_sanitized/README.md)), but no character capture is committed, so the training and stat improvement attributes the snapshot reads are not confirmed on a live record. No version or date is recorded, so all five are `unknown_version` and `weak_only` at every target.
 
 ### Marketplace path
 

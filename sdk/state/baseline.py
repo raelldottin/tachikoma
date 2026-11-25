@@ -18,6 +18,10 @@ traffic. It only serialises and parses snapshots that were already built.
 A section that was not observed is ``null`` in the file, never ``0`` or an
 empty list. The snapshot's ``game_identity`` fingerprint is kept; a raw user
 id is refused.
+
+Files are written as format version 2, whose crew records add the nine stat
+improvements and ``training_capacity``. Version 1 files still load; their crew
+members get ``None`` for those ten fields.
 """
 
 from __future__ import annotations
@@ -45,7 +49,8 @@ from sdk.state.snapshot import (
 )
 
 BASELINE_FORMAT = "tachikoma-account-baseline"
-BASELINE_FORMAT_VERSION = 1
+BASELINE_FORMAT_VERSION = 2
+SUPPORTED_FORMAT_VERSIONS = (1, 2)
 FILENAME_TIME_FORMAT = "%Y%m%dT%H%M%SZ"
 LIST_SECTIONS = ("crew", "rooms", "research", "inventory")
 
@@ -79,7 +84,7 @@ _TOP_LEVEL_KEYS = frozenset(
     }
 )
 _RESOURCE_KEYS = ("minerals", "gas", "starbux")
-_CREW_KEYS = (
+_CREW_KEYS_V1 = (
     "character_id",
     "design_id",
     "name",
@@ -90,6 +95,20 @@ _CREW_KEYS = (
     "training_design_id",
     "training_end",
 )
+# Added by format version 2.
+_CREW_STAT_KEYS = (
+    "hp_improvement",
+    "pilot_improvement",
+    "repair_improvement",
+    "weapon_improvement",
+    "science_improvement",
+    "engine_improvement",
+    "attack_improvement",
+    "ability_improvement",
+    "stamina_improvement",
+    "training_capacity",
+)
+_CREW_KEYS = _CREW_KEYS_V1 + _CREW_STAT_KEYS
 _ROOM_KEYS = ("room_id", "design_id", "status")
 _RESEARCH_KEYS = ("design_id", "state")
 _INVENTORY_KEYS = ("item_design_id", "quantity")
@@ -353,7 +372,9 @@ def _rows(record: Mapping[str, Any], name: str, keys: tuple[str, ...], completen
 def _parse_record(record: Any) -> tuple[Optional[str], AccountSnapshot]:
     if not isinstance(record, Mapping) or set(record) != _TOP_LEVEL_KEYS:
         raise BaselineError("baseline must hold exactly the documented top-level keys")
-    if record["format"] != BASELINE_FORMAT or record["format_version"] != BASELINE_FORMAT_VERSION:
+    version = record["format_version"]
+    # type() is exact: True == 1 and 2.0 == 2, but neither is a format version.
+    if record["format"] != BASELINE_FORMAT or type(version) is not int or version not in SUPPORTED_FORMAT_VERSIONS:
         raise BaselineError("unsupported baseline format or version")
 
     alias = record["account_alias"]
@@ -384,6 +405,11 @@ def _parse_record(record: Any) -> tuple[Optional[str], AccountSnapshot]:
     def text(value: Any, label: str) -> Optional[str]:
         return _optional_text(value, label)
 
+    def crew_stats(row: Mapping[str, Any]) -> dict[str, Optional[int]]:
+        if version == 1:
+            return {}
+        return {key: _opt_int(row[key], f"crew.{key}") for key in _CREW_STAT_KEYS}
+
     crew = tuple(
         CrewMember(
             character_id=_req_text(row["character_id"], "crew.character_id"),
@@ -395,8 +421,9 @@ def _parse_record(record: Any) -> tuple[Optional[str], AccountSnapshot]:
             training_observed=_bool(row["training_observed"], "crew.training_observed"),
             training_design_id=text(row["training_design_id"], "crew.training_design_id"),
             training_end=text(row["training_end"], "crew.training_end"),
+            **crew_stats(row),
         )
-        for row in _rows(record, "crew", _CREW_KEYS, completeness["crew"])
+        for row in _rows(record, "crew", _CREW_KEYS_V1 if version == 1 else _CREW_KEYS, completeness["crew"])
     )
     rooms = tuple(
         Room(
