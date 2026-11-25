@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Synthetic, sanitized fixture: fake character design ids. -->
+<CharacterService>
+  <ListAllCharacterDesigns>
+    <CharacterDesigns>
+      <CharacterDesign CharacterDesignId="501" CharacterDesignName="Synthetic Legend" TrainingCapacity="100" Rarity="Legendary" />
+      <CharacterDesign CharacterDesignId="502" CharacterDesignName="Synthetic Epic A" TrainingCapacity="100" Rarity="Epic" />
+      <CharacterDesign CharacterDesignId="503" CharacterDesignName="Synthetic Epic B" TrainingCapacity="80" Rarity="Epic" />
+    </CharacterDesigns>
+  </ListAllCharacterDesigns>
+</CharacterService>
