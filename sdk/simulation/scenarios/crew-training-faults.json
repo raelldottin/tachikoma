@@ -1,0 +1,253 @@
+{
+  "name": "crew-training-faults",
+  "seed": 12,
+  "start": "2027-06-01T06:00:00+00:00",
+  "days": 2,
+  "execute": true,
+  "design": {
+    "room_designs": [
+      {
+        "@RoomDesignId": "100",
+        "@RoomName": "Engine"
+      },
+      {
+        "@RoomDesignId": "101",
+        "@UpgradeFromRoomDesignId": "100",
+        "@PriceString": "mineral:300"
+      },
+      {
+        "@RoomDesignId": "102",
+        "@UpgradeFromRoomDesignId": "101",
+        "@PriceString": "mineral:600"
+      },
+      {
+        "@RoomDesignId": "200",
+        "@RoomName": "Shield"
+      },
+      {
+        "@RoomDesignId": "201",
+        "@UpgradeFromRoomDesignId": "200",
+        "@PriceString": "mineral:400"
+      },
+      {
+        "@RoomDesignId": "300",
+        "@RoomName": "Gym"
+      },
+      {
+        "@RoomDesignId": "301",
+        "@UpgradeFromRoomDesignId": "300",
+        "@PriceString": "mineral:2000"
+      },
+      {
+        "@RoomDesignId": "400",
+        "@RoomName": "Academy"
+      },
+      {
+        "@RoomDesignId": "500",
+        "@RoomName": "Bridge"
+      }
+    ],
+    "research_designs": [
+      {
+        "@ResearchDesignId": "510",
+        "@RootResearchDesignId": "510",
+        "@GasCost": "50"
+      },
+      {
+        "@ResearchDesignId": "520",
+        "@RootResearchDesignId": "520",
+        "@GasCost": "120"
+      },
+      {
+        "@ResearchDesignId": "610",
+        "@RootResearchDesignId": "610",
+        "@GasCost": "80"
+      }
+    ]
+  },
+  "registry": {
+    "version": 1,
+    "accounts": [
+      {
+        "alias": "alpha",
+        "objective": "grow",
+        "policy_id": "baseline-v1",
+        "credentials_secret": "ALPHA_AUTH",
+        "budgets": {
+          "minerals": 800,
+          "gas": 500,
+          "starbux": 0
+        },
+        "max_actions": 10
+      }
+    ]
+  },
+  "training": {
+    "fatigue_max": 100,
+    "fatigue_recovery_seconds": 7200,
+    "character_designs": [
+      {
+        "@CharacterDesignId": "cd-recruit",
+        "@CharacterDesignName": "Recruit",
+        "@Rarity": "Common",
+        "@TrainingCapacity": "50",
+        "@SpecialAbilityType": "None"
+      }
+    ],
+    "training_designs": [
+      {
+        "@TrainingDesignId": "5050",
+        "@TrainingName": "Bench Press",
+        "@Rank": "1",
+        "@TrainingStat": "Attack",
+        "@Duration": "3600",
+        "@Fatigue": "10",
+        "@MinGain": "1",
+        "@MaxGain": "3",
+        "@RequiredRoomDesignId": "300"
+      },
+      {
+        "@TrainingDesignId": "5051",
+        "@TrainingName": "Muscle Beach",
+        "@Rank": "2",
+        "@TrainingStat": "Attack",
+        "@Duration": "14400",
+        "@Fatigue": "25",
+        "@MinGain": "2",
+        "@MaxGain": "5",
+        "@RequiredRoomDesignId": "300",
+        "@RequiredResearchDesignId": "610"
+      },
+      {
+        "@TrainingDesignId": "5020",
+        "@TrainingName": "Big Book of Science",
+        "@Rank": "1",
+        "@TrainingStat": "Science",
+        "@Duration": "3600",
+        "@Fatigue": "10",
+        "@MinGain": "1",
+        "@MaxGain": "3",
+        "@RequiredRoomDesignId": "400"
+      }
+    ],
+    "item_designs": [
+      {
+        "@ItemDesignId": "901",
+        "@ItemName": "Grey ATK",
+        "@ConsumableStat": "Attack",
+        "@ConsumableGain": "1",
+        "@ConsumableFatigue": "0"
+      },
+      {
+        "@ItemDesignId": "950",
+        "@ItemName": "Rest Pill",
+        "@FatigueRecovery": "50"
+      }
+    ]
+  },
+  "accounts": {
+    "alpha": {
+      "minerals": 900,
+      "gas": 300,
+      "starbux": 5,
+      "trophies": 1200,
+      "rooms": [
+        {
+          "@RoomId": "r1",
+          "@RoomDesignId": "100",
+          "@RoomStatus": "Normal"
+        },
+        {
+          "@RoomId": "r2",
+          "@RoomDesignId": "200",
+          "@RoomStatus": "Normal"
+        },
+        {
+          "@RoomId": "r-gym",
+          "@RoomDesignId": "300",
+          "@RoomStatus": "Normal"
+        },
+        {
+          "@RoomId": "r-acad",
+          "@RoomDesignId": "400",
+          "@RoomStatus": "Normal"
+        },
+        {
+          "@RoomId": "r-bridge",
+          "@RoomDesignId": "500",
+          "@RoomStatus": "Normal"
+        }
+      ],
+      "research": [
+        {
+          "@ResearchDesignId": "610",
+          "@ResearchState": "Completed"
+        }
+      ],
+      "inventory": [
+        {
+          "@ItemId": "i1",
+          "@ItemDesignId": "901",
+          "@Quantity": "3"
+        },
+        {
+          "@ItemId": "i2",
+          "@ItemDesignId": "950",
+          "@Quantity": "1"
+        }
+      ],
+      "crew": [
+        {
+          "@CharacterId": "101",
+          "@CharacterDesignId": "cd-recruit",
+          "@CharacterName": "Ada",
+          "@RoomId": "r-gym",
+          "@Level": "1",
+          "@Fatigue": "0"
+        },
+        {
+          "@CharacterId": "102",
+          "@CharacterDesignId": "cd-recruit",
+          "@CharacterName": "Bo",
+          "@RoomId": "r-acad",
+          "@Level": "1",
+          "@Fatigue": "0"
+        },
+        {
+          "@CharacterId": "103",
+          "@CharacterDesignId": "cd-recruit",
+          "@CharacterName": "Cy",
+          "@RoomId": "r-bridge",
+          "@Level": "1",
+          "@Fatigue": "0"
+        }
+      ],
+      "faults": [
+        {
+          "kind": "contradicted-effect",
+          "method": "addTraining",
+          "day": 0,
+          "call": 1,
+          "training_design_id": "5020"
+        },
+        {
+          "kind": "reject",
+          "method": "addTraining",
+          "day": 0,
+          "call": 2
+        },
+        {
+          "kind": "raise",
+          "method": "finishTraining",
+          "day": 1,
+          "call": 1
+        },
+        {
+          "kind": "reject",
+          "method": "activateItem3",
+          "call": 1
+        }
+      ]
+    }
+  }
+}

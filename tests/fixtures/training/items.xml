@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Synthetic, sanitized fixture: fake item ids. -->
+<ItemService>
+  <ListItemsOfAShip>
+    <Items>
+      <Item ItemId="8001" ItemDesignId="9101" Quantity="2" />
+      <Item ItemId="8002" ItemDesignId="9102" />
+      <Item ItemId="8003" ItemDesignId="9104" Quantity="7" />
+    </Items>
+  </ListItemsOfAShip>
+</ItemService>

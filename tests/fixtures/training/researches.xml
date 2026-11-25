@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Synthetic, sanitized fixture: fake research ids. -->
+<ResearchService>
+  <ListAllResearches>
+    <Researches>
+      <Research ResearchId="7001" ResearchDesignId="11" ResearchState="Completed" />
+      <Research ResearchId="7002" ResearchDesignId="22" ResearchState="Completed" />
+      <Research ResearchId="7003" ResearchDesignId="40" ResearchState="Researching" />
+    </Researches>
+  </ListAllResearches>
+</ResearchService>
