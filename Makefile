@@ -11,12 +11,12 @@ TEST_PYTHON = $(if $(findstring /,$(PYTHON)),$(abspath $(PYTHON)),$(or $(shell c
 # `python -m unittest tests.<module>` there, but covers the other forms only partly.
 IN_TEMP_DIR = tmp=$$(mktemp -d) && [ -d "$$tmp" ] && trap 'rm -rf "$$tmp"' EXIT && cd "$$tmp" &&
 CI_TEST = PYTHONDONTWRITEBYTECODE=1 "$(TEST_PYTHON)" "$(CURDIR)/scripts/ci.py" test
-# Only test, test-security and lint need Python >= 3.11 (scripts/ci.py and the pinned CI tools).
+# Only test, test-security, lint and mutation need Python >= 3.11 (scripts/ci.py and the pinned CI tools).
 REQUIRE_311 = "$(TEST_PYTHON)" -c 'import sys; sys.exit(sys.version_info < (3, 11) and "make: this target needs Python >= 3.11 (found " + sys.version.split()[0] + "); create .venv")'
 # make lint mirrors the CI lint job, with the ruff version pinned there.
 CI_REQUIREMENTS = .github/requirements-ci.txt
 
-.PHONY: automation-check automation-dry-run syntax-check test test-security git-check lint pre-commit
+.PHONY: automation-check automation-dry-run syntax-check test test-security mutation git-check lint pre-commit
 
 automation-check:
 	PYTHONDONTWRITEBYTECODE=1 \
@@ -36,6 +36,13 @@ test:
 test-security:
 	@$(REQUIRE_311)
 	$(IN_TEMP_DIR) $(CI_TEST) --names tests.test_security
+
+# make mutation runs every target in automation/mutation/config.json; TARGET=sdk/foo.py runs one (TESTS="tests.test_foo"
+# maps tests for a file the config does not list, JOBS=N sets parallelism). Mutants run in temporary copies, so the
+# working tree is never modified.
+mutation:
+	@$(REQUIRE_311)
+	PYTHONDONTWRITEBYTECODE=1 "$(TEST_PYTHON)" "$(CURDIR)/scripts/mutation.py" $(if $(TARGET),--target "$(TARGET)") $(if $(TESTS),--tests $(TESTS)) $(if $(JOBS),--jobs $(JOBS))
 
 git-check:
 	git diff --check
