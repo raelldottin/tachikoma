@@ -526,6 +526,23 @@ class ConsumableTests(unittest.TestCase):
         # Every item use that reaches the server is logged; item checks come before the crew member's.
         self.assertEqual([entry["code"] for entry in g.training.log], ["ok", "not-consumable", "unknown-item"])
 
+    def test_an_activation_response_is_a_copy_of_the_item_record(self):
+        # A parsed reply never changes afterwards: a later use must not rewrite an earlier response's @Quantity.
+        g = game(inventory=ITEMS)
+        g.activateItem3(itemId="i1", targetId="c1")
+        first = activation(g)
+        g.activateItem3(itemId="i1", targetId="c1")
+        self.assertEqual((first["Item"]["@Quantity"], activation(g)["Item"]["@Quantity"]), ("1", "0"))
+        self.assertEqual(quantity(g, "i1"), "0")
+
+    def test_use_consumable_takes_the_first_stack_of_a_design(self):
+        # Client.useConsumable stops at the first listed item of the design.
+        g = game(inventory=({"@ItemId": "a", "@ItemDesignId": "901", "@Quantity": "2"},
+                            {"@ItemId": "b", "@ItemDesignId": "901", "@Quantity": "2"}))
+        self.assertIs(g.useConsumable(901, "c1"), True)
+        self.assertEqual((quantity(g, "a"), quantity(g, "b")), ("1", "2"))
+        self.assertEqual(activation(g)["Item"]["@ItemId"], "a")
+
 
 REJECT = {"kind": "reject", "method": "addTraining"}
 CONTRADICT = {"kind": "contradicted-effect", "method": "addTraining", "training_design_id": "t-atk2"}
@@ -549,6 +566,7 @@ class TrainingFaultTests(unittest.TestCase):
             ({"kind": "raise", "method": "addTraining", "training_design_id": "t"},
              "inapplicable keys: training_design_id"),
             (dict(REJECT, effect=False), "inapplicable keys: effect"),
+            (dict(REJECT, training_design_id="t-atk"), "inapplicable keys: training_design_id"),
             (dict(REJECT, kind="explode"), "unknown fault kind"),
         ):
             with self.subTest(fault=fault), self.assertRaisesRegex(ValueError, message):
@@ -606,6 +624,16 @@ class TrainingFaultTests(unittest.TestCase):
         g = game(inventory=ITEMS, faults=({"kind": "ambiguous-response", "method": "activateItem3", "effect": False},))
         self.assertIs(g.useConsumable(901, "c1"), True)  # no reply, so no error: Client.useConsumable says True
         self.assertEqual((quantity(g, "i1"), g.item), ("2", None))
+
+    def test_no_reply_clears_an_earlier_activation_error(self):
+        # An error reply, then a call with no reply: the earlier error must not be read as this call's outcome.
+        g = game(inventory=ITEMS, faults=({"kind": "ambiguous-response", "method": "activateItem3", "call": 2,
+                                           "effect": False},))
+        self.assertIs(g.useConsumable(901, "ghost"), False)
+        self.assertIn("unknown character", activation(g)["@errorMessage"])
+        self.assertIs(g.useConsumable(901, "c1"), True)  # no reply, so no error: Client.useConsumable says True
+        self.assertEqual((g.item, quantity(g, "i1")), (None, "2"))
+        self.assertEqual(g.fired, ["day 0 activateItem3 #2: ambiguous-response"])
 
     def test_contradicted_effect_starts_the_substitute_design(self):
         g = game(faults=(CONTRADICT,))
