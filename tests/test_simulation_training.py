@@ -7,6 +7,7 @@ second, so no test takes one between an advance and the assertion that depends o
 import collections
 import copy
 import json
+import math
 import os
 import random
 import re
@@ -14,6 +15,7 @@ import tempfile
 import time
 import unittest
 from datetime import datetime, timedelta, timezone
+from fractions import Fraction
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -914,8 +916,10 @@ class PropertyTests(unittest.TestCase):
                 model["at_start"][cid] = old_fatigue
             elif op == "finish":
                 design = DESIGNS[before[cid]["@TrainingDesignId"]]
-                stat, scale = design["@TrainingStat"], FATIGUE_MAX - model["at_start"][cid]
-                low, high = (int(design[key]) * scale // FATIGUE_MAX for key in ("@MinGain", "@MaxGain"))
+                # The rule in words: a roll from MinGain to MaxGain keeps the share of it that the fatigue at the
+                # start leaves, rounded down. test_gain_is_scaled_by_the_fatigue_at_the_start pins worked values.
+                stat, kept = design["@TrainingStat"], 1 - Fraction(model["at_start"][cid], FATIGUE_MAX)
+                low, high = (math.floor(int(design[key]) * kept) for key in ("@MinGain", "@MaxGain"))
                 gained = stats[stat] - old_stats[stat]
                 self.assertTrue(changed <= {stat})
                 self.assertTrue(min(low, room) <= gained <= min(high, room))
@@ -974,7 +978,10 @@ def economy(result):
 
 
 class TrainIdle:
-    """A stand-in training policy: plan each listed crew member's design whenever they have no session."""
+    """A stand-in training policy: plan each listed crew member's design whenever they have no session.
+
+    It only starts sessions: the action catalog has no finish action, so no policy can finish one. Finished
+    sessions under a scenario's seed and faults are covered by drive_scenario_games instead."""
 
     name = "test-train-idle"
 
@@ -1124,6 +1131,9 @@ class TrainingScenarioTests(unittest.TestCase):
             (crew(0, **{"@RoomId": "r9"}), "crew 101: unknown @RoomId 'r9'"),
             (crew(0, **{"@Fatigue": "101"}), "crew 101: @Fatigue 101 is above the maximum 100"),
             (crew(0, **{"@Fatigue": "-1"}), "crew 101: @Fatigue must be an integer >= 0"),
+            # Digits only, never a sign: "-0" is refused like "-1", though it would read as 0.
+            (crew(0, **{"@Fatigue": "-0"}), "crew 101: @Fatigue must be an integer >= 0, not '-0'"),
+            (crew(0, **{"@AttackImprovement": "+1"}), "crew 101: @AttackImprovement must be an integer >= 0, not '+1'"),
             (crew(1, **{"@TrainingDesignId": "t-x"}), "crew 102: unknown @TrainingDesignId 't-x'"),
             (crew(1, **{"@TrainingEndDate": "tomorrow"}), "crew 102: @TrainingEndDate 'tomorrow' does not fit"),
             (crew(1, **{"@TrainingEndDate": ""}), "crew 102: @TrainingEndDate '' does not fit"),
@@ -1179,15 +1189,104 @@ class TrainingScenarioTests(unittest.TestCase):
             second = runner.run("add_training", {"training_design_id": "t-acad-1", "character_id": "102"})
         self.assertEqual((first.outcome, second.outcome), ("contradicted", "not-observed"))
         self.assertEqual(g.training.log[0]["design_id"], "t-acad-1")
+        self.assertIs(g.useConsumable(901, "103"), False)  # the scenario's item reject: the item is kept
+        self.assertEqual((g.inventory[0]["@Quantity"], len(g.training.log)), ("3", 1))
         clock.start_day(1)
         g.start_day(1)
         with self.assertRaises(SimulatedFaultError):
             g.finishTraining("101")
+        # The raise came after the request reached the server: the session did finish, as the log and read show.
+        self.assertEqual({key: g.training.log[-1][key] for key in ("op", "character_id", "design_id", "accepted")},
+                         {"op": "finish", "character_id": "101", "design_id": "t-acad-1", "accepted": True})
+        self.assertEqual(crew_record(g, "101")["@TrainingDesignId"], "0")
         self.assertEqual(g.fired, ["day 0 addTraining #1: contradicted-effect", "day 0 addTraining #2: reject",
-                                   "day 1 finishTraining #1: raise"])
+                                   "day 0 activateItem3 #1: reject", "day 1 finishTraining #1: raise"])
         result = run_training(scenario)
         self.assertEqual(result.faults, {"alpha": ()})  # no policy trains yet, so the faults never trigger
         self.assertEqual(len(result.crew["alpha"]), 3)
+
+
+WIDE = training_design("t-wide", "Pilot", "300", 3600, 0, 2, 4)
+
+
+def twin_trainers():
+    """The shipped one-account scenario plus a twin account "bravo". In each, crew 101 is rested, has room to grow
+    and trains t-wide (2-4 Pilot, no fatigue), so every gain is the roll itself."""
+    scenario = load_scenario("crew-training-single-account")
+    scenario["training"]["character_designs"].append({"@CharacterDesignId": "cd-wide", "@TrainingCapacity": "1000"})
+    scenario["training"]["training_designs"].append(dict(WIDE))
+    scenario["accounts"]["alpha"]["crew"][0].update({"@CharacterDesignId": "cd-wide", "@Fatigue": "0"})
+    scenario["accounts"]["bravo"] = copy.deepcopy(scenario["accounts"]["alpha"])
+    return scenario
+
+
+def drive_scenario_games(scenario, seed, *, train=True, days=3, sessions=8):
+    """Drive the games ``build_games`` makes for ``scenario`` day by day, as run_scenario does, training crew 101
+    in every account the way the legacy client loop does (``Client.finishTraining`` and ``addTraining`` called
+    directly, not through the action catalog).
+
+    This is the seam where a session both starts and finishes under a scenario's seed: the catalog has no finish
+    action, so no policy, real or stand-in, can finish one inside run_scenario yet. Each day every account first
+    collects resources, a draw on the shared economy generator. Returns the games and those economy readings."""
+    clock = SimulatedClock(datetime.fromisoformat(scenario["start"]))
+    games = build_games(scenario, seed, DesignData.from_records(**scenario["design"]), clock)
+    readings = []
+    for day in range(days):
+        clock.start_day(day)
+        for g in games.values():
+            g.start_day(day)
+            g.collectAllResources()
+            readings.append((g.alias, day, g.minerals, g.gas))
+        for _ in range(sessions if train else 0):
+            for g in games.values():
+                assert g.addTraining("t-wide", "101") is True, g.training.log[-1]
+            clock.advance(timedelta(hours=1))
+            for g in games.values():
+                assert g.finishTraining("101") is True, g.training.log[-1]
+    return games, readings
+
+
+def pilot_gains(game_):
+    return [entry["gain"]["Pilot"] for entry in game_.training.log if entry["op"] == "finish"]
+
+
+class ScenarioSeedTests(unittest.TestCase):
+    """build_games gives each account a training generator of its own, seeded from the scenario seed and the alias
+    and apart from the economy's, and finished sessions draw every gain from MinGain to MaxGain."""
+
+    def test_the_same_seed_replays_the_same_sessions(self):
+        first, _ = drive_scenario_games(twin_trainers(), 1)
+        again, _ = drive_scenario_games(twin_trainers(), 1)
+        for alias in ("alpha", "bravo"):
+            with self.subTest(alias=alias):
+                self.assertEqual(len(pilot_gains(first[alias])), 24)
+                self.assertEqual(json.dumps({"log": first[alias].training.log, "crew": characters(first[alias])},
+                                            sort_keys=True),
+                                 json.dumps({"log": again[alias].training.log, "crew": characters(again[alias])},
+                                            sort_keys=True))
+
+    def test_the_scenario_seed_and_the_alias_each_change_the_gains(self):
+        one, _ = drive_scenario_games(twin_trainers(), 1)
+        two, _ = drive_scenario_games(twin_trainers(), 2)
+        for alias in ("alpha", "bravo"):
+            self.assertNotEqual(pilot_gains(one[alias]), pilot_gains(two[alias]), alias)
+        # The twins make identical requests under one seed; their own generators still roll differently.
+        self.assertNotEqual(pilot_gains(one["alpha"]), pilot_gains(one["bravo"]))
+
+    def test_every_gain_from_min_gain_to_max_gain_turns_up(self):
+        for seed in (1, 2):
+            games, _ = drive_scenario_games(twin_trainers(), seed)
+            for alias, g in games.items():
+                with self.subTest(seed=seed, alias=alias):
+                    self.assertEqual(collections.Counter(pilot_gains(g)).keys(), {2, 3, 4})
+
+    def test_finished_sessions_leave_the_economy_draws_alone(self):
+        trained, with_training = drive_scenario_games(twin_trainers(), 1)
+        idle, without_training = drive_scenario_games(twin_trainers(), 1, train=False)
+        self.assertEqual((len(pilot_gains(trained["alpha"])), pilot_gains(idle["alpha"])), (24, []))
+        self.assertIs(trained["alpha"].rng, trained["bravo"].rng)  # the accounts share one economy generator
+        self.assertEqual(with_training, without_training)
+        self.assertEqual(trained["alpha"].rng.getstate(), idle["alpha"].rng.getstate())
 
 
 if __name__ == "__main__":
