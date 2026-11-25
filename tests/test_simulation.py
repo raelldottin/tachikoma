@@ -62,8 +62,8 @@ def report_digest(result):
 # Golden digests of the crew-training scenarios: reports plus training_json (span, per-day crew and training rooms,
 # final crew, log). Regenerate with training_digest(run(name)[0]) only for an intended change.
 TRAINING_DIGESTS = {
-    "crew-training-faults": "deef264633d08c9c891e5e50390ce032e26d753e043a8a9b22870ef367895bf8",
-    "crew-training-single-account": "e5e2077bb62363c8c968da8dab5966441410c5fe1a5e8d48974a3387ad1b4b05",
+    "crew-training-faults": "a74e06cc39ee470e722b5fcf3056fc2b93f83fc3520e77ba5740b7eccc6407bc",
+    "crew-training-single-account": "4a506a3b146117e45dad96492b377eaf0ae3864f760edd3c65688d3c595e8494",
 }
 
 

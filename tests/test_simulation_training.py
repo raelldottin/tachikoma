@@ -69,11 +69,11 @@ RULES: dict[str, Any] = {
         {"@CharacterDesignId": "cd-big", "@TrainingCapacity": "500"},
     ],
     "training_designs": [
-        training_design("t-atk", "Attack", "300", 3600, 10, 4, 4),
-        training_design("t-sci", "Science", "400", 3600, 10, 4, 4),
-        training_design("t-atk2", "Attack", "300", 14400, 25, 6, 6, research="610"),
-        training_design("t-301", "Attack", "301", 3600, 0, 1, 1),
-        training_design("t-rand", "Pilot", "300", 3600, 0, 1, 10),
+        training_design("5030", "Attack", "300", 3600, 10, 4, 4),
+        training_design("5070", "Science", "400", 3600, 10, 4, 4),
+        training_design("5031", "Attack", "300", 14400, 25, 6, 6, research="610"),
+        training_design("5010", "Attack", "301", 3600, 0, 1, 1),
+        training_design("5060", "Pilot", "300", 3600, 0, 1, 10),
     ],
     "item_designs": [
         {"@ItemDesignId": "901", "@ItemName": "Grey ATK", "@ConsumableStat": "Attack", "@ConsumableGain": "1",
@@ -200,31 +200,31 @@ def rules(**changes):
 class StateMachineTests(unittest.TestCase):
     def test_start_assigns_the_design_its_end_and_its_fatigue(self):
         g = game()
-        self.assertIs(g.addTraining("t-atk", "c1"), True)
+        self.assertIs(g.addTraining("5030", "c1"), True)
         record = crew_record(g)
         self.assertEqual((record["@TrainingDesignId"], record["@TrainingEndDate"], record["@Fatigue"]),
-                         ("t-atk", "2027-06-01T07:00:00", "10"))
+                         ("5030", "2027-06-01T07:00:00", "10"))
         (entry,) = g.training.log
         self.assertEqual({key: entry[key] for key in ("seq", "op", "character_id", "design_id", "accepted", "end",
                                                       "fatigue", "at")},
-                         {"seq": 1, "op": "start", "character_id": "c1", "design_id": "t-atk", "accepted": True,
+                         {"seq": 1, "op": "start", "character_id": "c1", "design_id": "5030", "accepted": True,
                           "end": "2027-06-01T07:00:00", "fatigue": 10, "at": "2027-06-01T06:00:00"})
         (crew,) = g.snapshot().crew
         self.assertEqual((crew.training_design_id, crew.training_end, crew.training_active),
-                         ("t-atk", "2027-06-01T07:00:00", True))
+                         ("5030", "2027-06-01T07:00:00", True))
         self.assertEqual(g.calls, ["addTraining"])
         state = {"rooms": [dict(ROOMS[0])], "crew": [member()]}
         local = SimulatedGame("alpha", state, DESIGN, random.Random(0),
                               SimulatedClock(datetime(2027, 6, 1, 8, 0, tzinfo=timezone(timedelta(hours=2)))),
                               training=RULES)
-        local.addTraining("t-atk", "c1")
+        local.addTraining("5030", "c1")
         self.assertEqual(crew_record(local)["@TrainingEndDate"], "2027-06-01T07:00:00")
 
     def test_start_while_training_is_refused_and_changes_nothing(self):
         g = game()
-        g.addTraining("t-atk", "c1")
+        g.addTraining("5030", "c1")
         before = crew_record(g)
-        for design in ("t-atk", "t-sci"):
+        for design in ("5030", "5070"):
             with self.subTest(design=design):
                 self.assertIs(g.addTraining(design, "c1"), False)
                 self.assertEqual(crew_record(g), before)
@@ -233,26 +233,26 @@ class StateMachineTests(unittest.TestCase):
 
     def test_a_finished_session_must_be_collected_before_the_next_starts(self):
         g = game()
-        g.addTraining("t-atk", "c1")
+        g.addTraining("5030", "c1")
         g.clock.advance(timedelta(hours=2))
-        self.assertIs(g.addTraining("t-atk", "c1"), False)
+        self.assertIs(g.addTraining("5030", "c1"), False)
         self.assertEqual(crew_record(g)["@TrainingEndDate"], "2027-06-01T07:00:00")
 
     def test_finish_waits_for_the_end_to_the_second(self):
         g = game()
-        g.addTraining("t-atk", "c1")
+        g.addTraining("5030", "c1")
         g.clock.advance(timedelta(minutes=59, seconds=59))
         self.assertIs(g.finishTraining("c1"), False)
         self.assertEqual(crew_record(g)["@AttackImprovement"], "0")
         self.assertEqual({key: g.training.log[-1][key] for key in ("code", "design_id", "stat", "gain")},
-                         {"code": "early", "design_id": "t-atk", "stat": "Attack", "gain": {}})
+                         {"code": "early", "design_id": "5030", "stat": "Attack", "gain": {}})
         g.clock.advance(timedelta(seconds=1))
         self.assertIs(g.finishTraining("c1"), True)
         self.assertEqual(crew_record(g)["@AttackImprovement"], "4")
 
     def test_finish_adds_the_gain_to_the_design_stat_only_and_clears_the_session(self):
         g = game(crew=(member(**{stat: 1 for stat in STATS}),))
-        g.addTraining("t-atk", "c1")
+        g.addTraining("5030", "c1")
         g.clock.advance(timedelta(hours=1))
         self.assertIs(g.finishTraining("c1"), True)
         record = crew_record(g)
@@ -281,7 +281,7 @@ class StateMachineTests(unittest.TestCase):
         for fatigue, gain in ((30, 2), (50, 2), (75, 1), (100, 0)):
             with self.subTest(fatigue=fatigue):
                 g = game(crew=(member(fatigue=fatigue),), training=rules(fatigue_recovery_seconds=10 ** 6))
-                self.assertIs(g.addTraining("t-atk", "c1"), True)  # full fatigue still trains, for nothing
+                self.assertIs(g.addTraining("5030", "c1"), True)  # full fatigue still trains, for nothing
                 g.clock.advance(timedelta(hours=1))
                 self.assertIs(g.finishTraining("c1"), True)
                 self.assertEqual(crew_record(g)["@AttackImprovement"], str(gain))
@@ -290,7 +290,7 @@ class StateMachineTests(unittest.TestCase):
         for start, attack, capped in ((16, 4, False), (18, 2, True), (20, 0, True)):
             with self.subTest(start=start):
                 g = game(crew=(member(Hp=start),))
-                g.addTraining("t-atk", "c1")
+                g.addTraining("5030", "c1")
                 g.clock.advance(timedelta(hours=1))
                 self.assertIs(g.finishTraining("c1"), True)
                 record = crew_record(g)
@@ -301,7 +301,7 @@ class StateMachineTests(unittest.TestCase):
                                  ({"Attack": attack}, capped, 20))
 
     def test_the_crew_member_must_be_in_a_room_that_trains_the_design(self):
-        for room, design in (("r-bridge", "t-atk"), ("r-gym", "t-sci"), ("", "t-atk"), ("r-gym", "t-301")):
+        for room, design in (("r-bridge", "5030"), ("r-gym", "5070"), ("", "5030"), ("r-gym", "5010")):
             with self.subTest(room=room, design=design):
                 g = game(crew=(member(room=room),))
                 before = crew_record(g)
@@ -311,51 +311,51 @@ class StateMachineTests(unittest.TestCase):
 
     def test_an_upgraded_room_still_trains_its_root_designs(self):
         upgraded = game(crew=(member(room="r-gym2"),))
-        self.assertIs(upgraded.addTraining("t-atk", "c1"), True)
+        self.assertIs(upgraded.addTraining("5030", "c1"), True)
         g = game()
-        self.assertIs(g.addTraining("t-301", "c1"), False)
+        self.assertIs(g.addTraining("5010", "c1"), False)
         g.upgradeRoom("r-gym", "301")
-        self.assertIs(g.addTraining("t-301", "c1"), False)  # still upgrading: the room is 300 until the day ends
+        self.assertIs(g.addTraining("5010", "c1"), False)  # still upgrading: the room is 300 until the day ends
         g.finish_day()
-        self.assertIs(g.addTraining("t-301", "c1"), True)
+        self.assertIs(g.addTraining("5010", "c1"), True)
 
     def test_a_room_being_upgraded_starts_no_session_until_the_upgrade_completes(self):
         g = game(crew=(member(), member("c2", room="r-gym2")))
-        g.addTraining("t-atk", "c2")
+        g.addTraining("5030", "c2")
         g.upgradeRoom("r-gym", "301")
         g.upgradeRoom("r-gym2", "302")
         before = characters(g)
-        self.assertIs(g.addTraining("t-atk", "c1"), False)
+        self.assertIs(g.addTraining("5030", "c1"), False)
         self.assertEqual((characters(g), g.training.log[-1]["code"]), (before, "room-upgrading"))
-        self.assertIs(g.addTraining("t-sci", "c1"), False)
+        self.assertIs(g.addTraining("5070", "c1"), False)
         self.assertEqual(g.training.log[-1]["code"], "wrong-room")  # the room would not train it anyway
         g.clock.advance(timedelta(hours=1))
         self.assertIs(g.finishTraining("c2"), True)  # a session already running still finishes
         g.finish_day()
-        self.assertIs(g.addTraining("t-atk", "c1"), True)
+        self.assertIs(g.addTraining("5030", "c1"), True)
 
     def test_log_entries_name_the_room_stat_day_and_a_refusal_code(self):
         g = game()
         g.start_day(2)
-        g.addTraining("t-atk", "c1")
+        g.addTraining("5030", "c1")
         self.assertEqual(g.training.log[-1], {
             "seq": 1, "at": "2027-06-01T06:00:00", "day": 2, "op": "start", "character_id": "c1", "room_id": "r-gym",
-            "design_id": "t-atk", "requested_design_id": "t-atk", "stat": "Attack", "accepted": True, "code": "ok",
+            "design_id": "5030", "requested_design_id": "5030", "stat": "Attack", "accepted": True, "code": "ok",
             "detail": "", "end": "2027-06-01T07:00:00", "gain": {}, "capped": False, "fatigue": 10, "total": 0,
             "capacity": 20})
-        g.addTraining("t-sci", "c1")
+        g.addTraining("5070", "c1")
         refused = g.training.log[-1]
         self.assertEqual({key: refused[key] for key in ("seq", "accepted", "code", "design_id", "stat", "end")},
-                         {"seq": 2, "accepted": False, "code": "busy", "design_id": "t-sci", "stat": "Science",
+                         {"seq": 2, "accepted": False, "code": "busy", "design_id": "5070", "stat": "Science",
                           "end": None})
-        self.assertIn("t-atk", refused["detail"])  # prose for people; tests and benchmarks read the code
-        g.addTraining("t-atk", "ghost")
+        self.assertIn("5030", refused["detail"])  # prose for people; tests and benchmarks read the code
+        g.addTraining("5030", "ghost")
         self.assertEqual({key: g.training.log[-1][key] for key in ("room_id", "fatigue", "total", "capacity", "stat")},
                          {"room_id": None, "fatigue": None, "total": None, "capacity": None, "stat": "Attack"})
         g.clock.advance(timedelta(hours=1))
         g.finishTraining("c1")
         self.assertEqual({key: g.training.log[-1][key] for key in ("op", "design_id", "stat", "gain", "day")},
-                         {"op": "finish", "design_id": "t-atk", "stat": "Attack", "gain": {"Attack": 4}, "day": 2})
+                         {"op": "finish", "design_id": "5030", "stat": "Attack", "gain": {"Attack": 4}, "day": 2})
         g.finishTraining("c1")
         self.assertEqual({key: g.training.log[-1][key] for key in ("code", "design_id", "stat")},
                          {"code": "idle", "design_id": None, "stat": None})
@@ -366,24 +366,24 @@ class StateMachineTests(unittest.TestCase):
             {"@RoomDesignId": "701", "@UpgradeFromRoomDesignId": "700"}]).rooms, research=DESIGN.research)
         state = {"rooms": [{"@RoomId": "r7", "@RoomDesignId": "700"}], "crew": [member(room="r7")]}
         g = SimulatedGame("alpha", state, cyclic, random.Random(0), SimulatedClock(T0), training=RULES)
-        self.assertIs(g.addTraining("t-atk", "c1"), False)  # 300 is not in the 700/701 loop, and the walk ends
+        self.assertIs(g.addTraining("5030", "c1"), False)  # 300 is not in the 700/701 loop, and the walk ends
 
     def test_required_research_must_be_completed(self):
         for research in ((), ({"@ResearchDesignId": "610", "@ResearchState": "Researching"},),
                          ({"@ResearchDesignId": "611", "@ResearchState": "Completed"},)):
             with self.subTest(research=research):
                 g = game(research=research)
-                self.assertIs(g.addTraining("t-atk2", "c1"), False)
+                self.assertIs(g.addTraining("5031", "c1"), False)
                 self.assertEqual(g.training.log[-1]["code"], "no-research")
         g = game()
         g.addResearch("610")
         g.finish_day()
-        self.assertIs(g.addTraining("t-atk2", "c1"), True)
+        self.assertIs(g.addTraining("5031", "c1"), True)
 
     def test_unknown_crew_or_design_is_refused(self):
         g = game()
         before = crew_record(g)
-        for design, cid, code in (("t-atk", "ghost", "unknown-character"), ("nope", "c1", "unknown-design"),
+        for design, cid, code in (("5030", "ghost", "unknown-character"), ("nope", "c1", "unknown-design"),
                                   ("nope", "ghost", "unknown-character")):
             with self.subTest(design=design, cid=cid):
                 self.assertIs(g.addTraining(design, cid), False)
@@ -402,7 +402,7 @@ class StateMachineTests(unittest.TestCase):
 
     def test_session_fatigue_is_capped_at_the_maximum(self):
         g = game(crew=(member(fatigue=95),))
-        g.addTraining("t-atk", "c1")
+        g.addTraining("5030", "c1")
         self.assertEqual(crew_record(g)["@Fatigue"], "100")
 
     def test_reads_and_snapshots_do_not_reset_recovery(self):
@@ -421,7 +421,7 @@ class StateMachineTests(unittest.TestCase):
         items = ({"@ItemId": "i5", "@ItemDesignId": "905", "@Quantity": "1"},
                  {"@ItemId": "i1", "@ItemDesignId": "901", "@Quantity": "1"})
         for action, expected in ((lambda g: None, "9"),
-                                 (lambda g: g.addTraining("t-rand", "c1"), "9"),  # a session with no fatigue
+                                 (lambda g: g.addTraining("5060", "c1"), "9"),  # a session with no fatigue
                                  (lambda g: g.useConsumable("905", "c1"), "9"),  # an item with no fatigue
                                  (lambda g: g.useConsumable("901", "c1"), "14")):  # +5, then the point is due
             with self.subTest(expected=expected):
@@ -434,7 +434,7 @@ class StateMachineTests(unittest.TestCase):
     def test_recovery_starts_a_fresh_period_once_fatigue_is_back_to_zero(self):
         g = game(crew=(member(fatigue=1),))
         g.clock.advance(timedelta(seconds=360 + 359))  # at zero for 359 s
-        g.addTraining("t-atk", "c1")  # +10
+        g.addTraining("5030", "c1")  # +10
         g.clock.advance(timedelta(seconds=1))
         self.assertEqual(crew_record(g)["@Fatigue"], "10")
         g.clock.advance(timedelta(seconds=359))
@@ -470,11 +470,11 @@ class ConsumableTests(unittest.TestCase):
 
     def test_consumables_work_while_training_and_fatigue_stays_capped(self):
         g = game(crew=(member(fatigue=90),), inventory=ITEMS)
-        g.addTraining("t-atk", "c1")
+        g.addTraining("5030", "c1")
         self.assertIs(g.useConsumable("901", "c1"), True)
         record = crew_record(g)
         self.assertEqual((record["@Fatigue"], record["@TrainingDesignId"], record["@AttackImprovement"]),
-                         ("100", "t-atk", "1"))
+                         ("100", "5030", "1"))
 
     def test_an_item_out_of_stock_or_missing_is_not_used(self):
         g = game(inventory=({"@ItemId": "i1", "@ItemDesignId": "901", "@Quantity": "0"},))
@@ -543,11 +543,11 @@ class ConsumableTests(unittest.TestCase):
 
 
 REJECT = {"kind": "reject", "method": "addTraining"}
-CONTRADICT = {"kind": "contradicted-effect", "method": "addTraining", "training_design_id": "t-atk2"}
+CONTRADICT = {"kind": "contradicted-effect", "method": "addTraining", "training_design_id": "5031"}
 
 
 def finished(game_, cid="c1"):
-    game_.addTraining("t-atk", cid)
+    game_.addTraining("5030", cid)
     game_.clock.advance(timedelta(hours=1))
     return game_
 
@@ -564,7 +564,7 @@ class TrainingFaultTests(unittest.TestCase):
             ({"kind": "raise", "method": "addTraining", "training_design_id": "t"},
              "inapplicable keys: training_design_id"),
             (dict(REJECT, effect=False), "inapplicable keys: effect"),
-            (dict(REJECT, training_design_id="t-atk"), "inapplicable keys: training_design_id"),
+            (dict(REJECT, training_design_id="5030"), "inapplicable keys: training_design_id"),
             (dict(REJECT, kind="explode"), "unknown fault kind"),
         ):
             with self.subTest(fault=fault), self.assertRaisesRegex(ValueError, message):
@@ -572,7 +572,7 @@ class TrainingFaultTests(unittest.TestCase):
         for method in ("addTraining", "finishTraining", "activateItem3"):
             self.assertEqual(Fault.from_dict(dict(REJECT, method=method, day=1)), Fault("reject", method, day=1))
             self.assertEqual(Fault.from_dict({"kind": "raise", "method": method}).method, method)
-        self.assertEqual(Fault.from_dict(CONTRADICT).training_design_id, "t-atk2")
+        self.assertEqual(Fault.from_dict(CONTRADICT).training_design_id, "5031")
 
     def test_an_unknown_substitute_design_is_refused_when_the_game_is_built(self):
         with self.assertRaisesRegex(ValueError, "unknown training design 'nope'"):
@@ -581,16 +581,16 @@ class TrainingFaultTests(unittest.TestCase):
     def test_rejected_start_changes_nothing(self):
         g = game(faults=(dict(REJECT, call=1),))
         before = crew_record(g)
-        self.assertIs(g.addTraining("t-atk", "c1"), False)
+        self.assertIs(g.addTraining("5030", "c1"), False)
         self.assertEqual(g.fired, ["day 0 addTraining #1: reject"])
         self.assertEqual((g.calls, crew_record(g), g.training.log), (["addTraining"], before, []))
-        self.assertIs(g.addTraining("t-atk", "c1"), True)  # only the first call was rejected
+        self.assertIs(g.addTraining("5030", "c1"), True)  # only the first call was rejected
 
     def test_rejected_finish_keeps_the_session(self):
         g = finished(game(faults=({"kind": "reject", "method": "finishTraining"},)))
         self.assertIs(g.finishTraining("c1"), False)
         record = crew_record(g)
-        self.assertEqual((record["@TrainingDesignId"], record["@AttackImprovement"]), ("t-atk", "0"))
+        self.assertEqual((record["@TrainingDesignId"], record["@AttackImprovement"]), ("5030", "0"))
         self.assertFalse(hasattr(g, "trainingFinish"))
 
     def test_rejected_item_is_kept(self):
@@ -603,12 +603,12 @@ class TrainingFaultTests(unittest.TestCase):
     def test_raise_and_ambiguous_response_honour_the_effect_flag(self):
         g = game(faults=({"kind": "raise", "method": "addTraining", "effect": False},))
         with self.assertRaises(SimulatedFaultError):
-            g.addTraining("t-atk", "c1")
+            g.addTraining("5030", "c1")
         self.assertEqual(crew_record(g)["@TrainingDesignId"], "0")
         g = game(faults=({"kind": "raise", "method": "addTraining"},))
         with self.assertRaises(SimulatedFaultError):
-            g.addTraining("t-atk", "c1")
-        self.assertEqual(crew_record(g)["@TrainingDesignId"], "t-atk")
+            g.addTraining("5030", "c1")
+        self.assertEqual(crew_record(g)["@TrainingDesignId"], "5030")
         g = finished(game(faults=({"kind": "ambiguous-response", "method": "finishTraining"},)))
         self.assertIsNone(g.finishTraining("c1"))
         self.assertEqual(crew_record(g)["@AttackImprovement"], "4")
@@ -635,31 +635,31 @@ class TrainingFaultTests(unittest.TestCase):
 
     def test_contradicted_effect_starts_the_substitute_design(self):
         g = game(faults=(CONTRADICT,))
-        self.assertIs(g.addTraining("t-atk", "c1"), True)
+        self.assertIs(g.addTraining("5030", "c1"), True)
         record = crew_record(g)
         self.assertEqual((record["@TrainingDesignId"], record["@TrainingEndDate"], record["@Fatigue"]),
-                         ("t-atk2", "2027-06-01T10:00:00", "25"))  # the substitute's duration and fatigue
+                         ("5031", "2027-06-01T10:00:00", "25"))  # the substitute's duration and fatigue
         entry = g.training.log[-1]
-        self.assertEqual((entry["design_id"], entry["requested_design_id"]), ("t-atk2", "t-atk"))
+        self.assertEqual((entry["design_id"], entry["requested_design_id"]), ("5031", "5030"))
         bridge = game(crew=(member(room="r-bridge"),), faults=(CONTRADICT,))
-        self.assertIs(bridge.addTraining("t-atk", "c1"), False)  # a request the server refuses stays refused
+        self.assertIs(bridge.addTraining("5030", "c1"), False)  # a request the server refuses stays refused
         self.assertEqual((crew_record(bridge)["@TrainingDesignId"], bridge.fired),
                          ("0", ["day 0 addTraining #1: contradicted-effect"]))
 
     def test_a_substitute_equal_to_the_request_is_no_contradiction(self):
         # The fault fires, but the server started what was asked: the runner verifies it and the log agrees.
-        g = game(faults=(dict(CONTRADICT, training_design_id="t-atk"),))
+        g = game(faults=(dict(CONTRADICT, training_design_id="5030"),))
         with tempfile.TemporaryDirectory() as tmp:
             runner = ActionRunner("alpha", g, g.snapshot, GameplayJournal(Path(tmp) / "alpha.jsonl"), clock=g.clock)
-            result = runner.run("add_training", {"training_design_id": "t-atk", "character_id": "c1"})
+            result = runner.run("add_training", {"training_design_id": "5030", "character_id": "c1"})
         self.assertEqual(result.outcome, "verified")
         self.assertEqual(g.fired, ["day 0 addTraining #1: contradicted-effect"])
         entry = g.training.log[-1]
         self.assertEqual((entry["design_id"], entry["requested_design_id"], entry["end"]),
-                         ("t-atk", "t-atk", "2027-06-01T07:00:02"))
+                         ("5030", "5030", "2027-06-01T07:00:02"))
 
     def test_the_action_runner_reconciles_each_fault(self):
-        params = {"training_design_id": "t-atk", "character_id": "c1"}
+        params = {"training_design_id": "5030", "character_id": "c1"}
         for faults, outcome, response_ok, error_class in (
             ((), "verified", True, None),
             ((CONTRADICT,), "contradicted", True, None),
@@ -679,7 +679,7 @@ class TrainingFaultTests(unittest.TestCase):
 def random_sessions(training_rng=None, sessions=20, alias="alpha"):
     g = game(crew=(member(design="cd-big"),), training_rng=training_rng, alias=alias)
     for _ in range(sessions):
-        g.addTraining("t-rand", "c1")
+        g.addTraining("5060", "c1")
         g.clock.advance(timedelta(hours=1))
         g.finishTraining("c1")
     gains = [entry["gain"]["Pilot"] for entry in g.training.log if entry["op"] == "finish"]
@@ -691,7 +691,7 @@ class RandomnessTests(unittest.TestCase):
         shared = random.Random(5)
         g = game(inventory=ITEMS, rng=shared)
         before = shared.getstate()
-        g.addTraining("t-rand", "c1")
+        g.addTraining("5060", "c1")
         g.clock.advance(timedelta(hours=1))
         g.finishTraining("c1")
         g.useConsumable(901, "c1")
@@ -736,10 +736,10 @@ class ReviewRegressionTests(unittest.TestCase):
         # Live records say "no research" with "0" (or ""); they were refused as an unknown research design.
         for required in ("0", ""):
             with self.subTest(required=required):
-                free = dict(training_design("t-free", "Attack", "300", 3600, 0, 1, 1), **{
+                free = dict(training_design("5040", "Attack", "300", 3600, 0, 1, 1), **{
                     "@RequiredResearchDesignId": required})
                 g = game(training=rules(training_designs=RULES["training_designs"] + [free]))
-                self.assertIs(g.addTraining("t-free", "c1"), True)
+                self.assertIs(g.addTraining("5040", "c1"), True)
 
     def test_ids_given_as_json_numbers_still_match(self):
         # Numeric ids passed validation (which reads them through str) and then never matched a lookup.
@@ -749,7 +749,7 @@ class ReviewRegressionTests(unittest.TestCase):
         g = game(crew=(member(room=5),), rooms=rooms, research=research, inventory=inventory)
         self.assertIs(g.useConsumable("901", "c1"), True)
         self.assertEqual(g.inventory[0]["@Quantity"], "0")
-        self.assertIs(g.addTraining("t-atk2", "c1"), True)  # room 301 is an upgrade of 300; research 610 done
+        self.assertIs(g.addTraining("5031", "c1"), True)  # room 301 is an upgrade of 300; research 610 done
 
     def test_inventory_is_not_checked_without_a_training_block(self):
         # The new item checks broke scenarios that never use consumables.
@@ -780,14 +780,14 @@ class FinalReviewRegressionTests(unittest.TestCase):
             with self.subTest(room=crew.get("@RoomId")):
                 g = game(crew=(crew,))
                 self.assertEqual(crew_record(g)["@RoomId"], "0")
-                self.assertIs(g.addTraining("t-atk", "c1"), False)
+                self.assertIs(g.addTraining("5030", "c1"), False)
                 entry = g.training.log[-1]
                 self.assertEqual((entry["code"], entry["room_id"], entry["detail"]),
-                                 ("wrong-room", "0", "room (none) does not train t-atk"))
+                                 ("wrong-room", "0", "room (none) does not train 5030"))
         # "0" is never a room, even if a scenario room claims that id.
         zero = {"@RoomId": "0", "@RoomDesignId": "300", "@RoomStatus": "Normal"}
         g = game(crew=(member(room="0"),), rooms=ROOMS + (zero,))
-        self.assertIs(g.addTraining("t-atk", "c1"), False)
+        self.assertIs(g.addTraining("5030", "c1"), False)
         self.assertEqual(g.training.log[-1]["code"], "wrong-room")
 
     def test_an_idle_record_may_keep_its_last_end_date(self):
@@ -796,7 +796,7 @@ class FinalReviewRegressionTests(unittest.TestCase):
         self.assertEqual(crew_record(g)["@TrainingEndDate"], "")
         (crew,) = g.snapshot().crew
         self.assertEqual((crew.training_active, crew.training_end), (False, None))
-        self.assertIs(g.addTraining("t-atk", "c1"), True)
+        self.assertIs(g.addTraining("5030", "c1"), True)
         with self.assertRaisesRegex(ValueError, "crew c1: @TrainingEndDate 'soon' does not fit"):
             game(crew=(dict(member(), **{"@TrainingEndDate": "soon"}),))
 
@@ -806,7 +806,7 @@ class FinalReviewRegressionTests(unittest.TestCase):
         seven = training_design("7", "Attack", "300", 3600, 0, 1, 1)
         g = game(training=rules(training_designs=RULES["training_designs"] + [seven]),
                  faults=(dict(CONTRADICT, training_design_id=7),))
-        self.assertIs(g.addTraining("t-atk", "c1"), True)
+        self.assertIs(g.addTraining("5030", "c1"), True)
         self.assertEqual(crew_record(g)["@TrainingDesignId"], "7")
         for bad in (True, False, None, "", 7.0, ["7"]):
             with self.subTest(bad=bad), self.assertRaisesRegex(ValueError, "needs the training_design_id"):
@@ -869,7 +869,7 @@ class FinalReviewRegressionTests(unittest.TestCase):
         # The day was kept twice (the game's, for faults, and the training log's), so one could go stale.
         g = game(inventory=ITEMS)
         g.day = 2
-        g.addTraining("t-atk", "c1")
+        g.addTraining("5030", "c1")
         g.finishTraining("c1")
         g.useConsumable(901, "c1")
         self.assertEqual([entry["day"] for entry in g.training.log], [2, 2, 2])
@@ -1130,7 +1130,7 @@ class TrainingScenarioTests(unittest.TestCase):
         idle, training = crew["101"], crew["102"]
         self.assertEqual((idle["@Fatigue"], idle["@TrainingDesignId"]), ("16", "0"))  # 40 - 48 h / 2 h
         self.assertEqual((training["@Fatigue"], training["@TrainingDesignId"], training["@TrainingEndDate"]),
-                         ("0", "t-acad-1", "2027-06-01T08:00:00"))  # past its end, never finished for it
+                         ("0", "5020", "2027-06-01T08:00:00"))  # past its end, never finished for it
         for record in scenario["accounts"]["alpha"]["crew"]:
             self.assertEqual(stats_of(crew[record["@CharacterId"]]), stats_of(dict(
                 {f"@{stat}Improvement": "0" for stat in STATS}, **record)))
@@ -1148,7 +1148,7 @@ class TrainingScenarioTests(unittest.TestCase):
         self.assertEqual(fatigue, [{"101": "40", "102": "20", "103": "0"}, {"101": "28", "102": "8", "103": "0"},
                                    {"101": "16", "102": "0", "103": "0"}])  # one point per 2 h
         self.assertEqual({day["day"]: day["training_rooms"] for day in days},
-                         dict.fromkeys((0, 1, 2), {"r-gym": ("t-gym-1", "t-gym-2"), "r-acad": ("t-acad-1",)}))
+                         dict.fromkeys((0, 1, 2), {"r-gym": ("5050", "5051"), "r-acad": ("5020",)}))
         scenario_crew = load_scenario("crew-training-single-account")["accounts"]["alpha"]["crew"]
         self.assertEqual(result.initial_crew, {"alpha": days[0]["crew"]})
         self.assertEqual([dict(record, **{"@Fatigue": scenario["@Fatigue"]})
@@ -1167,17 +1167,17 @@ class TrainingScenarioTests(unittest.TestCase):
         g.start_day(1)
         self.assertEqual(g.clock.now, now)
         self.assertEqual(g.days, [{"day": 1, "at": "2027-06-01T07:00:00", "crew": (crew_record(g),),
-                                   "training_rooms": {"r-gym": ("t-atk", "t-atk2", "t-rand"),
-                                                      "r-gym2": ("t-atk", "t-atk2", "t-301", "t-rand"),
-                                                      "r-acad": ("t-atk", "t-atk2", "t-301", "t-rand")}}])
+                                   "training_rooms": {"r-gym": ("5030", "5031", "5060"),
+                                                      "r-gym2": ("5030", "5031", "5010", "5060"),
+                                                      "r-acad": ("5030", "5031", "5010", "5060")}}])
         self.assertEqual(g.days[0]["crew"][0]["@Fatigue"], "20")
 
     def test_training_by_a_policy_reaches_the_journal_and_the_scenario_result(self):
         # No shipped policy trains yet; TrainIdle stands in for one through the real orchestrator, runner and journal.
-        result, journal = run_with_policy("crew-training-single-account", {"101": "t-gym-1"})
+        result, journal = run_with_policy("crew-training-single-account", {"101": "5050"})
         (entry,) = result.training_log["alpha"]
         self.assertEqual({key: entry[key] for key in ("op", "design_id", "accepted", "code", "day", "room_id")},
-                         {"op": "start", "design_id": "t-gym-1", "accepted": True, "code": "ok", "day": 0,
+                         {"op": "start", "design_id": "5050", "accepted": True, "code": "ok", "day": 0,
                           "room_id": "r-gym"})
         self.assertEqual(entry["end"], (datetime.strptime(entry["at"], TIME) + timedelta(hours=1)).strftime(TIME))
         self.assertEqual(json.loads(result.training_json)["log"], {"alpha": [entry]})
@@ -1185,17 +1185,17 @@ class TrainingScenarioTests(unittest.TestCase):
                          [("add_training", "verified")])
         self.assertEqual(result.calls["alpha"].count("addTraining"), 1)  # day 1: an unfinished session is not idle
         self.assertEqual([day["crew"][0]["@TrainingDesignId"] for day in result.days["alpha"]],
-                         ["0", "t-gym-1", "t-gym-1"])
+                         ["0", "5050", "5050"])
         self.assertEqual(result.initial_crew["alpha"][0]["@TrainingDesignId"], "0")
 
     def test_training_faults_fire_through_a_policy_run(self):
-        result, journal = run_with_policy("crew-training-faults", {"101": "t-gym-1", "102": "t-acad-1"})
+        result, journal = run_with_policy("crew-training-faults", {"101": "5050", "102": "5020"})
         self.assertEqual(result.faults, {"alpha": ("day 0 addTraining #1: contradicted-effect",)})
         self.assertEqual([(event.params["character_id"], event.outcome) for event in journal
                           if event.action_id == "add_training"], [("101", "contradicted"), ("102", "verified")])
         self.assertEqual([(entry["day"], entry["character_id"], entry["requested_design_id"], entry["design_id"])
                           for entry in result.training_log["alpha"]],
-                         [(0, "101", "t-gym-1", "t-acad-1"), (1, "102", "t-acad-1", "t-acad-1")])
+                         [(0, "101", "5050", "5020"), (1, "102", "5020", "5020")])
 
     def test_the_training_block_has_documented_defaults(self):
         g = game(training={"character_designs": RULES["character_designs"]})
@@ -1248,7 +1248,7 @@ class TrainingScenarioTests(unittest.TestCase):
             # Digits only, never a sign: "-0" is refused like "-1", though it would read as 0.
             (crew(0, **{"@Fatigue": "-0"}), "crew 101: @Fatigue must be an integer >= 0, not '-0'"),
             (crew(0, **{"@AttackImprovement": "+1"}), "crew 101: @AttackImprovement must be an integer >= 0, not '+1'"),
-            (crew(1, **{"@TrainingDesignId": "t-x"}), "crew 102: unknown @TrainingDesignId 't-x'"),
+            (crew(1, **{"@TrainingDesignId": "5090"}), "crew 102: unknown @TrainingDesignId '5090'"),
             (crew(1, **{"@TrainingEndDate": "tomorrow"}), "crew 102: @TrainingEndDate 'tomorrow' does not fit"),
             (crew(1, **{"@TrainingEndDate": ""}), "crew 102: @TrainingEndDate '' does not fit"),
             (crew(0, **{"@TrainingEndDate": "2027-06-01"}), "crew 101: @TrainingEndDate '2027-06-01' does not fit"),
@@ -1257,16 +1257,16 @@ class TrainingScenarioTests(unittest.TestCase):
             (remove("training", "character_designs", 0, "@TrainingCapacity"),
              "character design cd-recruit: @TrainingCapacity must be an integer >= 1, not None"),
             (design("training_designs", 0, **{"@TrainingStat": "Atack"}),
-             "training design t-gym-1: unknown @TrainingStat 'Atack'"),
-            (design("training_designs", 0, **{"@Duration": "0"}), "t-gym-1: @Duration must be an integer >= 1"),
-            (design("training_designs", 0, **{"@MinGain": "5"}), "t-gym-1: @MinGain 5 is above @MaxGain 3"),
-            (design("training_designs", 0, **{"@Fatigue": "-1"}), "t-gym-1: @Fatigue must be an integer >= 0"),
+             "training design 5050: unknown @TrainingStat 'Atack'"),
+            (design("training_designs", 0, **{"@Duration": "0"}), "5050: @Duration must be an integer >= 1"),
+            (design("training_designs", 0, **{"@MinGain": "5"}), "5050: @MinGain 5 is above @MaxGain 3"),
+            (design("training_designs", 0, **{"@Fatigue": "-1"}), "5050: @Fatigue must be an integer >= 0"),
             (design("training_designs", 0, **{"@RequiredRoomDesignId": "999"}),
-             "t-gym-1: unknown @RequiredRoomDesignId '999'"),
+             "5050: unknown @RequiredRoomDesignId '999'"),
             (design("training_designs", 0, **{"@RequiredResearchDesignId": "999"}),
-             "t-gym-1: unknown @RequiredResearchDesignId '999'"),
-            (design("training_designs", 1, **{"@TrainingDesignId": "t-gym-1"}),
-             "training block: duplicate @TrainingDesignId t-gym-1"),
+             "5050: unknown @RequiredResearchDesignId '999'"),
+            (design("training_designs", 1, **{"@TrainingDesignId": "5050"}),
+             "training block: duplicate @TrainingDesignId 5050"),
             # Regression: a null list raised TypeError, and a record without its id was filed under "None".
             (setting("training_designs", None), "training block: training_designs must be a list of records"),
             (setting("item_designs", {"901": {}}), "training block: item_designs must be a list of records"),
@@ -1300,10 +1300,10 @@ class TrainingScenarioTests(unittest.TestCase):
         g = games["alpha"]
         with tempfile.TemporaryDirectory() as tmp:
             runner = ActionRunner("alpha", g, g.snapshot, GameplayJournal(Path(tmp) / "alpha.jsonl"), clock=clock)
-            first = runner.run("add_training", {"training_design_id": "t-gym-1", "character_id": "101"})
-            second = runner.run("add_training", {"training_design_id": "t-acad-1", "character_id": "102"})
+            first = runner.run("add_training", {"training_design_id": "5050", "character_id": "101"})
+            second = runner.run("add_training", {"training_design_id": "5020", "character_id": "102"})
         self.assertEqual((first.outcome, second.outcome), ("contradicted", "not-observed"))
-        self.assertEqual(g.training.log[0]["design_id"], "t-acad-1")
+        self.assertEqual(g.training.log[0]["design_id"], "5020")
         self.assertIs(g.useConsumable(901, "103"), False)  # the scenario's item reject: the item is kept
         self.assertEqual((g.inventory[0]["@Quantity"], len(g.training.log)), ("3", 1))
         clock.start_day(1)
@@ -1312,7 +1312,7 @@ class TrainingScenarioTests(unittest.TestCase):
             g.finishTraining("101")
         # The raise came after the request reached the server: the session did finish, as the log and read show.
         self.assertEqual({key: g.training.log[-1][key] for key in ("op", "character_id", "design_id", "accepted")},
-                         {"op": "finish", "character_id": "101", "design_id": "t-acad-1", "accepted": True})
+                         {"op": "finish", "character_id": "101", "design_id": "5020", "accepted": True})
         self.assertEqual(crew_record(g, "101")["@TrainingDesignId"], "0")
         self.assertEqual(g.fired, ["day 0 addTraining #1: contradicted-effect", "day 0 addTraining #2: reject",
                                    "day 0 activateItem3 #1: reject", "day 1 finishTraining #1: raise"])
@@ -1321,12 +1321,12 @@ class TrainingScenarioTests(unittest.TestCase):
         self.assertEqual(len(result.crew["alpha"]), 3)
 
 
-WIDE = training_design("t-wide", "Pilot", "300", 3600, 0, 2, 4)
+WIDE = training_design("5080", "Pilot", "300", 3600, 0, 2, 4)
 
 
 def twin_trainers():
     """The shipped one-account scenario plus a twin account "bravo". In each, crew 101 is rested, has room to grow
-    and trains t-wide (2-4 Pilot, no fatigue), so every gain is the roll itself."""
+    and trains 5080 (2-4 Pilot, no fatigue), so every gain is the roll itself."""
     scenario = load_scenario("crew-training-single-account")
     scenario["training"]["character_designs"].append({"@CharacterDesignId": "cd-wide", "@TrainingCapacity": "1000"})
     scenario["training"]["training_designs"].append(dict(WIDE))
@@ -1354,7 +1354,7 @@ def drive_scenario_games(scenario, seed, *, train=True, days=3, sessions=8):
             readings.append((g.alias, day, g.minerals, g.gas))
         for _ in range(sessions if train else 0):
             for g in games.values():
-                assert g.addTraining("t-wide", "101") is True, g.training.log[-1]
+                assert g.addTraining("5080", "101") is True, g.training.log[-1]
             clock.advance(timedelta(hours=1))
             for g in games.values():
                 assert g.finishTraining("101") is True, g.training.log[-1]
