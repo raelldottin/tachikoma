@@ -247,6 +247,24 @@ class ShippedLedgerTests(unittest.TestCase):
         ):
             self.assertIn(entry_id, report.weak_only)
 
+    def test_training_crew_and_item_endpoints_are_weak_only(self):
+        expected = {
+            "endpoint.training.add-training": ("sdk.client:Client.addTraining",),
+            "endpoint.training.finish-training": ("sdk.client:Client.finishTraining",),
+            "endpoint.crew.upgrade-character": ("sdk.client:Client.upgradeCharacter",),
+            "endpoint.item.activate-item3": ("sdk.client:Client.activateItem3", "sdk.client:Client.useConsumable"),
+            "endpoint.crew.list-all-characters-of-user": ("sdk.client:Client.listAllCharactersOfUser",),
+        }
+        by_id = {entry.entry_id: entry for entry in LEDGER}
+        report = check_compatibility("1.0")
+        for entry_id, code in expected.items():
+            with self.subTest(entry=entry_id):
+                self.assertIn(entry_id, by_id)
+                self.assertEqual((by_id[entry_id].kind, by_id[entry_id].code), ("endpoint", code))
+                self.assertIn(entry_id, report.weak_only)
+                self.assertIn(entry_id, report.unknown_version)
+                self.assertNotIn(entry_id, report.current)
+
     # Verifies: S03-R7
     def test_target_1_0_flags_every_entry_but_the_g1_read_path(self):
         report = check_compatibility("1.0")

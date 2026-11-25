@@ -126,6 +126,10 @@ class LoadTests(unittest.TestCase):
         auth = authorization_from_dict(payload(actions=["upgrade_room"]))
         self.assertEqual(auth.actions, ("upgrade_room",))
 
+    def test_training_and_consumable_actions_are_authorizable(self):
+        actions = ["add_training", "finish_training", "use_consumable"]
+        self.assertEqual(authorization_from_dict(payload(actions=actions)).actions, tuple(actions))
+
     # Verifies: S05-R2
     def test_window_must_be_utc_and_at_most_fourteen_days(self):
         ok = authorization_from_dict(payload(not_before="2026-11-12T00:00:00+00:00",
