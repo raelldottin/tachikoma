@@ -1,0 +1,1 @@
+<TrainingService><ListAllTrainingDesigns2><TrainingDesigns><TrainingDesign TrainingDesignId="104" TrainingName="Bench Press" Rank="1" Duration="3600" RequiredResearchDesignId="0" RequiredRoomType="Gym" HpChance="10" AttackChance="60" StaminaChance="30" /></TrainingDesigns></ListAllTrainingDesigns2></TrainingService>

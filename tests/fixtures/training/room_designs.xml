@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Synthetic, sanitized fixture: fake room design ids; in-game room names plus one invented look-alike. -->
+<RoomService>
+  <ListRoomDesigns>
+    <RoomDesigns>
+      <RoomDesign RoomDesignId="201" RoomName="Academy" RoomType="Training" />
+      <RoomDesign RoomDesignId="202" RoomName="Galaxy Gym" RoomType="Training" />
+      <RoomDesign RoomDesignId="203" RoomName="Galaxy Gym Annex" RoomType="Storage" />
+      <RoomDesign RoomDesignId="204" RoomName="GYM" RoomType="Training" />
+      <RoomDesign RoomDesignId="205" RoomName="Lunar College" RoomType="Training" />
+    </RoomDesigns>
+  </ListRoomDesigns>
+</RoomService>

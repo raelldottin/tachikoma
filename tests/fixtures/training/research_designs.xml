@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Synthetic, sanitized fixture: fake research design ids; assumed "<Family> LvN" naming (see parse.py). -->
+<ResearchService>
+  <ListAllResearchDesigns>
+    <ResearchDesigns>
+      <ResearchDesign ResearchDesignId="10" RootResearchDesignId="10" ResearchName="Fitness" GasCost="100" StarbuxCost="0" />
+      <ResearchDesign ResearchDesignId="11" RootResearchDesignId="10" ResearchName="Fitness Lv2" GasCost="200" StarbuxCost="0" />
+      <ResearchDesign ResearchDesignId="20" RootResearchDesignId="20" ResearchName="Education" GasCost="100" StarbuxCost="0" />
+      <ResearchDesign ResearchDesignId="21" RootResearchDesignId="20" ResearchName="Education Lv2" GasCost="200" StarbuxCost="0" />
+      <ResearchDesign ResearchDesignId="22" RootResearchDesignId="20" ResearchName="Education Lv3" GasCost="300" StarbuxCost="0" />
+      <ResearchDesign ResearchDesignId="40" RootResearchDesignId="40" ResearchName="Advanced Training" GasCost="500" StarbuxCost="0" />
+    </ResearchDesigns>
+  </ListAllResearchDesigns>
+</ResearchService>

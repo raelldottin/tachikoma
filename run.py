@@ -1225,7 +1225,7 @@ def halt_share_value(text):
     return value
 
 
-REPORT_KINDS = ("progression", "pvp", "fleet", "dashboard")
+REPORT_KINDS = ("progression", "pvp", "fleet", "dashboard", "training")
 REPORT_FORMATS = ("markdown", "json")
 
 
@@ -1238,8 +1238,9 @@ def run_offline_report(kind, journal_paths, registry_path=None, report_format="m
     ``account_alias`` across all given journals; the registry is only read for
     those two. The dashboard is written atomically to ``output_path`` as one
     self-contained HTML file and the path is printed. Returns a process exit
-    code: 0 on success, 2 when a journal or registry is missing or invalid, or
-    the dashboard cannot be written.
+    code: 0 on success, 2 when a journal or registry is missing or invalid
+    (for ``training``, also a record without a time zone), or the dashboard
+    cannot be written.
     """
     from sdk.fleet.accounts import RegistryError, load_registry
     from sdk.journal import JournalError, read_events
@@ -1295,6 +1296,17 @@ def run_offline_report(kind, journal_paths, registry_path=None, report_format="m
 
         rows = pvp.compute_scorecard(battles_from_events(events))
         text = pvp.to_json(rows) if report_format == "json" else pvp.to_markdown(rows)
+    elif kind == "training":
+        from datetime import datetime, timezone
+
+        from sdk.reports import training
+
+        try:
+            report = training.build_training_report(events, now=datetime.now(timezone.utc))
+        except training.TrainingReportError as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 2
+        text = training.to_json(report) if report_format == "json" else training.render_markdown(report)
     else:
         from sdk.fleet.audit import audit_fleet
         from sdk.reports import fleet
@@ -1387,8 +1399,8 @@ def main():
         dest="report",
         choices=REPORT_KINDS,
         default=None,
-        help="print an offline report from --journal files and exit (dashboard writes HTML to --output); "
-        "never logs in or touches the network",
+        help="print an offline report from --journal files and exit (dashboard writes HTML to --output; "
+        "training reports crew training outcomes from the journals alone); never logs in or touches the network",
     )
     parser.add_argument(
         "--journal",

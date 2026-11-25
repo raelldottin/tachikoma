@@ -239,9 +239,14 @@ from sdk.state.snapshot import (  # noqa: E402
     Resources,
     Room,
     SnapshotDelta,
+    TRAINING_STAT_ATTRIBUTES,
     check_game_identity,
     diff_snapshots,
 )
+
+# CrewMember fields that AccountSnapshot.to_dict writes beyond the training fields: the nine stat improvements and
+# the training capacity. Each is an int or null.
+_CREW_STAT_FIELDS = tuple(name for name, _ in TRAINING_STAT_ATTRIBUTES) + ("training_capacity",)
 
 GROWTH_SOURCE = "snapshot diffs: room design changes plus research completions per account-day"
 RESEARCH_DONE = "Completed"
@@ -427,6 +432,7 @@ def snapshot_from_dict(payload: Mapping[str, Any]) -> AccountSnapshot:
                     training_observed=bool(member.get("training_observed", False)),
                     training_design_id=_optional_text(member.get("training_design_id")),
                     training_end=_optional_text(member.get("training_end")),
+                    **{name: _optional_int(member.get(name)) for name in _CREW_STAT_FIELDS},
                 )
                 for member in payload.get("crew") or ()
             ),

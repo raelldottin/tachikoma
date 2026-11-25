@@ -9,6 +9,10 @@ on:
       python-versions:
         type: string
         default: '["3.13"]'
+      # Only Blocking CI sets this; post-merge and release runs skip the advisory mutation job.
+      run-mutation:
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -47,3 +51,48 @@ jobs:
           tests.test_crew_leveling
           tests.test_ship_layout
           tests.test_ci
+
+  mutation:
+    name: Mutation score (advisory)
+    if: ${{ inputs.run-mutation }}
+    runs-on: ubuntu-latest
+    # The mutation step carries continue-on-error and times out (15 minutes) before the job does, so a low score,
+    # a harness error or a slow run is reported without failing this reusable workflow or `CI required`.
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            .github/requirements-ci.txt
+      - run: python -m pip install -r .github/requirements-ci.txt
+      # Exit 1 (a score below min_score) becomes a warning annotation; exit 2 (config, baseline or harness error)
+      # an error annotation, so a broken harness stays visible. Neither can fail `CI required`.
+      - name: Mutation testing (non-blocking)
+        continue-on-error: true
+        timeout-minutes: 15
+        run: |
+          status=0
+          python scripts/mutation.py --jobs 4 --json mutation.json --summary "$GITHUB_STEP_SUMMARY" || status=$?
+          if [ "$status" -eq 1 ]; then
+            echo "::warning title=Mutation score::a target scored below its min_score (advisory)"
+          elif [ "$status" -ne 0 ]; then
+            echo "::error title=Mutation harness::scripts/mutation.py exited $status (config, baseline or harness error)"
+          fi
+          exit "$status"
+      # The JSON report (every mutant, its status and survivor diffs) outlives the runner, also after a failed
+      # mutation step; a failed upload cannot fail the job either.
+      - name: Upload mutation report
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mutation-report-${{ github.run_attempt }}
+          path: mutation.json
+          retention-days: 14
+          if-no-files-found: ignore
