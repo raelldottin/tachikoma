@@ -77,12 +77,34 @@ No repository settings are changed merely by adding these files.
   per-operator counts, surviving mutants and any `ratchet:` hint. A ratchet hint appears when a
   passing target scores at least two points above its `min_score`; it names
   the new floor (the score rounded down to two decimals) to record in the
-  config.
+  config. The summary's headroom is rounded down too, so it never shows two
+  points without a ratchet hint, nor zero or more next to a failure.
+- A following step uploads `mutation.json` as the `mutation-report-<attempt>`
+  artifact (`actions/upload-artifact`, pinned to a commit; kept 14 days). It
+  runs with `if: always()`, so the report survives a failed mutation step, and
+  with `continue-on-error: true`, so a failed upload cannot fail the job;
+  a missing file is ignored.
+- Without a configured or `--timeout` value, each mutant run times out after
+  five times the baseline test time multiplied by the number of parallel runs
+  (CI uses `--jobs 4`), at least 10 seconds: the baseline runs alone, while
+  mutant runs contend with each other.
 - Config targets can also set `functions` (qualnames such as
   `PixelStarshipsApi.addTraining`; nested functions and methods are included),
   `operators` (from the defaults plus the opt-in `arithmetic` and `minmax`) and
   `aggregate: true`, which gates a glob such as `sdk/training/**/*.py` on its
-  combined score while still printing each file's report.
+  combined score while still printing each file's report. A qualname in a
+  glob target's `functions` needs to match in at least one of its files. A
+  glob file with nothing to mutate (an empty `__init__.py`, or nothing left
+  after `functions` or `operators`) is reported as skipped and adds nothing to
+  the combined score; an explicit single target with nothing to mutate under
+  the default operators is still a configuration error (exit 2).
+- `make mutation TARGET=...` (`--target`) can name a configured glob to run it
+  whole. Naming one file of an aggregate glob runs that file without gating it
+  against the glob's `min_score` (unless `--min-score` is given) and without a
+  ratchet hint; only that config entry is expanded and validated, so a broken
+  unrelated entry does not block it. A `--timeout` that differs from the
+  target's configured one is recorded as an override and suppresses the
+  ratchet hint, like `--operators`, `--tests` and `--min-score`.
 
 ## Lint debt is explicit
 

@@ -751,8 +751,8 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(
             expanded,
             [
-                mutation.TargetConfig(LOOP_PATH, ("tests.a",), 0.5, (loop_id,)),
-                mutation.TargetConfig(TOY_PATH, ("tests.a",), 0.5, (toy_id,)),
+                mutation.TargetConfig(LOOP_PATH, ("tests.a",), 0.5, (loop_id,), glob=target.path),
+                mutation.TargetConfig(TOY_PATH, ("tests.a",), 0.5, (toy_id,), glob=target.path),
             ],
         )
         failures = {
@@ -883,13 +883,18 @@ class FakeRunnerTests(unittest.TestCase):
             Counter(mutation.apply_mutant(self.source, mutant) for mutant in self.expected),
         )
         self.assertEqual({call[2] for call in runner.calls}, {("tests.mutation_toys.weak_suite",)})
-        self.assertEqual(report.timeout, 20.0)
-        self.assertEqual({call[1] for call in runner.calls[1:]}, {20.0})
+        # Regression (final review 5): the timeout scales with the parallel runs (3 here) that contend with each
+        # other, not only with the solo baseline: 5 x 4.0 s x 3.
+        self.assertEqual(report.timeout, 60.0)
+        self.assertEqual({call[1] for call in runner.calls[1:]}, {60.0})
         self.assertEqual(report.baseline_seconds, 4.0)
         self.assertLessEqual(len({call[3] for call in runner.calls}), 3)
         self.assertEqual([result.mutant for result in report.results], self.expected)
         self.assertEqual(sorted(result.mutant.id for result in seen), sorted(m.id for m in self.expected))
 
+        two = FakeRunner(baseline=mutation.RunResult("passed", 4.0, tests_run=5))
+        self.assertEqual(self.run_toy(two, jobs=3, mutants=self.expected[:2]).timeout, 40.0, "two mutants: two runs")
+        self.assertEqual(self.run_toy(FakeRunner(baseline=two.baseline), jobs=1).timeout, 20.0)
         quick = FakeRunner(baseline=mutation.RunResult("passed", 0.5, tests_run=5))
         self.assertEqual(self.run_toy(quick).timeout, 10.0)
         fixed = FakeRunner()
@@ -1429,9 +1434,11 @@ class EndToEndToyRuns(unittest.TestCase):
                 "counts_by_operator",
                 "headroom",
                 "part_of",
+                "subset_of",
                 "operators",
                 "overrides",
                 "partial",
+                "no_mutants",
                 "gated",
             },
         )
@@ -1866,6 +1873,270 @@ class ReviewRegressionTests(unittest.TestCase):
         self.assertEqual((report["partial"], report["gated"], report["passed"]), (True, True, False))
 
 
+TOY_GLOB = "tests/mutation_toys/*_target.py"
+EMPTY_PATH = "tests/mutation_toys/empty_target.py"
+
+
+class FinalReviewRegressionTests(unittest.TestCase):
+    """Regression coverage for defects found in the final code review of the harness."""
+
+    def setUp(self):
+        self.tmp = Path(self.enterContext(TemporaryDirectory(ignore_cleanup_errors=True)))
+        self.repo = make_toy_repo(self.tmp)
+        self.scratch = self.tmp / "scratch"
+        self.scratch.mkdir()
+
+    def originals(self):
+        return {
+            path.relative_to(self.repo).as_posix(): path.read_bytes()
+            for path in (self.repo / "tests" / "mutation_toys").glob("*_target.py")
+        }
+
+    def split_runner(self):
+        """A runner class that kills every toy_target mutant and lets every other mutant survive."""
+        originals = self.originals()
+
+        class SplitRunner:
+            def __call__(self, workspace, tests, timeout):
+                changed = [name for name, data in originals.items() if (Path(workspace) / name).read_bytes() != data]
+                return mutation.RunResult("failed" if changed == [TOY_PATH] else "passed", 0.01, "", tests_run=5)
+
+        return SplitRunner
+
+    def killing_runner(self):
+        originals = self.originals()
+
+        class KillingRunner:
+            def __call__(self, workspace, tests, timeout):
+                changed = any((Path(workspace) / name).read_bytes() != data for name, data in originals.items())
+                return mutation.RunResult("failed" if changed else "passed", 0.01, "", tests_run=5)
+
+        return KillingRunner
+
+    def cli(self, targets, *arguments, runner=None):
+        """main() over a config of targets: (exit code, stdout, stderr, JSON reports or None)."""
+        config = write_config(self.tmp, {"schema_version": 1, "copy": list(TOY_COPY), "targets": targets})
+        report_path = self.tmp / "report.json"
+        report_path.unlink(missing_ok=True)
+        base = ["--repo-root", self.repo, "--config", config, "--quiet", "--scratch-dir", self.scratch]
+        with patch.object(mutation, "SubprocessTestRunner", runner or self.split_runner()):
+            code, stdout, stderr = run_main([*base, "--json", report_path, *arguments])
+        reports = json.loads(report_path.read_text(encoding="utf-8"))["reports"] if report_path.exists() else None
+        return code, stdout, stderr, reports
+
+    @staticmethod
+    def glob_target(min_score, aggregate=True, **extra):
+        target = {"path": TOY_GLOB, "tests": ["tests.mutation_toys.weak_suite"], "min_score": min_score, **extra}
+        if aggregate:
+            target["aggregate"] = True
+        return target
+
+    def add_empty_target(self):
+        (self.repo / EMPTY_PATH).write_text('"""Nothing here to mutate."""\n', encoding="utf-8")
+
+    def test_target_naming_one_member_of_an_aggregate_is_not_gated_against_the_glob(self):
+        # Regression (final review 1): --target <member> built a one-file "combined" report gated against the glob's
+        # min_score, with a ratchet hint for the whole glob.
+        code, stdout, stderr, reports = self.cli([self.glob_target(0.9)], "--target", TOY_PATH)
+        self.assertEqual(code, 0, stderr)
+        self.assertEqual([report["target"] for report in reports], [TOY_PATH])
+        (report,) = reports
+        self.assertEqual((report["gated"], report["passed"], report["subset_of"]), (False, True, TOY_GLOB))
+        self.assertIn(f"score 100.0% (part of {TOY_GLOB}; run the glob to gate)\n", stdout)
+        self.assertNotIn("ratchet:", stderr)
+        code, stdout, stderr, (report,) = self.cli([self.glob_target(0.9)], "--target", LOOP_PATH)
+        self.assertEqual(code, 0, stderr)
+        self.assertEqual((report["score"], report["gated"], report["passed"]), (0.0, False, True))
+        code, stdout, stderr, (report,) = self.cli([self.glob_target(0.9)], "--target", LOOP_PATH, "--min-score", "0.5")
+        self.assertEqual(code, 1, stderr)
+        self.assertEqual((report["gated"], report["passed"], report["min_score"]), (True, False, 0.5))
+        self.assertIn("score 0.0% (minimum 50.0%) FAIL\n", stdout)
+        markdown = mutation.Report(
+            TOY_PATH, ("tests.a",), make_results(TOY_PATH, killed=1), 1.0, 10.0, 0.9, subset_of=TOY_GLOB
+        ).format_markdown()
+        self.assertTrue(markdown.startswith(f"### `{TOY_PATH}`: not gated (part of `{TOY_GLOB}`)\n"), markdown)
+        self.assertIn(f"part of `{TOY_GLOB}`; run the glob to gate", markdown)
+
+    def test_target_naming_a_configured_glob_runs_the_whole_group(self):
+        # Regression (final review 6): --target <glob> was rejected as "not a target".
+        code, stdout, stderr, reports = self.cli([self.glob_target(0.6)], "--target", TOY_GLOB)
+        self.assertEqual(code, 0, stderr)
+        self.assertEqual([report["target"] for report in reports], [LOOP_PATH, TOY_PATH, TOY_GLOB])
+        self.assertAlmostEqual(reports[-1]["score"], 24 / 35)
+        self.assertIn(f"ratchet: {TOY_GLOB} scored 0.686; raise min_score from 0.6 to 0.68\n", stderr)
+        code, _, stderr, reports = self.cli([self.glob_target(0.6)], "--target", TOY_GLOB, "--min-score", "0.7")
+        self.assertEqual(code, 1, stderr)
+        self.assertEqual((reports[-1]["min_score"], reports[-1]["overrides"]), (0.7, ["min_score"]))
+        code, _, stderr, reports = self.cli([self.glob_target(0.0, aggregate=False)], "--target", TOY_GLOB)
+        self.assertEqual(code, 0, stderr)
+        self.assertEqual([report["target"] for report in reports], [LOOP_PATH, TOY_PATH])
+
+    def test_target_selection_ignores_unrelated_broken_targets(self):
+        # Regression (final review 7): every configured target was expanded and validated, so one broken entry
+        # blocked --target runs of the others.
+        good = dict(VALID_TARGET, tests=["tests.mutation_toys.weak_suite"])
+        broken = [
+            {"path": "tests/mutation_toys/missing.py", "tests": ["tests.a"], "min_score": 0.5},
+            {"path": "tests/mutation_toys/*_nothing.py", "tests": ["tests.a"], "min_score": 0.5},
+            {
+                "path": "tests/mutation_toys/loop_t*.py",
+                "tests": ["tests.a"],
+                "min_score": 0.5,
+                "equivalent": ["sdk/elsewhere.py:1:0:delete:0"],
+            },
+        ]
+        code, stdout, stderr, _ = self.cli([*broken, good], "--target", TOY_PATH, "--list")
+        self.assertEqual(code, 0, stderr)
+        self.assertEqual(len(stdout.splitlines()), 24)
+        code, _, stderr, _ = self.cli([*broken, good], "--list")
+        self.assertEqual(code, 2)
+        self.assertIn("target not found", stderr)
+        code, _, stderr, _ = self.cli([dict(good, typo=1), good], "--target", TOY_PATH, "--list")
+        self.assertEqual(code, 2, "the schema of every entry is still validated")
+        self.assertIn("unknown keys", stderr)
+
+    def test_files_without_mutants_in_a_glob_or_narrowed_run_are_skipped(self):
+        # Regression (final review 2): an empty __init__.py in a glob, or a narrow --operators run, exited 2.
+        self.add_empty_target()
+        code, stdout, stderr, reports = self.cli([self.glob_target(0.6)])
+        self.assertEqual(code, 0, stderr)
+        self.assertEqual([report["target"] for report in reports], [EMPTY_PATH, LOOP_PATH, TOY_PATH, TOY_GLOB])
+        empty = reports[0]
+        self.assertEqual(
+            (empty["score"], empty["no_mutants"], empty["passed"], empty["gated"], empty["counts"]["total"]),
+            (None, True, True, False, 0),
+        )
+        self.assertIn(f"{EMPTY_PATH}: 0 mutants", stdout)
+        self.assertIn("score n/a (no mutants: skipped)\n", stdout)
+        self.assertEqual(reports[-1]["counts"]["total"], 35)
+        self.assertAlmostEqual(reports[-1]["score"], 24 / 35)
+        self.assertFalse(reports[-1]["no_mutants"])
+
+        code, _, stderr, reports = self.cli([self.glob_target(0.5, aggregate=False)], runner=self.killing_runner())
+        self.assertEqual(code, 0, stderr)
+        self.assertEqual([(report["target"], report["passed"]) for report in reports][0], (EMPTY_PATH, True))
+
+        toy = dict(VALID_TARGET, tests=["tests.mutation_toys.weak_suite"])
+        code, stdout, stderr, (report,) = self.cli([toy], "--operators", "minmax")
+        self.assertEqual(code, 0, stderr)
+        self.assertEqual((report["no_mutants"], report["passed"], report["score"]), (True, True, None))
+
+        code, _, stderr, _ = self.cli([dict(toy, path=EMPTY_PATH)])
+        self.assertEqual(code, 2, "an explicit target with nothing to mutate is still a configuration error")
+        self.assertIn("no mutants", stderr)
+        code, _, stderr, _ = self.cli([dict(toy, functions=["sign"])])
+        self.assertEqual(code, 2)
+        self.assertIn("no mutants", stderr)
+
+        markdown = mutation.Report(EMPTY_PATH, ("tests.a",), (), 0.0, 0.0, 0.5, no_mutants=True).format_markdown()
+        self.assertTrue(markdown.startswith(f"### `{EMPTY_PATH}`: skipped (no mutants)\n"), markdown)
+        combined = mutation.Report.combine(
+            TOY_GLOB, [mutation.Report(EMPTY_PATH, ("tests.a",), (), 0.0, 0.0, 0.5, no_mutants=True)], 0.5
+        )
+        self.assertEqual((combined.no_mutants, combined.passed), (True, True))
+
+    def test_glob_functions_need_to_match_in_one_expanded_file_only(self):
+        # Regression (final review 3): every file of a glob had to define every listed qualname.
+        code, stdout, stderr, _ = self.cli([self.glob_target(0.0, functions=["grade"])], "--list")
+        self.assertEqual(code, 0, stderr)
+        self.assertEqual(len(stdout.splitlines()), 6)
+        self.assertTrue(all(line.startswith(f"{TOY_PATH}:") for line in stdout.splitlines()), stdout)
+        code, _, stderr, reports = self.cli([self.glob_target(0.0, functions=["grade"])])
+        self.assertEqual(code, 0, stderr)
+        self.assertEqual(
+            [(report["target"], report["no_mutants"]) for report in reports][:2], [(LOOP_PATH, True), (TOY_PATH, False)]
+        )
+        code, _, stderr, _ = self.cli([self.glob_target(0.0, functions=["grade", "nope"])], "--list")
+        self.assertEqual(code, 2)
+        self.assertIn("['nope'] match no def or class", stderr)
+
+    def test_a_command_line_timeout_is_an_override(self):
+        # Regression (final review 4): --timeout changed which mutants time out but still printed a ratchet hint.
+        results = make_results(TOY_PATH, killed=9, survived=1)
+        crafted = mutation.Report(TOY_PATH, ("tests.mutation_toys.strong_suite",), results, 1.0, 10.0, min_score=0.5)
+        cases = {
+            "no --timeout": ({}, [], [], None),
+            "--timeout": ({}, ["--timeout", "60"], ["timeout"], 60.0),
+            "configured timeout": ({"timeout": 60}, ["--timeout", "60"], [], 60.0),
+            "different timeout": ({"timeout": 60}, ["--timeout", "30"], ["timeout"], 30.0),
+        }
+        for name, (target, arguments, overrides, timeout) in cases.items():
+            with self.subTest(case=name):
+                with patch.object(mutation, "run_mutants", return_value=crafted) as run:
+                    code, _, stderr, (report,) = self.cli([dict(VALID_TARGET, **target)], *arguments)
+                self.assertEqual(code, 0, stderr)
+                self.assertEqual(report["overrides"], overrides)
+                self.assertEqual("ratchet:" in stderr, not overrides, stderr)
+                self.assertEqual(run.call_args.kwargs["timeout"], timeout)
+
+    def test_mutants_are_generated_once_per_target_and_line_offsets_once_per_run(self):
+        # Regression (final review 10): progress re-parsed the target and apply_mutant re-split the source per mutant.
+        toy = dict(VALID_TARGET, tests=["tests.mutation_toys.weak_suite"])
+        config = write_config(self.tmp, {"schema_version": 1, "copy": list(TOY_COPY), "targets": [toy]})
+        arguments = ["--repo-root", self.repo, "--config", config, "--scratch-dir", self.scratch]
+        with (
+            patch.object(mutation, "SubprocessTestRunner", self.killing_runner()),
+            patch.object(mutation, "generate_mutants", wraps=mutation.generate_mutants) as generate,
+            patch.object(mutation, "line_offsets", wraps=mutation.line_offsets) as offsets,
+        ):
+            code, _, stderr = run_main(arguments)
+        self.assertEqual(code, 0, stderr)
+        self.assertIn("[24/24]", stderr)
+        self.assertEqual(generate.call_count, 1)
+        self.assertEqual(offsets.call_count, 2, "once while generating and once for applying every mutant")
+
+    def test_extra_workspaces_are_copied_only_after_the_baseline_passes(self):
+        # Regression (final review 10): --jobs copies were made before a baseline that could fail.
+        runner = FakeRunner(baseline=mutation.RunResult("failed", 1.0, "boom", tests_run=5))
+        with patch.object(mutation, "copy_workspace", wraps=mutation.copy_workspace) as copy:
+            with self.assertRaises(mutation.BaselineError):
+                mutation.run_mutants(
+                    TOY_PATH,
+                    ("tests.mutation_toys.weak_suite",),
+                    repo_root=self.repo,
+                    copy_paths=TOY_COPY,
+                    scratch_dir=self.scratch,
+                    test_runner=runner,
+                    jobs=4,
+                )
+        self.assertEqual(copy.call_count, 1)
+        with patch.object(mutation, "copy_workspace", wraps=mutation.copy_workspace) as copy:
+            mutation.run_mutants(
+                TOY_PATH,
+                ("tests.mutation_toys.weak_suite",),
+                repo_root=self.repo,
+                copy_paths=TOY_COPY,
+                scratch_dir=self.scratch,
+                test_runner=FakeRunner(),
+                jobs=4,
+            )
+        self.assertEqual(copy.call_count, 4)
+
+    def test_typing_helper_name_arguments_are_not_mutated(self):
+        # Regression (final review 11): cast("T", x), TypeVar("T") and NewType("T", int) produced noise mutants.
+        source = (
+            "from typing import TypeVar, NewType, cast\n"
+            "import typing\n"
+            'T = TypeVar("T")\n'
+            'UserId = NewType("UserId", int)\n'
+            'K = typing.TypeVar("K", bound=int)\n'
+            'kept = registry.cast("keep")\n'
+            "def f(x):\n"
+            '    y = cast("int", x)\n'
+            '    z = typing.cast("list[str]", x)\n'
+            "    return y\n"
+        )
+        self.assertEqual(
+            [(m.id, m.original, m.replacement) for m in gen(source)],
+            [
+                ("m.py:6:21:constant:0", '"keep"', '""'),
+                ("m.py:8:4:delete:0", 'y = cast("int", x)', "pass"),
+                ("m.py:9:4:delete:0", 'z = typing.cast("list[str]", x)', "pass"),
+                ("m.py:10:11:return:0", "y", "None"),
+            ],
+        )
+
+
 class ReportTests(unittest.TestCase):
     """Report fields for gating and ratcheting: headroom, ratchet_hint, aggregation and the Markdown summary."""
 
@@ -1962,13 +2233,36 @@ class ReportTests(unittest.TestCase):
         failing = self.report(0.81, killed=17, survived=4)
         self.assertFalse(failing.passed)
         self.assertIn("score 80.9% (minimum 81.0%) FAIL\n", failing.format_text())
-        self.assertIn("Score **80.9%** (minimum 81.0%, headroom -0.0 points)", failing.format_markdown())
+        self.assertIn("Score **80.9%** (minimum 81.0%, headroom -0.1 points)", failing.format_markdown())
         finer = self.report(0.8096, killed=17, survived=4)
         self.assertIn("score 80.95% (minimum 80.96%) FAIL\n", finer.format_text())
         passing = self.report(0.80, killed=17, survived=4)
         self.assertIn("score 81.0% (minimum 80.0%) PASS\n", passing.format_text())
         exact = self.report(0.81, killed=81, survived=19)
         self.assertIn("score 81.0% (minimum 81.0%) PASS\n", exact.format_text())
+
+    def test_markdown_headroom_never_contradicts_the_verdict_or_the_ratchet_hint(self):
+        # Regression (final review 8): headroom was rounded to .1f, so 1.96 points showed "+2.0" with no ratchet hint
+        # and -0.05 points showed "-0.0" next to FAIL.
+        cases = [
+            # (min_score, killed, survived, shown headroom, verdict, has hint)
+            (0.80, 2049, 451, "+1.9", "PASS", False),
+            (0.81, 83, 17, "+2.0", "PASS", True),
+            (0.81, 81, 19, "+0.0", "PASS", False),
+            (0.8096, 17, 4, "-0.01", "FAIL", False),
+            (0.81, 17, 4, "-0.1", "FAIL", False),
+            (0.95, 1, 2, "-61.7", "FAIL", False),
+        ]
+        for min_score, killed, survived, headroom, verdict, hint in cases:
+            with self.subTest(min_score=min_score, killed=killed, survived=survived):
+                report = self.report(min_score, killed=killed, survived=survived)
+                markdown = report.format_markdown()
+                self.assertIn(f"headroom {headroom} points)", markdown)
+                self.assertTrue(markdown.startswith(f"### `m.py`: {verdict}\n"), markdown)
+                self.assertEqual("ratchet:" in markdown, hint, markdown)
+        overridden = replace(self.report(0.5, killed=9, survived=1), overrides=("timeout",))
+        self.assertIn("headroom +40.0 points", overridden.format_markdown())
+        self.assertIn("No ratchet hint: the run used command-line overrides (timeout).\n", overridden.format_markdown())
 
     def test_a_partial_run_is_gated_only_against_an_explicit_minimum(self):
         # Regression (benchmark O1): `--only <survivor id>` was gated against the full-run floor and exited 1.
@@ -1991,7 +2285,7 @@ class ReportTests(unittest.TestCase):
         markdown = report.format_markdown()
         self.assertTrue(markdown.startswith("### `m.py`: PASS\n\n"), markdown)
         self.assertIn(
-            "Score **90.0%** (minimum 85.0%, headroom +5.0 points); 10 mutants: 9 killed, 1 survived, 0 timeout, "
+            "Score **90.0%** (minimum 85.0%, headroom +5.0 points); 10 mutants, 9 killed, 1 survived, 0 timeout, "
             "0 incompetent, 0 equivalent.\n",
             markdown,
         )
@@ -2116,7 +2410,16 @@ class RepositoryWiringTests(unittest.TestCase):
         # Exit 1 (score below min_score) is a warning; exit 2 (config, baseline or harness error) stays visible.
         self.assertIn("::warning", step["run"])
         self.assertIn("::error", step["run"])
-        others = [other for other in job["steps"] if other is not step]
+        # Regression (final review 9): mutation.json was written and then discarded with the runner. It is uploaded
+        # even when the mutation step failed, and a failed upload cannot fail the job either.
+        (upload,) = [other for other in job["steps"] if other.get("uses", "").startswith("actions/upload-artifact@")]
+        self.assertGreater(job["steps"].index(upload), job["steps"].index(step))
+        self.assertRegex(upload["uses"], r"^actions/upload-artifact@[0-9a-f]{40}$")
+        self.assertEqual((upload.get("if"), upload.get("continue-on-error")), ("always()", "true"))
+        self.assertEqual(upload["with"]["path"], "mutation.json")
+        self.assertEqual(upload["with"]["retention-days"], "14")
+        self.assertEqual(upload["with"]["if-no-files-found"], "ignore")
+        others = [other for other in job["steps"] if other is not step and other is not upload]
         self.assertFalse([other for other in others if "continue-on-error" in other])
 
         # The same cached dependency install as the tests job, so client.py targets can import requests.

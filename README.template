@@ -24,13 +24,20 @@ tests, and fails below the module's recorded minimum score. A target can
 limit mutation to some functions (`"functions": ["Class.method"]`), choose
 operators (`"operators"`, or `--operators`, including the opt-in `arithmetic`
 and `minmax`), and gate a glob such as `sdk/training/**/*.py` on its combined
-score (`"aggregate": true`). A passing score at least two points above its
-minimum prints a `ratchet:` line naming the new floor to record, unless the
-run used `--only`, `--operators`, `--tests` or `--min-score`, and
-`--summary PATH` appends a Markdown report that lists the operators used. An
-`--only` run is not gated unless `--min-score` is given. Blocking CI (the `run-mutation`
-input of `python-tests.yml`) reports the score in the job summary without
-blocking merges; post-merge and release runs skip it.
+score (`"aggregate": true`). `TARGET` can also name a configured glob, which
+runs the whole glob; naming one file of an aggregate glob reports that file
+without gating it (run the glob to gate). A file in a glob with nothing to
+mutate, such as an empty `__init__.py`, is reported as skipped. A passing
+score at least two points above its minimum prints a `ratchet:` line naming
+the new floor to record, unless the run used `--only`, `--operators`,
+`--tests`, `--min-score` or `--timeout`, and `--summary PATH` appends a
+Markdown report that lists the operators used. An `--only` run is not gated
+unless `--min-score` is given. Each mutant run times out after five times the
+baseline test time multiplied by the number of parallel runs (`--jobs`), at
+least 10 seconds, unless the config or `--timeout` sets it. Blocking CI (the
+`run-mutation` input of `python-tests.yml`) reports the score in the job
+summary and uploads `mutation.json` as an artifact without blocking merges;
+post-merge and release runs skip it.
 
 See [.github/workflows/README.md](.github/workflows/README.md) for the
 check coverage, lint baseline, local commands, and branch-protection setup.

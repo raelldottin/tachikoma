@@ -18,10 +18,14 @@ annotations, the `__main__` guard and the arguments of `Literal[...]` are never 
 A target can restrict mutation to some functions ("functions": qualnames such as Class.method, nested scopes
 included) and choose operators ("operators", or --operators), including the opt-in arithmetic and minmax operators
 that the default set leaves out. "aggregate": true on a glob target such as sdk/training/**/*.py gates the glob's
-combined score instead of each file's. A complete, passing run at least two points above min_score, with the
-configured tests, operators and minimum, prints a `ratchet:` line with the floor to record, and --summary appends a
-Markdown report (for $GITHUB_STEP_SUMMARY). An --only run is partial: it is gated only against an explicit
---min-score. Reports record the operators used and any command-line overrides.
+combined score instead of each file's; a qualname in "functions" of a glob target must match in at least one of its
+files. A complete, passing run at least two points above min_score, with the configured tests, operators, minimum
+and timeout, prints a `ratchet:` line with the floor to record, and --summary appends a Markdown report (for
+$GITHUB_STEP_SUMMARY). --target names one module or a configured glob. An --only run, like a --target run of one
+file of an aggregate glob, is partial: it is gated only against an explicit --min-score. A glob member, or a run
+whose operators leave out a default one, with nothing to mutate is reported as skipped, not an error. Without a
+timeout, each mutant run gets 5x the baseline's seconds times the number of parallel runs (at least 10 seconds).
+Reports record the operators used and any command-line overrides.
 """
 
 from __future__ import annotations
@@ -80,6 +84,9 @@ TEST_MODULE_RE = re.compile(r"^[A-Za-z_][\w.]*$")
 MUTANT_ID_RE = re.compile(rf"^(?P<path>.+):\d+:\d+:(?:{'|'.join(ALL_OPERATORS)}):\d+$")
 QUALNAME_RE = re.compile(r"^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*$")
 GLOB_CHARACTERS = frozenset("*?[")
+# The first argument of these calls is a type expression or a type's name, not runtime logic.
+TYPING_HELPERS = frozenset({"cast", "TypeVar", "NewType"})
+TYPING_MODULES = frozenset({"typing", "typing_extensions", "t"})
 
 COMPARE_FLIPS: dict[type[ast.cmpop], str] = {
     ast.Lt: ">=",
@@ -186,20 +193,14 @@ def read_source(path: Path) -> str:
         raise ConfigError(f"{path}: not valid UTF-8 ({error})") from None
 
 
-def is_int_literal(node: ast.AST) -> bool:
-    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
-        node = node.operand
-    return isinstance(node, ast.Constant) and type(node.value) is int
-
-
-def int_literal_value(node: ast.AST) -> int:
-    """The value of a node accepted by is_int_literal."""
+def int_literal_value(node: ast.AST) -> int | None:
+    """The value of an int literal such as 5 or -5 (not a bool); None for any other node."""
     sign, inner = 1, node
     if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
         sign, inner = -1, node.operand
-    if isinstance(inner, ast.Constant) and isinstance(inner.value, int):
+    if isinstance(inner, ast.Constant) and type(inner.value) is int:
         return sign * inner.value
-    raise TypeError(f"not an int literal: {ast.dump(node)}")
+    return None
 
 
 def is_main_guard(node: ast.stmt) -> bool:
@@ -219,6 +220,18 @@ def is_literal_type(node: ast.expr) -> bool:
     """`Literal`, `typing.Literal`, `t.Literal` and the like: the subscripted name of a typing.Literal type."""
     return (isinstance(node, ast.Name) and node.id == "Literal") or (
         isinstance(node, ast.Attribute) and node.attr == "Literal"
+    )
+
+
+def is_typing_helper(node: ast.expr) -> bool:
+    """`cast`, `TypeVar` or `NewType`, bare or as an attribute of typing, typing_extensions or t."""
+    if isinstance(node, ast.Name):
+        return node.id in TYPING_HELPERS
+    return (
+        isinstance(node, ast.Attribute)
+        and node.attr in TYPING_HELPERS
+        and isinstance(node.value, ast.Name)
+        and node.value.id in TYPING_MODULES
     )
 
 
@@ -336,6 +349,9 @@ class _Collector:
             elif isinstance(node, ast.Subscript) and is_literal_type(node.value):
                 # Literal["a", "b"] is typing (often a module-level alias), not runtime logic.
                 self.mark(node.slice)
+            elif isinstance(node, ast.Call) and node.args and is_typing_helper(node.func):
+                # cast("Foo", x), TypeVar("T") and NewType("UserId", int): a type expression or a type's name.
+                self.mark(node.args[0])
 
     # Traversal ---------------------------------------------------------------------------------------------
     def collect(self) -> list[tuple[int, int, int, int, str, str, str]]:
@@ -378,8 +394,8 @@ class _Collector:
             if span is not None:
                 self.add("compare", span[0], span[1], COMPARE_FLIPS[type(operator)])
         for operand in operands:
-            if is_int_literal(operand):
-                value = int_literal_value(operand)
+            value = int_literal_value(operand)
+            if value is not None:
                 self.add_node("boundary", operand, str(value - 1))
                 self.add_node("boundary", operand, str(value + 1))
                 self.owned.add(id(operand.operand if isinstance(operand, ast.UnaryOp) else operand))
@@ -465,6 +481,13 @@ def scope_names(tree: ast.Module) -> set[str]:
     return names
 
 
+def parse_module(source: str, display: str) -> ast.Module:
+    try:
+        return ast.parse(source, filename=display)
+    except SyntaxError as error:
+        raise ConfigError(f"{display}: cannot parse: {error}") from None
+
+
 def check_operators(operators: Iterable[str] | None) -> tuple[str, ...]:
     """The selected operator names (default: OPERATORS); a name outside ALL_OPERATORS is a ConfigError."""
     if operators is None:
@@ -487,24 +510,23 @@ def generate_mutants(
     mutate_data_tables: bool = False,
     functions: Iterable[str] | None = None,
     operators: Iterable[str] | None = None,
+    require_functions: bool = True,
 ) -> list[Mutant]:
     """Every mutant of one module, in deterministic (line, col, operator) order.
 
     path names the module in mutant ids (as POSIX); source defaults to the file's UTF-8 text. operators selects from
     ALL_OPERATORS (default: OPERATORS). functions keeps only mutants whose scope equals or is nested inside one of the
-    listed qualnames; a name that matches no def or class in the module is a ConfigError. Neither filter changes the
-    id of a mutant it keeps.
+    listed qualnames; a name that matches no def or class in the module is a ConfigError unless require_functions is
+    false (a glob member: expand_targets checks the names across the whole glob). Neither filter changes the id of a
+    mutant it keeps.
     """
     selected = check_operators(operators)
     if source is None:
         source = read_source(Path(path))
     display = PurePath(path).as_posix()
-    try:
-        tree = ast.parse(source, filename=display)
-    except SyntaxError as error:
-        raise ConfigError(f"{display}: cannot parse: {error}") from None
+    tree = parse_module(source, display)
     scopes = None if functions is None else tuple(functions)
-    if scopes is not None:
+    if scopes is not None and require_functions:
         known = scope_names(tree)
         missing = [name for name in scopes if name not in known]
         if missing:
@@ -524,9 +546,14 @@ def generate_mutants(
     return mutants
 
 
-def apply_mutant(source: str, mutant: Mutant) -> str:
-    """source with the mutant's span replaced; ValueError when the span does not hold mutant.original."""
-    offsets = line_offsets(source_lines(source))
+def apply_mutant(source: str, mutant: Mutant, offsets: list[int] | None = None) -> str:
+    """source with the mutant's span replaced; ValueError when the span does not hold mutant.original.
+
+    offsets, if given, must be line_offsets(source_lines(source)): a caller applying many mutants to one source
+    computes them once.
+    """
+    if offsets is None:
+        offsets = line_offsets(source_lines(source))
     if not (1 <= mutant.line <= mutant.end_line < len(offsets)):
         raise ValueError(f"{mutant.id}: span is outside the source")
     start = offsets[mutant.line - 1] + mutant.col
@@ -542,8 +569,10 @@ class TargetConfig:
     """One configured target: a repo-relative module path (or glob) and the dotted test modules that cover it.
 
     functions and operators restrict generation (see generate_mutants). aggregate (glob targets only) gates the
-    glob's combined score instead of each file's; expand_targets records the glob as group on each of its files.
-    overrides names what the command line changed ("operators", "tests", "min_score"); see Report.
+    glob's combined score instead of each file's; expand_targets records the configured glob as glob on each of its
+    files, and also as group when aggregate is set. subset_of is the aggregate glob of a file that --target ran
+    alone, without the rest of its group. overrides names what the command line changed ("operators", "tests",
+    "min_score", "timeout"); see Report.
     """
 
     path: str
@@ -557,6 +586,8 @@ class TargetConfig:
     aggregate: bool = False
     group: str | None = None
     overrides: tuple[str, ...] = ()
+    glob: str | None = None
+    subset_of: str | None = None
 
 
 @dataclass(frozen=True)
@@ -696,31 +727,64 @@ def mutant_id_path(mutant_id: str) -> str:
     return mutant_id.rsplit(":", 4)[0]
 
 
+def is_glob(path: str) -> bool:
+    return bool(GLOB_CHARACTERS & set(path))
+
+
+def glob_files(pattern: str, root: Path) -> list[str]:
+    """The .py files under root that a glob pattern matches, as sorted repo-relative POSIX paths (maybe none)."""
+    matches = {match.relative_to(root).as_posix() for match in root.glob(pattern) if match.is_file()}
+    return sorted(name for name in matches if name.endswith(".py"))
+
+
+def expand_target(target: TargetConfig, repo_root) -> list[TargetConfig]:
+    """One TargetConfig per concrete file of one configured target (see expand_targets)."""
+    root = Path(repo_root)
+    glob = target.path if is_glob(target.path) else None
+    if glob is not None:
+        files = glob_files(glob, root)
+        if not files:
+            raise ConfigError(f"target glob {glob!r} matches no .py files")
+    else:
+        if not (root / target.path).is_file():
+            raise ConfigError(f"target not found: {target.path}")
+        files = [target.path]
+    for mutant_id in target.equivalent:
+        if mutant_id_path(mutant_id) not in files:
+            raise ConfigError(f"equivalent id {mutant_id!r} names a file outside target {target.path!r}")
+    if glob is not None and target.functions is not None:
+        # A glob member generates with require_functions=False, so each qualname is checked here, once for the glob.
+        known = set().union(*(scope_names(parse_module(read_source(root / name), name)) for name in files))
+        missing = [name for name in target.functions if name not in known]
+        if missing:
+            raise ConfigError(
+                f"{glob}: function(s) {missing} match no def or class in any matched file (give qualnames: Class.method)"
+            )
+    group = glob if target.aggregate else None
+    return [
+        replace(
+            target,
+            path=name,
+            equivalent=tuple(item for item in target.equivalent if mutant_id_path(item) == name),
+            group=group,
+            glob=glob,
+        )
+        for name in files
+    ]
+
+
 def expand_targets(config: Config, repo_root) -> list[TargetConfig]:
     """One TargetConfig per concrete file: globs expand to sorted .py files and equivalent ids split per file."""
-    root = Path(repo_root)
     expanded: list[TargetConfig] = []
     owners: dict[str, str] = {}
     for target in config.targets:
-        if GLOB_CHARACTERS & set(target.path):
-            matches = {match.relative_to(root).as_posix() for match in root.glob(target.path) if match.is_file()}
-            files = sorted(name for name in matches if name.endswith(".py"))
-            if not files:
-                raise ConfigError(f"target glob {target.path!r} matches no .py files")
-        else:
-            if not (root / target.path).is_file():
-                raise ConfigError(f"target not found: {target.path}")
-            files = [target.path]
-        for mutant_id in target.equivalent:
-            if mutant_id_path(mutant_id) not in files:
-                raise ConfigError(f"equivalent id {mutant_id!r} names a file outside target {target.path!r}")
-        for name in files:
-            if name in owners:
-                raise ConfigError(f"{name} is matched by more than one target ({owners[name]!r}, {target.path!r})")
-            owners[name] = target.path
-            equivalent = tuple(item for item in target.equivalent if mutant_id_path(item) == name)
-            group = target.path if target.aggregate else None
-            expanded.append(replace(target, path=name, equivalent=equivalent, group=group))
+        for item in expand_target(target, repo_root):
+            if item.path in owners:
+                raise ConfigError(
+                    f"{item.path} is matched by more than one target ({owners[item.path]!r}, {target.path!r})"
+                )
+            owners[item.path] = target.path
+            expanded.append(item)
     return expanded
 
 
@@ -755,9 +819,12 @@ class Report:
 
     partial: only some mutants ran (`only`); such a score is not comparable with min_score, so it is not gated
     unless "min_score" is in overrides, and gives no ratchet hint. part_of: the glob of an aggregate target this file
-    belongs to; such a report is informational and the combined report is gated. operators: the operator set used.
-    overrides: what the command line changed from the config ("operators", "tests", "min_score"); the score is
-    still gated, but it is not measured like the recorded floor, so no ratchet hint.
+    belongs to; such a report is informational and the combined report is gated. subset_of: the glob of an
+    aggregate target when --target ran this one file of it alone; like a partial run it is not gated unless
+    "min_score" is in overrides, and gives no ratchet hint. no_mutants: a glob member or an operator-narrowed run
+    with nothing to mutate; it is skipped (never gated, always passes). operators: the operator set used.
+    overrides: what the command line changed from the config ("operators", "tests", "min_score", "timeout"); the
+    score is still gated, but it is not measured like the recorded floor, so no ratchet hint.
     """
 
     target: str
@@ -771,10 +838,15 @@ class Report:
     part_of: str | None = None
     operators: tuple[str, ...] = ()
     overrides: tuple[str, ...] = ()
+    subset_of: str | None = None
+    no_mutants: bool = False
 
     @classmethod
     def combine(cls, target: str, reports: Iterable[Report], min_score: float) -> Report:
-        """One gated report over every result of an aggregate target's per-file reports."""
+        """One gated report over every result of an aggregate target's per-file reports.
+
+        Members without mutants add nothing; when no member had any, the combined report is skipped too.
+        """
         reports = list(reports)
         return cls(
             target,
@@ -787,6 +859,7 @@ class Report:
             any(report.partial for report in reports),
             operators=reports[0].operators if reports else (),
             overrides=tuple(dict.fromkeys(name for report in reports for name in report.overrides)),
+            no_mutants=bool(reports) and all(report.no_mutants for report in reports),
         )
 
     @property
@@ -814,15 +887,17 @@ class Report:
 
     @property
     def gated(self) -> bool:
-        """Whether the score is compared with min_score: not for an aggregate member, nor for a partial run unless
-        its minimum was given explicitly."""
-        return self.part_of is None and (not self.partial or "min_score" in self.overrides)
+        """Whether the score is compared with min_score: not for a skipped report or an aggregate member, nor for a
+        partial run or a lone member of an aggregate unless its minimum was given explicitly."""
+        if self.no_mutants or self.part_of is not None:
+            return False
+        return (not self.partial and self.subset_of is None) or "min_score" in self.overrides
 
     @property
     def passed(self) -> bool:
         """Without a score only a zero minimum passes: an unmeasured target cannot meet a positive one. An ungated
-        partial run passes when it measured anything."""
-        if self.part_of is not None:
+        partial run passes when it measured anything; a skipped report or an aggregate member always passes."""
+        if self.no_mutants or self.part_of is not None:
             return True
         score = self.score
         if not self.gated:
@@ -839,11 +914,11 @@ class Report:
     def ratchet_hint(self) -> str | None:
         """After a complete, passing run at least RATCHET_MARGIN above min_score: the floor to record instead.
 
-        None when the run is not comparable with the recorded floor: partial, or measured with operators, tests or
-        a minimum given on the command line.
+        None when the run is not comparable with the recorded floor: partial, one file of an aggregate, or measured
+        with operators, tests, a minimum or a timeout given on the command line.
         """
         headroom = self.headroom
-        if headroom is None or self.partial or self.overrides or not self.passed:
+        if headroom is None or self.partial or self.subset_of or self.overrides or not self.passed:
             return None
         if headroom < RATCHET_MARGIN - 1e-9:
             return None
@@ -867,7 +942,9 @@ class Report:
             "passed": self.passed,
             "headroom": self.headroom,
             "part_of": self.part_of,
+            "subset_of": self.subset_of,
             "partial": self.partial,
+            "no_mutants": self.no_mutants,
             "gated": self.gated,
             "operators": list(self.operators),
             "overrides": list(self.overrides),
@@ -881,7 +958,7 @@ class Report:
 
     def summary_line(self) -> str:
         counts = self.counts
-        return f"{counts['total']} mutants: " + ", ".join(f"{counts[status]} {status}" for status in STATUSES)
+        return f"{counts['total']} mutants, " + ", ".join(f"{counts[status]} {status}" for status in STATUSES)
 
     def percent_digits(self) -> int:
         """Decimals that show min_score as a percentage exactly (1 to 4)."""
@@ -902,20 +979,36 @@ class Report:
             shown = math.floor(score * 100 * 10**digits) / 10**digits
         return f"{shown:.{digits}f}%"
 
+    def shown_headroom(self) -> str | None:
+        """headroom in points at the score's precision, rounded down: a pass never shows two points that no ratchet
+        hint backs up, and a failure never shows a headroom of zero or more."""
+        headroom = self.headroom
+        if headroom is None:
+            return None
+        digits = self.percent_digits()
+        units = headroom * 100 * 10**digits
+        units = math.floor(units + 1e-6) if self.passed else min(math.floor(units), -1)
+        return f"{units / 10**digits:+.{digits}f}"
+
     def operators_note(self) -> str:
         return " (operators differ from config)" if "operators" in self.overrides else ""
 
+    def ungated_reason(self, quote: str = "") -> str:
+        if self.subset_of is not None:
+            return f"part of {quote}{self.subset_of}{quote}; run the glob to gate"
+        return "partial run: not gated"
+
     def format_text(self) -> str:
-        counts = self.counts
-        summary = ", ".join(f"{counts[status]} {status}" for status in STATUSES)
         score = self.shown_score() or "n/a (no scored mutants)"
-        if self.part_of is not None:
+        if self.no_mutants:
+            gate = "score n/a (no mutants: skipped)"
+        elif self.part_of is not None:
             gate = f"score {score} (gated as part of {self.part_of})"
         elif not self.gated:
-            gate = f"score {score} (partial run: not gated)"
+            gate = f"score {score} ({self.ungated_reason()})"
         else:
             gate = f"score {score} (minimum {self.shown_minimum()}) {'PASS' if self.passed else 'FAIL'}"
-        lines = [f"{self.target}: {counts['total']} mutants, {summary}", gate]
+        lines = [f"{self.target}: {self.summary_line()}", gate]
         if self.operators:
             lines.append(f"operators: {', '.join(self.operators)}{self.operators_note()}")
         for result in self.survivors:
@@ -925,17 +1018,22 @@ class Report:
 
     def format_markdown(self) -> str:
         """A GitHub-flavoured Markdown section: verdict, score, per-operator table, ratchet hint, survivor diffs."""
-        if self.part_of is not None:
-            verdict = f"gated as part of `{self.part_of}`"
+        if self.no_mutants:
+            verdict, detail = "skipped (no mutants)", "no mutants: skipped"
+        elif self.part_of is not None:
+            verdict, detail = f"gated as part of `{self.part_of}`", "not gated alone"
         elif not self.gated:
-            verdict = "not gated (partial run)"
+            reason = f"part of `{self.subset_of}`" if self.subset_of is not None else "partial run"
+            verdict, detail = f"not gated ({reason})", self.ungated_reason("`")
         else:
-            verdict = "PASS" if self.passed else "FAIL"
-        score, headroom = self.shown_score(), self.headroom
-        detail = f"minimum {self.shown_minimum()}" if self.gated else "partial run: not gated"
+            verdict, detail = ("PASS" if self.passed else "FAIL"), f"minimum {self.shown_minimum()}"
+        score, headroom = self.shown_score(), self.shown_headroom()
         if headroom is not None:
-            detail += f", headroom {headroom * 100:+.1f} points"
-        shown = "**n/a** (no scored mutants)" if score is None else f"**{score}**"
+            detail += f", headroom {headroom} points"
+        if score is not None:
+            shown = f"**{score}**"
+        else:
+            shown = "**n/a**" if self.no_mutants else "**n/a** (no scored mutants)"
         lines = [f"### `{self.target}`: {verdict}", "", f"Score {shown} ({detail}); {self.summary_line()}.", ""]
         if self.operators:
             operators = ", ".join(f"`{operator}`" for operator in self.operators)
@@ -946,6 +1044,8 @@ class Report:
             lines.append(f"| {operator} | " + " | ".join(str(counts[status]) for status in STATUSES) + " |")
         if self.ratchet_hint:
             lines += ["", self.ratchet_hint]
+        elif self.overrides and self.passed and (self.headroom or 0.0) >= RATCHET_MARGIN - 1e-9:
+            lines += ["", f"No ratchet hint: the run used command-line overrides ({', '.join(self.overrides)})."]
         survivors = self.survivors
         if survivors:
             noun = "surviving mutant" if len(survivors) == 1 else "surviving mutants"
@@ -1169,11 +1269,18 @@ def run_mutants(
     test_runner: TestRunner | None = None,
     scratch_dir=None,
     progress: Callable[[MutantResult], None] | None = None,
+    generated: list[Mutant] | None = None,
+    allow_empty: bool = False,
 ) -> Report:
     """Mutate one target and run its mapped tests against every mutant in temporary repository copies.
 
-    Caller-supplied mutants replace the generated list, but `only` and the stale-equivalent check still use every
-    mutant generated for the file (with functions and operators applied). No mutants to run is a ConfigError.
+    generated is every mutant of the file (with functions and operators applied) when the caller already has it;
+    otherwise it is generated here. Caller-supplied mutants replace it as the list to run, but `only` and the
+    stale-equivalent check still use every generated mutant. No mutants to run is a ConfigError, unless allow_empty
+    (a glob member or an operator-narrowed run): then nothing runs and the report is skipped (no_mutants).
+
+    The timeout per mutant run, unless given, is TIMEOUT_FACTOR x the baseline's seconds x the number of parallel
+    runs (the baseline runs alone; parallel runs contend), and at least MIN_TIMEOUT.
     """
     root = Path(os.path.abspath(repo_root))
     rel = resolve_target(target, root)
@@ -1181,12 +1288,13 @@ def run_mutants(
     copy_paths = tuple(copy_paths)
     validate_run(rel, tests, root, copy_paths, default_runner=test_runner is None)
     source = read_source(root / rel)
-    generated = generate_mutants(
-        rel, source, mutate_data_tables=mutate_data_tables, functions=functions, operators=operators
-    )
+    if generated is None:
+        generated = generate_mutants(
+            rel, source, mutate_data_tables=mutate_data_tables, functions=functions, operators=operators
+        )
     if mutants is None:
         mutants = generated
-    if not mutants:
+    if not mutants and not allow_empty:
         raise ConfigError(f"{rel}: no mutants to run (check the target's functions and operators)")
     known_ids = {mutant.id for mutant in generated} | {mutant.id for mutant in mutants}
     if only is not None:
@@ -1197,16 +1305,22 @@ def run_mutants(
         mutants = [mutant for mutant in mutants if mutant.id in wanted]
     equivalent = tuple(equivalent)
     stale = tuple(mutant_id for mutant_id in equivalent if mutant_id not in known_ids)
+    selected_operators = check_operators(operators)
+    if not mutants:
+        return Report(
+            rel, tests, (), 0.0, 0.0, min_score, stale, only is not None, operators=selected_operators, no_mutants=True
+        )
     runner = test_runner if test_runner is not None else SubprocessTestRunner()
 
     results: list[MutantResult | None] = [None] * len(mutants)
     to_run: list[tuple[int, Mutant, str]] = []
+    offsets = line_offsets(source_lines(source))
     for index, mutant in enumerate(mutants):
         if mutant.id in equivalent:
             results[index] = MutantResult(mutant, "equivalent", 0.0, "")
             continue
         try:
-            text = apply_mutant(source, mutant)
+            text = apply_mutant(source, mutant, offsets)
         except ValueError as error:
             raise ConfigError(str(error)) from None
         if compiles(text, rel):
@@ -1222,8 +1336,7 @@ def run_mutants(
     stop = threading.Event()
     try:
         workspaces = [scratch / f"w{number}" for number in range(max(1, min(jobs, len(to_run))))]
-        for workspace in workspaces:
-            copy_workspace(root, workspace, copy_paths)
+        copy_workspace(root, workspaces[0], copy_paths)
         baseline = runner(workspaces[0], tests, max(BASELINE_TIMEOUT, timeout or 0.0))
         if baseline.status != "passed":
             raise BaselineError(
@@ -1232,7 +1345,12 @@ def run_mutants(
             )
         if baseline.tests_run == 0:
             raise BaselineError(f"baseline: mapped tests ran no tests for {rel}: {' '.join(tests)}")
-        effective_timeout = float(timeout) if timeout else max(MIN_TIMEOUT, TIMEOUT_FACTOR * baseline.seconds)
+        for workspace in workspaces[1:]:
+            copy_workspace(root, workspace, copy_paths)
+        if timeout:
+            effective_timeout = float(timeout)
+        else:
+            effective_timeout = max(MIN_TIMEOUT, TIMEOUT_FACTOR * baseline.seconds * len(workspaces))
 
         free: queue.Queue[Path] = queue.Queue()
         for workspace in workspaces:
@@ -1298,7 +1416,7 @@ def run_mutants(
         min_score,
         stale,
         only is not None,
-        operators=check_operators(operators),
+        operators=selected_operators,
     )
 
 
@@ -1328,11 +1446,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--config", help=f"config file (default: <repo-root>/{DEFAULT_CONFIG})")
     parser.add_argument("--repo-root", default=str(ROOT), help="repository root (default: this checkout)")
-    parser.add_argument("--target", help="run one module, a path relative to the repository root")
+    parser.add_argument("--target", help="run one module or a configured glob, a path relative to the repository root")
     parser.add_argument("--tests", nargs="+", help="dotted test modules for --target (overrides the config)")
     parser.add_argument("--min-score", type=unit_score, help="minimum score for --target, from 0 to 1")
     parser.add_argument("--jobs", type=positive_int, default=min(4, os.cpu_count() or 1), help="parallel test runs")
-    parser.add_argument("--timeout", type=positive_float, help="seconds per mutant run (default: 5x baseline, min 10)")
+    parser.add_argument(
+        "--timeout",
+        type=positive_float,
+        help="seconds per mutant run (default: config, else 5x baseline x parallel runs, min 10)",
+    )
     parser.add_argument("--only", nargs="+", help="run only these mutant ids")
     parser.add_argument("--operators", nargs="+", choices=ALL_OPERATORS, help="operators to apply (default: config)")
     parser.add_argument("--json", help="write a JSON report to this file (exit 0 or 1 only)")
@@ -1352,25 +1474,43 @@ def select_targets(args: argparse.Namespace, root: Path) -> tuple[tuple[str, ...
         config = Config(DEFAULT_COPY_PATHS, ())
     else:
         config = load_config(config_path)
-    targets = expand_targets(config, root)
     if not args.target:
-        return config.copy, targets
+        return config.copy, expand_targets(config, root)
     rel = resolve_target(args.target, root)
-    matches = [target for target in targets if target.path == rel]
-    if matches:
-        selected = matches[0]
-    elif args.tests:
-        selected = TargetConfig(rel, ())
-    else:
-        raise ConfigError(f"{rel} is not a target in {config_path}; give --tests to map its tests")
-    overrides = []
-    if args.tests and tuple(args.tests) != selected.tests:
-        selected = replace(selected, tests=tuple(args.tests))
-        overrides.append("tests")
-    if args.min_score is not None:
-        selected = replace(selected, min_score=args.min_score)
-        overrides.append("min_score")
-    return config.copy, [replace(selected, overrides=tuple(overrides))]
+    selected = select_entry(config, rel, root)
+    if not selected:
+        if not args.tests:
+            raise ConfigError(f"{rel} is not a target in {config_path}; give --tests to map its tests")
+        if not (root / rel).is_file():
+            raise ConfigError(f"target not found: {rel}")
+        selected = [TargetConfig(rel, ())]
+    chosen = []
+    for target in selected:
+        overrides = []
+        if args.tests and tuple(args.tests) != target.tests:
+            target = replace(target, tests=tuple(args.tests))
+            overrides.append("tests")
+        if args.min_score is not None:
+            target = replace(target, min_score=args.min_score)
+            overrides.append("min_score")
+        chosen.append(replace(target, overrides=tuple(overrides)))
+    return config.copy, chosen
+
+
+def select_entry(config: Config, rel: str, root: Path) -> list[TargetConfig]:
+    """The concrete targets that --target rel names, expanding and validating only the config entry it belongs to.
+
+    rel can be a configured path or glob (the whole glob), or one file of a configured glob; a lone file of an
+    aggregate glob records the glob as subset_of instead of group, so it is not gated against the glob's floor.
+    """
+    for target in config.targets:
+        if target.path == rel:
+            return expand_target(target, root)
+    for target in config.targets:
+        if is_glob(target.path) and rel in glob_files(target.path, root):
+            (member,) = [item for item in expand_target(target, root) if item.path == rel]
+            return [replace(member, group=None, subset_of=member.group)]
+    return []
 
 
 def apply_operators(args: argparse.Namespace, targets: list[TargetConfig]) -> list[TargetConfig]:
@@ -1385,6 +1525,21 @@ def apply_operators(args: argparse.Namespace, targets: list[TargetConfig]) -> li
             overrides = (*overrides, "operators")
         replaced.append(replace(target, operators=operators, overrides=overrides))
     return replaced
+
+
+def apply_timeout(args: argparse.Namespace, targets: list[TargetConfig]) -> list[TargetConfig]:
+    """--timeout replaces every selected target's timeout; a value other than the configured one is an override,
+    since it changes which mutants time out (and timeouts count as killed)."""
+    if args.timeout is None:
+        return targets
+    return [
+        replace(
+            target,
+            timeout=args.timeout,
+            overrides=target.overrides if target.timeout == args.timeout else (*target.overrides, "timeout"),
+        )
+        for target in targets
+    ]
 
 
 def only_by_target(only: list[str] | None, targets: list[TargetConfig]) -> dict[str, list[str]] | None:
@@ -1427,19 +1582,20 @@ def progress_printer(total: int) -> Callable[[MutantResult], None]:
 
 
 def target_mutants(root: Path, target: TargetConfig) -> list[Mutant]:
+    """Every mutant of a concrete target; a glob member's functions were checked across its glob already."""
     return generate_mutants(
         target.path,
         read_source(root / target.path),
         mutate_data_tables=target.mutate_data_tables,
         functions=target.functions,
         operators=target.operators,
+        require_functions=target.glob is None,
     )
 
 
-def mutant_total(root: Path, target: TargetConfig, only: list[str] | None) -> int:
-    if only is not None:
-        return len(only)
-    return len(target_mutants(root, target))
+def may_be_empty(target: TargetConfig) -> bool:
+    """A glob member, or a run without some default operator, may have nothing to mutate; it is then skipped."""
+    return target.glob is not None or not set(OPERATORS) <= set(check_operators(target.operators))
 
 
 def print_report(report: Report) -> None:
@@ -1453,7 +1609,7 @@ def print_report(report: Report) -> None:
 def run_targets(args: argparse.Namespace, root: Path) -> list[Report]:
     """Run every selected target; after the last file of an aggregate glob, add and print its combined report."""
     copy_paths, targets = select_targets(args, root)
-    targets = apply_operators(args, targets)
+    targets = apply_timeout(args, apply_operators(args, targets))
     only = only_by_target(args.only, targets)
     if args.list:
         list_mutants(root, targets, only)
@@ -1485,13 +1641,14 @@ def run_target(
     target: TargetConfig,
     target_only: list[str] | None,
 ) -> Report:
-    progress = None if args.quiet else progress_printer(mutant_total(root, target, target_only))
+    generated = target_mutants(root, target)
+    progress = None if args.quiet else progress_printer(len(generated if target_only is None else target_only))
     report = run_mutants(
         target.path,
         target.tests,
         repo_root=root,
         jobs=args.jobs,
-        timeout=args.timeout or target.timeout,
+        timeout=target.timeout,
         equivalent=target.equivalent,
         min_score=target.min_score,
         copy_paths=copy_paths,
@@ -1501,8 +1658,10 @@ def run_target(
         operators=target.operators,
         scratch_dir=args.scratch_dir,
         progress=progress,
+        generated=generated,
+        allow_empty=may_be_empty(target),
     )
-    return replace(report, overrides=target.overrides)
+    return replace(report, overrides=target.overrides, subset_of=target.subset_of)
 
 
 def raise_keyboard_interrupt(signum, frame):
