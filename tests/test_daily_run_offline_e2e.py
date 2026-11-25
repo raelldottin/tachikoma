@@ -147,8 +147,6 @@ KNOWN_DEFECTS = {
     "DC1": ("Client.dronesCollected is a class-level dict shared by every Client in the process, so a later Client "
             "(the fleet runner makes one per account) skips every drone id an earlier one collected",
             "sdk/client.py Client.dronesCollected (~L202) / collectMiningDronesWithTravel (~L3152)"),
-    "AT1": ("addTraining returns True for a falsy (HTTP error) reply, so manageTraining logs 'Starting training' for a "
-            "training the server never started", "sdk/client.py addTraining (~L995-1000)"),
     "TZ1": ("upgradeCharacters compares the server's UTC @AvailableDate with the host's local datetime.now(): a host "
             "behind UTC upgrades an available crew hours late, and a host ahead of UTC sends UpgradeCharacter before the "
             "crew is available (the server refuses it)", "sdk/client.py upgradeCharacters (~L1624-1631)"),
@@ -902,19 +900,19 @@ class DailyRunFailureContinuationTests(NeedsHealthyBaseline):
         self.assertEqual(fake.state.character("1001").session,
                          TrainingSession("3", FAKE_EPOCH - 3 * HOUR, FAKE_EPOCH - 2 * HOUR, applied=True))
         self.assertNotIn(("1001", "3"), applied(daily, "/TrainingService/AddTraining", "characterId", "trainingDesignId"))
-        # addTraining treats a falsy reply as success, so the emailed log reports a training that never started. A fix
-        # flips this to: no "Starting training" line for 1001.
-        self.assertIn(("1001", "3"), reported_training_starts(daily))  # PINNED(AT1)
+        # Regression (AT1, fixed in #279): addTraining used to treat a falsy reply as success, so the emailed log
+        # reported a training that never started. Now only a parsed success reply logs "Starting training".
+        self.assertNotIn(("1001", "3"), reported_training_starts(daily))
         assert_protocol_clean(self, fake)
 
     def test_training_exception_mid_roster_aborts_rest_of_roster_but_not_later_steps(self):
         fake = FakePss(default_world())
         fault = fake.fail("/TrainingService/FinishTraining", when=lambda p: p.get("characterId") == "1001",
-                          body='<TrainingService><FinishTraining><Character Fatigue="0"/></FinishTraining>'
-                               "</TrainingService>")
+                          body='<TrainingService><FinishTraining><Character Fatigue="0" HpImprovement="n/a"/>'
+                               "</FinishTraining></TrainingService>")
         daily = run_daily(fake)
         self.assertEqual((daily.code, fault.hits), (1, 1))
-        self.assertIn("manageTraining failed", daily.log)  # KeyError on the missing stats
+        self.assertIn("manageTraining failed", daily.log)  # ValueError: int("n/a") on the reported stat
         # No per-crew try, so one crew's exception skips the rest of the roster: 1002 is never reached (the baseline
         # gives it Finish+Add). Wave 2 flips this to: later crews still processed.
         self.assertEqual(training_slice(fake), [("FinishTraining", "1001", None, "fault")])  # PINNED(D13)
