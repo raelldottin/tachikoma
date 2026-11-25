@@ -7,6 +7,7 @@ them; the harness runs them by module name inside temporary copies of a toy repo
 import ast
 from collections import Counter
 from contextlib import redirect_stderr, redirect_stdout
+from dataclasses import replace
 import hashlib
 import io
 import json
@@ -300,6 +301,23 @@ class GenerationTests(unittest.TestCase):
         self.assertEqual(mutated('x: "T" = 0\n'), [("m.py:1:9:constant:0", 'x: "T" = 1\n')])
         self.assertEqual(mutated('if __name__ == "__main__":\n    main(1 < 2)\n'), [])
         self.assertEqual(mutated('if "__main__" == __name__:\n    main(1 < 2)\n'), [])
+
+    def test_strings_inside_literal_subscripts_are_skipped(self):
+        # Regression (benchmark N1): `EaseType = Literal["ease_out", ...]` in sdk/game_formulas.py is a typing alias,
+        # so its constant mutants could only be killed by a typing.get_args() test.
+        source = (
+            "import typing\n"
+            "import typing as t\n"
+            "from typing import Literal\n"
+            'A = Literal["x", "@y"]\n'
+            'B = t.Literal["z", 0]\n'
+            'C = typing.Literal[Literal["w"], "v"]\n'
+            'D = Optional["kept"]\n'
+        )
+        self.assertEqual(
+            [(m.id, m.original, m.replacement) for m in gen(source)],
+            [("m.py:7:13:constant:0", '"kept"', '""')],
+        )
 
     def test_pragma_no_mutate_excludes_its_line(self):
         self.assertEqual(
@@ -1265,8 +1283,14 @@ class EndToEndToyRuns(unittest.TestCase):
                 "counts_by_operator",
                 "headroom",
                 "part_of",
+                "operators",
+                "overrides",
+                "partial",
+                "gated",
             },
         )
+        self.assertEqual(report["operators"], list(mutation.OPERATORS))
+        self.assertEqual((report["overrides"], report["partial"], report["gated"]), ([], False, True))
         self.assertEqual(report["schema_version"], 1)
         self.assertAlmostEqual(report["headroom"], 14 / 24 - 0.9)
         by_operator = report["counts_by_operator"]
@@ -1551,6 +1575,71 @@ class ReviewRegressionTests(unittest.TestCase):
         self.assertEqual(code, 0, stderr)
         self.assertEqual(stdout.splitlines(), [f"{chosen}  '>=' -> '<'"])
 
+    def run_surviving(self, *arguments):
+        """main() over the toy config with every mutant surviving: (exit code, stdout, stderr, JSON reports)."""
+
+        class SurvivingRunner:
+            def __call__(self, workspace, tests, timeout):
+                return mutation.RunResult("passed", 0.01, "", tests_run=5)
+
+        report_path = self.tmp / "surviving.json"
+        report_path.unlink(missing_ok=True)
+        base = [*self.config_arguments(), "--quiet", "--scratch-dir", self.scratch, "--json", report_path]
+        with patch.object(mutation, "SubprocessTestRunner", SurvivingRunner):
+            code, stdout, stderr = run_main([*base, *arguments])
+        reports = json.loads(report_path.read_text(encoding="utf-8"))["reports"] if report_path.exists() else None
+        return code, stdout, stderr, reports
+
+    def test_command_line_overrides_are_recorded_and_suppress_the_ratchet_hint(self):
+        # Regression (benchmark B1): the hint suggested raising the configured floor after an --operators run.
+        results = make_results(TOY_PATH, killed=9, survived=1)
+        crafted = mutation.Report(TOY_PATH, ("tests.mutation_toys.strong_suite",), results, 1.0, 10.0, min_score=0.5)
+        target = ["--target", TOY_PATH]
+        cases = {
+            "configured run": ([], []),
+            "configured operators in another order": (["--operators", *reversed(mutation.OPERATORS)], []),
+            "configured tests": ([*target, "--tests", "tests.mutation_toys.strong_suite"], []),
+            "operators": (["--operators", "compare", "arithmetic"], ["operators"]),
+            "tests": ([*target, "--tests", "tests.mutation_toys.weak_suite"], ["tests"]),
+            "min_score": ([*target, "--min-score", "0.5"], ["min_score"]),
+        }
+        report_path = self.tmp / "overrides.json"
+        for name, (arguments, overrides) in cases.items():
+            with self.subTest(case=name):
+                with patch.object(mutation, "run_mutants", return_value=crafted):
+                    code, _, stderr = run_main([*self.config_arguments(), "--quiet", "--json", report_path, *arguments])
+                self.assertEqual(code, 0, stderr)
+                (payload,) = json.loads(report_path.read_text(encoding="utf-8"))["reports"]
+                self.assertEqual(payload["overrides"], overrides)
+                self.assertEqual("ratchet:" in stderr, not overrides, stderr)
+
+    def test_an_operator_override_is_recorded_and_still_gated(self):
+        # Regression (benchmark B2): the JSON report did not say which operators produced the score.
+        code, stdout, stderr, reports = self.run_surviving("--operators", "arithmetic")
+        self.assertEqual(code, 1, stderr)
+        (report,) = reports
+        self.assertEqual((report["operators"], report["overrides"]), (["arithmetic"], ["operators"]))
+        self.assertEqual((report["passed"], report["gated"], report["partial"]), (False, True, False))
+        self.assertIn("score 0.0% (minimum 50.0%) FAIL\noperators: arithmetic (operators differ from config)\n", stdout)
+        _, stdout, _, (report,) = self.run_surviving("--only", f"{TOY_PATH}:5:13:compare:0")
+        self.assertEqual(report["operators"], list(mutation.OPERATORS))
+        self.assertIn(f"operators: {', '.join(mutation.OPERATORS)}\n", stdout)
+
+    def test_partial_runs_are_not_gated_unless_a_minimum_is_given(self):
+        # Regression (benchmark O1): `--only <survivor id>` exited 1 against the full-run floor.
+        survivor = f"{TOY_PATH}:5:13:compare:0"
+        code, stdout, stderr, (report,) = self.run_surviving("--only", survivor)
+        self.assertEqual(code, 0, stderr)
+        self.assertIn("score 0.0% (partial run: not gated)\n", stdout)
+        self.assertEqual((report["partial"], report["gated"], report["passed"]), (True, False, True))
+        self.assertNotIn("ratchet:", stderr)
+        code, stdout, stderr, (report,) = self.run_surviving(
+            "--target", TOY_PATH, "--min-score", "0.5", "--only", survivor
+        )
+        self.assertEqual(code, 1, stderr)
+        self.assertIn("score 0.0% (minimum 50.0%) FAIL\n", stdout)
+        self.assertEqual((report["partial"], report["gated"], report["passed"]), (True, True, False))
+
 
 class ReportTests(unittest.TestCase):
     """Report fields for gating and ratcheting: headroom, ratchet_hint, aggregation and the Markdown summary."""
@@ -1609,6 +1698,58 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(combined.stale_equivalent, (stale,))
         self.assertIsNone(combined.part_of)
         self.assertFalse(mutation.Report.combine("sdk/x/*.py", [member, other], 0.85).passed)
+
+    def test_ratchet_hint_is_suppressed_when_the_run_is_not_comparable_with_the_floor(self):
+        # Regression (benchmark B1): `--operators arithmetic minmax` suggested raising the default-operator floor.
+        for override in ("operators", "tests", "min_score"):
+            with self.subTest(override=override):
+                report = replace(self.report(0.5, killed=9, survived=1), overrides=(override,))
+                self.assertTrue(report.passed)
+                self.assertIsNone(report.ratchet_hint)
+                self.assertNotIn("ratchet:", report.format_markdown())
+
+    def test_reports_record_the_operators_and_note_an_override(self):
+        # Regression (benchmark B2): a reader could not tell which operator set produced a score.
+        report = replace(self.report(0.5, killed=9, survived=1), operators=("compare", "constant"))
+        self.assertEqual(report.to_dict()["operators"], ["compare", "constant"])
+        self.assertEqual(report.to_dict()["overrides"], [])
+        self.assertEqual((report.to_dict()["partial"], report.to_dict()["gated"]), (False, True))
+        self.assertIn("\noperators: compare, constant\n", report.format_text())
+        self.assertIn("Operators: `compare`, `constant`.\n", report.format_markdown())
+        overridden = replace(report, overrides=("operators",))
+        self.assertEqual(overridden.to_dict()["overrides"], ["operators"])
+        self.assertIn("\noperators: compare, constant (operators differ from config)\n", overridden.format_text())
+        self.assertIn(
+            "Operators: `compare`, `constant` (operators differ from config).\n", overridden.format_markdown()
+        )
+        self.assertFalse(replace(overridden, min_score=0.95).passed, "an operator override is still gated")
+
+    def test_a_failing_score_is_never_displayed_at_or_above_the_minimum(self):
+        # Regression (benchmark B3): 17/21 = 0.8095 printed "score 81.0% (minimum 81.0%) FAIL".
+        failing = self.report(0.81, killed=17, survived=4)
+        self.assertFalse(failing.passed)
+        self.assertIn("score 80.9% (minimum 81.0%) FAIL\n", failing.format_text())
+        self.assertIn("Score **80.9%** (minimum 81.0%, headroom -0.0 points)", failing.format_markdown())
+        finer = self.report(0.8096, killed=17, survived=4)
+        self.assertIn("score 80.95% (minimum 80.96%) FAIL\n", finer.format_text())
+        passing = self.report(0.80, killed=17, survived=4)
+        self.assertIn("score 81.0% (minimum 80.0%) PASS\n", passing.format_text())
+        exact = self.report(0.81, killed=81, survived=19)
+        self.assertIn("score 81.0% (minimum 81.0%) PASS\n", exact.format_text())
+
+    def test_a_partial_run_is_gated_only_against_an_explicit_minimum(self):
+        # Regression (benchmark O1): `--only <survivor id>` was gated against the full-run floor and exited 1.
+        partial = self.report(0.9, survived=1, partial=True)
+        self.assertEqual((partial.gated, partial.passed), (False, True))
+        self.assertIsNone(partial.headroom)
+        self.assertIn("score 0.0% (partial run: not gated)\n", partial.format_text())
+        self.assertTrue(partial.format_markdown().startswith("### `m.py`: not gated (partial run)\n"))
+        self.assertEqual((partial.to_dict()["partial"], partial.to_dict()["gated"]), (True, False))
+        explicit = replace(partial, overrides=("min_score",))
+        self.assertEqual((explicit.gated, explicit.passed), (True, False))
+        self.assertIn("score 0.0% (minimum 90.0%) FAIL\n", explicit.format_text())
+        unmeasured = self.report(0.9, incompetent=1, partial=True)
+        self.assertFalse(unmeasured.passed, "a partial run that measured nothing still fails")
 
     def test_markdown_summary(self):
         report = self.report(0.85, killed=9, survived=1)

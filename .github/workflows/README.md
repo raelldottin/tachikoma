@@ -73,8 +73,8 @@ No repository settings are changed merely by adding these files.
   failed checkout, setup or dependency install still fails it.
 - The mutation step writes `mutation.json` and, through
   `--summary "$GITHUB_STEP_SUMMARY"`, appends a Markdown report to the job
-  summary: each target's score, minimum and headroom, per-operator counts,
-  surviving mutants and any `ratchet:` hint. A ratchet hint appears when a
+  summary: each target's score, minimum and headroom, operators used,
+  per-operator counts, surviving mutants and any `ratchet:` hint. A ratchet hint appears when a
   passing target scores at least two points above its `min_score`; it names
   the new floor (the score rounded down to two decimals) to record in the
   config.

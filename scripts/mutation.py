@@ -12,13 +12,16 @@ The working tree is never written: every copy lives under a mkdtemp scratch dire
 also on errors, Ctrl-C and SIGTERM. Known limitation: if this process is SIGKILLed, test processes started in their
 own sessions are orphaned, and an infinite-loop mutant keeps running until it is killed by hand.
 
-A `# pragma: no mutate` comment excludes every mutant whose source span covers its line.
+A `# pragma: no mutate` comment excludes every mutant whose source span covers its line. Docstrings, f-strings,
+annotations, the `__main__` guard and the arguments of `Literal[...]` are never mutated.
 
 A target can restrict mutation to some functions ("functions": qualnames such as Class.method, nested scopes
 included) and choose operators ("operators", or --operators), including the opt-in arithmetic and minmax operators
 that the default set leaves out. "aggregate": true on a glob target such as sdk/training/**/*.py gates the glob's
-combined score instead of each file's. A passing run at least two points above min_score prints a `ratchet:` line
-with the floor to record, and --summary appends a Markdown report (for $GITHUB_STEP_SUMMARY).
+combined score instead of each file's. A complete, passing run at least two points above min_score, with the
+configured tests, operators and minimum, prints a `ratchet:` line with the floor to record, and --summary appends a
+Markdown report (for $GITHUB_STEP_SUMMARY). An --only run is partial: it is gated only against an explicit
+--min-score. Reports record the operators used and any command-line overrides.
 """
 
 from __future__ import annotations
@@ -212,6 +215,13 @@ def is_main_guard(node: ast.stmt) -> bool:
     return has_name and has_main
 
 
+def is_literal_type(node: ast.expr) -> bool:
+    """`Literal`, `typing.Literal`, `t.Literal` and the like: the subscripted name of a typing.Literal type."""
+    return (isinstance(node, ast.Name) and node.id == "Literal") or (
+        isinstance(node, ast.Attribute) and node.attr == "Literal"
+    )
+
+
 def constant_replacement(value: object) -> str | None:
     if isinstance(value, bool):
         return str(not value)
@@ -323,6 +333,9 @@ class _Collector:
                 self.mark(node.annotation)
             elif isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant):
                 self.mark(node.value)
+            elif isinstance(node, ast.Subscript) and is_literal_type(node.value):
+                # Literal["a", "b"] is typing (often a module-level alias), not runtime logic.
+                self.mark(node.slice)
 
     # Traversal ---------------------------------------------------------------------------------------------
     def collect(self) -> list[tuple[int, int, int, int, str, str, str]]:
@@ -530,6 +543,7 @@ class TargetConfig:
 
     functions and operators restrict generation (see generate_mutants). aggregate (glob targets only) gates the
     glob's combined score instead of each file's; expand_targets records the glob as group on each of its files.
+    overrides names what the command line changed ("operators", "tests", "min_score"); see Report.
     """
 
     path: str
@@ -542,6 +556,7 @@ class TargetConfig:
     operators: tuple[str, ...] | None = None
     aggregate: bool = False
     group: str | None = None
+    overrides: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -736,8 +751,14 @@ class MutantResult:
 
 @dataclass(frozen=True)
 class Report:
-    """The outcome of one target. partial: only some mutants ran (`only`), so no ratchet hint. part_of: the glob of
-    an aggregate target this file belongs to; such a report is informational and the combined report is gated."""
+    """The outcome of one target.
+
+    partial: only some mutants ran (`only`); such a score is not comparable with min_score, so it is not gated
+    unless "min_score" is in overrides, and gives no ratchet hint. part_of: the glob of an aggregate target this file
+    belongs to; such a report is informational and the combined report is gated. operators: the operator set used.
+    overrides: what the command line changed from the config ("operators", "tests", "min_score"); the score is
+    still gated, but it is not measured like the recorded floor, so no ratchet hint.
+    """
 
     target: str
     tests: tuple[str, ...]
@@ -748,6 +769,8 @@ class Report:
     stale_equivalent: tuple[str, ...] = ()
     partial: bool = False
     part_of: str | None = None
+    operators: tuple[str, ...] = ()
+    overrides: tuple[str, ...] = ()
 
     @classmethod
     def combine(cls, target: str, reports: Iterable[Report], min_score: float) -> Report:
@@ -762,6 +785,8 @@ class Report:
             min_score,
             tuple(mutant_id for report in reports for mutant_id in report.stale_equivalent),
             any(report.partial for report in reports),
+            operators=reports[0].operators if reports else (),
+            overrides=tuple(dict.fromkeys(name for report in reports for name in report.overrides)),
         )
 
     @property
@@ -788,24 +813,39 @@ class Report:
         return (counts["killed"] + counts["timeout"]) / scored if scored else None
 
     @property
+    def gated(self) -> bool:
+        """Whether the score is compared with min_score: not for an aggregate member, nor for a partial run unless
+        its minimum was given explicitly."""
+        return self.part_of is None and (not self.partial or "min_score" in self.overrides)
+
+    @property
     def passed(self) -> bool:
-        """Without a score only a zero minimum passes: an unmeasured target cannot meet a positive one."""
+        """Without a score only a zero minimum passes: an unmeasured target cannot meet a positive one. An ungated
+        partial run passes when it measured anything."""
         if self.part_of is not None:
             return True
         score = self.score
+        if not self.gated:
+            return score is not None
         return self.min_score <= 0.0 if score is None else score >= self.min_score
 
     @property
     def headroom(self) -> float | None:
-        """score - min_score; None without a score or for an aggregate member."""
+        """score - min_score; None without a score or when the score is not gated."""
         score = self.score
-        return None if score is None or self.part_of is not None else score - self.min_score
+        return None if score is None or not self.gated else score - self.min_score
 
     @property
     def ratchet_hint(self) -> str | None:
-        """After a complete, passing run at least RATCHET_MARGIN above min_score: the floor to record instead."""
+        """After a complete, passing run at least RATCHET_MARGIN above min_score: the floor to record instead.
+
+        None when the run is not comparable with the recorded floor: partial, or measured with operators, tests or
+        a minimum given on the command line.
+        """
         headroom = self.headroom
-        if headroom is None or self.partial or not self.passed or headroom < RATCHET_MARGIN - 1e-9:
+        if headroom is None or self.partial or self.overrides or not self.passed:
+            return None
+        if headroom < RATCHET_MARGIN - 1e-9:
             return None
         score = self.score or 0.0
         floor = math.floor(score * 100 + 1e-9) / 100
@@ -827,6 +867,10 @@ class Report:
             "passed": self.passed,
             "headroom": self.headroom,
             "part_of": self.part_of,
+            "partial": self.partial,
+            "gated": self.gated,
+            "operators": list(self.operators),
+            "overrides": list(self.overrides),
             "counts": self.counts,
             "counts_by_operator": self.counts_by_operator,
             "baseline_seconds": round(self.baseline_seconds, 3),
@@ -839,15 +883,41 @@ class Report:
         counts = self.counts
         return f"{counts['total']} mutants: " + ", ".join(f"{counts[status]} {status}" for status in STATUSES)
 
+    def percent_digits(self) -> int:
+        """Decimals that show min_score as a percentage exactly (1 to 4)."""
+        minimum = self.min_score * 100
+        return next((digits for digits in (1, 2, 3) if abs(round(minimum, digits) - minimum) < 1e-9), 4)
+
+    def shown_minimum(self) -> str:
+        return f"{self.min_score * 100:.{self.percent_digits()}f}%"
+
+    def shown_score(self) -> str | None:
+        """The score as a percentage, rounded, but never shown at or above the shown minimum when it fails."""
+        score = self.score
+        if score is None:
+            return None
+        digits = self.percent_digits()
+        shown = round(score * 100, digits)
+        if self.gated and score < self.min_score and shown >= round(self.min_score * 100, digits):
+            shown = math.floor(score * 100 * 10**digits) / 10**digits
+        return f"{shown:.{digits}f}%"
+
+    def operators_note(self) -> str:
+        return " (operators differ from config)" if "operators" in self.overrides else ""
+
     def format_text(self) -> str:
         counts = self.counts
         summary = ", ".join(f"{counts[status]} {status}" for status in STATUSES)
-        score = "n/a (no scored mutants)" if self.score is None else f"{self.score * 100:.1f}%"
+        score = self.shown_score() or "n/a (no scored mutants)"
         if self.part_of is not None:
             gate = f"score {score} (gated as part of {self.part_of})"
+        elif not self.gated:
+            gate = f"score {score} (partial run: not gated)"
         else:
-            gate = f"score {score} (minimum {self.min_score * 100:.1f}%) {'PASS' if self.passed else 'FAIL'}"
+            gate = f"score {score} (minimum {self.shown_minimum()}) {'PASS' if self.passed else 'FAIL'}"
         lines = [f"{self.target}: {counts['total']} mutants, {summary}", gate]
+        if self.operators:
+            lines.append(f"operators: {', '.join(self.operators)}{self.operators_note()}")
         for result in self.survivors:
             lines.append(f"survived {result.mutant.id}")
             lines.append(result.diff.rstrip("\n"))
@@ -857,14 +927,19 @@ class Report:
         """A GitHub-flavoured Markdown section: verdict, score, per-operator table, ratchet hint, survivor diffs."""
         if self.part_of is not None:
             verdict = f"gated as part of `{self.part_of}`"
+        elif not self.gated:
+            verdict = "not gated (partial run)"
         else:
             verdict = "PASS" if self.passed else "FAIL"
-        score, headroom = self.score, self.headroom
-        detail = f"minimum {self.min_score * 100:.1f}%"
+        score, headroom = self.shown_score(), self.headroom
+        detail = f"minimum {self.shown_minimum()}" if self.gated else "partial run: not gated"
         if headroom is not None:
             detail += f", headroom {headroom * 100:+.1f} points"
-        shown = "**n/a** (no scored mutants)" if score is None else f"**{score * 100:.1f}%**"
+        shown = "**n/a** (no scored mutants)" if score is None else f"**{score}**"
         lines = [f"### `{self.target}`: {verdict}", "", f"Score {shown} ({detail}); {self.summary_line()}.", ""]
+        if self.operators:
+            operators = ", ".join(f"`{operator}`" for operator in self.operators)
+            lines += [f"Operators: {operators}{self.operators_note()}.", ""]
         lines.append("| operator | " + " | ".join(STATUSES) + " |")
         lines.append("| --- |" + " ---: |" * len(STATUSES))
         for operator, counts in self.counts_by_operator.items():
@@ -1214,7 +1289,17 @@ def run_mutants(
     finished = tuple(result for result in results if result is not None)
     if len(finished) != len(results):
         raise MutationError(f"{rel}: {len(results) - len(finished)} mutant(s) produced no result")
-    return Report(rel, tests, finished, baseline.seconds, effective_timeout, min_score, stale, only is not None)
+    return Report(
+        rel,
+        tests,
+        finished,
+        baseline.seconds,
+        effective_timeout,
+        min_score,
+        stale,
+        only is not None,
+        operators=check_operators(operators),
+    )
 
 
 # Command line -------------------------------------------------------------------------------------------------
@@ -1278,18 +1363,28 @@ def select_targets(args: argparse.Namespace, root: Path) -> tuple[tuple[str, ...
         selected = TargetConfig(rel, ())
     else:
         raise ConfigError(f"{rel} is not a target in {config_path}; give --tests to map its tests")
-    if args.tests:
+    overrides = []
+    if args.tests and tuple(args.tests) != selected.tests:
         selected = replace(selected, tests=tuple(args.tests))
+        overrides.append("tests")
     if args.min_score is not None:
         selected = replace(selected, min_score=args.min_score)
-    return config.copy, [selected]
+        overrides.append("min_score")
+    return config.copy, [replace(selected, overrides=tuple(overrides))]
 
 
 def apply_operators(args: argparse.Namespace, targets: list[TargetConfig]) -> list[TargetConfig]:
-    """--operators replaces every selected target's operators."""
+    """--operators replaces every selected target's operators; a different set is recorded as an override."""
     if not args.operators:
         return targets
-    return [replace(target, operators=tuple(dict.fromkeys(args.operators))) for target in targets]
+    operators = tuple(dict.fromkeys(args.operators))
+    replaced = []
+    for target in targets:
+        overrides = target.overrides
+        if set(operators) != set(check_operators(target.operators)):
+            overrides = (*overrides, "operators")
+        replaced.append(replace(target, operators=operators, overrides=overrides))
+    return replaced
 
 
 def only_by_target(only: list[str] | None, targets: list[TargetConfig]) -> dict[str, list[str]] | None:
@@ -1391,7 +1486,7 @@ def run_target(
     target_only: list[str] | None,
 ) -> Report:
     progress = None if args.quiet else progress_printer(mutant_total(root, target, target_only))
-    return run_mutants(
+    report = run_mutants(
         target.path,
         target.tests,
         repo_root=root,
@@ -1407,6 +1502,7 @@ def run_target(
         scratch_dir=args.scratch_dir,
         progress=progress,
     )
+    return replace(report, overrides=target.overrides)
 
 
 def raise_keyboard_interrupt(signum, frame):

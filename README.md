@@ -28,8 +28,10 @@ limit mutation to some functions (`"functions": ["Class.method"]`), choose
 operators (`"operators"`, or `--operators`, including the opt-in `arithmetic`
 and `minmax`), and gate a glob such as `sdk/training/**/*.py` on its combined
 score (`"aggregate": true`). A passing score at least two points above its
-minimum prints a `ratchet:` line naming the new floor to record, and
-`--summary PATH` appends a Markdown report. Blocking CI (the `run-mutation`
+minimum prints a `ratchet:` line naming the new floor to record, unless the
+run used `--only`, `--operators`, `--tests` or `--min-score`, and
+`--summary PATH` appends a Markdown report that lists the operators used. An
+`--only` run is not gated unless `--min-score` is given. Blocking CI (the `run-mutation`
 input of `python-tests.yml`) reports the score in the job summary without
 blocking merges; post-merge and release runs skip it.
 
