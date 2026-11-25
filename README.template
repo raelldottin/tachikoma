@@ -18,7 +18,8 @@ and prepare a draft GitHub release with a reproducible source archive and
 SHA-256 checksums. These validation workflows use mocked game traffic.
 
 See [.github/workflows/README.md](.github/workflows/README.md) for the
-check coverage, lint baseline, local commands, and branch-protection setup.
+check coverage, lint and hollow-test baselines, local commands, and
+branch-protection setup.
 
 ## Repository Contents
 

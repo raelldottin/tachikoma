@@ -78,6 +78,105 @@ the new gate uses the explicit ratchet rather than claiming a clean full
 lint result. Type checking remains outside the required gate; it was already
 advisory in the existing Makefile.
 
+## Hollow tests are explicit
+
+`python scripts/ci.py hollow-tests` parses every git-tracked
+`tests/**/test_*.py` module, and the `tests` modules they import, with Python's
+`ast` module (it imports and runs nothing) and finds unittest tests that
+cannot catch a regression. Untracked files and tracked symlinks are not read,
+the same file set `python scripts/ci.py repository` checks; outside a git
+checkout (a Bazel runfiles tree) every module under `tests/` is read. A test
+breaks one of three rules:
+
+- `no-assertion`: neither the test nor any helper it references asserts anything.
+- `mock-only`: its only assertions check how mocks were called
+  (`assert_called_once_with`, `call_count`, `called`, or anything read out of
+  `call_args`, `call_args_list`, `mock_calls`, `method_calls`, `await_args`
+  or `await_args_list`), never a result.
+- `tautology`: its only assertions check values the test built itself, from
+  literals or from mocks no project code ever sees, so they cannot detect a
+  regression: `self.assertTrue(True)`, `x = 4` then `self.assertEqual(x, 4)`,
+  `m = MagicMock(return_value=3)` then `self.assertEqual(m(), 3)`, or a flag
+  set only by `if m() is False:` on such a mock. Comparing an expression with
+  itself where that always passes (`==`, `is`, `<=`, `>=`, `assertEqual`,
+  `assertIs`, `assertLessEqual`, `assertCountEqual`, ...), or a value that is
+  always true (`assert (result, "message")`,
+  `self.assertTrue(mock.assert_called)`), is a tautology too; the same
+  comparison under `!=`, `is not`, `<`, `>`, `assertNotEqual`, `assertLess`,
+  ... always fails, so it counts as a real assertion like `self.fail()`. A
+  name stays test-controlled only while every binding and use of it is a
+  plain assignment, assertion, expression statement or attribute assignment
+  that runs unconditionally or under `if`/`while` tests that are themselves
+  test-controlled. Passing it to any function other than a side-effect-free
+  builtin (`print`, `str`, `repr`, `len`, `int`, `float`, `bool`, `type`,
+  `isinstance`, `sorted`, `list`, `tuple`, `dict`, `set`, `format`, while the
+  module and test leave that name unbound), storing it where project code can
+  reach it, configuring it from a project value, or touching it inside a
+  loop, `try`, `with` or nested function makes it a project value, so a flag
+  or counter set from project calls is not a tautology. A mock from `patch()`
+  is never test-controlled: the patched project code sees it.
+
+One real assertion anywhere in the test, or in a helper it calls or passes on,
+makes the test clean. Names resolve the way Python binds them, never by
+searching for any definition with the same name: a bare name finds a function
+nested in the test (or in a function enclosing it), then a module-level
+function, defined in the module or imported from the `tests` package;
+`self.`, `cls.` and `super().` find methods of the test's class and its bases
+only; `<Class>.` and `<tests module>.` find that class's methods or that
+module's functions. A call named `assert*` that resolves to such a helper is
+followed like any other helper; one that resolves to nothing in the tree
+(`self.assertEqual`, a library's `assert_frame_equal`) counts as an assertion
+by its name. Methods of a non-test class defined inside the test, such as a
+fake, count too. `self.fail()`, `assert False` and `assertTrue(False)` count
+as real assertions.
+
+Tests are the `test*` methods that run in a module-level `unittest` TestCase
+of a test module: the class's own methods and those of every base it inherits
+from in the `tests` tree, including mixins imported from another `tests`
+module (reported under the module that defines them). A class is a TestCase
+when a base resolves to `unittest.TestCase` or `IsolatedAsyncioTestCase`
+(through `import unittest [as u]` or `from unittest import TestCase [as TC]`)
+or to a TestCase defined anywhere in the tree, worked out across all modules
+at once so an import cycle cannot hide one. A class defined in the tree is
+never a TestCase because of its name (`class FakeTestCase:` is not one), but a
+base from outside the tree and `unittest` is trusted by name when it ends in
+`TestCase` (`django.test.TestCase`, `absltest.TestCase`), and a base imported
+from a `tests` module that is not in the tree is assumed to be a test base.
+`unittest` loads neither module-level functions nor TestCase classes nested in
+a class or defined inside a function, so those are not tests. A test that is
+skipped unconditionally
+(`@unittest.skip` on the test or its class, or a `self.skipTest(...)` or
+`raise unittest.SkipTest(...)` statement directly in its body) is exempt; a
+conditional skip is not.
+
+Legacy hollow tests are recorded in `.github/hollow-tests-baseline.json`, sorted
+(an unsorted baseline is rejected) and keyed by `tests/<file>.py::<Class>.<test>`
+and rule. The check prints
+`NEW: <test>: <rule>` for each hollow test missing from the baseline and
+`REMOVE FIXED BASELINE ENTRY: <test>: <rule>` for each entry whose test is no
+longer hollow, then fails. Fix new hollow tests instead of recording them.
+`python scripts/ci.py repository` runs the same check, so Blocking CI enforces it.
+
+Known limits of the static analysis: `self.hook()` defined only in a subclass
+of the test's class (a template-method hook) is not followed, so a mixin whose
+assertions live only in such a hook is reported; a test inheriting from a
+class skipped with `@unittest.skip` is still examined; an import inside a
+function is treated as if it were at module level; and a value read through
+any call other than the builtins listed above counts as handed to project
+code, even when the callee is harmless.
+
+### How to fix a flagged test
+
+Make the test fail when the behaviour it names breaks. Acceptable evidence is
+a return value of project code, a state change project code made, a log line
+captured with `assertLogs`, an error raised (`assertRaises`), or a request
+recorded at the HTTP seam (a fake `Client.request` that stores what was sent,
+then an assertion on that list). Checking only how a mock was called proves
+the code called something, not that it did the right thing. Wrapping a call in
+`assertIsNone(...)` or `assertTrue(...)` only to silence the check is not a
+fix: assert something the behaviour actually determines, and plant the bug the
+test is meant to catch to see it fail.
+
 ## Source releases
 
 Use a stable `X.Y.Z` or `vX.Y.Z` tag, including the repository's existing
@@ -134,6 +233,7 @@ Install dependencies in an isolated environment, then run:
 python -m pip install -r .github/requirements-ci.txt
 python scripts/ci.py repository
 python scripts/ci.py lint
+python scripts/ci.py hollow-tests
 python scripts/ci.py test
 python -m ruff format --check scripts/ci.py tests/test_ci.py
 python -m unittest tests.test_ci
@@ -144,7 +244,7 @@ git diff --check
 ```
 
 `tests/test_ci.py` tests aggregate failure handling, lint regression/debt
-handling, workflow permissions and checkout policy, malformed/mismatched
+handling, hollow-test detection and its baseline ratchet, workflow permissions and checkout policy, malformed/mismatched
 tags, main ancestry, repeatable archives, checksum validation, source
 symlink rejection and exclusion of dirty/private synthetic files. It creates
 only temporary test repositories and initiates no live game requests.

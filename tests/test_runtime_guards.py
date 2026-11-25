@@ -7,10 +7,93 @@ SMTP pre-validation, exit semantics aggregation, and nonfatal gameplay execution
 import sys
 import unittest
 from pathlib import Path
+from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
+from urllib.parse import parse_qsl, urlsplit
+from xml.sax.saxutils import quoteattr
 
 from sdk.client import ROOM_UPGRADE_BLOCKERS, SHIP_UPGRADE_REQUIRED, Client, _extract_collection
 from sdk.device import Device
+from tests.synthetic_fixtures import SYNTHETIC_ACCESS_TOKEN
+
+# The client steps run.main() calls on a default run (no --run-battle, SMTP off), in the order it calls them.
+RUN_MAIN_STEPS = (
+    "heartbeat",
+    "purchaseScorchedPodIfAffordable",
+    "grabFlyingStarbux",
+    "collectTaskReward",
+    "getCrewInfo",
+    "upgradeResearches",
+    "upgradeRooms",
+    "collectDailyReward",
+    "collectAvailableMarkers",
+    "collectMiningDronesWithTravel",
+    "listActiveMarketplaceMessages",
+    "getMessages",
+    "infoBux",
+    "manageTraining",
+    "analyzeShipLayout",
+    "getResourceTotals",
+    "upgradeCharacters",
+)
+# Read from run.main(): the steps whose False return value fails the run (exit 1), and the steps whose exception
+# fails it. Any other outcome is logged and the run carries on to exit 0; no outcome stops the later steps.
+FATAL_ON_FALSE = frozenset(
+    {
+        "getCrewInfo",
+        "upgradeResearches",
+        "upgradeRooms",
+        "collectDailyReward",
+        "listActiveMarketplaceMessages",
+        "getMessages",
+        "manageTraining",
+        "upgradeCharacters",
+    }
+)
+FATAL_ON_RAISE = FATAL_ON_FALSE | {"purchaseScorchedPodIfAffordable", "collectTaskReward"}
+
+
+def recording_client(outcomes=None, **attributes):
+    """A logged-in fake client whose run.main() steps record their names in client.step_calls.
+
+    outcomes maps a step name to its return value, or to an exception instance the step raises; every other
+    step returns True. _automation_done is False so the once-per-account steps run, as on a real first pass.
+    The fake is specced on Client, so run.main() calling a method Client lacks raises AttributeError.
+    """
+    outcomes = outcomes or {}
+    client = MagicMock(
+        spec=Client, _automation_done=False, freeStarbuxToday=10, freeStarbuxMax=10, info={"@Name": "TestCaptain"}
+    )
+    client.configure_mock(**attributes)
+    client.login.return_value = True
+    client.step_calls = []
+
+    def step(name):
+        def call(*args, **kwargs):
+            client.step_calls.append(name)
+            outcome = outcomes.get(name, True)
+            if isinstance(outcome, BaseException):
+                raise outcome
+            return outcome
+
+        return MagicMock(side_effect=call)
+
+    for name in RUN_MAIN_STEPS:
+        setattr(client, name, step(name))
+    return client
+
+
+def run_main(client, argv=("run.py",)):
+    """Run run.main() against client with a mocked Device and return its exit code."""
+    import run
+
+    with patch("run.Client", return_value=client), patch("run.Device"), patch.object(sys, "argv", list(argv)):
+        try:
+            run.main()
+        except SystemExit as exit_request:
+            return exit_request.code
+    raise AssertionError("run.main() returned without calling sys.exit")
 
 
 class TestExtractCollectionHelper(unittest.TestCase):
@@ -169,8 +252,7 @@ class TestRoomDesignShapeGuards(unittest.TestCase):
             mock_log_exc.assert_called_once_with("Unable to upgrade rooms.", exc_info=True)
 
     def test_list_upgrading_rooms_safe_with_single_dict_or_missing(self):
-        self.client.getShipByUserId = MagicMock()  # type: ignore
-        self.client.shipByUserId = {
+        upgrading_shield = {
             "ShipService": {
                 "GetShipByUserId": {
                     "Ship": {
@@ -181,9 +263,29 @@ class TestRoomDesignShapeGuards(unittest.TestCase):
                 }
             }
         }
-        self.client.roomDesigns = {"RoomDesign": {"@RoomDesignId": "101", "@RoomName": "Shield"}}
-        # Should not raise KeyError or TypeError
-        self.client.listUpgradingRooms()
+        shield_design = {"RoomDesign": {"@RoomDesignId": "101", "@RoomName": "Shield"}}
+        self.client.info = {"@Name": "TestCaptain"}
+        self.client.getShipByUserId = MagicMock()  # type: ignore
+
+        # A single Room record and a single RoomDesign record (dicts, not lists) are still matched and reported.
+        self.client.shipByUserId = upgrading_shield
+        self.client.roomDesigns = shield_design
+        with self.assertLogs(level="INFO") as logs:
+            self.client.listUpgradingRooms()
+        self.assertEqual(logs.output, ["INFO:root:[TestCaptain] Shield is currently being upgraded."])
+
+        # Missing ship data, room designs or rooms: nothing is reported and nothing raises.
+        missing = {
+            "ship": (None, shield_design),
+            "room designs": (upgrading_shield, None),
+            "rooms": ({"ShipService": {"GetShipByUserId": {"Ship": {}}}}, shield_design),
+        }
+        for case, (ship, designs) in missing.items():
+            with self.subTest(missing=case):
+                self.client.shipByUserId = ship
+                self.client.roomDesigns = designs
+                with self.assertNoLogs(level="INFO"):
+                    self.client.listUpgradingRooms()
 
 
 class TestShipReadEmptyContainers(unittest.TestCase):
@@ -702,70 +804,336 @@ class TestResearchOutcomeClassification(unittest.TestCase):
         self.assertFalse(res)
 
 
+# The endpoints manageTraining reads today through Client.getLatestVersion3, listAllCharactersOfUser,
+# listAllCharacterDesigns2, listRoomsViaAccessToken, listAllTrainingDesigns2 and listAllResearches, and the two it
+# posts to. TestTrainingShapeGuards exercises those methods through these endpoints, never by name.
+SETTINGS = "/SettingService/GetLatestVersion3"
+CHARACTERS = "/CharacterService/ListAllCharactersOfUser"
+CHARACTER_DESIGNS = "/CharacterService/ListAllCharacterDesigns2"
+ROOMS = "/RoomService/ListRoomsViaAccessToken"
+TRAINING_DESIGNS = "/TrainingService/ListAllTrainingDesigns2"
+RESEARCHES = "/ResearchService/ListAllResearches"
+FINISH_TRAINING = "/TrainingService/FinishTraining"
+ADD_TRAINING = "/TrainingService/AddTraining"
+
+
+def _elements(tag, records):
+    """<tag .../> elements for records whose keys are xmltodict attribute names, such as "@CharacterId"."""
+    return "".join(
+        f"<{tag} " + " ".join(f"{key[1:]}={quoteattr(value)}" for key, value in record.items()) + "/>"
+        for record in records
+    )
+
+
+def _reply(service, method, collection, tag, records):
+    """A <service><method><collection>records</collection></method></service> list reply."""
+    return f"<{service}><{method}><{collection}>{_elements(tag, records)}</{collection}></{method}></{service}>"
+
+
+def _error_reply(path):
+    """The errorMessage reply a list endpoint sends: its service and method elements carry the message."""
+    service, method = path.strip("/").split("/")
+    method = "GetLatestSetting" if path == SETTINGS else method.rstrip("0123456789")
+    return f'<{service}><{method} errorMessage="Internal server error"/></{service}>'
+
+
+class TrainingRequestRecorder:
+    """Stands in for Client.request: answers each endpoint from replies (path -> XML body) and records every
+    request, so a test checks the POSTs that were sent, whatever reads came before them."""
+
+    FINISH_REPLY = (
+        '<TrainingService><FinishTraining><Character HpImprovement="1" PilotImprovement="1" RepairImprovement="1" '
+        'WeaponImprovement="1" ScienceImprovement="1" EngineImprovement="1" AttackImprovement="1" '
+        'AbilityImprovement="1" StaminaImprovement="1" Fatigue="12"/></FinishTraining></TrainingService>'
+    )
+    FINISH_ERROR_REPLY = '<TrainingService><FinishTraining errorMessage="Training is not finished."/></TrainingService>'
+    ADD_REPLY = "<TrainingService><AddTraining/></TrainingService>"
+
+    def __init__(self, replies):
+        self.replies = {FINISH_TRAINING: self.FINISH_REPLY, ADD_TRAINING: self.ADD_REPLY, **replies}
+        self.calls = []
+
+    def __call__(self, url, method, data=None):
+        parts = urlsplit(url)
+        self.calls.append((method, parts.path, dict(parse_qsl(parts.query))))
+        text = self.replies.get(parts.path, "<Unexpected/>")
+        return SimpleNamespace(text=text, content=text.encode("utf-8"), status_code=200)
+
+    def posts(self):
+        """Every POST sent, as (path, query), with the clock-dependent trainingStartDate left out."""
+        return [
+            (path, {key: value for key, value in params.items() if key != "trainingStartDate"})
+            for method, path, params in self.calls
+            if method == "POST"
+        ]
+
+
+def _crew(character_id, name, room_id, end="", fatigue="10", **improvements):
+    """One ListAllCharactersOfUser Character record; improvements are stat names without the Improvement suffix."""
+    record = {
+        "@CharacterId": character_id,
+        "@CharacterName": name,
+        "@CharacterDesignId": "1",
+        "@RoomId": room_id,
+        "@TrainingEndDate": end,
+        "@Fatigue": fatigue,
+    }
+    for stat in ("Hp", "Pilot", "Repair", "Weapon", "Science", "Engine", "Attack", "Ability", "Stamina"):
+        record[f"@{stat}Improvement"] = str(improvements.get(stat, 0))
+    return record
+
+
+def _characters_reply(characters):
+    return _reply("CharacterService", "ListAllCharactersOfUser", "Characters", "Character", characters)
+
+
+def _research_reply(level):
+    research = {"@ResearchName": "Fitness Lab", "@ResearchLevel": level}
+    return _reply("ResearchService", "ListAllResearches", "Researches", "Research", [research])
+
+
+def _training_designs_reply(designs):
+    return _reply("TrainingService", "ListAllTrainingDesigns", "TrainingDesigns", "TrainingDesign", designs)
+
+
 class TestTrainingShapeGuards(unittest.TestCase):
-    """Test training data shape handling and outcome reporting (R5)."""
+    """CHARACTERIZATION of Client.manageTraining: pins the POSTs it sends today (FinishTraining then AddTraining
+    per crew member, or none) and its return value, for game data served through Client.request.
+
+    TrainingRequestRecorder is the only seam: it answers the list endpoints with XML built from ROSTER and the
+    tests assert only on POSTs, so Wave 2 may change how and when the data is read. Wave 2 rewrites
+    manageTraining and may deliberately update the expected POSTs and the KNOWN DEFECT cases below.
+
+    roomDesigns is pre-seeded as run.main() leaves it: upgradeRooms, an earlier step, loads it through
+    RoomService/ListRoomDesigns2. manageTraining's own fallback is the deprecated DesignService/ListAllDesigns4,
+    which needs 30+ design sections and also replaces trainingDesigns, so these tests do not exercise it.
+
+    Every crew member has a training capacity of 100, so a stat total is also the training percentage.
+    """
+
+    ROSTER = (
+        # Weapons role in its primary room at 40%: green primary training, gated on Fitness/Education 101.
+        _crew("101", "Delish", "500", Weapon=40),
+        # Engines role in its secondary room at 72%, cooldown long over: green secondary training, no research gate.
+        _crew("102", "Galactic Sprite", "500", end="2020-01-01T00:00:00", Engine=72),
+        # Weapons role still training: no request.
+        _crew("103", "Galactic Succubus", "500", end="2999-01-01T00:00:00", Weapon=40),
+        # Not in a training room: skipped.
+        _crew("104", "Mistycball", "600", Science=40),
+        # In a training room but in no role: no request.
+        _crew("105", "Random Recruit", "700", Hp=40),
+        # Weapons role past 71% in its primary room: told to move to the gym, no request.
+        _crew("106", "Galactic Snow Maiden", "500", Weapon=80),
+        # Engines role in its secondary room at 72% but still training: the secondary T1 cooldown holds, no request.
+        _crew("107", "The Conjoint Archon", "500", end="2999-01-01T00:00:00", Engine=72),
+        # Shields role past 71% but not in a training room: skipped, so neither told to move nor sent a request.
+        _crew("108", "C.P.U.", "600", Science=80),
+    )
+    TRAINING = (
+        {"@TrainingDesignId": "11", "@TrainingName": "Read Expert Weapon Theory"},
+        {"@TrainingDesignId": "12", "@TrainingName": "Weapons Summit"},
+        {"@TrainingDesignId": "21", "@TrainingName": "Study Expert Engineering Manual"},
+        {"@TrainingDesignId": "31", "@TrainingName": "Bench Press"},
+    )
 
     def setUp(self):
-        self.device = MagicMock(spec=Device)  # type: ignore
-        self.client = Client(device=self.device)
-        self.client.listAllCharactersOfUser = MagicMock(return_value=True)  # type: ignore
-        self.client.allCharactersOfUser = {"CharacterService": {"ListAllCharactersOfUser": {"Characters": {"Character": []}}}}
-        self.client.listAllCharacterDesigns2 = MagicMock(return_value=True)  # type: ignore
-        self.client.allCharacterDesigns = {"CharacterService": {"ListAllCharacterDesigns": {"CharacterDesigns": {"CharacterDesign": []}}}}
-        self.client.listRoomsViaAccessToken = MagicMock(return_value=True)  # type: ignore
-        self.client.roomsViaAccessToken = {"RoomService": {"ListRoomsViaAccessToken": {"Rooms": {"Room": []}}}}
-        self.client.listAllTrainingDesigns2 = MagicMock(return_value=True)  # type: ignore
+        self.recorder = TrainingRequestRecorder(
+            {
+                SETTINGS: (
+                    '<SettingService><GetLatestSetting><Setting CharacterDesignVersion="7" '
+                    'TrainingDesignVersion="3"/></GetLatestSetting></SettingService>'
+                ),
+                CHARACTERS: _characters_reply(self.ROSTER),
+                CHARACTER_DESIGNS: _reply(
+                    "CharacterService",
+                    "ListAllCharacterDesigns",
+                    "CharacterDesigns",
+                    "CharacterDesign",
+                    [
+                        {"@CharacterDesignId": "1", "@TrainingCapacity": "100", "@SpecialAbilityType": "DamageToCurrentEnemy"},
+                        {"@CharacterDesignId": "2", "@TrainingCapacity": "200", "@SpecialAbilityType": "HealRoomHp"},
+                    ],
+                ),
+                ROOMS: _reply(
+                    "RoomService",
+                    "ListRoomsViaAccessToken",
+                    "Rooms",
+                    "Room",
+                    [
+                        {"@RoomId": "500", "@RoomDesignId": "50"},
+                        {"@RoomId": "600", "@RoomDesignId": "60"},
+                        {"@RoomId": "700", "@RoomDesignId": "70"},
+                    ],
+                ),
+                TRAINING_DESIGNS: _training_designs_reply(self.TRAINING),
+                RESEARCHES: _research_reply("203"),
+            }
+        )
+        self.client = self.new_client()
 
-    def test_training_designs_missing(self):
-        self.client.trainingDesigns = {}
-
-        with patch("logging.info") as mock_info:
-            res = self.client.manageTraining()
-            self.assertTrue(res)
-            mock_info.assert_any_call("Training design data unavailable; skipping training.")
-
-    def test_training_designs_single_dict(self):
-        self.client.trainingDesigns = {
-            "TrainingDesign": {
-                "@TrainingDesignId": "1",
-                "@TrainingName": "Read Expert Weapon Theory",
+    def new_client(self):
+        device = MagicMock(spec=Device)
+        device.languageKey = "en"
+        client = Client(device=device)
+        client.accessToken = SYNTHETIC_ACCESS_TOKEN
+        client.info = {"@Name": "TestCaptain"}
+        client.roomDesigns = {
+            "RoomService": {
+                "ListRoomDesigns": {
+                    "RoomDesigns": {
+                        "RoomDesign": [
+                            {"@RoomDesignId": "50", "@RoomName": "Academy"},
+                            {"@RoomDesignId": "60", "@RoomName": "Bridge"},
+                            {"@RoomDesignId": "70", "@RoomName": "GYM"},
+                        ]
+                    }
+                }
             }
         }
+        client.request = self.recorder
+        return client
 
-        res = self.client.manageTraining()
-        self.assertTrue(res)
+    def training_posts(self, character_id, training_design_id):
+        token = SYNTHETIC_ACCESS_TOKEN
+        return [
+            (FINISH_TRAINING, {"characterId": character_id, "accessToken": token}),
+            (ADD_TRAINING, {"trainingDesignId": training_design_id, "characterId": character_id, "accessToken": token}),
+        ]
 
-    def test_training_endpoint_error(self):
-        self.client.trainingDesigns = {"errorMessage": "Internal server error"}
+    def test_eligible_crew_get_finish_then_add_training_posts(self):
+        self.assertIs(self.client.manageTraining(), True)
 
-        with patch("logging.error") as mock_err:
-            res = self.client.manageTraining()
-            self.assertFalse(res)
-            mock_err.assert_called_with("TrainingDesign data not available.")
+        self.assertEqual(self.recorder.posts(), [*self.training_posts("101", "11"), *self.training_posts("102", "21")])
+        start_dates = [params["trainingStartDate"] for _, path, params in self.recorder.calls if path == ADD_TRAINING]
+        self.assertEqual(len(start_dates), 2)
+        for start_date in start_dates:
+            self.assertRegex(start_date, r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d$")
+
+    def test_without_training_research_only_ungated_secondary_training_is_sent(self):
+        self.recorder.replies[RESEARCHES] = _research_reply("0")
+
+        self.assertIs(self.client.manageTraining(), True)
+
+        self.assertEqual(self.recorder.posts(), self.training_posts("102", "21"))
+
+    def test_over_trained_crew_in_primary_room_is_told_to_move(self):
+        with self.assertLogs(level="ERROR") as logs:
+            self.assertIs(self.client.manageTraining(), True)
+
+        move_messages = [message for message in logs.output if "Move Galactic Snow Maiden" in message]
+        self.assertEqual(len(move_messages), 1)
+        self.assertIn("to the GYM or Galaxy Gym", move_messages[0])
+        self.assertNotIn("106", [params.get("characterId") for _, params in self.recorder.posts()])
+
+    def test_secondary_room_crew_still_training_get_no_request(self):
+        self.assertIs(self.client.manageTraining(), True)
+
+        posted = [params.get("characterId") for _, params in self.recorder.posts()]
+        self.assertNotIn("107", posted)
+        self.assertEqual(posted, ["101", "101", "102", "102"])
+
+    def test_crew_outside_training_rooms_are_neither_moved_nor_trained(self):
+        with self.assertLogs(level="ERROR") as logs:
+            self.assertIs(self.client.manageTraining(), True)
+
+        move_messages = [message for message in logs.output if "] Move " in message]
+        self.assertEqual(len(move_messages), 1)
+        self.assertIn("Move Galactic Snow Maiden", move_messages[0])
+        for name in ("Mistycball", "C.P.U."):
+            self.assertFalse([message for message in logs.output if name in message], name)
+        posted = [params.get("characterId") for _, params in self.recorder.posts()]
+        self.assertNotIn("104", posted)
+        self.assertNotIn("108", posted)
+
+    def test_training_designs_missing_skips_without_posting(self):
+        self.recorder.replies[TRAINING_DESIGNS] = _training_designs_reply([])
+
+        with self.assertLogs(level="INFO") as logs:
+            self.assertIs(self.client.manageTraining(), True)
+
+        self.assertIn("INFO:root:Training design data unavailable; skipping training.", logs.output)
+        self.assertEqual(self.recorder.posts(), [])
+
+    def test_single_character_and_training_design_records_are_used(self):
+        # One record parses to a dict rather than a list of dicts.
+        self.recorder.replies[CHARACTERS] = _characters_reply([self.ROSTER[0]])
+        self.recorder.replies[TRAINING_DESIGNS] = _training_designs_reply([self.TRAINING[0]])
+
+        self.assertIs(self.client.manageTraining(), True)
+
+        self.assertEqual(self.recorder.posts(), self.training_posts("101", "11"))
+
+    def test_unreadable_training_data_returns_false_without_posting(self):
+        # A reply without the endpoint's service element, such as a gateway error page.
+        foreign = '<ServerError errorMessage="Service unavailable"/>'
+        # The pinned "avaialble" typos come from Client; Wave 2 may fix them.
+        cases = (
+            (TRAINING_DESIGNS, _error_reply(TRAINING_DESIGNS), ["ERROR:root:TrainingDesign data not available."]),
+            (SETTINGS, _error_reply(SETTINGS), ["ERROR:root:AllCharacterDesigns data not avaialble."]),
+            (
+                CHARACTERS,
+                foreign,
+                [
+                    "ERROR:root:Failed to get list of characters on the ship.",
+                    "ERROR:root:allCharactersOfUser data not avaialble.",
+                ],
+            ),
+            (ROOMS, foreign, ["ERROR:root:RoomService data not available."]),
+        )
+        for path, reply, expected in cases:
+            with self.subTest(error_at=path):
+                self.setUp()
+                self.recorder.replies[path] = reply
+
+                with self.assertLogs(level="ERROR") as logs:
+                    self.assertIs(self.client.manageTraining(), False)
+
+                self.assertEqual(logs.output, expected)
+                self.assertEqual(self.recorder.posts(), [])
+
+    def test_character_list_error_reads_as_an_empty_roster(self):
+        # KNOWN DEFECT: the errorMessage reply still carries <CharacterService>, so it is accepted as a roster
+        # with no crew and the run counts training as done. Wave 2 may return False here instead.
+        self.recorder.replies[CHARACTERS] = _error_reply(CHARACTERS)
+
+        self.assertIs(self.client.manageTraining(), True)
+
+        self.assertEqual(self.recorder.posts(), [])
+
+    def test_character_design_or_room_list_error_raises_before_any_post(self):
+        # KNOWN DEFECT: these errorMessage replies are accepted as data, then reading the missing records raises
+        # (run.main() logs "manageTraining failed" and exits 1). Wave 2 may return False here instead.
+        for path in (CHARACTER_DESIGNS, ROOMS):
+            with self.subTest(error_at=path):
+                self.setUp()
+                self.recorder.replies[path] = _error_reply(path)
+
+                with self.assertRaises((KeyError, AttributeError)):
+                    self.client.manageTraining()
+
+                self.assertEqual(self.recorder.posts(), [])
+
+    def test_failed_finish_training_still_adds_training(self):
+        self.recorder.replies[CHARACTERS] = _characters_reply([self.ROSTER[0]])
+        self.recorder.replies[FINISH_TRAINING] = TrainingRequestRecorder.FINISH_ERROR_REPLY
+
+        self.assertIs(self.client.manageTraining(), True)
+
+        self.assertEqual(self.recorder.posts(), self.training_posts("101", "11"))
 
 
 class TestSMTPPreValidation(unittest.TestCase):
     """Test CLI SMTP pre-validation and exit codes before gameplay (R6)."""
 
-    @patch("run.Client")
-    @patch("run.Device")
-    def test_smtp_disabled_when_no_flags(self, mock_device, mock_client):
-        mock_cli_inst = MagicMock()  # type: ignore
-        mock_cli_inst.login.return_value = True
-        mock_cli_inst.freeStarbuxToday = 10
-        mock_cli_inst.freeStarbuxMax = 10
-        mock_cli_inst.upgradeResearches.return_value = True
-        mock_cli_inst.upgradeRooms.return_value = True
-        mock_cli_inst.manageTraining.return_value = True
-        mock_client.return_value = mock_cli_inst
+    def test_smtp_disabled_when_no_flags(self):
+        client = recording_client()
 
-        test_args = ["run.py"]
-        with patch.object(sys, "argv", test_args), patch("run.email_logfile") as mock_email:
-            with self.assertRaises(SystemExit) as cm:
-                from run import main
-                main()
-            self.assertEqual(cm.exception.code, 0)
-            mock_email.assert_not_called()
+        with patch("run.email_logfile") as mock_email:
+            code = run_main(client)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(client.step_calls, list(RUN_MAIN_STEPS))
+        mock_email.assert_not_called()
 
     @patch("run.Client")
     @patch("run.Device")
@@ -852,20 +1220,15 @@ class TestSMTPPreValidation(unittest.TestCase):
             if tmp_pwd_file.exists():
                 tmp_pwd_file.unlink()
 
-    @patch("run.Client")
-    @patch("run.Device")
-    def test_smtp_valid_configuration_invokes_email_logfile_after_gameplay(self, mock_device, mock_client):
+    def test_smtp_valid_configuration_invokes_email_logfile_after_gameplay(self):
         tmp_pwd_file = Path("tests_scratch_valid_pw.txt")
         tmp_pwd_file.write_text("synthetic_secret_password\n")
         try:
-            mock_cli_inst = MagicMock()  # type: ignore
-            mock_cli_inst.login.return_value = True
-            mock_cli_inst.freeStarbuxToday = 10
-            mock_cli_inst.freeStarbuxMax = 10
-            mock_cli_inst.upgradeResearches.return_value = True
-            mock_cli_inst.upgradeRooms.return_value = True
-            mock_cli_inst.manageTraining.return_value = True
-            mock_client.return_value = mock_cli_inst
+            client = recording_client()
+
+            def email_logfile(*args):
+                client.step_calls.append("email_logfile")
+                return True
 
             test_args = [
                 "run.py",
@@ -876,95 +1239,150 @@ class TestSMTPPreValidation(unittest.TestCase):
                 "-r",
                 "r@e.com",
             ]
-            with patch.object(sys, "argv", test_args), patch("run.email_logfile") as mock_email:
-                with self.assertRaises(SystemExit) as cm:
-                    from run import main
-                    main()
-                self.assertEqual(cm.exception.code, 0)
-                mock_email.assert_called_once_with("tachikoma.log", mock_cli_inst, "s@e.com", "synthetic_secret_password", "r@e.com")
+            with patch("run.email_logfile", side_effect=email_logfile) as mock_email:
+                code = run_main(client, test_args)
+
+            self.assertEqual(code, 0)
+            # The log is e-mailed once, after every gameplay step has run.
+            self.assertEqual(client.step_calls, [*RUN_MAIN_STEPS, "email_logfile"])
+            mock_email.assert_called_once_with(
+                "tachikoma.log", client, "s@e.com", "synthetic_secret_password", "r@e.com"
+            )
         finally:
             if tmp_pwd_file.exists():
                 tmp_pwd_file.unlink()
 
 
+class TestRunMainHarness(unittest.TestCase):
+    """recording_client stays in step with Client, so a renamed or removed client method fails the run.main() tests."""
+
+    def test_every_run_main_step_is_a_client_method(self):
+        for name in RUN_MAIN_STEPS:
+            with self.subTest(step=name):
+                self.assertTrue(callable(getattr(Client, name, None)), f"Client has no method {name}")
+
+    def test_the_fake_client_rejects_methods_client_does_not_have(self):
+        client = recording_client()
+
+        with self.assertRaises(AttributeError):
+            client.collectEverythingAtOnce()
+
+
 class TestExitCodeAggregation(unittest.TestCase):
     """Test truthful exit code aggregation and nonfatal execution sequence (R7)."""
 
-    @patch("run.Client")
-    @patch("run.Device")
-    def test_exit_0_on_success_and_skips(self, mock_device, mock_client):
-        mock_cli_inst = MagicMock(_automation_done=False)  # type: ignore
-        mock_cli_inst.login.return_value = True
-        mock_cli_inst.freeStarbuxToday = 10
-        mock_cli_inst.freeStarbuxMax = 10
-        mock_cli_inst.upgradeResearches.return_value = True
-        mock_cli_inst.upgradeRooms.return_value = True
-        mock_cli_inst.manageTraining.return_value = True
-        mock_client.return_value = mock_cli_inst
+    def test_exit_code_contract_for_every_step_outcome(self):
+        # redact_secrets scrubs a token in its accessToken=<value> form (a bare UUID is not redacted).
+        secret = f"accessToken={SYNTHETIC_ACCESS_TOKEN}"
+        for name in RUN_MAIN_STEPS:
+            for outcome, fatal in ((False, FATAL_ON_FALSE), (RuntimeError(f"boom {secret}"), FATAL_ON_RAISE)):
+                with self.subTest(step=name, outcome="raises" if isinstance(outcome, RuntimeError) else "False"):
+                    client = recording_client({name: outcome})
 
-        with patch.object(sys, "argv", ["run.py"]):
-            with self.assertRaises(SystemExit) as cm:
-                from run import main
-                main()
-            self.assertEqual(cm.exception.code, 0)
+                    with self.assertLogs(level="DEBUG") as logs:
+                        code = run_main(client)
 
-    @patch("run.Client")
-    @patch("run.Device")
-    def test_exit_1_on_unexpected_room_failure_and_continues_training(self, mock_device, mock_client):
-        mock_cli_inst = MagicMock(_automation_done=False)  # type: ignore
-        mock_cli_inst.login.return_value = True
-        mock_cli_inst.freeStarbuxToday = 10
-        mock_cli_inst.freeStarbuxMax = 10
-        mock_cli_inst.upgradeResearches.return_value = True
-        mock_cli_inst.upgradeRooms.return_value = False  # Unexpected failure
-        mock_cli_inst.manageTraining.return_value = True
-        mock_client.return_value = mock_cli_inst
+                    self.assertEqual(code, 1 if name in fatal else 0)
+                    self.assertEqual(client.step_calls, list(RUN_MAIN_STEPS))
+                    output = "\n".join(logs.output)
+                    if isinstance(outcome, RuntimeError):
+                        self.assertIn(f":root:{name} failed: boom accessToken=***REDACTED***", output)
+                    self.assertNotIn(SYNTHETIC_ACCESS_TOKEN, output)
 
-        with patch.object(sys, "argv", ["run.py"]):
-            with self.assertRaises(SystemExit) as cm:
-                from run import main
-                main()
-            self.assertEqual(cm.exception.code, 1)
-            # Verify manageTraining was still called despite upgradeRooms failure
-            mock_cli_inst.manageTraining.assert_called_once()
+    def test_failed_login_exits_1_before_any_gameplay_step(self):
+        client = recording_client()
+        client.login.return_value = False
 
-    @patch("run.Client")
-    @patch("run.Device")
-    def test_exit_1_on_unexpected_training_failure(self, mock_device, mock_client):
-        mock_cli_inst = MagicMock(_automation_done=False)  # type: ignore
-        mock_cli_inst.login.return_value = True
-        mock_cli_inst.freeStarbuxToday = 10
-        mock_cli_inst.freeStarbuxMax = 10
-        mock_cli_inst.upgradeResearches.return_value = True
-        mock_cli_inst.upgradeRooms.return_value = True
-        mock_cli_inst.manageTraining.return_value = False  # Unexpected failure
-        mock_client.return_value = mock_cli_inst
+        with self.assertLogs(level="WARNING") as logs:
+            code = run_main(client)
 
-        with patch.object(sys, "argv", ["run.py"]):
-            with self.assertRaises(SystemExit) as cm:
-                from run import main
-                main()
-            self.assertEqual(cm.exception.code, 1)
+        self.assertEqual(code, 1)
+        self.assertEqual(client.step_calls, [])
+        self.assertIn("WARNING:root:[authenticate] failed to login", logs.output)
 
-    @patch("run.Client")
-    @patch("run.Device")
-    def test_independent_actions_continue_after_research_failure(self, mock_device, mock_client):
-        mock_cli_inst = MagicMock(_automation_done=False)  # type: ignore
-        mock_cli_inst.login.return_value = True
-        mock_cli_inst.freeStarbuxToday = 10
-        mock_cli_inst.freeStarbuxMax = 10
-        mock_cli_inst.upgradeResearches.return_value = False  # Unexpected failure
-        mock_cli_inst.upgradeRooms.return_value = True
-        mock_cli_inst.manageTraining.return_value = True
-        mock_client.return_value = mock_cli_inst
+    def test_email_logfile_exception_fails_the_run_after_every_step(self):
+        with TemporaryDirectory() as directory:
+            password_file = Path(directory) / "smtp_password.txt"
+            password_file.write_text("synthetic_secret_password\n")
+            client = recording_client()
+            argv = ["run.py", "--smtp-email", "s@e.com", "--smtp-password-file", str(password_file), "-r", "r@e.com"]
 
-        with patch.object(sys, "argv", ["run.py"]):
-            with self.assertRaises(SystemExit) as cm:
-                from run import main
-                main()
-            self.assertEqual(cm.exception.code, 1)
-            mock_cli_inst.upgradeRooms.assert_called_once()
-            mock_cli_inst.manageTraining.assert_called_once()
+            with (
+                patch("run.email_logfile", side_effect=RuntimeError("smtp down")),
+                self.assertLogs(level="ERROR") as logs,
+            ):
+                code = run_main(client, argv)
+
+        self.assertEqual(code, 1)
+        self.assertEqual(client.step_calls, list(RUN_MAIN_STEPS))
+        self.assertIn("email_logfile raised exception: smtp down", "\n".join(logs.output))
+
+    def test_exit_0_on_success_and_skips(self):
+        client = recording_client()
+
+        self.assertEqual(run_main(client), 0)
+        self.assertEqual(client.step_calls, list(RUN_MAIN_STEPS))
+        self.assertIs(client._automation_done, True)
+
+    def test_exit_1_on_unexpected_room_failure_and_continues_training(self):
+        client = recording_client({"upgradeRooms": False})
+
+        self.assertEqual(run_main(client), 1)
+        self.assertEqual(client.step_calls, list(RUN_MAIN_STEPS))
+
+    def test_exit_1_on_unexpected_training_failure(self):
+        client = recording_client({"manageTraining": False})
+
+        self.assertEqual(run_main(client), 1)
+        self.assertEqual(client.step_calls, list(RUN_MAIN_STEPS))
+
+    def test_independent_actions_continue_after_research_failure(self):
+        client = recording_client({"upgradeResearches": False})
+
+        self.assertEqual(run_main(client), 1)
+        self.assertEqual(client.step_calls, list(RUN_MAIN_STEPS))
+
+    def test_automation_already_done_runs_only_per_pass_steps(self):
+        client = recording_client(_automation_done=True)
+
+        self.assertEqual(run_main(client), 0)
+        self.assertEqual(
+            client.step_calls,
+            [
+                "heartbeat",
+                "purchaseScorchedPodIfAffordable",
+                "grabFlyingStarbux",
+                "collectTaskReward",
+                "getResourceTotals",
+                "upgradeCharacters",
+            ],
+        )
+
+    def test_collect_task_reward_skipped_below_daily_cap(self):
+        client = recording_client(freeStarbuxToday=3)
+
+        self.assertEqual(run_main(client), 0)
+        self.assertEqual(client.step_calls, [name for name in RUN_MAIN_STEPS if name != "collectTaskReward"])
+
+    def test_collect_task_reward_exception_fails_run(self):
+        client = recording_client({"collectTaskReward": RuntimeError("boom")})
+
+        with self.assertLogs(level="ERROR") as logs:
+            code = run_main(client)
+
+        self.assertEqual(code, 1)
+        self.assertIn("ERROR:root:collectTaskReward failed: boom", logs.output)
+        self.assertEqual(client.step_calls, list(RUN_MAIN_STEPS))
+
+    def test_analyze_ship_layout_exception_is_nonfatal(self):
+        client = recording_client({"analyzeShipLayout": RuntimeError("boom")})
+
+        with self.assertLogs(level="ERROR") as logs:
+            code = run_main(client)
+
+        self.assertEqual(code, 0)
+        self.assertIn("ERROR:root:analyzeShipLayout failed: boom", logs.output)
+        self.assertEqual(client.step_calls, list(RUN_MAIN_STEPS))
 
 
 if __name__ == "__main__":

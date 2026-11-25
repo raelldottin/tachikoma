@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "hollow_tests": [
+    {
+      "test": "tests/test_battle_flow.py::TestBattleFlow.test_run_battle_proceeds_when_hp_full",
+      "rule": "mock-only"
+    },
+    {
+      "test": "tests/test_tui.py::TestTUI.test_command_loop_help",
+      "rule": "mock-only"
+    },
+    {
+      "test": "tests/test_tui.py::TestTUI.test_command_loop_unknown",
+      "rule": "no-assertion"
+    }
+  ]
+}
