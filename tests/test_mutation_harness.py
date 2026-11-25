@@ -4,6 +4,7 @@ The toy suites under tests/mutation_toys are never imported here at module level
 them; the harness runs them by module name inside temporary copies of a toy repository.
 """
 
+from argparse import Namespace
 import ast
 from collections import Counter
 from contextlib import redirect_stderr, redirect_stdout
@@ -280,6 +281,9 @@ class GenerationTests(unittest.TestCase):
                 ("m.py:4:17:constant:0", klass.replace("self.y = 2", "self.y = 3")),
             ],
         )
+        # A class body is not a function body, also when the class is defined inside a function.
+        nested = "def f():\n    class C:\n        x = 1\n    return C\n"
+        self.assertEqual([m.id for m in gen(nested)], ["m.py:3:12:constant:0", "m.py:4:11:return:0"])
 
     def test_strip_at_keeps_quote_style_and_applies_in_data_tables(self):
         self.assertEqual(
@@ -301,6 +305,10 @@ class GenerationTests(unittest.TestCase):
         self.assertEqual(mutated('x: "T" = 0\n'), [("m.py:1:9:constant:0", 'x: "T" = 1\n')])
         self.assertEqual(mutated('if __name__ == "__main__":\n    main(1 < 2)\n'), [])
         self.assertEqual(mutated('if "__main__" == __name__:\n    main(1 < 2)\n'), [])
+        # Only an equality between __name__ and "__main__" is the guard.
+        for test in ('__name__ != "__main__"', '__name__ == "other"', 'name == "__main__"'):
+            with self.subTest(test=test):
+                self.assertIn("m.py:1:3:negate:0", [m.id for m in gen(f"if {test}:\n    main()\n")])
 
     def test_strings_inside_literal_subscripts_are_skipped(self):
         # Regression (benchmark N1): `EaseType = Literal["ease_out", ...]` in sdk/game_formulas.py is a typing alias,
@@ -388,12 +396,43 @@ class GenerationTests(unittest.TestCase):
                 self.assertEqual(text.count("\r\n"), 2)
                 self.assertEqual(text.count("\n"), 2)
 
+    def test_lines_split_only_where_ast_splits_them(self):
+        # A form feed and U+2028 are line breaks to str.splitlines, but not to ast and tokenize.
+        source = 'x = 1\n\x0cdef f(a):\n    return a < " "\ny = 2\n'
+        self.assertEqual(
+            [(m.id, m.original) for m in gen(source)],
+            [
+                ("m.py:1:4:constant:0", "1"),
+                ("m.py:3:11:return:0", 'a < " "'),
+                ("m.py:3:13:compare:0", "<"),
+                ("m.py:3:15:constant:0", '" "'),
+                ("m.py:4:4:constant:0", "2"),
+            ],
+        )
+        self.assertEqual(
+            dict(mutated(source))["m.py:4:4:constant:0"], 'x = 1\n\x0cdef f(a):\n    return a < " "\ny = 3\n'
+        )
+
     def test_apply_mutant_rejects_a_mutant_that_does_not_match_the_source(self):
         (mutant,) = gen("x = a < b\n")
         with self.assertRaises(ValueError):
             mutation.apply_mutant("x = a > b\n", mutant)
         with self.assertRaises(ValueError):
             mutation.apply_mutant("", mutant)
+
+    def test_apply_mutant_rejects_a_span_whose_columns_run_past_its_lines(self):
+        source = "x = 1\ny = 2\n"
+        well_formed = mutation.Mutant("m.py", 1, 0, 2, 1, "constant", 0, "x = 1\ny", "z")
+        self.assertEqual(mutation.apply_mutant(source, well_formed), "z = 2\n")
+        # The same characters addressed as line 1, column 7: the text matches, but the end column overruns line 1.
+        with self.assertRaises(ValueError):
+            mutation.apply_mutant(source, replace(well_formed, end_line=1, end_col=7))
+        # Lines outside the source, or a start after the end: each original equals the characters the span would
+        # slice, so only the range check can reject it.
+        for line, end_line, original in ((0, 1, ""), (2, 1, ""), (2, 3, "y = 2\n")):
+            outside = replace(well_formed, line=line, col=0, end_line=end_line, end_col=0, original=original)
+            with self.subTest(line=line, end_line=end_line), self.assertRaisesRegex(ValueError, "outside"):
+                mutation.apply_mutant(source, outside)
 
     def test_toy_target_mutants_match_the_expected_list(self):
         mutants = mutation.generate_mutants(TOY_PATH, toy_source())
@@ -489,6 +528,9 @@ class ScopeAndOperatorTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(mutation.ConfigError, "unknown operator"):
             gen(SCOPED_SOURCE, operators=["nope"])
+        # Reports record the selection as configured, in the configured order.
+        self.assertEqual(mutation.check_operators(["return", "compare"]), ("return", "compare"))
+        self.assertEqual(mutation.check_operators(None), mutation.OPERATORS)
         self.assertEqual(set(mutation.OPERATORS) & set(mutation.EXTRA_OPERATORS), set())
         self.assertEqual(mutation.EXTRA_OPERATORS, ("arithmetic", "minmax"))
 
@@ -614,7 +656,18 @@ class ConfigTests(unittest.TestCase):
         missing_tests = {"schema_version": 1, "targets": [{"path": TOY_PATH, "min_score": 0.5}]}
         cases = {
             "schema_version 2": {"schema_version": 2, "targets": [VALID_TARGET]},
+            "schema_version true": {"schema_version": True, "targets": [VALID_TARGET]},
+            "schema_version string": {"schema_version": "1", "targets": [VALID_TARGET]},
             "no schema_version": {"targets": [VALID_TARGET]},
+            "description not a string": {"schema_version": 1, "description": 1, "targets": [VALID_TARGET]},
+            "duplicate copy": {"schema_version": 1, "copy": ["sdk", "sdk"], "targets": [VALID_TARGET]},
+            "parent copy": {"schema_version": 1, "copy": ["../sdk"], "targets": [VALID_TARGET]},
+            "target not an object": {"schema_version": 1, "targets": [TOY_PATH]},
+            "tests not a list": config(tests="tests.a"),
+            "windows drive-relative path": config(path="C:sdk\\x.py"),
+            "timeout negative": config(timeout=-1),
+            "timeout true": config(timeout=True),
+            "equivalent not a list": config(equivalent=f"{TOY_PATH}:5:13:compare:0"),
             "empty targets": {"schema_version": 1, "targets": []},
             "targets not a list": {"schema_version": 1, "targets": {}},
             "top level not an object": [1],
@@ -718,6 +771,15 @@ class ConfigTests(unittest.TestCase):
             twice = (target, mutation.TargetConfig(TOY_PATH, ("tests.a",), 0.5))
             with self.assertRaisesRegex(mutation.ConfigError, "more than one"):
                 mutation.expand_targets(mutation.Config(TOY_COPY, twice), REPO)
+        with self.subTest(case="only .py files"), TemporaryDirectory() as tmp:
+            for name in ("pkg/b.py", "pkg/a.py", "pkg/notes.txt", "pkg/data.pyc", "pkg/sub/c.py"):
+                (Path(tmp) / name).parent.mkdir(parents=True, exist_ok=True)
+                (Path(tmp) / name).write_text("x = 1\n", encoding="utf-8")
+            star = mutation.TargetConfig("pkg/*", ("tests.a",), 0.5)
+            self.assertEqual(
+                [item.path for item in mutation.expand_targets(mutation.Config(("pkg",), (star,)), tmp)],
+                ["pkg/a.py", "pkg/b.py"],
+            )
 
 
 def make_results(path="m.py", operator="constant", **counts):
@@ -835,11 +897,26 @@ class FakeRunnerTests(unittest.TestCase):
         self.assertEqual(fixed.calls[0][1], 400.0)
         self.assertEqual({call[1] for call in fixed.calls[1:]}, {400.0})
 
+    def test_a_workspace_holds_the_original_source_again_after_each_run(self):
+        runner = FakeRunner(status="passed")
+        restored = []
+
+        def check(result):
+            # progress runs after the mutant's run has finished; with one mutant no other run can reuse the copy.
+            restored.append((runner.calls[-1][3] / TOY_PATH).read_bytes() == self.source.encode("utf-8"))
+
+        self.run_toy(runner, mutants=[self.expected[0]], progress=check)
+        self.assertEqual(runner.calls[-1][0], mutation.apply_mutant(self.source, self.expected[0]))
+        self.assertEqual(restored, [True])
+
     def test_equivalent_ids_are_not_run_and_leave_the_denominator(self):
         equivalent_id, stale_id = f"{TOY_PATH}:24:4:delete:0", f"{TOY_PATH}:999:0:delete:0"
         (deleted,) = [mutant for mutant in self.expected if mutant.id == equivalent_id]
         runner = FakeRunner(status="passed")
-        report = self.run_toy(runner, equivalent=[equivalent_id, stale_id])
+        seen = []
+        report = self.run_toy(runner, equivalent=[equivalent_id, stale_id], progress=seen.append)
+        self.assertEqual(Counter(result.status for result in seen), Counter(equivalent=1, survived=23))
+        self.assertEqual(seen[0].mutant.id, equivalent_id, "results known before any run are reported first")
         self.assertNotIn(mutation.apply_mutant(self.source, deleted), [call[0] for call in runner.calls])
         self.assertEqual(len(runner.calls), 24)
         self.assertEqual(report.counts["equivalent"], 1)
@@ -881,6 +958,10 @@ class FakeRunnerTests(unittest.TestCase):
             "failed": (mutation.RunResult("failed", 1.0, "AssertionError: boom", tests_run=5), "boom"),
             "timeout": (mutation.RunResult("timeout", 300.0, "", tests_run=None), "timeout"),
             "no tests": (mutation.RunResult("passed", 1.0, "Ran 0 tests", tests_run=0), "ran no tests"),
+            "long output": (
+                mutation.RunResult("failed", 1.0, "x" * 2 * mutation.OUTPUT_TAIL + "the real error", tests_run=5),
+                "the real error$",
+            ),
         }
         for name, (baseline, message) in baselines.items():
             with self.subTest(case=name):
@@ -902,11 +983,39 @@ class FakeRunnerTests(unittest.TestCase):
             self.run_toy(runner, jobs=2)
         self.assertLess(len(runner.calls), 25)
 
+    def test_an_interrupted_run_asks_the_runner_to_kill_its_live_children(self):
+        class KillableRunner(FakeRunner):
+            def __init__(self, **keywords):
+                super().__init__(**keywords)
+                self.kill_all_calls = 0
+
+            def kill_all(self):
+                self.kill_all_calls += 1
+
+        interrupted = KillableRunner(raise_on=(3, KeyboardInterrupt()))
+        with self.assertRaises(KeyboardInterrupt):
+            self.run_toy(interrupted, jobs=2)
+        self.assertEqual(interrupted.kill_all_calls, 1)
+        finished = KillableRunner()
+        self.run_toy(finished, jobs=2)
+        self.assertEqual(finished.kill_all_calls, 0, "a run that finishes normally kills nothing")
+
+    def test_an_unknown_runner_status_stops_the_run_with_a_mutation_error(self):
+        # A MutationError exits 2 from main; any other exception would escape as a traceback.
+        with self.assertRaisesRegex(mutation.MutationError, "unknown status 'error'"):
+            self.run_toy(FakeRunner(status="error"))
+
+    def test_a_baseline_without_a_test_count_still_runs(self):
+        # A custom runner need not parse "Ran N tests": only an explicit count of zero means nothing ran.
+        runner = FakeRunner(baseline=mutation.RunResult("passed", 1.0, "", tests_run=None))
+        self.assertEqual(self.run_toy(runner).counts["killed"], 24)
+
     def test_paths_and_test_modules_are_validated_before_running(self):
         cases = {
             "outside the root": ("../escape.py", ("tests.mutation_toys.weak_suite",), {}, "outside"),
             "parent segment": ("tests/../tests/mutation_toys/toy_target.py", ("tests.a",), {}, r"\.\."),
             "missing target": ("tests/mutation_toys/nope.py", ("tests.mutation_toys.weak_suite",), {}, "not found"),
+            "no tests": (TOY_PATH, (), {}, "no tests mapped"),
             "missing copy path": (
                 TOY_PATH,
                 ("tests.mutation_toys.weak_suite",),
@@ -933,6 +1042,12 @@ class FakeRunnerTests(unittest.TestCase):
                         copy_paths=extra.get("copy_paths", TOY_COPY),
                     )
                 self.assertEqual(runner.calls, [])
+        # A copy path covers itself and what is below it, not a sibling that merely shares its prefix.
+        self.assertTrue(mutation.is_covered("tests/mutation_toys/a.py", ("tests/mutation_toys",)))
+        self.assertTrue(mutation.is_covered("tests/mutation_toys/a.py", ("tests/mutation_toys/",)))
+        self.assertTrue(mutation.is_covered("scripts/ci.py", ("scripts/ci.py",)))
+        self.assertFalse(mutation.is_covered("tests/mutation_toys/a.py", ("tests/mutation_toy",)))
+        self.assertFalse(mutation.is_covered("scripts/ci.py.orig", ("scripts/ci.py",)))
         absolute = self.run_toy(FakeRunner(), target=str(self.repo / TOY_PATH), only=[self.expected[0].id])
         self.assertEqual(absolute.target, TOY_PATH)
         dotted = self.run_toy(
@@ -1114,11 +1229,12 @@ class FakeRunnerTests(unittest.TestCase):
                 status = "failed" if changed == [TOY_PATH] else "passed"
                 return mutation.RunResult(status, 0.5 if not changed else 0.01, "", tests_run=5)
 
-        def run(min_score, aggregate=True):
+        def run(min_score, aggregate=True, targets=None):
             target = {"path": glob, "tests": ["tests.mutation_toys.weak_suite"], "min_score": min_score}
             if aggregate:
                 target["aggregate"] = True
-            config = write_config(self.tmp, {"schema_version": 1, "copy": list(TOY_COPY), "targets": [target]})
+            targets = [target] if targets is None else targets
+            config = write_config(self.tmp, {"schema_version": 1, "copy": list(TOY_COPY), "targets": targets})
             report_path = self.tmp / "aggregate.json"
             arguments = ["--repo-root", self.repo, "--config", config, "--quiet", "--scratch-dir", self.scratch]
             with patch.object(mutation, "SubprocessTestRunner", SplitRunner):
@@ -1148,6 +1264,24 @@ class FakeRunnerTests(unittest.TestCase):
         self.assertEqual([report["target"] for report in separate[3]["reports"]], [LOOP_PATH, TOY_PATH])
         self.assertEqual([report["passed"] for report in separate[3]["reports"]], [False, True])
 
+        # Two aggregate globs in a row: each combined report holds only its own glob's results.
+        groups = [
+            {"path": path, "tests": ["tests.mutation_toys.weak_suite"], "min_score": minimum, "aggregate": True}
+            for path, minimum in (("tests/mutation_toys/loop_t*.py", 0.0), ("tests/mutation_toys/toy_t*.py", 0.9))
+        ]
+        code, _, stderr, payload = run(0.0, targets=groups)
+        self.assertEqual(code, 0, stderr)
+        summary = [(report["target"], report["counts"]["total"], report["score"]) for report in payload["reports"]]
+        self.assertEqual(
+            summary,
+            [
+                (LOOP_PATH, 11, 0.0),
+                ("tests/mutation_toys/loop_t*.py", 11, 0.0),
+                (TOY_PATH, 24, 1.0),
+                ("tests/mutation_toys/toy_t*.py", 24, 1.0),
+            ],
+        )
+
     def test_main_returns_130_on_interrupt(self):
         config = write_config(self.tmp, {"schema_version": 1, "copy": list(TOY_COPY), "targets": [VALID_TARGET]})
         stderr = io.StringIO()
@@ -1159,7 +1293,12 @@ class FakeRunnerTests(unittest.TestCase):
     @unittest.skipUnless(hasattr(signal, "SIGTERM"), "SIGTERM is not available here")
     def test_sigterm_becomes_an_interrupt_and_the_old_handler_is_restored(self):
         config = write_config(self.tmp, {"schema_version": 1, "copy": list(TOY_COPY), "targets": [VALID_TARGET]})
-        previous = signal.getsignal(signal.SIGTERM)
+
+        def previous(signum, frame):
+            """A handler other than SIG_DFL, so restoring "the default" is not mistaken for restoring this one."""
+
+        original = signal.signal(signal.SIGTERM, previous)
+        self.addCleanup(signal.signal, signal.SIGTERM, original)
 
         def deliver_sigterm(*arguments, **keywords):
             handler = signal.getsignal(signal.SIGTERM)
@@ -1255,7 +1394,14 @@ class EndToEndToyRuns(unittest.TestCase):
         self.assertFalse((self.tmp / "not-written.json").exists())
 
     def test_command_line_ranges_are_checked_by_argparse(self):
-        for arguments in (["--jobs", "0"], ["--min-score", "1.5"], ["--min-score", "-1"], ["--timeout", "0"]):
+        for arguments in (
+            ["--jobs", "0"],
+            ["--min-score", "1.5"],
+            ["--min-score", "-1"],
+            ["--timeout", "0"],
+            ["--timeout", "inf"],
+            ["--timeout", "nan"],
+        ):
             with self.subTest(arguments=arguments):
                 with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as raised:
                     mutation.main(["--repo-root", str(self.repo), *arguments])
@@ -1323,6 +1469,12 @@ class EndToEndToyRuns(unittest.TestCase):
         self.assertIn(f"survived {TOY_PATH}:24:4:delete:0", stdout)
         self.assertIn(f"--- a/{TOY_PATH}", stdout)
         self.assertIn("-    log.append(total)\n+    pass\n", stdout)
+        # One line of context around the change, no more.
+        self.assertIn(
+            f"survived {TOY_PATH}:24:4:delete:0\n--- a/{TOY_PATH}\n+++ b/{TOY_PATH}\n@@ -23,3 +23,3 @@\n"
+            "         total += value\n-    log.append(total)\n+    pass\n     return total\n",
+            stdout,
+        )
         self.assertEqual(stdout.count("\nsurvived "), 10)
         self.assertEqual(self.weak[2], "")
         self.assertIn("score 100.0% (minimum 100.0%) PASS", self.strong[1])
@@ -1342,6 +1494,17 @@ class EndToEndToyRuns(unittest.TestCase):
         ]
         self.assertEqual(stdout.splitlines(), expected)
         self.assertEqual(os.listdir(self.scratch), [])
+        # --list runs nothing, so it writes no report: a {"passed": true} file would claim a run that never happened.
+        report_path, summary_path = self.tmp / "list.json", self.tmp / "list.md"
+        code, _, stderr = run_main(
+            [
+                *("--repo-root", self.repo, "--config", self.weak_config, "--list"),
+                *("--json", report_path, "--summary", summary_path),
+            ]
+        )
+        self.assertEqual(code, 0, stderr)
+        self.assertFalse(report_path.exists())
+        self.assertFalse(summary_path.exists())
 
     def test_progress_lines_only_and_stale_equivalent_warning(self):
         stale = f"{TOY_PATH}:999:0:delete:0"
@@ -1511,6 +1674,24 @@ class ReviewRegressionTests(unittest.TestCase):
         self.assertTrue(child_tmp.is_dir())
         self.assertTrue(child_tmp.is_relative_to(workspace))
 
+    def test_the_last_ran_line_counts_and_a_nonzero_exit_is_a_failure(self):
+        # A suite whose tests print a nested "Ran N tests" line: the runner's own summary comes last.
+        class NestedOutputPopen(QuickPopen):
+            def communicate(self, timeout=None):
+                self.returncode = 1
+                return (
+                    "Ran 0 tests in 0.000s\n" + "." * 2 * mutation.OUTPUT_TAIL + "\nRan 7 tests in 1.0s\n\nFAILED\n",
+                    None,
+                )
+
+        workspace = self.tmp / "workspace"
+        workspace.mkdir()
+        with patch.object(mutation.subprocess, "Popen", NestedOutputPopen):
+            result = mutation.SubprocessTestRunner()(workspace, ("tests.a",), 5.0)
+        self.assertEqual((result.status, result.tests_run), ("failed", 7))
+        self.assertEqual(len(result.output), mutation.OUTPUT_TAIL)
+        self.assertTrue(result.output.endswith("Ran 7 tests in 1.0s\n\nFAILED\n"))
+
     def test_a_failed_restore_stops_the_run_instead_of_hanging(self):
         calls = []
 
@@ -1569,6 +1750,39 @@ class ReviewRegressionTests(unittest.TestCase):
         self.assertIn(f"[1/1] killed {chosen}\n", stderr)
         self.assertIn("1 mutants, 1 killed", stdout)
 
+    def test_tests_and_min_score_need_a_target(self):
+        # Without --target they would be silently ignored, gating against the configured floors instead.
+        for extra in (["--tests", "tests.mutation_toys.weak_suite"], ["--min-score", "0.5"]):
+            with self.subTest(extra=extra):
+                code, _, stderr = run_main([*self.config_arguments(), "--list", *extra])
+                self.assertEqual(code, 2)
+                self.assertIn("--tests and --min-score need --target", stderr)
+
+    def test_an_aggregate_glob_with_no_member_run_adds_no_combined_report(self):
+        # --only names a plain target only: the aggregate group ran nothing, so it must not add an empty report that
+        # fails its positive minimum.
+        targets = [
+            {"path": "tests/mutation_toys/loop_t*.py", "tests": ["tests.a"], "min_score": 0.5, "aggregate": True},
+            {"path": TOY_PATH, "tests": ["tests.mutation_toys.weak_suite"], "min_score": 0.0},
+        ]
+        config = write_config(self.tmp, {"schema_version": 1, "copy": list(TOY_COPY), "targets": targets})
+        report_path = self.tmp / "only.json"
+
+        original = (self.repo / TOY_PATH).read_bytes()
+
+        class KillingRunner:
+            def __call__(self, workspace, tests, timeout):
+                mutated = (Path(workspace) / TOY_PATH).read_bytes() != original
+                return mutation.RunResult("failed" if mutated else "passed", 0.01, "", tests_run=5)
+
+        chosen = f"{TOY_PATH}:5:13:compare:0"
+        arguments = ["--repo-root", self.repo, "--config", config, "--quiet", "--scratch-dir", self.scratch]
+        with patch.object(mutation, "SubprocessTestRunner", KillingRunner):
+            code, stdout, stderr = run_main([*arguments, "--only", chosen, "--json", report_path])
+        self.assertEqual(code, 0, stdout + stderr)
+        payload = json.loads(report_path.read_text(encoding="utf-8"))
+        self.assertEqual([report["target"] for report in payload["reports"]], [TOY_PATH])
+
     def test_list_honours_only(self):
         chosen = f"{TOY_PATH}:5:13:compare:0"
         code, stdout, stderr = run_main([*self.config_arguments(), "--list", "--only", chosen])
@@ -1624,6 +1838,17 @@ class ReviewRegressionTests(unittest.TestCase):
         _, stdout, _, (report,) = self.run_surviving("--only", f"{TOY_PATH}:5:13:compare:0")
         self.assertEqual(report["operators"], list(mutation.OPERATORS))
         self.assertIn(f"operators: {', '.join(mutation.OPERATORS)}\n", stdout)
+
+    def test_operators_matching_a_targets_configured_set_are_not_an_override(self):
+        configured = mutation.TargetConfig("a.py", ("tests.a",), operators=("compare", "boundary"))
+        default = mutation.TargetConfig("b.py", ("tests.a",))
+        targets = [configured, default]
+        self.assertIs(mutation.apply_operators(Namespace(operators=None), targets), targets)
+        replaced = mutation.apply_operators(Namespace(operators=["boundary", "compare", "compare"]), targets)
+        self.assertEqual([target.operators for target in replaced], [("boundary", "compare")] * 2)
+        self.assertEqual([target.overrides for target in replaced], [(), ("operators",)])
+        same_as_default = mutation.apply_operators(Namespace(operators=list(mutation.OPERATORS)), targets)
+        self.assertEqual([target.overrides for target in same_as_default], [("operators",), ()])
 
     def test_partial_runs_are_not_gated_unless_a_minimum_is_given(self):
         # Regression (benchmark O1): `--only <survivor id>` exited 1 against the full-run floor.
@@ -1697,7 +1922,15 @@ class ReportTests(unittest.TestCase):
         self.assertEqual((combined.baseline_seconds, combined.timeout), (3.0, 12.0))
         self.assertEqual(combined.stale_equivalent, (stale,))
         self.assertIsNone(combined.part_of)
+        self.assertFalse(combined.partial)
         self.assertFalse(mutation.Report.combine("sdk/x/*.py", [member, other], 0.85).passed)
+        # One partial member makes the whole aggregate partial; overrides are merged without duplicates.
+        mixed = mutation.Report.combine(
+            "sdk/x/*.py",
+            [replace(member, partial=True, overrides=("tests",)), replace(other, overrides=("tests", "min_score"))],
+            0.7,
+        )
+        self.assertEqual((mixed.partial, mixed.overrides), (True, ("tests", "min_score")))
 
     def test_ratchet_hint_is_suppressed_when_the_run_is_not_comparable_with_the_floor(self):
         # Regression (benchmark B1): `--operators arithmetic minmax` suggested raising the default-operator floor.
@@ -1745,8 +1978,10 @@ class ReportTests(unittest.TestCase):
         self.assertIn("score 0.0% (partial run: not gated)\n", partial.format_text())
         self.assertTrue(partial.format_markdown().startswith("### `m.py`: not gated (partial run)\n"))
         self.assertEqual((partial.to_dict()["partial"], partial.to_dict()["gated"]), (True, False))
+        self.assertIsNone(partial.to_dict()["headroom"], "an ungated score has no headroom in the JSON report")
         explicit = replace(partial, overrides=("min_score",))
         self.assertEqual((explicit.gated, explicit.passed), (True, False))
+        self.assertAlmostEqual(explicit.to_dict()["headroom"], -0.9)
         self.assertIn("score 0.0% (minimum 90.0%) FAIL\n", explicit.format_text())
         unmeasured = self.report(0.9, incompetent=1, partial=True)
         self.assertFalse(unmeasured.passed, "a partial run that measured nothing still fails")
@@ -1777,6 +2012,12 @@ class ReportTests(unittest.TestCase):
         empty = self.report(0.5, incompetent=1).format_markdown()
         self.assertIn("Score **n/a** (no scored mutants) (minimum 50.0%)", empty)
         self.assertNotIn("<details>", empty)
+
+    def test_markdown_fence_is_longer_than_any_backtick_run_in_a_survivor_diff(self):
+        (result,) = make_results(survived=1)
+        diff = '--- a/m.py\n+++ b/m.py\n@@ -1 +1 @@\n-x = "```py"\n+x = ""\n'
+        report = mutation.Report("m.py", ("tests.a",), (replace(result, diff=diff),), 1.0, 10.0, 0.5)
+        self.assertIn(f"````diff\n{diff}````\n", report.format_markdown())
 
 
 class RepositoryWiringTests(unittest.TestCase):
