@@ -34,7 +34,11 @@ from sdk.training.strategy import RARITY_STARS, ROOM_ACADEMY, ROOM_GYM, STAT_COD
 
 
 def to_int(value: object, default: int = 0) -> int:
-    """Best-effort integer: ints pass through, numeric strings parse ("7", " 7 ", "7.0"); anything else -> default."""
+    """Best-effort integer: ints pass through, numeric strings parse ("7", " 7 ", "7.0"); anything else -> default.
+
+    Non-whole values truncate toward zero ("7.6" -> 7, "-3.5" -> -3), so a level or quantity never rounds up.
+    Bools are not counts and take the default; NaN, infinities and overflowing values take the default too.
+    """
     if isinstance(value, bool):
         return default
     if isinstance(value, int):
@@ -54,14 +58,20 @@ def to_int(value: object, default: int = 0) -> int:
     return default
 
 
-_DATETIME_RE = re.compile(r"(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?(Z|[+-]\d{2}:\d{2})?")
+# ASCII digits only (re's \d and int() would otherwise accept any Unicode digit); offset minutes 00-59.
+_DATETIME_RE = re.compile(
+    r"(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?(Z|[+-]\d{2}:[0-5]\d)?",
+    re.ASCII,
+)
 
 
 def parse_datetime(value: object) -> datetime | None:
     """Parse a server timestamp into an aware UTC datetime; empty or malformed values -> None.
 
     Accepts "%Y-%m-%dT%H:%M:%S" with an optional fraction (truncated to microseconds) and an optional
-    "Z" / "±hh:mm" offset. Timestamps without an offset are taken to be UTC (the server's convention).
+    "Z" / "±hh:mm" offset (hh < 24, mm < 60). Timestamps without an offset are taken to be UTC (the server's
+    convention). The whole stripped string must match: trailing or leading junk, Unicode digits and
+    out-of-range fields all fail closed.
     """
     if not isinstance(value, str):
         return None
@@ -250,6 +260,7 @@ def parse_training_designs(raw: object, research_designs: object = None) -> tupl
 
     @RequiredResearchDesignId "0"/missing -> None; otherwise the research family name from ``research_designs``,
     or "research_design:<id>" when it cannot be resolved (no research of that name exists, so it fails closed).
+    @Duration (seconds) is clamped to 0..10 years: a negative value becomes 0, never a negative timedelta.
     """
     catalog = _research_catalog(research_designs)
     designs: list[TrainingDesign] = []

@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """Tests for the pure crew-training planner (sdk.training) — no network, no client."""
+
+from __future__ import annotations
 
 import ast
 import dataclasses
@@ -118,14 +118,17 @@ class TestModel(unittest.TestCase):
 
     def test_crew_state_rejects_at_prefixed_stat_keys(self) -> None:
         # Regression: the original read '@HpImprovement' and looked it up without '@'.
-        with self.assertRaises(ValueError):
-            mk_crew(stats={"@HpImprovement": 1})
+        # The dedicated '@' message is pinned so this check stays observable on its own: the generic unknown-key
+        # check would also reject these keys, but without telling the caller to strip the XML prefix.
+        for bad in ({"@HpImprovement": 1}, {"HpImprovement": 1, "@WeaponImprovement": 2}, {"@Weapon": 1}):
+            with self.subTest(bad=bad), self.assertRaisesRegex(ValueError, r"must not carry the XML '@' prefix"):
+                mk_crew(stats=bad)
         self.assertEqual(mk_crew(stats={"HpImprovement": 1}).stats["HpImprovement"], 1)
 
     def test_crew_state_rejects_non_canonical_stat_keys(self) -> None:
         # Regression: a mis-keyed stat ("Weapon") was accepted and then ignored by the TP total, so the crew read 0%.
         for bad in ({"Weapon": 5}, {"weaponimprovement": 5}, {"HpImprovement": 1, "Hp": 2}, {"": 1}):
-            with self.subTest(bad=bad), self.assertRaises(ValueError):
+            with self.subTest(bad=bad), self.assertRaisesRegex(ValueError, r"must be among CANONICAL_STATS"):
                 mk_crew(stats=bad)
         every = dict.fromkeys(CANONICAL_STATS, 1)
         self.assertEqual(dict(mk_crew(stats=every).stats), every)
@@ -367,6 +370,13 @@ class TestRoles(unittest.TestCase):
         # Spelling regression: the original table had this typo.
         self.assertIsNone(role_for("Huge Hellaloya", DEFAULT_STRATEGY))
 
+    def test_role_for_is_exact_case_and_whitespace_sensitive(self) -> None:
+        # Role names match the server's character names exactly; a case or whitespace variant is another name.
+        for variant in ("huge hellaluya", "HUGE HELLALUYA", "Huge hellaluya", "delish", "DELISH", " Delish", "Delish "):
+            with self.subTest(variant=variant):
+                self.assertIsNone(role_for(variant, DEFAULT_STRATEGY))
+        self.assertEqual(summary(plan_one(mk_crew(name="huge hellaluya"))), [("skip", 1, "unknown_role")])
+
     def test_role_for_unknown_and_pilots_empty(self) -> None:
         self.assertIsNone(role_for("", DEFAULT_STRATEGY))
         self.assertIsNone(role_for("Nobody", DEFAULT_STRATEGY))
@@ -403,6 +413,23 @@ class TestCaps(unittest.TestCase):
             with self.subTest(rarity=rarity):
                 self.assertEqual(effective_cap(mk_crew(rarity=rarity, capacity=100), DEFAULT_STRATEGY), 100)
                 self.assertEqual(effective_cap(mk_crew(rarity=rarity, capacity=250), DEFAULT_STRATEGY), 250)
+
+    def test_effective_cap_unknown_rarity_ignores_one_star_cap(self) -> None:
+        # Unknown rarity means 0 stars (capacity only), never the lowest known tier. The default tables have no
+        # 1-star entry, so only a strategy with one can tell 0 stars from 1 star.
+        custom = dataclasses.replace(DEFAULT_STRATEGY, tp_caps={1: 10}, exceptional_tp_caps={}, captain_tp_caps={})
+        self.assertEqual(effective_cap(mk_crew(rarity="Common", capacity=100), custom), 10)
+        for rarity in ("", "Mythic", "common"):
+            with self.subTest(rarity=rarity):
+                self.assertEqual(effective_cap(mk_crew(rarity=rarity, capacity=100), custom), 100)
+        self.assertEqual(
+            summary(plan_one(mk_crew(rarity="Mythic", total=20), strategy=custom)),
+            [("start", 1, "Read Expert Weapon Theory")],
+        )
+        self.assertEqual(
+            summary(plan_one(mk_crew(rarity="Common", total=20), strategy=custom)),
+            [("skip", 1, "tp_cap_reached")],
+        )
 
     def test_effective_cap_limited_by_tp_table(self) -> None:
         cases = (

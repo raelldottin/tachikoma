@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """Tests for sdk.training.parse — tolerant XML-dict to training model conversion (synthetic fixtures only)."""
+
+from __future__ import annotations
 
 import inspect
 import os
@@ -58,17 +58,32 @@ def summarize(decisions) -> list[tuple]:
     return rows
 
 
-def fixture_context():
+def fixture_context(**overrides: object):
+    """build_context over the synthetic fixtures; a keyword in ``overrides`` replaces that payload."""
+    payloads: dict[str, object] = {
+        "characters_raw": load("characters.xml"),
+        "character_designs_raw": load("character_designs.xml"),
+        "training_designs_raw": load("training_designs_list.xml"),
+        "rooms_raw": load("rooms.xml"),
+        "room_designs_raw": load("room_designs.xml"),
+        "researches_raw": load("researches.xml"),
+        "research_designs_raw": load("research_designs.xml"),
+        "items_raw": load("items.xml"),
+    }
+    unknown = sorted(set(overrides) - set(payloads))
+    if unknown:
+        raise TypeError(f"fixture_context: unknown payloads {unknown}")
+    payloads.update(overrides)
     return build_context(
         now=FIXTURE_NOW,
-        characters_raw=load("characters.xml"),
-        character_designs_raw=load("character_designs.xml"),
-        training_designs_raw=load("training_designs_list.xml"),
-        rooms_raw=load("rooms.xml"),
-        room_designs_raw=load("room_designs.xml"),
-        researches_raw=load("researches.xml"),
-        research_designs_raw=load("research_designs.xml"),
-        items_raw=load("items.xml"),
+        characters_raw=payloads["characters_raw"],
+        character_designs_raw=payloads["character_designs_raw"],
+        training_designs_raw=payloads["training_designs_raw"],
+        rooms_raw=payloads["rooms_raw"],
+        room_designs_raw=payloads["room_designs_raw"],
+        researches_raw=payloads["researches_raw"],
+        research_designs_raw=payloads["research_designs_raw"],
+        items_raw=payloads["items_raw"],
     )
 
 
@@ -82,6 +97,21 @@ class TestScalars(unittest.TestCase):
         self.assertEqual(to_int("abc", default=-1), -1)
         self.assertEqual(to_int(None, default=5), 5)
         self.assertEqual(to_int("9" * 5000), 0)  # beyond int()'s digit limit: default, no exception
+
+    def test_to_int_bools_take_the_default(self) -> None:
+        # bool is an int subclass, but True/False is not a count: it must not read as 1/0.
+        self.assertEqual(to_int(True), 0)
+        self.assertEqual(to_int(False), 0)
+        self.assertEqual(to_int(True, default=-1), -1)
+        self.assertEqual(to_int(False, default=7), 7)
+
+    def test_to_int_truncates_non_whole_numbers_toward_zero(self) -> None:
+        # Truncation, not rounding: a level or quantity of "7.6" never reads as 8.
+        cases = (("7.6", 7), ("7.4", 7), (" 2.999 ", 2), ("-3.5", -3), ("-0.9", 0), (7.9, 7), (-7.9, -7))
+        cases += (("1e3", 1000), ("2.5e1", 25))
+        for value, expected in cases:
+            with self.subTest(value=value):
+                self.assertEqual(to_int(value), expected)
 
     def test_parse_datetime_table(self) -> None:
         invalid = (None, "", "   ", "garbage", "2026-13-01T00:00:00", "2026-01-01", 20260101)
@@ -108,6 +138,50 @@ class TestScalars(unittest.TestCase):
                 self.assertEqual(parsed, expected)
                 assert parsed is not None
                 self.assertIs(parsed.tzinfo, UTC)
+
+    def test_parse_datetime_rejects_surrounding_junk(self) -> None:
+        # Fail closed: a timestamp with anything after it is malformed, not a prefix to salvage.
+        junk = (
+            "2026-01-02T03:04:05xyz",
+            "2026-01-02T03:04:05Zjunk",
+            "2026-01-02T03:04:05 Z",
+            "2026-01-02T03:04:05+05:30:00",
+            "2026-01-02T03:04:05.123.456",
+            "2026-01-02T03:04:05.",
+            "x2026-01-02T03:04:05",
+        )
+        for value in junk:
+            with self.subTest(value=value):
+                self.assertIsNone(parse_datetime(value))
+
+    def test_parse_datetime_applies_offset_minutes(self) -> None:
+        base = datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC)
+        cases = {
+            "2026-01-02T08:34:05+05:30": base,
+            "2026-01-02T08:49:05+05:45": base,
+            "2026-01-01T23:34:05-03:30": base,
+            "2026-01-02T03:04:05-00:00": base,
+        }
+        for value, expected in cases.items():
+            with self.subTest(value=value):
+                self.assertEqual(parse_datetime(value), expected)
+
+    def test_parse_datetime_rejects_malformed_offsets_and_non_ascii_digits(self) -> None:
+        # Regression: minutes 60-99 were folded into the hour ("+05:99" read as +06:39), and Unicode digits
+        # (which re's \d and int() both accept) parsed as a valid timestamp.
+        malformed = (
+            "2026-01-02T03:04:05+05:60",
+            "2026-01-02T03:04:05+05:99",
+            "2026-01-02T03:04:05+24:00",
+            "2026-01-02T03:04:05+0530",
+            "2026-01-02T03:04:05+5:30",
+            "２０２６-01-02T03:04:05",
+            "2026-01-02T03:04:05.١",
+        )
+        for value in malformed:
+            with self.subTest(value=value):
+                self.assertIsNone(parse_datetime(value))
+        self.assertEqual(parse_datetime("2026-01-02T03:04:05+23:59"), datetime(2026, 1, 1, 3, 5, 5, tzinfo=UTC))
 
 
 class TestCollections(unittest.TestCase):
@@ -256,6 +330,16 @@ class TestTrainingDesigns(unittest.TestCase):
             (bare.name, bare.tier, bare.stat, bare.required_research, bare.required_room_type),
             ("", 0, None, None, None),
         )
+
+    def test_design_duration_clamped_to_zero_and_ten_years(self) -> None:
+        # A negative duration is malformed and clamps to 0 (never a negative timedelta); a huge one clamps to the
+        # ten-year ceiling so timedelta arithmetic cannot overflow.
+        durations = {"-5": timedelta(0), "-1.5": timedelta(0), "60": timedelta(seconds=60)}
+        durations[str(10**12)] = timedelta(days=3650)
+        for raw, expected in durations.items():
+            with self.subTest(duration=raw):
+                (design,) = parse_training_designs({"TrainingDesign": {"@TrainingDesignId": "1", "@Duration": raw}})
+                self.assertEqual(design.duration, expected)
 
     def test_design_stat_from_highest_chance(self) -> None:
         cases = (
@@ -466,6 +550,45 @@ class TestRoomsResearch(unittest.TestCase):
         self.assertEqual(dict(parse_rooms(None, designs)), {})
         self.assertEqual(dict(parse_rooms(rooms, None)), {})
 
+    def test_duplicate_ids_first_record_wins(self) -> None:
+        # Every id-keyed join (room, room design, character design, research design, item design) keeps the first
+        # record for a repeated id, so a later duplicate can never overwrite data already in the payload.
+        room_designs = {
+            "RoomDesign": [
+                {"@RoomDesignId": "5", "@RoomName": "Gym"},
+                {"@RoomDesignId": "5", "@RoomName": "Academy"},
+                {"@RoomDesignId": "6", "@RoomName": "Galaxy Gym"},
+            ]
+        }
+        rooms = {"Room": [{"@RoomId": "1", "@RoomDesignId": "5"}, {"@RoomId": "1", "@RoomDesignId": "6"}]}
+        self.assertEqual(dict(parse_rooms(rooms, room_designs)), {1: "Gym"})
+
+        character_designs = {
+            "CharacterDesign": [
+                {"@CharacterDesignId": "7", "@TrainingCapacity": "100", "@Rarity": "Epic"},
+                {"@CharacterDesignId": "7", "@TrainingCapacity": "200", "@Rarity": "Legendary"},
+            ]
+        }
+        (crew,) = parse_crew({"Character": {"@CharacterId": "3", "@CharacterDesignId": "7"}}, character_designs)
+        self.assertEqual((crew.training_capacity, crew.rarity), (100, "Epic"))
+
+        research_designs = {
+            "ResearchDesign": [
+                {"@ResearchDesignId": "10", "@ResearchName": "Fitness"},
+                {"@ResearchDesignId": "10", "@ResearchName": "Education"},
+            ]
+        }
+        researches = {"Research": {"@ResearchDesignId": "10", "@ResearchState": "Completed"}}
+        self.assertEqual(dict(parse_research_levels(researches, research_designs)), {"Fitness": 1})
+
+        item_designs = {
+            "ItemDesign": [
+                {"@ItemDesignId": "9", "@ItemName": "Common Weapon Consumable"},
+                {"@ItemDesignId": "9", "@ItemName": "Hero HP Consumable"},
+            ]
+        }
+        self.assertEqual(dict(parse_consumable_designs(item_designs)), {("WPN", "Common"): 9})
+
     def test_research_levels(self) -> None:
         designs = {
             "ResearchDesigns": {
@@ -618,6 +741,23 @@ class TestFixtures(unittest.TestCase):
         rows = summarize(decisions)
         self.assertIn(("use", 1004, 9101), rows)
         self.assertEqual([row for row in rows if row[0] == "use"], [("use", 1004, 9101)])
+
+    def test_build_context_resolves_design_research_gates(self) -> None:
+        # build_context must hand the research catalog to the design parser: the fixture's gated design (108,
+        # RequiredResearchDesignId 40) names the research family, not the unresolvable "research_design:40".
+        designs = {design.id: design for design in fixture_context().designs}
+        self.assertEqual(designs[108].required_research, "Advanced Training")
+        self.assertEqual({d.id for d in designs.values() if d.required_research is not None}, {108})
+        # End to end: once research 40 completes, crew 1009 starts the gated design instead of research_missing.
+        researches = load("researches.xml")
+        records = researches["ResearchService"]["ListAllResearches"]["Researches"]["Research"]
+        self.assertEqual(records[2]["@ResearchDesignId"], "40")
+        records[2]["@ResearchState"] = "Completed"
+        ctx = fixture_context(researches_raw=researches)
+        self.assertEqual(ctx.research_levels.get("Advanced Training"), 1)
+        rows = summarize(plan_training(ctx))
+        self.assertIn(("start", 1009, 108), rows)
+        self.assertNotIn(("skip", 1009, "research_missing"), rows)
 
     def test_build_context_parses_rooms_once(self) -> None:
         # Regression: build_context parsed the room payloads twice (once for crew names, once for ctx.rooms).
