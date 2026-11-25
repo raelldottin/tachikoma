@@ -675,7 +675,8 @@ class FakeRunnerTests(unittest.TestCase):
         report = self.run_toy(runner, mutants=[broken])
         self.assertEqual([result.status for result in report.results], ["incompetent"])
         self.assertEqual(report.counts["incompetent"], 1)
-        self.assertEqual(report.score, 1.0)
+        self.assertIsNone(report.score)
+        self.assertTrue(report.passed)
         self.assertEqual(len(runner.calls), 1)
 
     def test_baseline_failure_and_empty_baseline_raise_baseline_error(self):
@@ -964,6 +965,190 @@ class EndToEndToyRuns(unittest.TestCase):
         self.assertEqual(os.listdir(self.scratch), [])
 
 
+SLOW_SUITE = "import time\nimport unittest\n\n\nclass Slow(unittest.TestCase):\n    def test_sleeps(self):\n"
+
+
+class QuickPopen:
+    """A stand-in for subprocess.Popen that records its arguments and reports one passing test."""
+
+    instances = []
+
+    def __init__(self, command, **options):
+        self.command, self.options, self.pid, self.returncode = command, options, 0, None
+        QuickPopen.instances.append(self)
+
+    def communicate(self, timeout=None):
+        self.returncode = 0
+        return "Ran 1 test in 0.001s\n\nOK\n", None
+
+
+class HangingPipePopen(QuickPopen):
+    """Times out, and after the kill a grandchild outside the process group still holds stdout open."""
+
+    def __init__(self, command, **options):
+        super().__init__(command, **options)
+        self.stdout = io.StringIO()
+        self.timeouts = []
+
+    def communicate(self, timeout=None):
+        self.timeouts.append(timeout)
+        if timeout is None:
+            raise AssertionError("communicate() without a timeout blocks forever while a grandchild holds the pipe")
+        raise subprocess.TimeoutExpired("ci.py", timeout)
+
+    def wait(self, timeout=None):
+        self.returncode = -9
+        return self.returncode
+
+
+class ReviewRegressionTests(unittest.TestCase):
+    """Regression coverage for defects found in review of the first harness version."""
+
+    def setUp(self):
+        self.tmp = Path(self.enterContext(TemporaryDirectory(ignore_cleanup_errors=True)))
+        self.repo = make_toy_repo(self.tmp)
+        self.scratch = self.tmp / "scratch"
+        self.scratch.mkdir()
+        QuickPopen.instances = []
+
+    def test_large_float_constants_get_a_different_value(self):
+        for literal in ("1e16", "9007199254740992.0", "1.7976931348623157e308"):
+            with self.subTest(literal=literal):
+                (mutant,) = gen(f"x = {literal}\n")
+                self.assertNotEqual(ast.literal_eval(mutant.replacement), ast.literal_eval(literal))
+                self.assertTrue(mutation.compiles(mutation.apply_mutant(f"x = {literal}\n", mutant), "m.py"))
+
+    def test_pragma_excludes_every_mutant_whose_span_covers_the_line(self):
+        source = "def f():\n    foo(1,\n        2)  # pragma: no mutate\n"
+        self.assertEqual([m.id for m in gen(source)], ["m.py:2:8:constant:0"])
+        self.assertEqual(gen("def f():\n    return (\n        a < b  # pragma: no mutate\n    )\n"), [])
+
+    def test_awaited_call_statements_are_deleted(self):
+        self.assertEqual(
+            mutated("async def f():\n    await h()\n"), [("m.py:2:4:delete:0", "async def f():\n    pass\n")]
+        )
+
+    def test_a_target_with_no_scored_mutants_has_no_score_and_fails_a_positive_minimum(self):
+        result = mutation.MutantResult(
+            mutation.Mutant("m.py", 1, 0, 1, 1, "constant", 0, "1", "("), "incompetent", 0, ""
+        )
+        failing = mutation.Report("m.py", ("tests.a",), (result,), 1.0, 10.0, min_score=0.5)
+        self.assertIsNone(failing.score)
+        self.assertFalse(failing.passed)
+        self.assertIsNone(failing.to_dict()["score"])
+        self.assertIn("score n/a (no scored mutants) (minimum 50.0%) FAIL", failing.format_text())
+        empty = mutation.Report("m.py", ("tests.a",), (), 1.0, 10.0, min_score=0.0)
+        self.assertIsNone(empty.score)
+        self.assertTrue(empty.passed)
+
+    def test_interrupt_during_a_test_run_kills_the_child(self):
+        suite = self.repo / "tests" / "mutation_toys" / "slow_suite.py"
+        suite.write_text(SLOW_SUITE + "        time.sleep(60)\n", encoding="utf-8")
+        started = []
+
+        class InterruptedPopen(subprocess.Popen):
+            def communicate(self, *arguments, **keywords):
+                started.append(self)
+                raise KeyboardInterrupt
+
+        with patch.object(mutation.subprocess, "Popen", InterruptedPopen):
+            with self.assertRaises(KeyboardInterrupt):
+                mutation.SubprocessTestRunner()(self.repo, ("tests.mutation_toys.slow_suite",), 120.0)
+        (process,) = started
+        self.addCleanup(process.stdout.close)
+        self.addCleanup(mutation.kill_process_tree, process)
+        self.assertIsNotNone(process.wait(timeout=20), "the interrupted test process is still running")
+
+    def test_timeout_does_not_wait_forever_for_a_pipe_held_by_an_escaped_grandchild(self):
+        killed = []
+        with (
+            patch.object(mutation.subprocess, "Popen", HangingPipePopen),
+            patch.object(mutation, "kill_process_tree", killed.append),
+        ):
+            result = mutation.SubprocessTestRunner()(self.repo, ("tests.a",), 1.0)
+        self.assertEqual(result.status, "timeout")
+        (process,) = QuickPopen.instances
+        self.assertEqual(killed, [process])
+        self.assertNotIn(None, process.timeouts)
+
+    def test_test_children_keep_temporary_files_inside_the_workspace(self):
+        workspace = self.tmp / "workspace"
+        workspace.mkdir()
+        with patch.object(mutation.subprocess, "Popen", QuickPopen):
+            result = mutation.SubprocessTestRunner()(workspace, ("tests.a",), 5.0)
+        self.assertEqual((result.status, result.tests_run), ("passed", 1))
+        (process,) = QuickPopen.instances
+        env = process.options["env"]
+        child_tmp = Path(env["TMPDIR"])
+        self.assertEqual({env["TMPDIR"], env["TEMP"], env["TMP"]}, {str(child_tmp)})
+        self.assertTrue(child_tmp.is_dir())
+        self.assertTrue(child_tmp.is_relative_to(workspace))
+
+    def test_a_failed_restore_stops_the_run_instead_of_hanging(self):
+        calls = []
+
+        def runner(workspace, tests, timeout):
+            calls.append(workspace)
+            if len(calls) == 2:
+                shutil.rmtree(Path(workspace) / "tests" / "mutation_toys")
+            return mutation.RunResult("passed" if len(calls) == 1 else "failed", 0.01, tests_run=1)
+
+        outcome = []
+
+        def run():
+            try:
+                mutation.run_mutants(
+                    TOY_PATH,
+                    ("tests.mutation_toys.weak_suite",),
+                    repo_root=self.repo,
+                    copy_paths=TOY_COPY,
+                    scratch_dir=self.scratch,
+                    test_runner=runner,
+                    jobs=1,
+                )
+            except BaseException as error:  # noqa: BLE001 - the test inspects whatever escaped
+                outcome.append(error)
+
+        thread = threading.Thread(target=run, daemon=True)
+        thread.start()
+        thread.join(20)
+        self.assertFalse(thread.is_alive(), "run_mutants hung after the target file could not be restored")
+        (error,) = outcome
+        self.assertIsInstance(error, OSError)
+        self.assertEqual(os.listdir(self.scratch), [])
+
+    def config_arguments(self):
+        config = write_config(self.tmp, {"schema_version": 1, "copy": list(TOY_COPY), "targets": [VALID_TARGET]})
+        return ["--repo-root", self.repo, "--config", config]
+
+    def test_an_explicit_config_path_that_does_not_exist_is_an_error(self):
+        missing = self.tmp / "mutaton" / "config.json"
+        code, _, stderr = run_main(
+            ["--repo-root", self.repo, "--config", missing, "--target", TOY_PATH, "--tests", "tests.mutation_toys.a"]
+        )
+        self.assertEqual(code, 2)
+        self.assertIn("config file not found", stderr)
+
+    def test_filesystem_errors_exit_2_without_a_traceback(self):
+        code, _, stderr = run_main([*self.config_arguments(), "--quiet", "--scratch-dir", self.tmp / "missing"])
+        self.assertEqual(code, 2)
+        self.assertIn("mutation:", stderr)
+
+    def test_duplicate_only_ids_are_counted_once(self):
+        chosen = f"{TOY_PATH}:5:13:compare:0"
+        arguments = [*self.config_arguments(), "--scratch-dir", self.scratch, "--only", chosen, chosen]
+        code, stdout, stderr = run_main(arguments)
+        self.assertEqual(code, 0, stderr)
+        self.assertIn(f"[1/1] killed {chosen}\n", stderr)
+        self.assertIn("1 mutants, 1 killed", stdout)
+
+    def test_list_honours_only(self):
+        chosen = f"{TOY_PATH}:5:13:compare:0"
+        code, stdout, stderr = run_main([*self.config_arguments(), "--list", "--only", chosen])
+        self.assertEqual(code, 0, stderr)
+        self.assertEqual(stdout.splitlines(), [f"{chosen}  '>=' -> '<'"])
+
+
 class RepositoryWiringTests(unittest.TestCase):
     def test_toy_suites_are_not_collected_by_discovery(self):
         self.assertEqual(sorted(path.name for path in TOYS.glob("test*.py")), [])
@@ -1032,15 +1217,21 @@ class RepositoryWiringTests(unittest.TestCase):
         path = REPO / ".github" / "workflows" / "python-tests.yml"
         workflow = yaml.load(path.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
         job = workflow["jobs"]["mutation"]
-        self.assertIn("timeout-minutes", job)
-        self.assertNotIn("continue-on-error", job)
+        # A job timeout or a failed setup step must not fail the reusable workflow, and so `CI required`.
+        self.assertEqual(job.get("continue-on-error"), "true")
         self.assertNotIn("strategy", job)
         steps = [step for step in job["steps"] if "scripts/mutation.py" in step.get("run", "")]
         self.assertEqual(len(steps), 1)
-        self.assertEqual(steps[0].get("continue-on-error"), "true")
-        others = [step for step in job["steps"] if step is not steps[0]]
-        self.assertFalse([step for step in others if "continue-on-error" in step])
-        self.assertFalse([step for step in job["steps"] if "pip" in step.get("run", "")])
+        (step,) = steps
+        self.assertEqual(step.get("continue-on-error"), "true")
+        # The step times out before the job does, so a slow run is reported, not a job failure.
+        self.assertLess(int(step["timeout-minutes"]), int(job["timeout-minutes"]))
+        # Exit 1 (score below min_score) is a warning; exit 2 (config, baseline or harness error) stays visible.
+        self.assertIn("::warning", step["run"])
+        self.assertIn("::error", step["run"])
+        others = [other for other in job["steps"] if other is not step]
+        self.assertFalse([other for other in others if "continue-on-error" in other])
+        self.assertFalse([other for other in job["steps"] if "pip" in other.get("run", "")])
 
 
 if __name__ == "__main__":

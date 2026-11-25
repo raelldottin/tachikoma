@@ -62,9 +62,10 @@ No repository settings are changed merely by adding these files.
   job timeouts, cache pip downloads, and disable checkout credential
   persistence. Validation defaults to `contents: read`.
 - `python-tests.yml` also runs an advisory mutation job (`scripts/mutation.py`,
-  Ubuntu / Python 3.13). Its step uses `continue-on-error: true`, so a score
-  below a target's `min_score` in `automation/mutation/config.json` is
-  reported but cannot fail `CI required`.
+  Ubuntu / Python 3.13). The job and its step use `continue-on-error: true`,
+  so a score below a target's `min_score` in `automation/mutation/config.json`
+  (a warning annotation), a harness error (exit 2, an error annotation) or a
+  timeout is reported but cannot fail `CI required`.
 
 ## Lint debt is explicit
 

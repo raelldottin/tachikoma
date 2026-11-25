@@ -52,6 +52,8 @@ jobs:
     name: Mutation score (advisory)
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # Advisory: a job timeout or a failed setup step must not fail this reusable workflow or `CI required`.
+    continue-on-error: true
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -59,7 +61,17 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.13"
-      # Advisory: a low score is reported here but cannot fail the reusable workflow or `CI required`.
+      # Exit 1 (a score below min_score) becomes a warning annotation; exit 2 (config, baseline or harness error)
+      # an error annotation, so a broken harness stays visible. Neither can fail `CI required`.
       - name: Mutation testing (non-blocking)
         continue-on-error: true
-        run: python scripts/mutation.py --jobs 4
+        timeout-minutes: 15
+        run: |
+          status=0
+          python scripts/mutation.py --jobs 4 || status=$?
+          if [ "$status" -eq 1 ]; then
+            echo "::warning title=Mutation score::a target scored below its min_score (advisory)"
+          elif [ "$status" -ne 0 ]; then
+            echo "::error title=Mutation harness::scripts/mutation.py exited $status (config, baseline or harness error)"
+          fi
+          exit "$status"

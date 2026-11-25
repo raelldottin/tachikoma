@@ -12,7 +12,7 @@ The working tree is never written: every copy lives under a mkdtemp scratch dire
 also on errors, Ctrl-C and SIGTERM. Known limitation: if this process is SIGKILLed, test processes started in their
 own sessions are orphaned, and an infinite-loop mutant keeps running until it is killed by hand.
 
-Lines carrying a `# pragma: no mutate` comment produce no mutants.
+A `# pragma: no mutate` comment excludes every mutant whose source span covers its line.
 """
 
 from __future__ import annotations
@@ -49,6 +49,8 @@ STATUSES = ("killed", "survived", "timeout", "incompetent", "equivalent")
 RUN_STATUSES = {"passed": "survived", "failed": "killed", "timeout": "timeout"}
 BASELINE_TIMEOUT = 300.0
 MIN_TIMEOUT, TIMEOUT_FACTOR = 10.0, 5.0
+KILL_GRACE = 10.0
+CHILD_TMP = ".mutation-tmp"
 OUTPUT_TAIL = 4000
 CHILD_ENV_DROPPED = (
     "PYTHONPATH",
@@ -191,7 +193,10 @@ def constant_replacement(value: object) -> str | None:
     if type(value) is int:
         return "1" if value == 0 else str(value + 1)
     if isinstance(value, float):
-        return repr(value + 1.0) if math.isfinite(value) else None
+        if not math.isfinite(value):
+            return None
+        # From 2**53 on, value + 1.0 == value, which would be an equivalent mutant that always survives.
+        return repr(value + 1.0 if value + 1.0 != value else value / 2)
     if isinstance(value, str) and value:
         return '""'
     if isinstance(value, bytes) and value:
@@ -297,13 +302,18 @@ class _Collector:
     def collect(self) -> list[tuple[int, int, int, int, str, str]]:
         self.mark_skipped_contexts()
         self.visit(self.tree, in_function=False)
-        return [candidate for candidate in self.candidates if candidate[0] not in self.pragma_lines]
+        return [
+            candidate
+            for candidate in self.candidates
+            if not any(line in self.pragma_lines for line in range(candidate[0], candidate[2] + 1))
+        ]
 
     def visit(self, node: ast.AST, in_function: bool) -> None:
         if id(node) in self.skipped:
             return
         deletable = isinstance(node, DELETABLE_STATEMENTS) or (
-            isinstance(node, ast.Expr) and isinstance(node.value, ast.Call)
+            isinstance(node, ast.Expr)
+            and isinstance(node.value.value if isinstance(node.value, ast.Await) else node.value, ast.Call)
         )
         if in_function and deletable:
             self.add_node("delete", node, "pass")
@@ -603,14 +613,17 @@ class Report:
         return counts
 
     @property
-    def score(self) -> float:
+    def score(self) -> float | None:
+        """(killed + timeout) / scored mutants; None when no mutant was scored, so nothing was measured."""
         counts = self.counts
         scored = counts["total"] - counts["incompetent"] - counts["equivalent"]
-        return (counts["killed"] + counts["timeout"]) / scored if scored else 1.0
+        return (counts["killed"] + counts["timeout"]) / scored if scored else None
 
     @property
     def passed(self) -> bool:
-        return self.score >= self.min_score
+        """Without a score only a zero minimum passes: an unmeasured target cannot meet a positive one."""
+        score = self.score
+        return self.min_score <= 0.0 if score is None else score >= self.min_score
 
     @property
     def survivors(self) -> tuple[MutantResult, ...]:
@@ -634,9 +647,10 @@ class Report:
         counts = self.counts
         summary = ", ".join(f"{counts[status]} {status}" for status in STATUSES)
         verdict = "PASS" if self.passed else "FAIL"
+        score = "n/a (no scored mutants)" if self.score is None else f"{self.score * 100:.1f}%"
         lines = [
             f"{self.target}: {counts['total']} mutants, {summary}",
-            f"score {self.score * 100:.1f}% (minimum {self.min_score * 100:.1f}%) {verdict}",
+            f"score {score} (minimum {self.min_score * 100:.1f}%) {verdict}",
         ]
         for result in self.survivors:
             lines.append(f"survived {result.mutant.id}")
@@ -652,9 +666,15 @@ def unified_diff(source: str, mutated: str, path: str) -> str:
 
 # Running ------------------------------------------------------------------------------------------------------
 def child_environment(workspace: Path) -> dict[str, str]:
-    """os.environ for a test child: only the workspace on PYTHONPATH, no bytecode, UTF-8 output."""
+    """os.environ for a test child: only the workspace on PYTHONPATH, no bytecode, UTF-8 output.
+
+    Temporary files go to a folder inside the workspace, so directories a killed child cannot clean up (such as
+    scripts/ci.py's tachikoma-test-* working directory) are removed with the scratch directory.
+    """
     env = {key: value for key, value in os.environ.items() if key not in CHILD_ENV_DROPPED}
+    child_tmp = str(Path(workspace) / CHILD_TMP)
     env.update({"PYTHONPATH": str(workspace), "PYTHONDONTWRITEBYTECODE": "1", "PYTHONIOENCODING": "utf-8"})
+    env.update({"TMPDIR": child_tmp, "TEMP": child_tmp, "TMP": child_tmp})
     return env
 
 
@@ -668,6 +688,24 @@ def kill_process_tree(process: subprocess.Popen) -> None:
         process.kill()
 
 
+def drain_killed(process: subprocess.Popen) -> str:
+    """The output of a process that was just killed, waiting at most KILL_GRACE seconds for its pipe to close.
+
+    A grandchild outside the killed process group (setsid, or any child on Windows) can keep stdout open forever.
+    """
+    try:
+        output, _ = process.communicate(timeout=KILL_GRACE)
+        return output or ""
+    except subprocess.TimeoutExpired:
+        if process.stdout is not None:
+            process.stdout.close()
+        try:
+            process.wait(timeout=KILL_GRACE)
+        except subprocess.TimeoutExpired:
+            pass
+        return ""
+
+
 class SubprocessTestRunner:
     """Runs `scripts/ci.py test --names ...` from the workspace copy in its own process group."""
 
@@ -679,9 +717,11 @@ class SubprocessTestRunner:
     def __call__(self, workspace: Path, tests: tuple[str, ...], timeout: float) -> RunResult:
         workspace = Path(workspace)
         command = [sys.executable, str(workspace / "scripts" / "ci.py"), "test", "--names", *tests]
-        options: dict = {"start_new_session": True} if os.name == "posix" else {}
-        if os.name != "posix":
-            options["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+        if os.name == "posix":
+            options: dict = {"start_new_session": True}
+        else:
+            options = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+        (workspace / CHILD_TMP).mkdir(exist_ok=True)
         started = time.monotonic()
         process = subprocess.Popen(
             command,
@@ -706,8 +746,12 @@ class SubprocessTestRunner:
                 status = "passed" if process.returncode == 0 else "failed"
             except subprocess.TimeoutExpired:
                 kill_process_tree(process)
-                output, _ = process.communicate()
-                status = "timeout"
+                output, status = drain_killed(process), "timeout"
+        except BaseException:
+            # Ctrl-C or SIGTERM in this thread (the baseline runs in the main thread): the child is in its own
+            # session and never saw the signal, so it is killed here.
+            kill_process_tree(process)
+            raise
         finally:
             with self._lock:
                 self._live.discard(process)
@@ -879,17 +923,27 @@ def run_mutants(
             free.put(workspace)
         original_bytes = source.encode("utf-8")
 
+        def take_workspace() -> Path:
+            # Polls so that a worker can never block forever once the run is stopping.
+            while True:
+                if stop.is_set():
+                    raise MutationError("mutation run stopped")
+                try:
+                    return free.get(timeout=0.2)
+                except queue.Empty:
+                    continue
+
         def run_one(index: int, mutant: Mutant, text: str) -> tuple[int, MutantResult]:
-            if stop.is_set():
-                raise MutationError("mutation run stopped")
-            workspace = free.get()
+            workspace = take_workspace()
             path = workspace / rel
             try:
                 path.write_bytes(text.encode("utf-8"))
                 outcome = runner(workspace, tests, effective_timeout)
             finally:
-                path.write_bytes(original_bytes)
-                free.put(workspace)
+                try:
+                    path.write_bytes(original_bytes)
+                finally:
+                    free.put(workspace)
             if outcome.status not in RUN_STATUSES:
                 raise MutationError(f"test runner returned unknown status {outcome.status!r}")
             status = RUN_STATUSES[outcome.status]
@@ -966,7 +1020,7 @@ def select_targets(args: argparse.Namespace, root: Path) -> tuple[tuple[str, ...
     if (args.tests or args.min_score is not None) and not args.target:
         raise ConfigError("--tests and --min-score need --target")
     config_path = Path(args.config) if args.config else root / DEFAULT_CONFIG
-    if args.target and args.tests and not config_path.exists():
+    if args.target and args.tests and not args.config and not config_path.exists():
         config = Config(DEFAULT_COPY_PATHS, ())
     else:
         config = load_config(config_path)
@@ -996,15 +1050,24 @@ def only_by_target(only: list[str] | None, targets: list[TargetConfig]) -> dict[
     if stray:
         raise ConfigError(f"--only ids name no selected target: {', '.join(stray)}")
     grouped: dict[str, list[str]] = {}
-    for mutant_id in only:
+    for mutant_id in dict.fromkeys(only):
         grouped.setdefault(mutant_id_path(mutant_id), []).append(mutant_id)
     return grouped
 
 
-def list_mutants(root: Path, targets: list[TargetConfig]) -> None:
+def list_mutants(root: Path, targets: list[TargetConfig], only: dict[str, list[str]] | None) -> None:
     for target in targets:
+        if only is not None and target.path not in only:
+            continue
         source = read_source(root / target.path)
-        for mutant in generate_mutants(target.path, source, mutate_data_tables=target.mutate_data_tables):
+        mutants = generate_mutants(target.path, source, mutate_data_tables=target.mutate_data_tables)
+        if only is not None:
+            wanted = set(only[target.path])
+            unknown = sorted(wanted - {mutant.id for mutant in mutants})
+            if unknown:
+                raise ConfigError(f"unknown mutant id(s) for {target.path}: {', '.join(unknown)}")
+            mutants = [mutant for mutant in mutants if mutant.id in wanted]
+        for mutant in mutants:
             print(f"{mutant.id}  {mutant.original!r} -> {mutant.replacement!r}")
 
 
@@ -1028,10 +1091,10 @@ def mutant_total(root: Path, target: TargetConfig, only: list[str] | None) -> in
 
 def run_targets(args: argparse.Namespace, root: Path) -> list[Report]:
     copy_paths, targets = select_targets(args, root)
-    if args.list:
-        list_mutants(root, targets)
-        return []
     only = only_by_target(args.only, targets)
+    if args.list:
+        list_mutants(root, targets, only)
+        return []
     reports = []
     for target in targets:
         target_only = None if only is None else only.get(target.path)
@@ -1073,7 +1136,8 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         print("mutation: interrupted; temporary copies removed", file=sys.stderr)
         return 130
-    except MutationError as error:
+    except (MutationError, OSError) as error:
+        # OSError: a missing --scratch-dir, a failed copy and the like still exit 2, never 1 ("score too low").
         print(f"mutation: {error}", file=sys.stderr)
         return 2
     finally:
@@ -1082,7 +1146,11 @@ def main(argv: list[str] | None = None) -> int:
     passed = all(report.passed for report in reports)
     if args.json and not args.list:
         payload = {"schema_version": 1, "passed": passed, "reports": [report.to_dict() for report in reports]}
-        Path(os.path.abspath(args.json)).write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        try:
+            Path(os.path.abspath(args.json)).write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        except OSError as error:
+            print(f"mutation: cannot write {args.json}: {error}", file=sys.stderr)
+            return 2
     return 0 if passed else 1
 
 
