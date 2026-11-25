@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Synthetic, sanitized fixture: a brand-new ship whose rooms and researches come back as empty elements. -->
+<ShipService>
+  <GetShipByUserId>
+    <Ship ShipId="1" ShipDesignId="1" UserId="1">
+      <Rooms />
+      <Researches />
+    </Ship>
+  </GetShipByUserId>
+</ShipService>
