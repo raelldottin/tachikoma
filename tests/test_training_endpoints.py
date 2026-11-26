@@ -705,6 +705,14 @@ class TestManageTrainingAgainstFakePss(unittest.TestCase):
                       "skipped=17 failed=0", log)
         self.assertEqual((fake.violations, fake.unknown), ([], []))
 
+    def test_without_account_info_the_log_lines_carry_no_label(self):
+        fake = FakePss(default_world())
+        result, log, _ = self.manage_training(fake, lambda client: setattr(client, "info", None))
+        self.assertIs(result, True)
+        self.assertIn("INFO:sdk.execution.training:training: started=0 finished=3 consumables=0 skipped=17 failed=0",
+                      log)
+        self.assertNotIn("INFO:sdk.execution.training:[", log)
+
     def test_returns_false_when_characters_unreadable(self):
         fake = FakePss(default_world())
         fake.fail("/CharacterService/ListAllCharactersOfUser", status=404)

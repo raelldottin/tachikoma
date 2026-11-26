@@ -917,6 +917,17 @@ class DailyRunFailureContinuationTests(NeedsHealthyBaseline):
         self.assertEqual(daily.traffic_by_step()["upgradeCharacters"], baseline().traffic_by_step()["upgradeCharacters"])
         assert_protocol_clean(self, fake)
 
+    def test_a_plan_that_does_not_pair_with_the_roster_stops_training_loudly(self):
+        # A planner whose output shape changed is a defect, not a crew failure: no training request is sent, the
+        # step fails by name and the run exits 1.
+        fake = FakePss(default_world())
+        with patch("sdk.execution.training.plan_training", return_value=()):
+            daily = run_daily(fake)
+        self.assertEqual(daily.code, 1, daily.log[-2000:])
+        self.assertEqual(training_slice(fake), [])
+        self.assertIn("manageTraining failed: the plan has no decision in place for crew member 1001\n", daily.log)
+        assert_protocol_clean(self, fake)
+
     def test_reauth_after_token_expiry_on_a_read_relogs_and_continues(self):
         fake = FakePss(default_world())
         marketplace = "/MessageService/ListActiveMarketplaceMessages5"

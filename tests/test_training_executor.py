@@ -10,15 +10,19 @@ from __future__ import annotations
 
 import dataclasses
 import datetime
+import inspect
 import logging
 import tempfile
 import unittest
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 from sdk.journal import GameplayEvent, GameplayJournal, JournalError
 from sdk.reports.training import contract_violations, validate_decision_evidence
+from sdk.state.client_provider import ClientSnapshotProvider
+from sdk.state.snapshot import Completeness, CrewMember, build_snapshot
 from sdk.execution import training as executor
 from sdk.execution.training import (
     ActionResult,
@@ -29,7 +33,7 @@ from sdk.execution.training import (
     run_training,
     verification_of,
 )
-from sdk.training.model import Skip, StartTraining
+from sdk.training.model import FinishTraining, Skip, StartTraining, UseConsumable
 from sdk.training.parse import parse_consumable_designs
 from sdk.training.strategy import DEFAULT_STRATEGY, with_consumables
 
@@ -196,7 +200,7 @@ class FakeTrainingClient:
 
         return self._run("addTraining", (training_design_id, character_id), apply, False)
 
-    def finishTraining(self, character_id):
+    def finishTraining(self, character_id) -> dict | None:
         def apply(act: Act):
             record = self.record(character_id)
             design = record["@TrainingDesignId"]
@@ -865,7 +869,9 @@ class DecisionRecordTests(unittest.TestCase):
     def test_training_active_only_while_the_end_is_after_the_record(self):
         running = delish(training="3", end=stamp(NOW + datetime.timedelta(hours=1)))
         due = delish(training="3", end=stamp(NOW - datetime.timedelta(seconds=30)))  # ended, but not past the grace
-        for record, active in ((running, True), (due, False), (delish(), True), (ended(), False)):
+        at_the_record = delish(training="3", end=stamp(NOW))  # ends the moment the record is written: not active
+        for record, active in ((running, True), (due, False), (at_the_record, False), (delish(), True),
+                               (ended(), False)):
             with self.subTest(record=record):
                 journal = MemoryJournal()
                 run(FakeTrainingClient([record]), journal=journal)
@@ -878,6 +884,14 @@ class DecisionRecordTests(unittest.TestCase):
         run(client, journal=journal)
         # 1001's after-snapshot failed: 1002's record falls back to the read the plan used (still running).
         self.assertEqual([r.evidence["training_active"] for r in decision_records(journal)], [False, True])
+
+    def test_training_active_falls_back_to_the_plan_s_read_when_the_snapshot_did_not_observe_training(self):
+        journal = MemoryJournal()
+        client = FakeTrainingClient([delish(), maiden(training="3", end=stamp(NOW + datetime.timedelta(hours=2)))])
+        client.script("listAllCharactersOfUser", Act(), Act(then=lambda: client.record("1002").pop("@TrainingEndDate")))
+        run(client, journal=journal)
+        # The snapshots after the plan's read carry no @TrainingEndDate for 1002: its training was not observed.
+        self.assertEqual([r.evidence["training_active"] for r in decision_records(journal)], [True, True])
 
     def test_in_training_room_flag(self):
         journal = MemoryJournal()
@@ -918,6 +932,7 @@ class DecisionRecordTests(unittest.TestCase):
                     account_alias=alias)
                 actions = [(e.account_alias, e.action_id, dict(e.params), e.outcome) for e in journal.read()
                            if e.action_id != "training_decision"]
+                self.assertEqual({e.account_alias for e in decision_records(journal)}, {alias})
                 self.assertEqual(actions, [
                     (alias, "finish_training", FINISH, "verified"),
                     (alias, "add_training", {"training_design_id": "4", "character_id": "1001"}, "verified"),
@@ -1115,6 +1130,345 @@ class ResponseAndShapeTests(unittest.TestCase):
                                  (result.counts, "started")):
             with self.subTest(type=type(value).__name__), self.assertRaises(dataclasses.FrozenInstanceError):
                 setattr(value, attribute, None)
+
+    def test_reads_and_pairings_are_immutable(self):
+        client = FakeTrainingClient([delish()])
+        reads = executor.read_training_data(client, read_items=False)
+        pairing = executor.pair_plan(roster(1001), (Skip(1001, "complete", ""),))[0]
+        for value, attribute in ((reads, "unreadable"), (pairing, "primary")):
+            with self.subTest(type=type(value).__name__), self.assertRaises(dataclasses.FrozenInstanceError):
+                setattr(value, attribute, None)
+
+
+
+# --- the pure decisions and the seams, tested directly ---------------------------------------------------------------
+
+
+def roster(*cids: int) -> tuple:
+    """Crew members with these ids (otherwise Delish): pair_plan looks at nothing but the ids."""
+    delish_state = context(FakeTrainingClient([delish()])).crew[0]
+    return tuple(dataclasses.replace(delish_state, character_id=cid) for cid in cids)
+
+
+def answering(name: str, **behaviour: Any) -> mock.Mock:
+    """A client whose method ``name`` answers as ``behaviour`` says (return_value or side_effect)."""
+    client = mock.Mock()
+    getattr(client, name).configure_mock(**behaviour)
+    return client
+
+
+def payloads(client: FakeTrainingClient) -> dict:
+    return executor.read_training_data(client, read_items=False).payloads
+
+
+def context(client: FakeTrainingClient):
+    return executor.context_from(executor.read_training_data(client, read_items=False), NOW)
+
+
+def crew_state(client: FakeTrainingClient, cid: str = "1001"):
+    return next(crew for crew in context(client).crew if crew.character_id == int(cid))
+
+
+def member(*, observed: bool = True, design: str | None = "3", end: str | None = ENDED_2H) -> CrewMember:
+    return CrewMember("1001", "1", "Delish", 40, 0, "201", training_observed=observed, training_design_id=design,
+                      training_end=end)
+
+
+class PairPlanTests(unittest.TestCase):
+    def test_pairs_each_crew_member_with_an_optional_finish_and_its_primary(self):
+        finish, after, start = FinishTraining(1, "ended"), Skip(1, "complete", ""), StartTraining(2, 3, "go")
+        crew = roster(1, 2)
+        self.assertEqual(executor.pair_plan(crew, (finish, after, start)), (
+            executor.CrewPlan(crew[0], finish, after), executor.CrewPlan(crew[1], None, start)))
+
+    def test_an_empty_roster_pairs_with_an_empty_plan(self):
+        self.assertEqual(executor.pair_plan((), ()), ())
+
+    def test_refuses_a_plan_that_does_not_match_the_roster(self):
+        finish = FinishTraining(1, "ended")
+        cases = {
+            "misordered": (roster(1, 2), (StartTraining(2, 3, ""), Skip(1, "complete", ""))),
+            "short": (roster(1, 2), (Skip(1, "complete", ""),)),
+            "a finish without a decision after it": (roster(1), (finish,)),
+            "two finishes": (roster(1), (finish, finish)),
+            "a finish for another crew member": (roster(2), (finish, Skip(2, "complete", ""))),
+            "a decision for crew not on the roster": (roster(1), (Skip(1, "complete", ""), Skip(2, "complete", ""))),
+        }
+        for case, (crew, plan) in cases.items():
+            with self.subTest(case=case), self.assertRaises(executor.PlanShapeError):
+                executor.pair_plan(crew, plan)
+
+    def test_a_plan_that_does_not_match_the_roster_stops_the_run_before_any_mutation(self):
+        client = FakeTrainingClient([ended(), maiden()])
+        with mock.patch.object(executor, "plan_training", return_value=(FinishTraining(1001, "ended"),)):
+            with self.assertRaises(executor.PlanShapeError) as raised:
+                run(client)
+        self.assertEqual(client.mutations(), [])
+        self.assertIn("1001", str(raised.exception))
+
+
+class FinishIsHarmlessTests(unittest.TestCase):
+    def harmless(self, observed: CrewMember | None, *, verification: str = "skipped", attempted: bool = False,
+                 replied: bool = False) -> bool:
+        return executor.finish_is_harmless(verification=verification, attempted=attempted, replied=replied,
+                                           member=observed)
+
+    def test_a_refusal_is_harmless_only_over_a_readable_training_state(self):
+        cases = (
+            (member(end=stamp(NOW)), True),  # not due yet (readable end)
+            (member(design=None, end=""), True),  # nothing to finish
+            (member(design=None, end="soon"), True),  # nothing to finish; the end does not matter
+            (member(end=None), True),  # not training
+            (member(end="soon"), False),  # a training whose end cannot be read may still be uncollected
+            (member(observed=False, end=None), False),  # training not observed
+            (None, False),  # crew member not in the snapshot
+        )
+        for observed, expected in cases:
+            with self.subTest(observed=observed):
+                self.assertIs(self.harmless(observed), expected)
+
+    def test_a_sent_finish_is_harmless_only_without_a_reply_and_with_nothing_left_to_collect(self):
+        cases = (((None, False), True), ((None, True), False), (("3", False), False))
+        for (design, replied), expected in cases:
+            with self.subTest(design=design, replied=replied):
+                self.assertIs(self.harmless(member(design=design), verification="unknown", attempted=True,
+                                            replied=replied), expected)
+
+    def test_a_contradicted_finish_is_never_harmless(self):
+        for attempted in (False, True):
+            with self.subTest(attempted=attempted):
+                self.assertIs(self.harmless(member(design=None, end=""), verification="contradicted",
+                                            attempted=attempted), False)
+
+
+class DecisionAfterFinishTests(unittest.TestCase):
+    def test_an_unverified_finish_or_an_unusable_reply_keeps_the_crew_member_in_training(self):
+        client = FakeTrainingClient([ended()], researches=("1", "2"))
+        ctx = context(client)
+        crew = ctx.crew[0]
+        stock = {101: 2}
+        for verification, rebuilt in (("unknown", crew), ("verified", None)):
+            with self.subTest(verification=verification, rebuilt=rebuilt):
+                finish = ActionResult("finish_training", FINISH, verification, "why", True, False)
+                decision, planned, left = executor.decision_after_finish(
+                    crew, finish, rebuilt, ctx=ctx, strategy=DEFAULT_STRATEGY, stock=stock)
+                self.assertEqual(decision, Skip(1001, "training_in_progress", f"finish_training {verification}: why"))
+                self.assertEqual((planned, left), (crew, stock))
+
+    def test_a_consumable_is_recorded_as_the_crew_member_s_primary_decision_without_items(self):
+        # Even for a crew member whose training is still uncollected: the record names the skip, not the finish.
+        client = FakeTrainingClient([low(training="21", end=ENDED_2H)], items={"101": 5})
+        ctx = context(client)
+        recorded = executor.recorded_decision(ctx.crew[0], UseConsumable(1001, 101, "use"), ctx=ctx,
+                                              strategy=DEFAULT_STRATEGY)
+        self.assertEqual(recorded, Skip(1001, "research_missing", "primary T1 research gate not met"))
+        start = StartTraining(1001, 3, "go")
+        self.assertIs(executor.recorded_decision(ctx.crew[0], start, ctx=ctx, strategy=DEFAULT_STRATEGY), start)
+
+
+class ContractCheckedTests(unittest.TestCase):
+    def test_evidence_that_breaks_the_contract_is_refused(self):
+        bad = evidence("1001", "maybe", True, False)
+        with self.assertRaisesRegex(ValueError, "decision record breaks the contract: bad_decision"):
+            executor.contract_checked(bad)
+
+    def test_evidence_that_meets_the_contract_is_returned_unchanged(self):
+        good = evidence("1001", "skip", True, False, "complete")
+        self.assertIs(executor.contract_checked(good), good)
+
+
+class MessageTests(unittest.TestCase):
+    def test_a_result_is_a_warning_only_when_it_failed(self):
+        harmless = ActionResult("finish_training", FINISH, "skipped", "not due", False, True)
+        failed = dataclasses.replace(harmless, harmless=False)
+        self.assertEqual(executor.result_message("Delish (1001)", harmless),
+                         (logging.INFO, "training: Delish (1001) finish_training skipped: not due"))
+        self.assertEqual(executor.result_message("Delish (1001)", failed),
+                         (logging.WARNING, "training: Delish (1001) finish_training skipped: not due"))
+
+
+class TrainingClientTests(unittest.TestCase):
+    CALLS = (("finishTraining", ("1001",)), ("addTraining", ("3", "1001")), ("useConsumable", ("101", "1001")))
+
+    def test_every_mutation_drops_the_snapshot_first_and_forwards_its_arguments(self):
+        for name, args in self.CALLS:
+            with self.subTest(name=name):
+                events = []
+                inner = answering(name, side_effect=lambda *a: events.append(("call", a)) or True)
+                proxy = executor.TrainingClient(inner, lambda: events.append(("invalidate",)))
+                getattr(proxy, name)(*args)
+                self.assertEqual(events, [("invalidate",), ("call", args)])
+
+    def test_a_raising_mutation_still_dropped_the_snapshot(self):
+        for name, args in self.CALLS:
+            with self.subTest(name=name):
+                dropped = []
+                inner = answering(name, side_effect=TimeoutError("read timed out"))
+                proxy = executor.TrainingClient(inner, lambda: dropped.append(True))
+                with self.assertRaises(TimeoutError):
+                    getattr(proxy, name)(*args)
+                self.assertEqual(dropped, [True])
+
+    def test_add_and_use_answer_true_only_for_exactly_true(self):
+        for name, args in self.CALLS[1:]:
+            for answer, expected in ((True, True), (False, False), (1, False), ("true", False), (None, False)):
+                with self.subTest(name=name, answer=answer):
+                    proxy = executor.TrainingClient(answering(name, return_value=answer), lambda: None)
+                    self.assertIs(getattr(proxy, name)(*args), expected)
+
+    def test_a_finish_succeeds_only_with_a_character_mapping_which_is_kept_once(self):
+        reply = {"@CharacterId": "1001"}
+        proxy = executor.TrainingClient(answering("finishTraining", return_value=reply), lambda: None)
+        self.assertIs(proxy.finishTraining("1001"), True)
+        self.assertIsNone(proxy.take_finish_reply("1002"))
+        self.assertIs(proxy.take_finish_reply("1001"), reply)
+        self.assertIsNone(proxy.take_finish_reply("1001"))
+        for answer in (True, "ok", ["@CharacterId"], None):
+            with self.subTest(answer=answer):
+                proxy = executor.TrainingClient(answering("finishTraining", return_value=answer), lambda: None)
+                self.assertIs(proxy.finishTraining("1001"), False)
+                self.assertIsNone(proxy.take_finish_reply("1001"))
+
+
+class CachingSnapshotProviderTests(unittest.TestCase):
+    def snapshot(self, crew: Any = (), inventory: Any = None):
+        return build_snapshot("legacy", NOW, "test", crew=None if crew is None else list(crew), inventory=inventory)
+
+    def provider(self, *snapshots, sections=("crew",)):
+        queue = list(snapshots)
+        source = mock.Mock(side_effect=lambda: queue.pop(0))
+        return executor.CachingSnapshotProvider(source, sections), source
+
+    def test_a_snapshot_is_reused_until_invalidated(self):
+        first, second = self.snapshot(), self.snapshot()
+        cache, source = self.provider(first, second)
+        self.assertIs(cache(), first)
+        self.assertIs(cache(), first)
+        cache.invalidate()
+        self.assertIs(cache(), second)
+        self.assertEqual((source.call_count, cache.last), (2, second))
+
+    def test_a_snapshot_missing_a_section_is_never_reused(self):
+        missing, complete = self.snapshot(crew=None), self.snapshot()
+        cache, source = self.provider(missing, complete)
+        self.assertIs(cache(), missing)
+        self.assertIs(cache.last, missing)
+        self.assertIs(cache(), complete)
+        self.assertIs(cache(), complete)
+        self.assertEqual(source.call_count, 2)
+
+    def test_every_named_section_must_be_present(self):
+        without_items, with_items = self.snapshot(), self.snapshot(inventory=[])
+        cache, source = self.provider(without_items, with_items, sections=("crew", "inventory"))
+        self.assertIs(cache(), without_items)
+        self.assertIs(cache(), with_items)
+        self.assertIs(cache(), with_items)
+
+    def test_a_partial_section_is_reused(self):
+        partial = self.snapshot(crew=[{"@CharacterId": "1001"}, {"@CharacterName": "no id"}])
+        self.assertIs(partial.section("crew"), Completeness.PARTIAL)
+        cache, source = self.provider(partial)
+        self.assertIs(cache(), partial)
+        self.assertIs(cache(), partial)
+        self.assertEqual(source.call_count, 1)
+
+
+class CrewSnapshotClientTests(unittest.TestCase):
+    def test_the_crew_read_and_its_payload_pass_through_as_exactly_true(self):
+        client = FakeTrainingClient([delish()])
+        view = executor.CrewSnapshotClient(client, read_items=False)
+        self.assertIs(view.listAllCharactersOfUser(), True)
+        self.assertIs(view.allCharactersOfUser, client.allCharactersOfUser)
+        client.script("listAllCharactersOfUser", Act(apply=False, result="yes"))
+        self.assertIs(view.listAllCharactersOfUser(), False)
+
+    def test_items_are_read_only_when_asked_for(self):
+        client = FakeTrainingClient([delish()], items={"101": 5})
+        self.assertIs(executor.CrewSnapshotClient(client, read_items=False).listItemsOfAShip(), False)
+        self.assertEqual(client.calls, [])
+        view = executor.CrewSnapshotClient(client, read_items=True)
+        self.assertIs(view.listItemsOfAShip(), True)
+        self.assertIs(view.itemsOfAShip, client.itemsOfAShip)
+        self.assertEqual(client.calls, [("listItemsOfAShip",)])
+        client.script("listItemsOfAShip", Act(apply=False, result="yes"))
+        self.assertIs(view.listItemsOfAShip(), False)
+
+    def test_nothing_else_of_the_client_is_reachable(self):
+        client = FakeTrainingClient([delish()])
+        client.listAllCharactersOfUser()
+        client.getShipByUserId()
+        view = executor.CrewSnapshotClient(client, read_items=True)
+        for name in ("getShipByUserId", "shipByUserId", "addTraining", "finishTraining", "useConsumable", "user"):
+            with self.subTest(name=name), self.assertRaises(AttributeError):
+                getattr(view, name)
+
+    def test_a_snapshot_through_it_holds_the_crew_and_never_reads_the_ship(self):
+        client = FakeTrainingClient([delish()])
+        snapshot = ClientSnapshotProvider(executor.CrewSnapshotClient(client, read_items=False), "legacy",
+                                          clock=client.clock)()
+        self.assertEqual(client.calls, [("listAllCharactersOfUser",)])
+        self.assertIsNotNone(snapshot.crew_member("1001"))
+        self.assertIs(snapshot.section("crew"), Completeness.COMPLETE)
+        self.assertIs(snapshot.section("ship"), Completeness.MISSING)
+
+
+class CrewFromReplyTests(unittest.TestCase):
+    def rebuild(self, client: FakeTrainingClient, reply: dict):
+        data = payloads(client)
+        return executor.crew_from_reply(reply, crew_state(client), character_designs_raw=data["character designs"],
+                                        rooms_raw=data["ship"], room_designs_raw=data["room designs"])
+
+    def test_a_reply_supplies_stats_fatigue_and_training_but_never_identity(self):
+        client = FakeTrainingClient([ended()])
+        reply = dict(ended(Hp=12, fatigue=5, training="0"), **{
+            "@CharacterName": "Someone Else", "@CharacterDesignId": "2", "@RoomId": "203"})
+        crew = crew_state(client)
+        rebuilt = self.rebuild(client, reply)
+        self.assertEqual((rebuilt.stats["HpImprovement"], rebuilt.fatigue, rebuilt.training_design_id), (12, 5, None))
+        self.assertEqual((rebuilt.name, rebuilt.design_id, rebuilt.room_id, rebuilt.training_capacity),
+                         (crew.name, crew.design_id, crew.room_id, crew.training_capacity))
+
+    def test_a_reply_for_another_crew_member_or_without_whole_numbers_is_refused(self):
+        client = FakeTrainingClient([ended()])
+        for reply in (dict(ended(), **{"@CharacterId": "1002"}), dict(ended(), **{"@Fatigue": "-1"}),
+                      dict(ended(), **{"@HpImprovement": "1.5"})):
+            with self.subTest(reply=reply):
+                self.assertIsNone(self.rebuild(client, reply))
+
+
+class ClientContractTests(unittest.TestCase):
+    """FakeTrainingClient stands in for sdk.client.Client: the methods the executor calls exist on both, accept the
+    arguments the executor sends, and keep the Client's return conventions."""
+
+    READS = READS + ("listItemsOfAShip",)  # the six training reads, then the items read (with consumables)
+    MUTATIONS = {"finishTraining": ("1001",), "addTraining": ("3", "1001"), "useConsumable": ("101", "1001")}
+
+    def test_the_executor_s_calls_bind_on_the_client_and_the_fake(self):
+        from sdk.client import Client
+
+        calls = {**{name: () for name in self.READS}, **self.MUTATIONS}
+        for name, args in calls.items():
+            for cls in (Client, FakeTrainingClient):
+                with self.subTest(name=name, cls=cls.__name__):
+                    inspect.signature(getattr(cls, name)).bind(None, *args)
+
+    def test_the_fake_keeps_the_client_s_declared_return_conventions(self):
+        from sdk.client import Client
+
+        for name in (*self.READS, *self.MUTATIONS):
+            declared = inspect.signature(getattr(Client, name)).return_annotation
+            if declared is not inspect.Signature.empty:
+                with self.subTest(name=name):
+                    self.assertEqual(inspect.signature(getattr(FakeTrainingClient, name)).return_annotation, declared)
+
+    def test_the_training_reads_are_the_ones_the_fake_answers(self):
+        self.assertEqual(tuple(method for _, method, _, _ in executor.TRAINING_READS), READS)
+        self.assertEqual(tuple(label for label, _, _, _ in executor.TRAINING_READS), LABELS)
+        client = FakeTrainingClient([delish()])
+        for _, method, attribute, key in executor.TRAINING_READS:
+            with self.subTest(method=method):
+                self.assertIs(getattr(client, method)(), True)
+                self.assertIn(f"'{key}'", repr(getattr(client, attribute)))  # stored where the executor looks
 
 
 if __name__ == "__main__":
