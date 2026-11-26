@@ -29,7 +29,7 @@ and ``fake.expire_token_once(at)``; both refuse a path that is not a route.
 Advancing by whole days hits defect H1: production's heartbeat check uses ``timedelta.seconds`` (ignores days).
 Only training sessions follow the clock: room upgrades and research never complete, and the daily counters
 (DailyRewardStatus, FreeStarbuxReceivedToday) never reset. A multi-day test must set those in ``fake.state`` itself.
-Defect IDs (D1, M1, H1, ...) are listed in KNOWN_DEFECTS in tests/test_daily_run_offline_e2e.py.
+Defect IDs (DR1, H1, TZ1, ...) are listed in KNOWN_DEFECTS in tests/test_daily_run_offline_e2e.py.
 """
 
 from __future__ import annotations
@@ -982,7 +982,12 @@ class FakePss:
         attrs = {"CharacterId": c.id, "CharacterDesignId": c.design_id, "CharacterName": c.name,
                  "RoomId": c.room_id, "Level": c.level, "Xp": c.xp, "Fatigue": c.fatigue}
         attrs.update(c.stats)
-        attrs.update({"TrainingEndDate": fmt(c.training_end), "AvailableDate": fmt(c.available_date)})
+        # The session's design while it is not yet applied (running, or ended and not collected), "0" otherwise: the
+        # shape sdk/training/parse.py, the snapshot and the simulator assume (unverified live). TrainingEndDate keeps
+        # the last session's end after a finish.
+        unapplied = c.session is not None and not c.session.applied
+        attrs.update({"TrainingDesignId": c.session.design_id if unapplied else "0",
+                      "TrainingEndDate": fmt(c.training_end), "AvailableDate": fmt(c.available_date)})
         return attrs
 
     def _h_characters(self, p: dict) -> str:

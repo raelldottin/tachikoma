@@ -8,16 +8,16 @@ Two ready-made worlds:
   Changing it shifts every golden, so build a variant (``w = default_world(); w.account.... = ...``) instead.
 - ``minimal_world()``: an account on which the daily run only collects resources (upgradeResearches always does).
   Add crew with ``world.add_crew(...)`` (and rooms with ``world.add_room(...)``) for a run whose only other activity
-  is training. Give it at least two CharacterDesigns: production breaks on a single one (defect D5).
+  is training. A single CharacterDesign is fine (defect D5, fixed).
 
 ``World.validate()`` (FakePss calls it) rejects dangling ids, so a typo in a hand-built world fails loudly instead of
-letting production silently fall back (defect D5 uses the last CharacterDesign for an unknown design id).
+letting production silently skip a crew member whose design is unknown.
 
-Training depends on room designs: production's manageTraining names each crew's room from the ``roomDesigns`` that
-upgradeRooms loaded earlier in the daily run (sdk/client.py getRoomName). A test that calls manageTraining without
-run.main() must call ``client.listRoomDesigns2()`` first, or every crew is silently skipped (defect D15).
+Training reads everything it needs itself (sdk/execution/training.py): the crew, the ship's rooms and researches and
+the character, training, room and research designs, so manageTraining works without run.main()'s earlier steps
+(defect D15, fixed).
 
-Defect IDs (D1, M1, ...) are listed in KNOWN_DEFECTS in tests/test_daily_run_offline_e2e.py.
+Defect IDs (DR1, H1, ...) are listed in KNOWN_DEFECTS in tests/test_daily_run_offline_e2e.py.
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 
 from tests.synthetic_fixtures import SYNTHETIC_EMAIL
 
-# Production order (sdk/client.py manageTraining ``stats``), without the "@".
+# Production order (sdk/training/model.py ``CANONICAL_STATS``), without the "@".
 STATS = ("HpImprovement", "PilotImprovement", "RepairImprovement", "WeaponImprovement", "ScienceImprovement",
          "EngineImprovement", "AttackImprovement", "AbilityImprovement", "StaminaImprovement")
 FAKE_EPOCH = datetime.datetime(2026, 11, 20, 12, 0, 0)  # naive UTC; test code never calls utcnow()
@@ -131,7 +131,8 @@ class ResearchDesign:
 class Research:
     design_id: str
     state: str = "Completed"
-    # Emitted only when set. Real ListAllResearches records carry no ResearchName, which is why defect D1 holds.
+    # Emitted only when set. Real ListAllResearches records carry no ResearchName; training joins the design id with
+    # ListAllResearchDesigns2 instead (defect D1, fixed).
     name: str | None = None
     level: int | None = None
 
@@ -457,13 +458,13 @@ DEFAULT_RESEARCH_DESIGNS = (
     ("11", "10", "Education Lv2", 8000),
     ("20", "20", "Combat Lv1", 3000),
 )
-# Training tiers as manageTraining's log names them (Green T1, Blue T2, Yellow T3): (gain, fatigue, duration).
+# Training tiers T1-T3 (the tier bands of sdk/training/strategy.py): (gain, fatigue, duration).
 TIERS = {
     "T1": (2, 10, datetime.timedelta(hours=1)),
     "T2": (4, 20, datetime.timedelta(hours=3)),
     "T3": (8, 40, datetime.timedelta(hours=12)),
 }
-# (id, name, stat, tier); every name is unique, so manageTraining's last-match lookup is unambiguous.
+# (id, name, stat, tier); every name is unique, so the planner's exact-name lookup (pick_design) is unambiguous.
 DEFAULT_TRAINING_DESIGNS = (
     ("1", "Steam Yoga", "StaminaImprovement", "T1"),
     ("3", "Bench Press", "HpImprovement", "T1"),
@@ -504,13 +505,14 @@ class RosterRow:
 
 
 H = datetime.timedelta(hours=1)
-# Roster, in this order: the order matters for defect D6 (crew #2 inherits crew #1's room name).
+# Roster, in this order: unassigned crew #2 follows a trained crew #1, which is how defect D6 (fixed) inherited a room.
 #
 # The capacities differ per design (80/120/150/200/100) and several stat totals are not a multiple of the capacity, so
 # the percent manageTraining computes is fractional: picking the wrong CharacterDesign, or rounding down instead of up,
 # changes a decision. These records sit on an edge on purpose:
 # - 1001: 57 / 80 = 71.25 %, which production rounds UP to 72, just inside the S-T1 window (71 < p < 74); rounded down
-#   it would be 71, outside. After its Bench Press (+2 Hp) it is 59 / 80 = 73.75 -> 74, just outside (D14 test).
+#   it would be 71, outside. After its Bench Press (+2 Hp) it is 59 / 80 = 73.75 -> 74: S-T2, research-gated, yet
+#   the ended session is still finished (D14, fixed).
 # - 1013: 89 xp at level 1, one short of production's 90-xp cost; 1009 (120 xp) is on the other side.
 # - 1014: AvailableDate 2 h ago. A UTC host upgrades it; a host behind UTC compares the UTC date with its local clock and
 #   waits (TZ1). 1012 (AvailableDate in 3 h) is upgraded early by a host ahead of UTC (TZ1). See NonUtcHostTests.
@@ -522,25 +524,25 @@ H = datetime.timedelta(hours=1)
 DEFAULT_ROSTER = (
     RosterRow("1001", "Galactic Succubus", "501", "Legendary", "103", stats(Hp=16, Weapon=32, Attack=9), 72,
               capacity=80, session_end_offset=-2 * H,
-              note="weapons, secondary room, 71.25 %: S-T1 finishes and restarts Bench Press"),
+              note="weapons, secondary room, 71.25 %: the ended Bench Press is finished; S-T2 is research-gated"),
     RosterRow("1002", "Galactic Snow Maiden", "502", "Epic", "0", stats(Hp=20, Weapon=55, Attack=12), 73,
-              capacity=120, note="weapons, unassigned, 72.5 %: D6 inherits Galaxy Gym and is sent Finish+Add"),
+              capacity=120, note="weapons, unassigned, 72.5 %: no room, no request (D6, fixed)"),
     RosterRow("1003", "Delish", "503", "Common", "102", stats(Hp=20, Weapon=77, Attack=12), 73, capacity=150,
-              session_end_offset=datetime.timedelta(minutes=-30), note="weapons, 72.67 %, ended 30 min ago: D2 gate"),
+              session_end_offset=datetime.timedelta(minutes=-30), note="weapons, 72.67 %, ended 30 min ago: finished now (D2, fixed)"),
     RosterRow("1004", "Mistycball", "504", "Common", "106", stats(Hp=10, Science=20), 30,
-              note="shields, primary room: D1 P-T1 never fires"),
+              note="shields, primary room: P-T1 research-gated (no Fitness 1)"),
     RosterRow("1005", "Galactic Sprite", "505", "Common", "102", stats(Hp=30, Engine=30), 60,
-              note="engines, primary room: D1 P-T2 never fires"),
+              note="engines, primary room: P-T2 research-gated"),
     RosterRow("1006", "The Conjoint Archon", "506", "Epic", "103", stats(Hp=34, Engine=101), 68, capacity=200,
-              note="engines, primary room, 67.5 %: D1 P-T3 never fires"),
+              note="engines, primary room, 67.5 %: Epic TP cap 80 reached"),
     RosterRow("1007", "Cyber Duck", "507", "Common", "106", stats(Hp=40, Stamina=40), 80,
-              note="rushers, wrong room: 'Move' log, no request"),
+              note="rushers, wrong room: not_in_training_room skip ('move to gym'), no request"),
     RosterRow("1008", "Admiral Serena", "508", "Common", "103", stats(Hp=40, Attack=40), 80,
-              note="defenders, secondary room: D1 S-T2 never fires"),
+              note="defenders, secondary room: S-T2 research-gated"),
     RosterRow("1009", "Engineer Grunt", "509", "Common", "104", stats(Hp=10, Repair=10), 20, level=1, xp=120,
               note="not a training room; upgraded to level 2"),
     RosterRow("1010", "Rookie Pilot", "510", "Common", "102", stats(Hp=10), 10, level=5, xp=3000,
-              available_offset=-24 * H, note="no role; D12 consumables never fire; upgraded to level 6"),
+              available_offset=-24 * H, note="no role: unknown_role skip (consumables need item designs: D12 fixed); upgraded to level 6"),
     RosterRow("1011", "Huntress", "511", "Legendary", "101", stats(Hp=20, Attack=20), 40, level=1, xp=120,
               note="Legendary needs 270 xp: not upgraded"),
     RosterRow("1012", "Turkey Hero", "512", "Common", "101", stats(Hp=20, Attack=20), 40, level=1, xp=500,
@@ -550,12 +552,12 @@ DEFAULT_ROSTER = (
     RosterRow("1014", "Night Shift Medic", "514", "Common", "104", stats(Hp=12), 12, level=3, xp=900,
               available_offset=-2 * H, note="AvailableDate 2 h ago: upgraded to level 4 (a UTC-5 host waits: TZ1)"),
     RosterRow("1015", "Ancestral Spirit", "515", "Unique", "103", stats(Hp=30, Attack=76), 71, capacity=150,
-              note="defenders, secondary room, exactly 71 %: outside the S-T1 window, no request"),
+              note="defenders, secondary room, exactly 71 %: Unique TP cap 70 reached, no request"),
     # A second copy of a character, as real rosters have: the log names both "Galactic Sprite", the room tells them
     # apart. 86 / 120 = 71.67 rounds UP to 72 (rounded down, 71 is outside the S-T1 window).
     RosterRow("1016", "Galactic Sprite", "516", "Common", "107", stats(Hp=20, Engine=66), 72, capacity=120,
               session_end_offset=-2 * H,
-              note="engines, secondary room Lunar College, 71.67 %: S-T1 finishes Bench Press and starts the manual"),
+              note="engines, secondary room Lunar College, 71.67 %: the ended Bench Press is finished; S-T2 gated"),
     RosterRow("1017", "Deck Hand", "517", "Common", "0", stats(Hp=10), 10, level=1, xp=500,
               available_offset=-24 * H,
               note="unassigned, level 1 with 500 xp and available: upgradeCharacters skips RoomId \"0\" crew"),

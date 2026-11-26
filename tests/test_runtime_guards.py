@@ -804,13 +804,17 @@ class TestResearchOutcomeClassification(unittest.TestCase):
         self.assertFalse(res)
 
 
-# The endpoints manageTraining reads today through Client.getLatestVersion3, listAllCharactersOfUser,
-# listAllCharacterDesigns2, listRoomsViaAccessToken, listAllTrainingDesigns2 and listAllResearches, and the two it
-# posts to. TestTrainingShapeGuards exercises those methods through these endpoints, never by name.
+# The endpoints manageTraining (sdk/execution/training.py through the Client) reads, through
+# Client.getLatestVersion3, listAllCharactersOfUser, getShipByUserId (rooms and researches),
+# listAllCharacterDesigns2, listAllTrainingDesigns2, listRoomDesigns2 and listAllResearchDesigns2, and the two it posts
+# to. It no longer reads listRoomsViaAccessToken or ListAllResearches. TestTrainingShapeGuards exercises those methods
+# through these endpoints, never by name.
 SETTINGS = "/SettingService/GetLatestVersion3"
 CHARACTERS = "/CharacterService/ListAllCharactersOfUser"
 CHARACTER_DESIGNS = "/CharacterService/ListAllCharacterDesigns2"
+SHIP = "/ShipService/GetShipByUserId"
 ROOMS = "/RoomService/ListRoomsViaAccessToken"
+ROOM_DESIGNS = "/RoomService/ListRoomDesigns2"
 TRAINING_DESIGNS = "/TrainingService/ListAllTrainingDesigns2"
 RESEARCHES = "/ResearchService/ListAllResearches"
 RESEARCH_DESIGNS = "/ResearchService/ListAllResearchDesigns2"
@@ -840,24 +844,25 @@ def _error_reply(path):
 
 class TrainingRequestRecorder:
     """Stands in for Client.request: answers each endpoint from replies (path -> XML body) and records every
-    request, so a test checks the POSTs that were sent, whatever reads came before them."""
+    request, so a test checks the POSTs that were sent, whatever reads came before them.
 
-    FINISH_REPLY = (
-        '<TrainingService><FinishTraining><Character HpImprovement="1" PilotImprovement="1" RepairImprovement="1" '
-        'WeaponImprovement="1" ScienceImprovement="1" EngineImprovement="1" AttackImprovement="1" '
-        'AbilityImprovement="1" StaminaImprovement="1" Fatigue="12"/></FinishTraining></TrainingService>'
-    )
-    FINISH_ERROR_REPLY = '<TrainingService><FinishTraining errorMessage="Training is not finished."/></TrainingService>'
+    ``after_post`` maps a POST path to replies that replace the current ones once that POST was sent, so a read after
+    a FinishTraining can show the collected training.
+    """
+
     ADD_REPLY = "<TrainingService><AddTraining/></TrainingService>"
 
-    def __init__(self, replies):
-        self.replies = {FINISH_TRAINING: self.FINISH_REPLY, ADD_TRAINING: self.ADD_REPLY, **replies}
+    def __init__(self, replies, after_post=None):
+        self.replies = {ADD_TRAINING: self.ADD_REPLY, **replies}
+        self.after_post = dict(after_post or {})
         self.calls = []
 
     def __call__(self, url, method, data=None):
         parts = urlsplit(url)
         self.calls.append((method, parts.path, dict(parse_qsl(parts.query))))
         text = self.replies.get(parts.path, "<Unexpected/>")
+        if method == "POST":
+            self.replies.update(self.after_post.pop(parts.path, {}))
         return SimpleNamespace(text=text, content=text.encode("utf-8"), status_code=200)
 
     def posts(self):
@@ -868,18 +873,25 @@ class TrainingRequestRecorder:
             if method == "POST"
         ]
 
+    def paths(self):
+        return [path for _, path, _ in self.calls]
 
-def _crew(character_id, name, room_id, end="", fatigue="10", **improvements):
+
+STAT_NAMES = ("Hp", "Pilot", "Repair", "Weapon", "Science", "Engine", "Attack", "Ability", "Stamina")
+
+
+def _crew(character_id, name, room_id, end="", design="0", fatigue="10", character_design="1", **improvements):
     """One ListAllCharactersOfUser Character record; improvements are stat names without the Improvement suffix."""
     record = {
         "@CharacterId": character_id,
         "@CharacterName": name,
-        "@CharacterDesignId": "1",
+        "@CharacterDesignId": character_design,
         "@RoomId": room_id,
+        "@TrainingDesignId": design,
         "@TrainingEndDate": end,
         "@Fatigue": fatigue,
     }
-    for stat in ("Hp", "Pilot", "Repair", "Weapon", "Science", "Engine", "Attack", "Ability", "Stamina"):
+    for stat in STAT_NAMES:
         record[f"@{stat}Improvement"] = str(improvements.get(stat, 0))
     return record
 
@@ -888,25 +900,24 @@ def _characters_reply(characters):
     return _reply("CharacterService", "ListAllCharactersOfUser", "Characters", "Character", characters)
 
 
-# Fitness course -> research design id. Per-account ListAllResearches records carry only the design id and state;
-# the course name ("Fitness 203") lives on the ListAllResearchDesigns2 design, so the client joins the two.
-FITNESS_DESIGNS = {"101": "7", "201": "8", "202": "9", "203": "10"}
+# Research design id -> name. The strategy gates name the "Fitness" family (sdk/training/parse.py's assumed
+# "<Family> LvN"); completed research is listed on the ship by design id only.
+FITNESS_DESIGNS = {"7": "Fitness", "8": "Fitness Lv2", "9": "Fitness Lv3"}
 
 
-def _research_reply(*completed_courses):
-    """ListAllResearches with the given Fitness courses completed; no courses means no training research."""
-    research = [
-        {"@ResearchId": f"70{index}", "@ResearchDesignId": FITNESS_DESIGNS[course], "@ResearchState": "Completed"}
-        for index, course in enumerate(completed_courses)
-    ]
-    return _reply("ResearchService", "ListAllResearches", "Researches", "Research", research)
+def _training_ship_reply(*completed):
+    """GetShipByUserId with rooms 500 (Academy), 600 (Bridge), 700 (GYM) and the given research designs done."""
+    rooms = _elements("Room", [{"@RoomId": room, "@RoomDesignId": design}
+                               for room, design in (("500", "50"), ("600", "60"), ("700", "70"))])
+    research = _elements("Research", [{"@ResearchDesignId": design, "@ResearchState": "Completed"}
+                                      for design in completed])
+    return (f'<ShipService><GetShipByUserId><Ship ShipId="1"><Rooms>{rooms}</Rooms><Researches>{research}'
+            "</Researches></Ship></GetShipByUserId></ShipService>")
 
 
 def _research_designs_reply():
-    designs = [
-        {"@ResearchDesignId": design_id, "@ResearchName": f"Fitness {course}", "@RootResearchDesignId": "7"}
-        for course, design_id in FITNESS_DESIGNS.items()
-    ]
+    designs = [{"@ResearchDesignId": design_id, "@ResearchName": name, "@RootResearchDesignId": "7"}
+               for design_id, name in FITNESS_DESIGNS.items()]
     return _reply("ResearchService", "ListAllResearchDesigns", "ResearchDesigns", "ResearchDesign", designs)
 
 
@@ -914,43 +925,42 @@ def _training_designs_reply(designs):
     return _reply("TrainingService", "ListAllTrainingDesigns", "TrainingDesigns", "TrainingDesign", designs)
 
 
+def _finish_reply(record):
+    return f"<TrainingService><FinishTraining>{_elements('Character', [record])}</FinishTraining></TrainingService>"
+
+
 class TestTrainingShapeGuards(unittest.TestCase):
-    """CHARACTERIZATION of Client.manageTraining: pins the POSTs it sends today (FinishTraining then AddTraining
-    per crew member, or none) and its return value, for game data served through Client.request.
+    """Client.manageTraining against game data served through Client.request: the POSTs it sends (only an
+    AddTraining for an idle eligible crew member, a FinishTraining for an ended training) and its return value.
 
-    TrainingRequestRecorder is the only seam: it answers the list endpoints with XML built from ROSTER and the
-    tests assert only on POSTs, so Wave 2 may change how and when the data is read. Wave 2 rewrites
-    manageTraining and may deliberately update the expected POSTs and the KNOWN DEFECT cases below.
-
-    roomDesigns is pre-seeded as run.main() leaves it: upgradeRooms, an earlier step, loads it through
-    RoomService/ListRoomDesigns2. manageTraining's own fallback is the deprecated DesignService/ListAllDesigns4,
-    which needs 30+ design sections and also replaces trainingDesigns, so these tests do not exercise it.
-
-    Every crew member has a training capacity of 100, so a stat total is also the training percentage.
+    TrainingRequestRecorder is the only seam: it answers the endpoints with XML built from ROSTER and the tests assert
+    only on POSTs (and the log), so how and when the data is read may change. Every crew member has a training
+    capacity of 100, so a stat total is also the training percentage.
     """
 
     ROSTER = (
-        # Weapons role in its primary room at 40%: green primary training, gated on Fitness/Education 101.
+        # Weapons role in its primary room (Academy) at 40%: primary T1, gated on Fitness 1.
         _crew("101", "Delish", "500", Weapon=40),
-        # Engines role in its secondary room at 72%, cooldown long over: green secondary training, no research gate.
+        # Engines role in its secondary room (Academy) at 72% with an idle placeholder end: S-T1, ungated.
         _crew("102", "Galactic Sprite", "500", end="2020-01-01T00:00:00", Engine=72),
         # Weapons role still training: no request.
-        _crew("103", "Galactic Succubus", "500", end="2999-01-01T00:00:00", Weapon=40),
+        _crew("103", "Galactic Succubus", "500", end="2999-01-01T00:00:00", design="11", Weapon=40),
         # Not in a training room: skipped.
         _crew("104", "Mistycball", "600", Science=40),
         # In a training room but in no role: no request.
         _crew("105", "Random Recruit", "700", Hp=40),
-        # Weapons role past 71% in its primary room: told to move to the gym, no request.
+        # Weapons role at 80% in the Academy: S-T2 wants the gym, so it is told to move, no request.
         _crew("106", "Galactic Snow Maiden", "500", Weapon=80),
-        # Engines role in its secondary room at 72% but still training: the secondary T1 cooldown holds, no request.
-        _crew("107", "The Conjoint Archon", "500", end="2999-01-01T00:00:00", Engine=72),
-        # Shields role past 71% but not in a training room: skipped, so neither told to move nor sent a request.
+        # Engines role at 72% in its secondary room but still training: no request.
+        _crew("107", "The Conjoint Archon", "500", end="2999-01-01T00:00:00", design="21", Engine=72),
+        # Shields role past 71% but not in a training room: skipped.
         _crew("108", "C.P.U.", "600", Science=80),
     )
     TRAINING = (
         {"@TrainingDesignId": "11", "@TrainingName": "Read Expert Weapon Theory"},
         {"@TrainingDesignId": "12", "@TrainingName": "Weapons Summit"},
         {"@TrainingDesignId": "21", "@TrainingName": "Study Expert Engineering Manual"},
+        {"@TrainingDesignId": "22", "@TrainingName": "Engineering Summit"},
         {"@TrainingDesignId": "31", "@TrainingName": "Bench Press"},
     )
 
@@ -958,7 +968,7 @@ class TestTrainingShapeGuards(unittest.TestCase):
         self.recorder = TrainingRequestRecorder(
             {
                 SETTINGS: (
-                    '<SettingService><GetLatestSetting><Setting CharacterDesignVersion="7" '
+                    '<SettingService><GetLatestSetting><Setting CharacterDesignVersion="7" RoomDesignVersion="2" '
                     'TrainingDesignVersion="3" ResearchDesignVersion="5"/></GetLatestSetting></SettingService>'
                 ),
                 CHARACTERS: _characters_reply(self.ROSTER),
@@ -968,23 +978,23 @@ class TestTrainingShapeGuards(unittest.TestCase):
                     "CharacterDesigns",
                     "CharacterDesign",
                     [
-                        {"@CharacterDesignId": "1", "@TrainingCapacity": "100", "@SpecialAbilityType": "DamageToCurrentEnemy"},
-                        {"@CharacterDesignId": "2", "@TrainingCapacity": "200", "@SpecialAbilityType": "HealRoomHp"},
+                        {"@CharacterDesignId": "1", "@TrainingCapacity": "100", "@Rarity": "Common"},
+                        {"@CharacterDesignId": "2", "@TrainingCapacity": "200", "@Rarity": "Common"},
                     ],
                 ),
-                ROOMS: _reply(
+                SHIP: _training_ship_reply("7"),
+                ROOM_DESIGNS: _reply(
                     "RoomService",
-                    "ListRoomsViaAccessToken",
-                    "Rooms",
-                    "Room",
+                    "ListRoomDesigns",
+                    "RoomDesigns",
+                    "RoomDesign",
                     [
-                        {"@RoomId": "500", "@RoomDesignId": "50"},
-                        {"@RoomId": "600", "@RoomDesignId": "60"},
-                        {"@RoomId": "700", "@RoomDesignId": "70"},
+                        {"@RoomDesignId": "50", "@RoomName": "Academy"},
+                        {"@RoomDesignId": "60", "@RoomName": "Bridge"},
+                        {"@RoomDesignId": "70", "@RoomName": "GYM"},
                     ],
                 ),
                 TRAINING_DESIGNS: _training_designs_reply(self.TRAINING),
-                RESEARCHES: _research_reply("203"),
                 RESEARCH_DESIGNS: _research_designs_reply(),
             }
         )
@@ -996,118 +1006,105 @@ class TestTrainingShapeGuards(unittest.TestCase):
         client = Client(device=device)
         client.accessToken = SYNTHETIC_ACCESS_TOKEN
         client.info = {"@Name": "TestCaptain"}
-        client.roomDesigns = {
-            "RoomService": {
-                "ListRoomDesigns": {
-                    "RoomDesigns": {
-                        "RoomDesign": [
-                            {"@RoomDesignId": "50", "@RoomName": "Academy"},
-                            {"@RoomDesignId": "60", "@RoomName": "Bridge"},
-                            {"@RoomDesignId": "70", "@RoomName": "GYM"},
-                        ]
-                    }
-                }
-            }
-        }
+        client.user = SimpleNamespace(id=7, isAuthorized=True)
         client.request = self.recorder
         return client
 
-    def training_posts(self, character_id, training_design_id):
-        token = SYNTHETIC_ACCESS_TOKEN
-        return [
-            (FINISH_TRAINING, {"characterId": character_id, "accessToken": token}),
-            (ADD_TRAINING, {"trainingDesignId": training_design_id, "characterId": character_id, "accessToken": token}),
-        ]
+    def add_post(self, character_id, training_design_id):
+        return (ADD_TRAINING, {"trainingDesignId": training_design_id, "characterId": character_id,
+                               "accessToken": SYNTHETIC_ACCESS_TOKEN})
 
-    def test_eligible_crew_get_finish_then_add_training_posts(self):
+    def finish_post(self, character_id):
+        return (FINISH_TRAINING, {"characterId": character_id, "accessToken": SYNTHETIC_ACCESS_TOKEN})
+
+    def posted_ids(self):
+        return [params.get("characterId") for _, params in self.recorder.posts()]
+
+    def test_idle_eligible_crew_get_add_training_only(self):
+        # D3: no FinishTraining is sent before an AddTraining for crew with nothing to collect.
         self.assertIs(self.client.manageTraining(), True)
 
-        self.assertEqual(self.recorder.posts(), [*self.training_posts("101", "11"), *self.training_posts("102", "21")])
+        self.assertEqual(self.recorder.posts(), [self.add_post("101", "11"), self.add_post("102", "21")])
         start_dates = [params["trainingStartDate"] for _, path, params in self.recorder.calls if path == ADD_TRAINING]
         self.assertEqual(len(start_dates), 2)
         for start_date in start_dates:
             self.assertRegex(start_date, r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d$")
 
-    def test_without_training_research_only_ungated_secondary_training_is_sent(self):
-        self.recorder.replies[RESEARCHES] = _research_reply()
+    def test_ended_session_gets_finish_then_replan(self):
+        # The finished crew is replanned from the FinishTraining reply (74%: S-T2, needs Fitness Lv2), never from the
+        # advisory decision planned on the old stats (S-T1).
+        ended = _crew("102", "Galactic Sprite", "500", end="2020-01-01T00:00:00", design="21", Engine=72)
+        collected = _crew("102", "Galactic Sprite", "500", end="2020-01-01T00:00:00", fatigue="20", Engine=74)
+        self.recorder.replies.update({CHARACTERS: _characters_reply([ended]), SHIP: _training_ship_reply("7", "8"),
+                                      FINISH_TRAINING: _finish_reply(collected)})
+        self.recorder.after_post[FINISH_TRAINING] = {CHARACTERS: _characters_reply([collected])}
 
         self.assertIs(self.client.manageTraining(), True)
 
-        self.assertEqual(self.recorder.posts(), self.training_posts("102", "21"))
+        self.assertEqual(self.recorder.posts(), [self.finish_post("102"), self.add_post("102", "22")])
 
-    def test_over_trained_crew_in_primary_room_is_told_to_move(self):
-        with self.assertLogs(level="ERROR") as logs:
-            self.assertIs(self.client.manageTraining(), True)
-
-        move_messages = [message for message in logs.output if "Move Galactic Snow Maiden" in message]
-        self.assertEqual(len(move_messages), 1)
-        self.assertIn("to the GYM or Galaxy Gym", move_messages[0])
-        self.assertNotIn("106", [params.get("characterId") for _, params in self.recorder.posts()])
-
-    def test_secondary_room_crew_still_training_get_no_request(self):
+    def test_crew_still_training_get_no_request(self):
         self.assertIs(self.client.manageTraining(), True)
 
-        posted = [params.get("characterId") for _, params in self.recorder.posts()]
-        self.assertNotIn("107", posted)
-        self.assertEqual(posted, ["101", "101", "102", "102"])
+        self.assertEqual(self.posted_ids(), ["101", "102"])
 
-    def test_crew_outside_training_rooms_are_neither_moved_nor_trained(self):
-        with self.assertLogs(level="ERROR") as logs:
+    def test_crew_outside_training_rooms_get_no_request(self):
+        with self.assertLogs("sdk.execution.training", level="INFO") as logs:
             self.assertIs(self.client.manageTraining(), True)
 
-        move_messages = [message for message in logs.output if "] Move " in message]
-        self.assertEqual(len(move_messages), 1)
-        self.assertIn("Move Galactic Snow Maiden", move_messages[0])
-        for name in ("Mistycball", "C.P.U."):
-            self.assertFalse([message for message in logs.output if name in message], name)
-        posted = [params.get("characterId") for _, params in self.recorder.posts()]
-        self.assertNotIn("104", posted)
-        self.assertNotIn("108", posted)
+        output = "\n".join(logs.output)
+        self.assertIn("[TestCaptain] training: Galactic Snow Maiden (106) skip not_in_training_room: move to gym", output)
+        self.assertIn("[TestCaptain] training: Mistycball (104) skip not_in_training_room: room 'Bridge' is not a "
+                      "training room", output)
+        self.assertIn("[TestCaptain] training: C.P.U. (108) skip not_in_training_room: room 'Bridge' is not a "
+                      "training room", output)
+        for character_id in ("104", "106", "108"):
+            self.assertNotIn(character_id, self.posted_ids())
 
-    def test_training_designs_missing_skips_without_posting(self):
-        self.recorder.replies[TRAINING_DESIGNS] = _training_designs_reply([])
+    def test_unassigned_crew_after_a_trained_crew_get_no_request(self):
+        # D6: the unassigned crew member never inherits the room of the crew member trained before it.
+        unassigned = _crew("109", "Galactic Snow Maiden", "0", Weapon=40)
+        self.recorder.replies[CHARACTERS] = _characters_reply([self.ROSTER[0], unassigned])
 
-        with self.assertLogs(level="INFO") as logs:
-            self.assertIs(self.client.manageTraining(), True)
+        self.assertIs(self.client.manageTraining(), True)
 
-        self.assertIn("INFO:root:Training design data unavailable; skipping training.", logs.output)
-        self.assertEqual(self.recorder.posts(), [])
+        self.assertEqual(self.recorder.posts(), [self.add_post("101", "11")])
 
     def test_single_character_and_training_design_records_are_used(self):
-        # One record parses to a dict rather than a list of dicts.
+        # D5: one record parses to a dict rather than a list of dicts.
         self.recorder.replies[CHARACTERS] = _characters_reply([self.ROSTER[0]])
         self.recorder.replies[TRAINING_DESIGNS] = _training_designs_reply([self.TRAINING[0]])
 
         self.assertIs(self.client.manageTraining(), True)
 
-        self.assertEqual(self.recorder.posts(), self.training_posts("101", "11"))
+        self.assertEqual(self.recorder.posts(), [self.add_post("101", "11")])
 
-    def test_unreadable_training_data_returns_false_without_posting(self):
-        # A reply without the endpoint's service element, such as a gateway error page.
-        foreign = '<ServerError errorMessage="Service unavailable"/>'
-        # The pinned "avaialble" typos come from Client; Wave 2 may fix them.
-        cases = (
-            (TRAINING_DESIGNS, _error_reply(TRAINING_DESIGNS), ["ERROR:root:TrainingDesign data not available."]),
-            (SETTINGS, _error_reply(SETTINGS), ["ERROR:root:AllCharacterDesigns data not avaialble."]),
-            (
-                CHARACTERS,
-                foreign,
-                [
-                    "ERROR:root:Failed to get list of characters on the ship.",
-                    "ERROR:root:allCharactersOfUser data not avaialble.",
-                ],
-            ),
-            (ROOMS, foreign, ["ERROR:root:RoomService data not available."]),
-        )
-        for path, reply, expected in cases:
+    def test_unknown_character_design_skips_instead_of_borrowing_another(self):
+        # D5: an unknown CharacterDesignId gets no capacity, never the last design's.
+        stranger = _crew("101", "Delish", "500", character_design="9", Weapon=40)
+        self.recorder.replies[CHARACTERS] = _characters_reply([stranger])
+
+        with self.assertLogs("sdk.execution.training", level="INFO") as logs:
+            self.assertIs(self.client.manageTraining(), True)
+
+        self.assertIn("INFO:sdk.execution.training:[TestCaptain] training: Delish (101) skip design_missing: no "
+                      "training capacity", logs.output)
+        self.assertEqual(self.recorder.posts(), [])
+
+    def test_each_required_list_error_returns_false_without_posting(self):
+        cases = ((CHARACTERS, "characters"), (SHIP, "ship"), (CHARACTER_DESIGNS, "character designs"),
+                 (TRAINING_DESIGNS, "training designs"), (ROOM_DESIGNS, "room designs"),
+                 (RESEARCH_DESIGNS, "research designs"))
+        for path, label in cases:
             with self.subTest(error_at=path):
                 self.setUp()
-                self.recorder.replies[path] = reply
+                self.recorder.replies[path] = _error_reply(path)
 
-                with self.assertLogs(level="ERROR") as logs:
+                with self.assertLogs("sdk.execution.training", level="ERROR") as logs:
                     self.assertIs(self.client.manageTraining(), False)
 
-                self.assertEqual(logs.output, expected)
+                self.assertEqual(logs.output, [f"ERROR:sdk.execution.training:[TestCaptain] training: cannot read "
+                                               f"{label}; no training this run"])
                 self.assertEqual(self.recorder.posts(), [])
 
     def test_character_list_error_is_not_read_as_an_empty_roster(self):
@@ -1119,34 +1116,33 @@ class TestTrainingShapeGuards(unittest.TestCase):
 
         self.assertEqual(self.recorder.posts(), [])
 
-    def test_character_design_list_error_returns_false_before_any_post(self):
-        # Regression (fixed in #276): listAllCharacterDesigns2 goes through _fetchDesignList, so an errorMessage reply
-        # is refused instead of being read as data and raising on the missing records.
-        self.recorder.replies[CHARACTER_DESIGNS] = _error_reply(CHARACTER_DESIGNS)
-
-        with self.assertLogs(level="ERROR") as logs:
-            self.assertIs(self.client.manageTraining(), False)
-
-        self.assertEqual(logs.output, ["ERROR:root:AllCharacterDesigns data not avaialble."])
-        self.assertEqual(self.recorder.posts(), [])
-
-    def test_room_list_error_raises_before_any_post(self):
-        # KNOWN DEFECT: the errorMessage reply is accepted as data, then reading the missing records raises
-        # (run.main() logs "manageTraining failed" and exits 1). Wave 2 may return False here instead.
-        self.recorder.replies[ROOMS] = _error_reply(ROOMS)
-
-        with self.assertRaises((KeyError, AttributeError)):
-            self.client.manageTraining()
-
-        self.assertEqual(self.recorder.posts(), [])
-
-    def test_failed_finish_training_still_adds_training(self):
-        self.recorder.replies[CHARACTERS] = _characters_reply([self.ROSTER[0]])
-        self.recorder.replies[FINISH_TRAINING] = TrainingRequestRecorder.FINISH_ERROR_REPLY
+    def test_failed_finish_does_not_start_training(self):
+        ended = _crew("102", "Galactic Sprite", "500", end="2020-01-01T00:00:00", design="21", Engine=72)
+        self.recorder.replies[CHARACTERS] = _characters_reply([ended])
+        self.recorder.replies[FINISH_TRAINING] = (
+            '<TrainingService><FinishTraining errorMessage="Training is not finished."/></TrainingService>')
 
         self.assertIs(self.client.manageTraining(), True)
 
-        self.assertEqual(self.recorder.posts(), self.training_posts("101", "11"))
+        self.assertEqual(self.recorder.posts(), [self.finish_post("102")])
+
+    def test_research_gate_met_opens_primary_tier(self):
+        # D1: research gates read the ship's completed research by design id and the design's name.
+        self.recorder.replies[SHIP] = _training_ship_reply()
+        self.assertIs(self.client.manageTraining(), True)
+        self.assertEqual(self.posted_ids(), ["102"])  # only the ungated S-T1
+
+        self.setUp()
+        self.assertIs(self.client.manageTraining(), True)
+        self.assertEqual(self.posted_ids(), ["101", "102"])
+
+    def test_rooms_and_research_come_from_the_ship(self):
+        # listRoomsViaAccessToken and ListAllResearches are no longer read: one GetShipByUserId carries both.
+        self.assertIs(self.client.manageTraining(), True)
+
+        self.assertNotIn(ROOMS, self.recorder.paths())
+        self.assertNotIn(RESEARCHES, self.recorder.paths())
+        self.assertEqual(self.recorder.paths().count(SHIP), 1)
 
 
 class TestSMTPPreValidation(unittest.TestCase):
