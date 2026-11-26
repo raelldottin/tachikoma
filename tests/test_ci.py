@@ -1272,6 +1272,10 @@ class MutationConfigPolicyTests(unittest.TestCase):
 
     def setUp(self):
         self.config = json.loads((ci.ROOT / ci.MUTATION_CONFIG).read_text(encoding="utf-8"))
+        # Every committed target outside sdk/training/, in config order, derived independently of the code under
+        # test, so adding an advisory target (a new policy or executor module) does not break these tests.
+        self.advisory_paths = [t["path"] for t in self.config["targets"] if not t["path"].startswith("sdk/training/")]
+        self.assertIn("sdk/crew_leveling.py", self.advisory_paths)
 
     def test_subset_splits_on_the_training_prefix(self):
         blocking = ci.mutation_config_subset(self.config, blocking=True)
@@ -1279,9 +1283,7 @@ class MutationConfigPolicyTests(unittest.TestCase):
         self.assertEqual(
             [target["path"] for target in blocking["targets"]], list(ci.REQUIRED_BLOCKING_MUTATION_TARGETS)
         )
-        self.assertEqual(
-            [target["path"] for target in advisory["targets"]], ["sdk/crew_leveling.py", "sdk/game_formulas.py"]
-        )
+        self.assertEqual([target["path"] for target in advisory["targets"]], self.advisory_paths)
         for subset in (blocking, advisory):
             self.assertEqual(
                 {key: value for key, value in subset.items() if key != "targets"},
@@ -1352,7 +1354,7 @@ class MutationConfigPolicyTests(unittest.TestCase):
 
         for selector, expected in (
             ("--blocking", list(ci.REQUIRED_BLOCKING_MUTATION_TARGETS)),
-            ("--advisory", ["sdk/crew_leveling.py", "sdk/game_formulas.py"]),
+            ("--advisory", self.advisory_paths),
         ):
             with self.subTest(selector=selector), TemporaryDirectory() as temporary:
                 code, stdout, stderr = self.run_command(selector)
@@ -1509,7 +1511,7 @@ class MutationConfigPolicyTests(unittest.TestCase):
             code, stdout, stderr = self.run_command("--advisory", "--config", str(path))
             self.assertEqual((code, stderr), (0, ""))
             paths = [target["path"] for target in json.loads(stdout)["targets"]]
-            self.assertEqual(paths, ["sdk/crew_leveling.py", "sdk/game_formulas.py"])
+            self.assertEqual(paths, self.advisory_paths)
             code, stdout, _ = self.run_command("--blocking", "--config", str(path))
             self.assertEqual((code, stdout), (1, ""))
 
