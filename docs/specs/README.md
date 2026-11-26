@@ -44,7 +44,7 @@ A spec that needs no live evidence goes from stage 6 straight to `Done`.
 | [SPEC-11](SPEC-11-alert-delivery.md) | Scheduled reports and alert delivery | R6 | G2 | 05 | Verified offline |
 | [SPEC-12](SPEC-12-study-report.md) | Automation effectiveness study report | R6 exit | — | 07, 08, 09, 10 | Verified offline |
 | [SPEC-13](SPEC-13-room-placement.md) | Automated room placement | ops (supports R2) | G6 | 03, 05 | Done ([evidence](SPEC-13-room-placement.md#evidence)) |
-| [SPEC-14](SPEC-14-automated-crew-training.md) | Automated crew training | R2 | G8 (proposed) | 05, 06 | Draft |
+| [SPEC-14](SPEC-14-automated-crew-training.md) | Automated crew training | R2 | G8 (proposed) | 05, 06 | Approved |
 
 ## Owner gates
 
