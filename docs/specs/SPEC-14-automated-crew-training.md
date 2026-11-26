@@ -1,7 +1,7 @@
 # SPEC-14: Automated crew training
 
 **Status:** Approved
-**Approval:** The owner's request to continue after the offline approval request authorizes test-first offline implementation with a maximum of one training start per account per run. The owner separately approved live testing. The first live test is planned for Echo Rune, with the one-start limit. The exact authorization and recurring schedule remain to be recorded under G8.
+**Approval:** The owner's request to continue after the offline approval request authorizes test-first offline implementation with a maximum of one training start per account per run. The owner separately approved live testing. The first live test is planned for `pss5`, the test ship that ran the individual Academy start behind this spec, with the one-start limit. The exact authorization and recurring schedule remain to be recorded under G8.
 **Release:** R2 (automated growth engine)
 **Owner gate:** G8 (proposed, per-account authorization for a scheduled training start)
 **Depends on:** SPEC-05, SPEC-06
@@ -92,7 +92,7 @@ During the red stage, run `python scripts/training_workflow_benchmark.py --gate`
 | Id | Question | Needed before | Safe default |
 | --- | --- | --- | --- |
 | S14-Q1 | Approve this policy and the proposed one-start limit? | Implementation | Approved for offline implementation, with one start per account per run. |
-| S14-Q2 | Which account, schedule, mineral and gas caps and reserves are authorized? | Scheduled live execution | Live testing approved in principle for Echo Rune. Record the verified account identity, test window, caps and reserves in G8 before a live course start. A recurring schedule needs its own authorization. |
+| S14-Q2 | Which account, schedule, mineral and gas caps and reserves are authorized? | Scheduled live execution | Live testing approved in principle for `pss5`. Record the verified account identity, test window, caps and reserves in G8 before a live course start. A recurring schedule needs its own authorization. |
 
 ## Evidence
 
