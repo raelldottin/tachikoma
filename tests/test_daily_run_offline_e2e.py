@@ -47,8 +47,9 @@ Known defects
     KNOWN_DEFECTS lists every production defect these tests characterise. Each assertion that pins one carries a
     grep-able ``# PINNED(<id>)`` tag (also in tests/fakes and tests/test_fake_pss_server.py). When a fix lands, grep
     the id, flip each tagged assertion to the correct behaviour, and delete the entry. A self-test keeps the tags and
-    the registry in sync. Training tiers are named as in manageTraining's log: P-/S-T1..T3 (primary or secondary
-    room, Green/Blue/Yellow course); they are not defect ids.
+    the registry in sync. Training tiers are named P-/S-T1..T3 (primary or secondary room, tier 1-3 of the bands in
+    sdk/training/strategy.py); they are not defect ids. The training defects D1-D15 were fixed when manageTraining
+    became sdk/execution/training.py; each one's regression test names it.
 """
 
 from __future__ import annotations
@@ -83,9 +84,9 @@ from tests.fakes.pss_server import HOST_UTC, HOST_UTC_MINUS_5, HOST_UTC_PLUS_9, 
 from tests.fakes.state import (
     FAKE_EPOCH,
     FAKE_PASSWORD,
-    CharacterDesign,
     Marker,
-    TrainingSession,
+    Research,
+    ResearchDesign,
     World,
     default_world,
     minimal_world,
@@ -97,38 +98,6 @@ HOUR = datetime.timedelta(hours=1)
 
 # id: (what is wrong today, where). "(not pinned)" marks a known defect no assertion characterises yet.
 KNOWN_DEFECTS = {
-    "D1": ("manageTraining's research gates read @ResearchLevel found by an @ResearchName prefix; real "
-           "ListAllResearches records carry neither, so P-T1/P-T2/P-T3/S-T2/S-T3 never fire",
-           "sdk/client.py manageTraining tier gates (~L1170) and research level lookup (~L2370)"),
-    "D2": ("tier gates measure time since the END of the last training (+1 h, +3 h 15, +12 h 15), so a session that "
-           "ended 30 min ago still waits", "sdk/client.py manageTraining (~L1184, ~L1260)"),
-    "D3": ("FinishTraining is sent before every AddTraining, even when the crew has no session",
-           "sdk/client.py manageTraining (~L1324)"),
-    "D4": ("(not pinned) statChange is always empty; only the 'Completed training' log line is affected",
-           "sdk/client.py manageTraining (~L1326)"),
-    "D5": ("the CharacterDesign lookup falls back to the last design for an unknown id, and a single design dict "
-           "raises TypeError", "sdk/client.py manageTraining (~L1150)"),
-    "D6": ("self.roomName is never reset between crews, so an unassigned crew inherits the previous crew's room and "
-           "is trained", "sdk/client.py manageTraining (~L1114) / getRoomName (~L796)"),
-    "D7": ("(not pinned) room matching is case-sensitive and the primary-room list has a 'Galexy Gym' typo",
-           "sdk/client.py manageTraining (~L1090, ~L1126)"),
-    "D8": ("(not pinned) an unknown training name sends trainingDesignId=None (FakePss answers it as a violation)",
-           "sdk/client.py manageTraining (~L1364)"),
-    "D9": ("ActivateItem3 is sent without an accessToken (dead code today because of D12)",
-           "sdk/client.py activateItem3 (~L1712)"),
-    "D10": ("(not pinned) roles are keyed by the instance @CharacterName, so the pilots role never matches",
-            "sdk/client.py manageTraining (~L1131)"),
-    "D11": ("(not pinned) an empty allResearches is refetched on every research check (8 GETs per crew)",
-            "sdk/client.py research level lookup (~L2367)"),
-    "D12": ("the stats entries carry '@' but the stat_to_cons keys do not, so grey and hero consumables never fire",
-            "sdk/client.py manageTraining (~L1385, ~L1415)"),
-    "D13": ("manageTraining has no per-crew try: one crew's exception aborts the rest of the roster",
-            "sdk/client.py manageTraining (~L1113-1432)"),
-    "D14": ("FinishTraining is only sent while starting the next training, so a completed session whose crew has no "
-            "eligible next tier is never finished and its stats never applied", "sdk/client.py manageTraining (~L1324)"),
-    "D15": ("when ListRoomDesigns2 fails, getRoomName falls back to ListAllDesigns4 (never sent without a FileVersion), "
-            "every crew's room name is '' and manageTraining silently trains nobody yet returns True",
-            "sdk/client.py getRoomName (~L796) / manageTraining"),
     "DR1": ("collectDailyReward reports success for any non-empty reply, including an errorMessage envelope, so a "
             "rejected collect logs 'You have collected the daily reward' and the run exits 0",
             "sdk/client.py collectDailyReward (~L1940)"),
@@ -574,7 +543,9 @@ EXPECTED_SHIP = {
 }
 EXPECTED_CREW = {  # id: (level, HpImprovement, fatigue)
     "1001": (40, 18, 10),  # pending Bench Press finished: Hp +2, fatigue +10
-    "1002": (40, 20, 0), "1003": (40, 20, 0), "1004": (40, 10, 0), "1005": (40, 30, 0), "1006": (40, 34, 0),
+    "1002": (40, 20, 0),
+    "1003": (40, 22, 10),  # Bench Press ended 30 min ago, finished (D2: no extra wait after the end)
+    "1004": (40, 10, 0), "1005": (40, 30, 0), "1006": (40, 34, 0),
     "1007": (40, 40, 0), "1008": (40, 40, 0),
     "1009": (2, 10, 0),  # level 1 -> 2 (production's cost: 90 xp, 0 gas)
     "1010": (6, 10, 0),  # level 5 -> 6 (production's cost: 2250 xp, 130 gas; the fake charges no gas)
@@ -583,43 +554,39 @@ EXPECTED_CREW = {  # id: (level, HpImprovement, fatigue)
     "1013": (1, 10, 0),  # 89 xp: one short of production's 90-xp cost for level 1
     "1014": (4, 12, 0),  # level 3 -> 4 (810 xp, 33 gas); AvailableDate 2 h ago
     "1015": (40, 30, 0),  # exactly 71 %: no training
-    "1016": (40, 22, 10),  # pending Bench Press finished: Hp +2, fatigue +10; the engineering manual started
+    "1016": (40, 22, 10),  # pending Bench Press finished: Hp +2, fatigue +10; S-T2 is research-gated
     "1017": (1, 10, 0),  # unassigned: never upgraded, whatever its xp
 }
 
 # --- training goldens (the only ones a manageTraining change should touch) ---------------------------------------
 
 EXPECTED_TRAINING_PATHS = (
+    # One read of each payload the plan needs (D11: never refetched per crew member), in this order:
+    "GET /CharacterService/ListAllCharactersOfUser",
+    "GET /ShipService/GetShipByUserId",  # rooms and researches
     "GET /CharacterService/ListAllCharacterDesigns2",
-    "GET /RoomService/ListRoomsViaAccessToken",
     "GET /TrainingService/ListAllTrainingDesigns2",
+    "GET /RoomService/ListRoomDesigns2",  # read here, not left over from upgradeRooms (D15)
+    "GET /ResearchService/ListAllResearchDesigns2",
+    "GET /CharacterService/ListAllCharactersOfUser",  # the runner's before-snapshot of the first action
     "POST /TrainingService/FinishTraining",  # 1001
-    "POST /TrainingService/AddTraining",  # 1001
-    "POST /TrainingService/FinishTraining",  # 1002 (D6 + D3)
-    "POST /TrainingService/AddTraining",  # 1002, rejected
+    "GET /CharacterService/ListAllCharactersOfUser",  # after-snapshot, reused as the next before-snapshot
+    "POST /TrainingService/FinishTraining",  # 1003
+    "GET /CharacterService/ListAllCharactersOfUser",
     "POST /TrainingService/FinishTraining",  # 1016
-    "POST /TrainingService/AddTraining",  # 1016
+    "GET /CharacterService/ListAllCharactersOfUser",
 )
-# Today's manageTraining against the default roster: (endpoint, characterId, trainingDesignId, fake's error).
+# manageTraining against the default roster: (endpoint, characterId, trainingDesignId, fake's error). Each ended
+# Bench Press is finished (D14: whether or not a next tier opens), and nothing else is sent (D3: no FinishTraining
+# before an AddTraining). After each finish the crew is replanned from the reply: 1001 (59 / 80 = 74 %), 1003 (111 /
+# 150 = 74 %) and 1016 (88 / 120 = 74 %) reach S-T2, whose research gate is unmet (only "Fitness Lab Lv1" is done).
 EXPECTED_TRAINING = [
-    ("FinishTraining", "1001", None, None),  # S-T1: the pending Bench Press (ended 2 h ago) is finished...
-    ("AddTraining", "1001", "3", None),  # ...and Bench Press restarted
-    # D6: unassigned 1002 (RoomId 0) inherits 1001's "Galaxy Gym" and is trained; D3: FinishTraining before every
-    # AddTraining. Wave 2 flips both rows to nothing.
-    ("FinishTraining", "1002", None, "No training to finish"),  # PINNED(D6) PINNED(D3)
-    ("AddTraining", "1002", "3", "Crew must be in a training room"),  # PINNED(D6)
-    # S-T1 for engines in Lunar College (their secondary room): the pending Bench Press is finished and
-    # "Study Expert Engineering Manual" started.
-    ("FinishTraining", "1016", None, None),
-    ("AddTraining", "1016", "31", None),
+    ("FinishTraining", "1001", None, None),  # ended 2 h ago
+    ("FinishTraining", "1003", None, None),  # ended 30 min ago: finished now (D2)
+    ("FinishTraining", "1016", None, None),  # ended 2 h ago
 ]
-# Second run of the default world, 2 h 1 min later.
-EXPECTED_SECOND_RUN_TRAINING = [
-    ("FinishTraining", "1002", None, "No training to finish"),  # PINNED(D6) PINNED(D3) again, as in the first run
-    ("AddTraining", "1002", "3", "Crew must be in a training room"),  # PINNED(D6)
-    ("FinishTraining", "1003", None, None),  # its Bench Press ended 2 h 31 min ago: the D2 gate finally opens
-    ("AddTraining", "1003", "3", None),
-]
+# Second run of the default world, 2 h 1 min later: every session was collected and every gate is still shut.
+EXPECTED_SECOND_RUN_TRAINING: list[tuple] = []
 
 
 def assert_protocol_clean(test: unittest.TestCase, fake: FakePss, expected_violations: int = 0) -> None:
@@ -656,31 +623,38 @@ class DailyRunGoldenTests(unittest.TestCase):
                 self.assertEqual(actual.get(step, ()), EXPECTED_STEP_MUTATIONS.get(step, ()))
 
     def test_training_step_matches_training_goldens(self):
-        """Pins what today's manageTraining sends for the default roster. Wave 2 flips the commented crews."""
+        """What manageTraining sends for the default roster, and why every other crew member sends nothing."""
         self.assertEqual(self.daily.paths_by_step()["manageTraining"], EXPECTED_TRAINING_PATHS)
         self.assertEqual(training_slice(self.fake), EXPECTED_TRAINING)
-        # Silent crews, each kept silent by a known defect:
-        # 1003 Delish: Bench Press ended 30 min ago; the gates measure time since the END of the last training
-        #   (+1 h), so it still waits. Wave 2 flips this to Finish(1003) + AddTraining.  PINNED(D2)
-        # 1004 Mistycball, 1005 Galactic Sprite, 1006 The Conjoint Archon, 1008 Admiral Serena: the research gates
-        #   never open, so P-T1/P-T2/P-T3/S-T2 never fire. Wave 2 flips these to "Big Book of Science" (21),
-        #   "Muscle Beach" (4), "Olympic Weightlifting" (5) and "BBJ" (42).  PINNED(D1)
-        # 1007 Cyber Duck: wrong room for its role; only an error log ("Move ..."), no request (correct today).
-        # 1009, 1011, 1012, 1013, 1014: not in a training room (correct today).
-        # 1010 Rookie Pilot: grey-consumable branch (< 30 %, fatigue 0), but no consumable is ever used. Wave 2 flips
-        #   this to ListItemsOfAShip + ActivateItem3 with an accessToken.
-        # 1015 Ancestral Spirit: exactly 71 % in its secondary room, below the S-T1 window (71 < p < 74) (correct).
         trained = {cid for _, cid, _, _ in training_slice(self.fake)}
-        self.assertEqual(trained & {"1003", "1004", "1005", "1006", "1008", "1010"}, set())  # PINNED(D1) PINNED(D2)
-        self.assertNotIn("1015", trained)
-        self.assertIn("Move Cyber Duck", self.daily.log)
-        self.assertNotIn("POST /ItemService/ActivateItem3", self.fake.paths())  # PINNED(D12) PINNED(D9)
+        self.assertEqual(trained, {"1001", "1003", "1016"})
+        # Every silent crew member logs why (D1 gates read research levels by design id; D6 no room is inherited):
+        prefix = "INFO [SyntheticCaptain] training: "
+        for line in (
+            "Mistycball (1004) skip research_missing: primary T1 research gate not met",
+            "Galactic Sprite (1005) skip research_missing: primary T2 research gate not met",
+            "The Conjoint Archon (1006) skip tp_cap_reached: 135 TP >= cap 80 TP (68% of capacity 200)",
+            "Cyber Duck (1007) skip not_in_training_room: move to gym",  # wrong room for its role: no request
+            "Admiral Serena (1008) skip research_missing: secondary T2 research gate not met",
+            "Rookie Pilot (1010) skip unknown_role: 'Rookie Pilot' has no training role",
+            "Ancestral Spirit (1015) skip tp_cap_reached: 106 TP >= cap 70 TP (71% of capacity 150)",
+            "Galactic Snow Maiden (1002) skip not_in_training_room: room None is not a training room",  # D6
+            "Galactic Succubus (1001) skip research_missing: secondary T2 research gate not met",  # after its finish
+        ):
+            with self.subTest(line=line):
+                self.assertIn(f"{prefix}{line}\n", self.daily.log)
+        self.assertIn(f"{prefix}started=0 finished=3 consumables=0 skipped=17 failed=0\n", self.daily.log)
+        # Consumables need item designs, which the daily path never loads (known limitation); with them, D9 and D12
+        # are proven fixed in tests/test_training_endpoints.py.
+        self.assertNotIn("POST /ItemService/ActivateItem3", self.fake.paths())
         self.assertNotIn("manageTraining failed", self.daily.log)
 
     def test_log_reports_only_what_the_server_applied(self):
-        # 1001's and 1016's AddTraining are applied and 1002's is refused (D6), so the check below sees both outcomes;
-        # 1016 shares its name with 1005, so the room in the line tells them apart.
-        self.assertEqual(reported_training_starts(self.daily), [("1001", "3"), ("1016", "31")])
+        # No AddTraining today, so no "Starting training" line; each applied finish reports its real stat change (D4).
+        self.assertEqual(reported_training_starts(self.daily), [])
+        for name, room in (("Galactic Succubus", "Galaxy Gym"), ("Delish", "GYM"), ("Galactic Sprite", "Lunar College")):
+            with self.subTest(name=name):
+                self.assertIn(f"] Completed training for {name} in {room} with Hp +2\n", self.daily.log)
         self.assertIn("INFO [SyntheticCaptain] Collected mining drone 9001\n", self.daily.log)
         assert_reports_match_server(self, self.daily)
 
@@ -712,11 +686,12 @@ class DailyRunGoldenTests(unittest.TestCase):
     def test_protocol_clean_no_unknown_endpoints_and_no_violations(self):
         assert_protocol_clean(self, self.fake)
 
-    def test_pending_training_finished_with_stat_gain_and_restarted(self):
+    def test_pending_training_finished_with_stat_gain_and_not_restarted(self):
+        # D14: the ended session is finished although no next tier is open (S-T2's gate is unmet at 74 %).
         crew = self.fake.state.character("1001")
         self.assertEqual((crew.stats["HpImprovement"], crew.fatigue), (18, 10))
-        self.assertEqual((crew.last_session.design_id, crew.last_session.applied), ("3", False))
-        self.assertEqual(crew.training_end, FAKE_EPOCH + datetime.timedelta(hours=1))
+        self.assertEqual((crew.last_session.design_id, crew.last_session.applied), ("3", True))
+        self.assertEqual(crew.training_end, FAKE_EPOCH - 2 * HOUR)
 
     def test_no_real_sleep_no_smtp_no_prompt(self):
         self.assertEqual(self.fake.clock.sleeps, [])
@@ -801,9 +776,8 @@ class DailyRunFailureContinuationTests(NeedsHealthyBaseline):
                 assert_protocol_clean(self, fake)
 
     def test_manage_training_exception_exits_1_and_later_steps_still_run(self):
-        # Keeps run.py's manageTraining `except` branch covered without relying on a known defect (D5 and D13 also
-        # make manageTraining raise today, but Wave 2 fixes both). manageTraining has no try of its own, so an
-        # unparseable ListAllCharacterDesigns2 reply raises out of it into run.py.
+        # Keeps run.py's manageTraining `except` branch covered: a read that raises (an unparseable
+        # ListAllCharacterDesigns2 reply) propagates out of manageTraining into run.py; only actions are per crew.
         fake = FakePss(default_world())
         fault = fake.fail("/CharacterService/ListAllCharacterDesigns2", body="not xml")
         daily = run_daily(fake)
@@ -853,22 +827,32 @@ class DailyRunFailureContinuationTests(NeedsHealthyBaseline):
         fake.fail("/TrainingService/ListAllTrainingDesigns2", error="Design service down")
         daily = run_daily(fake)
         self.assertEqual(training_slice(fake), [])
-        self.assertIn("TrainingDesign data not available.", daily.log)
+        self.assertIn("ERROR [SyntheticCaptain] training: cannot read training designs; no training this run\n",
+                      daily.log)
         self.assertEqual(daily.traffic_by_step()["upgradeCharacters"], baseline().traffic_by_step()["upgradeCharacters"])
 
-    def test_room_designs_failure_silently_trains_nobody(self):
+    def test_room_designs_failure_in_upgrade_rooms_does_not_stop_training(self):
         fake = FakePss(default_world())
         fault = fake.fail("/RoomService/ListRoomDesigns2", status=404)
         daily = run_daily(fake)
         self.assertEqual((daily.code, fault.hits), (1, 1))  # upgradeRooms reports the failure
         self.assertIn("Room design data unavailable; skipping room upgrades.", daily.log)
-        # getRoomName falls back to ListAllDesigns4, which is never sent without a FileVersion, so every crew's room
-        # name is "" and no training request is sent, yet manageTraining succeeds. Wave 2 flips this to the
-        # baseline's training (or an explicit manageTraining failure).
-        self.assertEqual(training_slice(fake), [])  # PINNED(D15)
-        self.assertNotIn("manageTraining failed", daily.log)  # PINNED(D15)
+        # D15: manageTraining reads the room designs itself, so the crew are trained as in the baseline.
+        self.assertEqual(training_slice(fake), training_slice(baseline().fake))
+        self.assertNotIn("manageTraining failed", daily.log)
         self.assertNotIn("GET /DesignService/ListAllDesigns4", fake.paths())
-        self.assertEqual(daily.paths_by_step()["analyzeShipLayout"], ("GET /RoomService/ListRoomDesigns2",))
+        self.assertEqual(daily.paths_by_step()["analyzeShipLayout"], ())  # reuses the room designs training read
+        assert_protocol_clean(self, fake)
+
+    def test_unreadable_room_designs_fail_manage_training_explicitly(self):
+        # D15: when manageTraining's own read fails too, it sends nothing and says why (and run.py exits 1).
+        fake = FakePss(default_world())
+        fault = fake.fail("/RoomService/ListRoomDesigns2", status=404, times=2)
+        daily = run_daily(fake)
+        self.assertEqual((daily.code, fault.hits), (1, 2))
+        self.assertIn("ERROR [SyntheticCaptain] training: cannot read room designs; no training this run\n", daily.log)
+        self.assertEqual(training_slice(fake), [])
+        assert_every_step_ran(self, daily)
         assert_protocol_clean(self, fake)
 
     def test_non_fatal_step_failures_keep_exit_zero_and_later_steps(self):
@@ -900,32 +884,72 @@ class DailyRunFailureContinuationTests(NeedsHealthyBaseline):
             self.assertEqual(daily.traffic_by_step()[step], expected[step], step)
         assert_protocol_clean(self, fake)
 
-    def test_add_training_http_error_is_logged_as_a_started_training(self):
-        fake = FakePss(default_world())
-        fault = fake.fail("/TrainingService/AddTraining", status=404, when=lambda p: p.get("characterId") == "1001")
+    def test_add_training_http_error_is_a_counted_failure_not_a_started_training(self):
+        world = minimal_world()
+        crew = world.add_crew("Galactic Succubus", room="Galaxy Gym", stats=stats(Hp=20, Weapon=40, Attack=12))
+        fake = FakePss(world)
+        fault = fake.fail("/TrainingService/AddTraining", status=404)
         daily = run_daily(fake)
-        self.assertEqual((daily.code, fault.hits), (0, 1), daily.log[-2000:])
-        # The pending Bench Press was finished (applied) and never restarted.
-        self.assertEqual(fake.state.character("1001").session,
-                         TrainingSession("3", FAKE_EPOCH - 3 * HOUR, FAKE_EPOCH - 2 * HOUR, applied=True))
-        self.assertNotIn(("1001", "3"), applied(daily, "/TrainingService/AddTraining", "characterId", "trainingDesignId"))
-        # Regression (AT1, fixed in #279): addTraining used to treat a falsy reply as success, so the emailed log
-        # reported a training that never started. Now only a parsed success reply logs "Starting training".
-        self.assertNotIn(("1001", "3"), reported_training_starts(daily))
+        self.assertEqual((daily.code, fault.hits), (0, 1), daily.log[-2000:])  # failures are logged and counted
+        self.assertIsNone(crew.session)
+        # Regression (AT1, fixed in #279): only a training the server applied is reported as started.
+        self.assertEqual(reported_training_starts(daily), [])
+        self.assertIn("WARNING [SyntheticCaptain] training: Galactic Succubus (1001) add_training no-change: 1001 is "
+                      "not training after the call\n", daily.log)
+        self.assertIn("training: started=0 finished=0 consumables=0 skipped=0 failed=1\n", daily.log)
         assert_protocol_clean(self, fake)
 
-    def test_training_exception_mid_roster_aborts_rest_of_roster_but_not_later_steps(self):
+    def test_training_failure_mid_roster_still_processes_later_crew(self):
         fake = FakePss(default_world())
         fault = fake.fail("/TrainingService/FinishTraining", when=lambda p: p.get("characterId") == "1001",
                           body='<TrainingService><FinishTraining><Character Fatigue="0" HpImprovement="n/a"/>'
                                "</FinishTraining></TrainingService>")
         daily = run_daily(fake)
-        self.assertEqual((daily.code, fault.hits), (1, 1))
-        self.assertIn("manageTraining failed", daily.log)  # ValueError: int("n/a") on the reported stat
-        # No per-crew try, so one crew's exception skips the rest of the roster: 1002 is never reached (the baseline
-        # gives it Finish+Add). Wave 2 flips this to: later crews still processed.
-        self.assertEqual(training_slice(fake), [("FinishTraining", "1001", None, "fault")])  # PINNED(D13)
+        self.assertEqual((daily.code, fault.hits), (0, 1), daily.log[-2000:])
+        # D13: 1001's broken finish fails that crew member only; 1003 and 1016 are still finished.
+        self.assertEqual(training_slice(fake), [("FinishTraining", "1001", None, "fault"),
+                                                ("FinishTraining", "1003", None, None),
+                                                ("FinishTraining", "1016", None, None)])
+        self.assertIn("WARNING [SyntheticCaptain] training: Galactic Succubus (1001) finish_training no-change: the "
+                      "ended training of 1001 is still in place and stat improvements are unchanged\n", daily.log)
+        self.assertIn("training: started=0 finished=2 consumables=0 skipped=17 failed=1\n", daily.log)
+        self.assertNotIn("manageTraining failed", daily.log)
         self.assertEqual(daily.traffic_by_step()["upgradeCharacters"], baseline().traffic_by_step()["upgradeCharacters"])
+        assert_protocol_clean(self, fake)
+
+    def test_a_journal_that_refuses_every_event_changes_neither_training_nor_the_exit_code(self):
+        # A real journal can refuse an event (GameplayJournal refuses a secret-shaped value). The refusal is logged,
+        # redacted, and the run trains and exits exactly as without a journal.
+        class RefusingJournal:
+            def append(self, event):
+                raise OSError("cannot write /journal?password=hunter2")
+
+            def read(self):
+                return []
+
+        self.assertEqual((Client.training_journal, Client.training_account_alias), (None, "legacy"))
+        fake = FakePss(default_world())
+        with patch.object(Client, "training_journal", RefusingJournal()):
+            daily = run_daily(fake)
+        self.assertEqual(daily.code, 0, daily.log[-2000:])
+        self.assertEqual(daily.traffic_by_step()["manageTraining"], baseline().traffic_by_step()["manageTraining"])
+        self.assertIn("ERROR [SyntheticCaptain] training: journal refused the finish_training event: OSError: cannot "
+                      "write /journal?password=***REDACTED***\n", daily.log)
+        self.assertIn("training: started=0 finished=3 consumables=0 skipped=17 failed=0\n", daily.log)
+        self.assertNotIn("hunter2", daily.log)
+        self.assertNotIn("manageTraining failed", daily.log)
+        assert_protocol_clean(self, fake)
+
+    def test_a_plan_that_does_not_pair_with_the_roster_stops_training_loudly(self):
+        # A planner whose output shape changed is a defect, not a crew failure: no training request is sent, the
+        # step fails by name and the run exits 1.
+        fake = FakePss(default_world())
+        with patch("sdk.execution.training.plan_training", return_value=()):
+            daily = run_daily(fake)
+        self.assertEqual(daily.code, 1, daily.log[-2000:])
+        self.assertEqual(training_slice(fake), [])
+        self.assertIn("manageTraining failed: the plan has no decision in place for crew member 1001\n", daily.log)
+        assert_protocol_clean(self, fake)
 
     def test_reauth_after_token_expiry_on_a_read_relogs_and_continues(self):
         fake = FakePss(default_world())
@@ -1239,14 +1263,12 @@ class MinimalWorldTests(NeedsHealthyBaseline):
         assert_every_step_ran(self, daily)
         assert_protocol_clean(self, daily.fake)
 
-    def test_a_roster_with_a_single_character_design_breaks_manage_training(self):
+    def test_a_roster_with_a_single_character_design_trains(self):
+        # D5: one CharacterDesign record (a dict, not a list) is read like any other.
         world = minimal_world()
-        world.add_crew("Galactic Succubus", room="Galaxy Gym", stats=stats(Hp=20, Weapon=40, Attack=12))
+        crew = world.add_crew("Galactic Succubus", room="Galaxy Gym", stats=stats(Hp=20, Weapon=40, Attack=12))
         daily = run_daily(FakePss(world))
-        # One CharacterDesign parses to a dict, not a list, and manageTraining indexes it like a list. A fix flips
-        # this to code 0 and the training of test_one_crew_training_cycle_on_a_minimal_world.
-        self.assertIn("manageTraining failed: string indices must be integers", daily.log)  # PINNED(D5)
-        self.assertEqual((daily.code, training_slice(daily.fake)), (1, []))  # PINNED(D5)
+        self.assertEqual((daily.code, training_slice(daily.fake)), (0, [("AddTraining", crew.id, "3", None)]))
 
 
 class MultiRunTests(NeedsHealthyBaseline):
@@ -1263,42 +1285,67 @@ class MultiRunTests(NeedsHealthyBaseline):
         for daily in (first, second):
             assert_reports_match_server(self, daily)
         succubus, delish = fake.state.character("1001"), fake.state.character("1003")
-        self.assertEqual((delish.stats["HpImprovement"], delish.fatigue), (22, 10))
-        # 1001 is now at 59 / 80 = 73.75 -> 74 %, where the only tier left is S-T2 (blocked by D1), so its Bench Press
-        # (ended 1 h ago) is never finished. Wave 2 flips this to: the completed session is finished (Hp 18 -> 20).
-        self.assertEqual((succubus.stats["HpImprovement"], succubus.last_session.applied), (18, False))  # PINNED(D14)
+        self.assertEqual((delish.stats["HpImprovement"], delish.fatigue), (22, 10))  # finished in the first run
+        # D14: the first run finished 1001's Bench Press although S-T2 stays gated; the second has nothing left.
+        self.assertEqual((succubus.stats["HpImprovement"], succubus.last_session.applied), (18, True))
 
     def test_one_crew_training_cycle_on_a_minimal_world(self):
-        """Wave 2 template: start, time passes, finish and stat gain, through run.main() on a custom roster."""
+        """Start, time passes, finish and stat gain, through run.main() and the real Client on a custom roster."""
         world = minimal_world()
         crew = world.add_crew("Galactic Succubus", room="Galaxy Gym", stats=stats(Hp=20, Weapon=40, Attack=12))
-        world.character_designs.append(CharacterDesign("599", "Spare Design"))  # PINNED(D5): one design breaks it
         fake = FakePss(world)
 
         def training_of(daily: DailyRun) -> list[tuple]:
             return training_slice(fake, daily.first_exchange)
 
-        first = run_daily(fake)
-        self.assertEqual(training_of(first), [("FinishTraining", crew.id, None, "No training to finish"),  # PINNED(D3)
-                                              ("AddTraining", crew.id, "3", None)])
+        first = run_daily(fake)  # 72 / 100 = 72 %: S-T1, Bench Press (ungated), with no FinishTraining first (D3)
+        self.assertEqual(training_of(first), [("AddTraining", crew.id, "3", None)])
         self.assertEqual(first.mutations_by_step(), {"upgradeResearches": (COLLECT,), "manageTraining": (
-            ("POST", "/TrainingService/FinishTraining", {"characterId": crew.id, "accessToken": T}),
             ("POST", "/TrainingService/AddTraining", {"trainingDesignId": "3", "characterId": crew.id,
-                                                      "trainingStartDate": N, "accessToken": T}))})
-        self.assertEqual(crew.training_end, FAKE_EPOCH + datetime.timedelta(hours=1))
+                                                      "trainingStartDate": N, "accessToken": T}),)})
+        self.assertIn("] Starting training Bench Press for Galactic Succubus in Galaxy Gym with 72% training complete\n",
+                      first.log)
+        self.assertIn("training: started=1 finished=0 consumables=0 skipped=0 failed=0\n", first.log)
+        self.assertEqual(crew.training_end, FAKE_EPOCH + HOUR)
 
-        fake.advance(hours=2)  # ended exactly 1 h ago: the S-T1 gate wants MORE than 1 h after the end
-        self.assertEqual(training_of(run_daily(fake)), [])  # PINNED(D2)
-        fake.advance(minutes=1)
+        fake.advance(hours=1, seconds=30)  # ended 30 s ago: inside the 60 s finish grace, so nothing is sent
+        second = run_daily(fake)
+        self.assertEqual(training_of(second), [])
+        self.assertIn("training: started=0 finished=0 consumables=0 skipped=1 failed=0\n", second.log)
+        fake.advance(seconds=31)  # 61 s after the end (D2: no extra wait after the end)
         third = run_daily(fake)
-        self.assertEqual(training_of(third), [("FinishTraining", crew.id, None, None),
-                                              ("AddTraining", crew.id, "3", None)])
+        self.assertEqual(training_of(third), [("FinishTraining", crew.id, None, None)])
         self.assertEqual((crew.stats["HpImprovement"], crew.fatigue), (22, 10))
-        self.assertEqual(crew.last_session.start, FAKE_EPOCH + datetime.timedelta(hours=2, minutes=1))
-        self.assertEqual({d.code for d in (first, third)}, {0})
+        self.assertIs(crew.last_session.applied, True)
+        self.assertIn("] Completed training for Galactic Succubus in Galaxy Gym with Hp +2\n", third.log)
+        # 74 %: S-T2 is research-gated, so the replan from the reply starts nothing.
+        self.assertIn("training: started=0 finished=1 consumables=0 skipped=1 failed=0\n", third.log)
+        self.assertEqual({d.code for d in (first, second, third)}, {0})
         assert_protocol_clean(self, fake)
-        for daily in (first, third):
+        for daily in (first, second, third):
             assert_reports_match_server(self, daily)
+
+    def test_research_gates_open_and_finished_crew_are_replanned(self):
+        # D1: research gates read completed research by design id. The added designs follow sdk/training/parse.py's
+        # assumed "<Family> LvN" naming (unverified live), which the strategy's ("Fitness", n) gates use.
+        world = default_world()
+        world.research_designs += [ResearchDesign("101", "101", "Fitness", 1000),
+                                   ResearchDesign("102", "101", "Fitness Lv2", 1000),
+                                   ResearchDesign("103", "101", "Fitness Lv3", 1000)]
+        world.researches += [Research("101", "Completed"), Research("102", "Completed"), Research("103", "Completed")]
+        daily = run_daily(FakePss(world))
+        self.assertEqual(daily.code, 0, daily.log[-2000:])
+        self.assertEqual(training_slice(daily.fake), [
+            ("FinishTraining", "1001", None, None), ("AddTraining", "1001", "4", None),  # replanned: S-T2 Muscle Beach
+            ("FinishTraining", "1003", None, None), ("AddTraining", "1003", "4", None),
+            ("AddTraining", "1004", "21", None),  # P-T1 Big Book of Science
+            ("AddTraining", "1005", "4", None),  # P-T2 Muscle Beach
+            ("AddTraining", "1008", "42", None),  # S-T2 BBJ
+            ("FinishTraining", "1016", None, None), ("AddTraining", "1016", "32", None),  # S-T2 Engineering Summit
+        ])
+        self.assertIn("training: started=6 finished=3 consumables=0 skipped=11 failed=0\n", daily.log)
+        assert_reports_match_server(self, daily)
+        assert_protocol_clean(self, daily.fake)
 
 
 # A host behind UTC and one ahead of it: a local/UTC mix-up moves a decision one way on the first and the other way on
