@@ -1592,30 +1592,6 @@ class WorkflowPolicyTests(unittest.TestCase):
                 with self.subTest(filename=filename, mutation=mutation), self.assertRaises(ValueError):
                     ci.check_workflows(docs)
 
-    # Verifies: S06-R1, S06-R5
-    def test_every_legacy_account_step_stays_skippable(self):
-        job_name, job = next(iter(self.documents["daily-run.yml"]["jobs"].items()))
-        steps = [i for i, step in enumerate(job["steps"]) if "PSS_ACCOUNT_" in json.dumps(step)]
-        self.assertEqual(len(steps), 5)
-        for mutation in ("dropped", "wrong_account", "two_accounts", "no_steps"):
-            docs = copy.deepcopy(self.documents)
-            target = docs["daily-run.yml"]["jobs"][job_name]["steps"]
-            if mutation == "dropped":
-                del target[steps[-1]]["if"]
-            elif mutation == "wrong_account":
-                target[steps[-1]]["if"] = ci.LEGACY_RUN_SKIP_CONDITION.format(account=4)
-            elif mutation == "two_accounts":
-                target[steps[0]]["env"]["EXTRA"] = "${{ secrets.PSS_ACCOUNT_5_EMAIL }}"
-            else:
-                for index in reversed(steps):
-                    del target[index]
-            with self.subTest(mutation=mutation), self.assertRaises(ValueError):
-                ci.check_workflows(docs)
-
-    def daily_run_steps(self, docs):
-        job_name, _ = next(iter(self.documents["daily-run.yml"]["jobs"].items()))
-        return docs["daily-run.yml"]["jobs"][job_name]["steps"]
-
     def assert_each_refused(self, mutations):
         """Each mutation alone, on a fresh copy, must fail check_workflows with its own rule's message."""
         for name, (mutate, fragment) in mutations.items():
@@ -1623,285 +1599,6 @@ class WorkflowPolicyTests(unittest.TestCase):
             mutate(docs)
             with self.subTest(mutation=name), self.assertRaisesRegex(ValueError, fragment):
                 ci.check_workflows(docs)
-
-    # Verifies: S06-R5
-    def test_every_account_step_journals_training_under_its_own_alias(self):
-        steps = self.daily_run_steps(self.documents)
-        accounts = [i for i, step in enumerate(steps) if ci.LEGACY_ACCOUNT_SECRET_RE.search(json.dumps(step))]
-        self.assertEqual(len(accounts), 5)
-        for number, index in enumerate(accounts, start=1):
-            with self.subTest(account=number):
-                self.assertIn(f"--account-alias account-{number} ", steps[index]["run"])
-                self.assertEqual(steps[index]["run"].count(ci.DAILY_TRAINING_JOURNAL_ARG), 1)
-        last = accounts[-1]
-        arg = ci.DAILY_TRAINING_JOURNAL_ARG
-
-        def edit_run(old, new):
-            def mutate(docs):
-                step = self.daily_run_steps(docs)[last]
-                self.assertIn(old, step["run"])
-                step["run"] = step["run"].replace(old, new)
-
-            return mutate
-
-        def edit_step(change):
-            return lambda docs: change(self.daily_run_steps(docs)[last])
-
-        alias, journal, keep_going = (
-            "must pass --account-alias account-5 exactly once",
-            "must journal training",
-            ("must keep continue-on-error: true"),
-        )
-        self.assert_each_refused(
-            {
-                "journal arg dropped": (edit_run(arg, ""), journal),
-                "journal arg twice": (edit_run(arg, f"{arg} {arg}"), journal),
-                "journal in the checkout": (edit_run("$RUNNER_TEMP", "$GITHUB_WORKSPACE"), journal),
-                "alias dropped": (edit_run("--account-alias account-5", ""), alias),
-                "another account's alias": (edit_run("--account-alias account-5", "--account-alias account-4"), alias),
-                "default alias": (edit_run("--account-alias account-5", "--account-alias primary"), alias),
-                "two alias flags": (
-                    edit_run("--account-alias account-5", "--account-alias account-5 --account-alias=account-5"),
-                    alias,
-                ),
-                "quoted wrong alias": (
-                    edit_run("--account-alias account-5", '--account-alias "account-4"'),
-                    alias,
-                ),
-                "continue-on-error deleted": (edit_step(lambda step: step.pop("continue-on-error")), keep_going),
-                "continue-on-error false": (
-                    edit_step(lambda step: step.update({"continue-on-error": "false"})),
-                    keep_going,
-                ),
-            }
-        )
-
-    def test_quoted_account_alias_is_accepted(self):
-        # Regression: the alias pattern kept shell quotes, so a correctly quoted --account-alias "account-5" (the
-        # same style as the quoted journal directory) was refused.
-        steps = self.daily_run_steps(self.documents)
-        last = [i for i, step in enumerate(steps) if ci.LEGACY_ACCOUNT_SECRET_RE.search(json.dumps(step))][-1]
-        for quoted in ('--account-alias "account-5"', "--account-alias 'account-5'", '--account-alias="account-5"'):
-            docs = copy.deepcopy(self.documents)
-            step = self.daily_run_steps(docs)[last]
-            step["run"] = step["run"].replace("--account-alias account-5", quoted)
-            with self.subTest(alias=quoted):
-                self.assertIn(quoted, step["run"])
-                self.assertIsNone(ci.check_workflows(docs))
-
-    def training_step_index(self, docs, marker):
-        return next(i for i, step in enumerate(self.daily_run_steps(docs)) if marker(step))
-
-    @staticmethod
-    def is_report(step):
-        return ci.DAILY_TRAINING_REPORT_COMMAND in step.get("run", "")
-
-    @staticmethod
-    def is_upload(step):
-        return step.get("uses", "").startswith("actions/upload-artifact@")
-
-    def move_step(self, marker, before):
-        """Move the step ``marker`` finds to just before the step ``before`` finds."""
-
-        def mutate(docs):
-            steps = self.daily_run_steps(docs)
-            step = steps.pop(self.training_step_index(docs, marker))
-            steps.insert(self.training_step_index(docs, before), step)
-
-        return mutate
-
-    def edit_training_step(self, marker, change):
-        return lambda docs: change(self.daily_run_steps(docs)[self.training_step_index(docs, marker)])
-
-    def test_training_report_step_always_runs_after_every_account(self):
-        steps = self.daily_run_steps(self.documents)
-        (report,) = [step for step in steps if self.is_report(step)]
-        self.assertEqual(report["if"], "always()")
-        self.assertNotIn("env", report)
-        last_account = max(i for i, step in enumerate(steps) if ci.LEGACY_ACCOUNT_SECRET_RE.search(json.dumps(step)))
-        self.assertGreater(steps.index(report), last_account)
-
-        def edit(change):
-            return self.edit_training_step(self.is_report, change)
-
-        def edit_run(old, new):
-            return edit(lambda step: step.update(run=step["run"].replace(old, new)))
-
-        def duplicate(docs):
-            steps = self.daily_run_steps(docs)
-            steps.append(copy.deepcopy(steps[self.training_step_index(docs, self.is_report)]))
-
-        def last_account_step(step):
-            return step.get("name") == "Process account 5"
-
-        self.assert_each_refused(
-            {
-                "report deleted": (
-                    lambda docs: self.daily_run_steps(docs).pop(self.training_step_index(docs, self.is_report)),
-                    "exactly one training report step",
-                ),
-                "runs only on success": (edit(lambda step: step.update({"if": "success()"})), "if: always()"),
-                "condition deleted": (edit(lambda step: step.pop("if")), "if: always()"),
-                "before account 5": (self.move_step(self.is_report, last_account_step), "after every account step"),
-                "second report": (duplicate, "exactly one training report step"),
-                "no job summary": (edit_run('>> "$GITHUB_STEP_SUMMARY"', "> /dev/null"), "job summary"),
-                "no JSON report": (edit_run(" --report-format json", ""), "JSON report"),
-                "journals read from the checkout": (
-                    edit_run('root="$RUNNER_TEMP/tachikoma-training"', 'root="$GITHUB_WORKSPACE/tachikoma-training"'),
-                    "must read the journals under \\$RUNNER_TEMP/tachikoma-training",
-                ),
-                "continue-on-error": (
-                    edit(lambda step: step.update({"continue-on-error": "true"})),
-                    "report step must not carry continue-on-error",
-                ),
-                "given a password file": (
-                    edit_run("--report-format json", '--report-format json --password-file "$pw"'),
-                    "must not be given credentials",
-                ),
-                "reads a secret": (
-                    edit(lambda step: step.update(env={"X": "${{ secrets.email_password }}"})),
-                    "only the account steps may read secrets",
-                ),
-            }
-        )
-
-    def test_training_artifact_uploads_only_the_training_directory(self):
-        steps = self.daily_run_steps(self.documents)
-        (upload,) = [step for step in steps if self.is_upload(step)]
-        self.assertEqual(upload["with"]["path"], "${{ runner.temp }}/tachikoma-training")
-        self.assertEqual(upload["with"]["retention-days"], "14")
-        self.assertGreater(steps.index(upload), self.training_step_index(self.documents, self.is_report))
-
-        def edit_with(change):
-            return self.edit_training_step(self.is_upload, lambda step: change(step["with"]))
-
-        def set_with(key, value):
-            return edit_with(lambda inputs: inputs.update({key: value}))
-
-        def duplicate(docs):
-            steps = self.daily_run_steps(docs)
-            steps.append(copy.deepcopy(steps[self.training_step_index(docs, self.is_upload)]))
-
-        def own_job(docs):
-            # Another job runs on another runner, where $RUNNER_TEMP holds no journals or report.
-            upload = self.daily_run_steps(docs).pop(self.training_step_index(docs, self.is_upload))
-            docs["daily-run.yml"]["jobs"]["training-upload"] = {
-                "runs-on": "ubuntu-latest",
-                "timeout-minutes": "10",
-                "steps": [upload],
-            }
-
-        path, retention = "must upload only", "retention-days between 1 and 30"
-        self.assert_each_refused(
-            {
-                "upload deleted": (
-                    lambda docs: self.daily_run_steps(docs).pop(self.training_step_index(docs, self.is_upload)),
-                    "exactly one artifact upload step",
-                ),
-                "condition deleted": (
-                    self.edit_training_step(self.is_upload, lambda step: step.pop("if")),
-                    "upload step must run with if: always()",
-                ),
-                "whole runner temp": (set_with("path", "${{ runner.temp }}"), path),
-                "checkout": (set_with("path", "."), path),
-                "checkout as a second line": (
-                    set_with("path", "${{ runner.temp }}/tachikoma-training\n${{ github.workspace }}\n"),
-                    path,
-                ),
-                "before the report": (
-                    self.move_step(self.is_upload, self.is_report),
-                    "upload step must come after the training report step",
-                ),
-                "upload in another job": (own_job, "upload step must run in the training report step's job"),
-                "retention deleted": (edit_with(lambda inputs: inputs.pop("retention-days")), retention),
-                "retention 90": (set_with("retention-days", "90"), retention),
-                "retention 0": (set_with("retention-days", "0"), retention),
-                "retention not a number": (set_with("retention-days", "x"), retention),
-                "hidden files": (set_with("include-hidden-files", "true"), "unexpected upload inputs"),
-                "second upload": (duplicate, "exactly one artifact upload step"),
-                "reads a secret": (
-                    self.edit_training_step(
-                        self.is_upload, lambda step: step.update(env={"X": "${{ secrets.email_password }}"})
-                    ),
-                    "only the account steps may read secrets",
-                ),
-            }
-        )
-
-    def test_training_steps_accept_either_spelling_of_always(self):
-        # Regression: the report and upload checks compared `if` with the text "always()", so the equivalent
-        # `${{ always() }}` was refused. Any other condition, inside or outside an expression, is still refused.
-        for marker, kind in ((self.is_report, "report"), (self.is_upload, "upload")):
-            fragment = re.escape(f"the daily-run training {kind} step must run with if: always()")
-            for spelling in ("${{ always() }}", "${{always()}}", "  ${{\n  always()\n}}  ", " always() "):
-                docs = copy.deepcopy(self.documents)
-                self.daily_run_steps(docs)[self.training_step_index(docs, marker)]["if"] = spelling
-                with self.subTest(step=kind, accepted=spelling):
-                    self.assertIsNone(ci.check_workflows(docs))
-            for spelling in (
-                "${{ success() }}",
-                "${{ always() && false }}",
-                "${{ always() }} && false",
-                "${{ always() }} || ${{ false }}",
-                "${{ }}",
-                "",
-            ):
-                docs = copy.deepcopy(self.documents)
-                self.daily_run_steps(docs)[self.training_step_index(docs, marker)]["if"] = spelling
-                with self.subTest(step=kind, refused=spelling), self.assertRaisesRegex(ValueError, fragment):
-                    ci.check_workflows(docs)
-
-    # Verifies: S06-R5
-    def test_only_account_steps_read_secrets(self):
-        job_name, _ = next(iter(self.documents["daily-run.yml"]["jobs"].items()))
-
-        def install_step(docs):
-            return next(step for step in self.daily_run_steps(docs) if step.get("name") == "Install dependencies")
-
-        secret = "${{ secrets.email_password }}"
-        fragment = "only the account steps may read secrets"
-        self.assert_each_refused(
-            {
-                "install step": (lambda docs: install_step(docs).update(env={"X": secret}), fragment),
-                "job env": (lambda docs: docs["daily-run.yml"]["jobs"][job_name].update(env={"X": secret}), fragment),
-                "workflow env": (lambda docs: docs["daily-run.yml"].update(env={"X": secret}), fragment),
-                "all secrets in the report": (
-                    self.edit_training_step(
-                        self.is_report, lambda step: step.update(run=step["run"] + 'echo "${{ toJSON(secrets) }}"\n')
-                    ),
-                    fragment,
-                ),
-                # Regression: the expression match stopped at the first `}`, so a `}` inside the expression (here a
-                # format() placeholder) hid the secrets reference after it.
-                "secret behind a format() placeholder": (
-                    self.edit_training_step(
-                        self.is_report,
-                        lambda step: step.update(env={"X": "${{ format('{0}', secrets.email_password) }}"}),
-                    ),
-                    fragment,
-                ),
-                "account secret behind a format() placeholder": (
-                    self.edit_training_step(
-                        self.is_report,
-                        lambda step: step.update(env={"X": "${{ format('{0}', secrets.PSS_ACCOUNT_1_EMAIL) }}"}),
-                    ),
-                    fragment,
-                ),
-                "multiline expression": (
-                    self.edit_training_step(
-                        self.is_report,
-                        lambda step: step.update(
-                            run=step["run"] + "echo \"${{ format(\n  '{0}-{1}',\n  github.run_id,\n"
-                            '  secrets.email_password\n) }}"\n'
-                        ),
-                    ),
-                    fragment,
-                ),
-            }
-        )
-        # The match ends at the expression's closing `}}`, on raw (unserialised) text as on a step's JSON.
-        self.assertIsNotNone(ci.SECRETS_EXPRESSION_RE.search("${{\n  format('{0}',\n  secrets.x)\n}}"))
-        self.assertIsNone(ci.SECRETS_EXPRESSION_RE.search("${{ runner.temp }}/secrets ${{ github.run_id }}"))
 
     def test_mutation_gate_stays_blocking(self):
         gate = self.documents["python-tests.yml"]["jobs"][ci.MUTATION_GATE_JOB]
@@ -2113,90 +1810,6 @@ class WorkflowPolicyTests(unittest.TestCase):
             }
         )
 
-    def test_training_report_must_share_the_account_job_and_keep_its_status(self):
-        # Regression: a report moved to its own job (another runner, no journals) passed because that job's
-        # last account index was -1, and `|| true` in the report run was not refused.
-        job_name, _ = next(iter(self.documents["daily-run.yml"]["jobs"].items()))
-
-        def own_job(docs):
-            jobs = docs["daily-run.yml"]["jobs"]
-            steps = jobs[job_name]["steps"]
-            report = steps.pop(self.training_step_index(docs, self.is_report))
-            upload = steps.pop(self.training_step_index(docs, self.is_upload))
-            jobs["training-report"] = {"runs-on": "ubuntu-latest", "timeout-minutes": "10", "steps": [report, upload]}
-
-        def edit_run(change):
-            return self.edit_training_step(self.is_report, lambda step: step.update(run=change(step["run"])))
-
-        swallow = "report step must not swallow"
-        self.assert_each_refused(
-            {
-                "report in its own job": (own_job, "after every account step, in their job"),
-                "|| true": (
-                    edit_run(
-                        lambda run: run.replace(
-                            '> "$root/report/training-report.md"', '> "$root/report/training-report.md" || true'
-                        )
-                    ),
-                    swallow,
-                ),
-                "exit 0": (edit_run(lambda run: run + "exit 0\n"), swallow),
-                "errexit off": (
-                    edit_run(lambda run: run.replace("set -euo pipefail", "set -uo pipefail")),
-                    "set -euo pipefail",
-                ),
-            }
-        )
-
-    def test_malformed_training_steps_raise_value_error(self):
-        # Regression: a mapping where a scalar belongs, or `with:` given as text, raised AttributeError, which
-        # scripts/ci.py's main does not catch, instead of a ValueError naming the rule.
-        def account_run_mapping(docs):
-            step = next(s for s in self.daily_run_steps(docs) if s.get("name") == "Process account 5")
-            step["run"] = {"script": step["run"]}
-
-        self.assert_each_refused(
-            {
-                "account run is a mapping": (account_run_mapping, "must pass --account-alias account-5"),
-                "upload with is text": (
-                    self.edit_training_step(self.is_upload, lambda step: step.update({"with": "path"})),
-                    "must upload only",
-                ),
-                "upload path is a list": (
-                    self.edit_training_step(self.is_upload, lambda step: step["with"].update(path=["a"])),
-                    "must upload only",
-                ),
-            }
-        )
-
-    def test_training_upload_cannot_fail_the_daily_run(self):
-        # Regression: the upload had no continue-on-error, so an artifact service failure turned the daily run red
-        # although every account step and the report had passed.
-        (upload,) = [step for step in self.daily_run_steps(self.documents) if self.is_upload(step)]
-        self.assertEqual(upload["continue-on-error"], "true")
-        fragment = "upload step must keep continue-on-error: true"
-        self.assert_each_refused(
-            {
-                "deleted": (
-                    self.edit_training_step(self.is_upload, lambda step: step.pop("continue-on-error")),
-                    fragment,
-                ),
-                "false": (
-                    self.edit_training_step(self.is_upload, lambda step: step.update({"continue-on-error": "false"})),
-                    fragment,
-                ),
-            }
-        )
-
-    def test_daily_training_refuses_a_step_with_several_accounts_on_its_own(self):
-        # Regression: check_daily_training popped an arbitrary account from a step naming several and relied on
-        # check_legacy_run having refused that step first.
-        docs = copy.deepcopy(self.documents)
-        step = next(s for s in self.daily_run_steps(docs) if s.get("name") == "Process account 5")
-        step["env"]["OTHER"] = "${{ secrets.PSS_ACCOUNT_4_EMAIL }}"
-        with self.assertRaisesRegex(ValueError, "reads several accounts' secrets"):
-            ci.check_daily_training(docs["daily-run.yml"])
-
     def test_trial_schedule_runs_only_on_its_schedule(self):
         self.assertEqual(set(self.documents["live-trial-schedule.yml"]["on"]), {"schedule"})
         for trigger in ("push", "pull_request", "workflow_dispatch", "workflow_run"):
@@ -2334,6 +1947,576 @@ class WorkflowPolicyTests(unittest.TestCase):
             text = json.dumps(self.documents[filename])
             for forbidden in ("secrets.", "secrets: inherit", "--run-battle", "pss_langgraph_automation"):
                 self.assertNotIn(forbidden, text)
+
+
+class DailyRunPolicyTests(unittest.TestCase):
+    """daily-run.yml runs every account in its own parallel leg, then reports once (scripts/ci.py check_daily_run).
+
+    Each mutation is applied alone to a fresh copy of the committed workflows and must be refused with its own rule's
+    message, so a test cannot pass because some other rule happened to fire.
+    """
+
+    def setUp(self):
+        self.documents = ci.workflow_documents(ci.ROOT)
+
+    # Helpers: every accessor takes the copy being mutated.
+    @staticmethod
+    def jobs(docs):
+        return docs["daily-run.yml"]["jobs"]
+
+    def accounts_job(self, docs):
+        return self.jobs(docs)[ci.DAILY_ACCOUNTS_JOB]
+
+    def report_job(self, docs):
+        return self.jobs(docs)[ci.DAILY_REPORT_JOB]
+
+    @staticmethod
+    def find(steps, marker):
+        (index,) = [i for i, step in enumerate(steps) if marker(step)]
+        return index
+
+    @staticmethod
+    def is_account(step):
+        return "PSS_ACCOUNT_" in json.dumps(step)
+
+    @staticmethod
+    def is_upload(step):
+        return step.get("uses", "").startswith("actions/upload-artifact@")
+
+    @staticmethod
+    def is_download(step):
+        return step.get("uses", "").startswith("actions/download-artifact@")
+
+    @staticmethod
+    def is_report(step):
+        return ci.DAILY_TRAINING_REPORT_COMMAND in step.get("run", "")
+
+    def account_step(self, docs):
+        steps = self.accounts_job(docs)["steps"]
+        return steps[self.find(steps, self.is_account)]
+
+    def journal_upload(self, docs):
+        steps = self.accounts_job(docs)["steps"]
+        return steps[self.find(steps, self.is_upload)]
+
+    def report_step(self, docs, marker):
+        steps = self.report_job(docs)["steps"]
+        return steps[self.find(steps, marker)]
+
+    def assert_each_refused(self, mutations):
+        for name, (mutate, fragment) in mutations.items():
+            docs = copy.deepcopy(self.documents)
+            mutate(docs)
+            with self.subTest(mutation=name), self.assertRaisesRegex(ValueError, fragment):
+                ci.check_workflows(docs)
+
+    def assert_each_accepted(self, mutations):
+        for name, mutate in mutations.items():
+            docs = copy.deepcopy(self.documents)
+            mutate(docs)
+            with self.subTest(accepted=name):
+                self.assertIsNone(ci.check_workflows(docs))
+
+    def edit(self, getter, change):
+        return lambda docs: change(getter(docs))
+
+    def edit_run(self, getter, old, new):
+        def mutate(docs):
+            step = getter(docs)
+            self.assertIn(old, step["run"])
+            step["run"] = step["run"].replace(old, new)
+
+        return mutate
+
+    def move(self, job_getter, marker, before):
+        """Move the step ``marker`` finds in a job to just before the step ``before`` finds."""
+
+        def mutate(docs):
+            steps = job_getter(docs)["steps"]
+            step = steps.pop(self.find(steps, marker))
+            steps.insert(self.find(steps, before), step)
+
+        return mutate
+
+    def duplicate(self, job_getter, marker):
+        def mutate(docs):
+            steps = job_getter(docs)["steps"]
+            steps.append(copy.deepcopy(steps[self.find(steps, marker)]))
+
+        return mutate
+
+    def delete(self, job_getter, marker):
+        def mutate(docs):
+            steps = job_getter(docs)["steps"]
+            steps.pop(self.find(steps, marker))
+
+        return mutate
+
+    def test_committed_workflow_runs_five_accounts_in_parallel_legs(self):
+        self.assertIsNone(ci.check_daily_run(self.documents["daily-run.yml"]))
+        self.assertEqual(set(self.jobs(self.documents)), {"accounts", "training-report"})
+        strategy = self.accounts_job(self.documents)["strategy"]
+        self.assertEqual(strategy["matrix"], {"account": ["1", "2", "3", "4", "5"]})
+        self.assertEqual(strategy["fail-fast"], "false")
+        self.assertNotIn("max-parallel", strategy)
+        self.assertEqual(self.report_job(self.documents)["needs"], "accounts")
+
+    def test_daily_run_has_exactly_the_accounts_and_report_jobs(self):
+        fragment = "exactly the jobs accounts and training-report"
+
+        def extra_job(docs):
+            self.jobs(docs)["extra"] = {"runs-on": "ubuntu-latest", "timeout-minutes": "5", "steps": []}
+
+        def rename(old, new):
+            return lambda docs: self.jobs(docs).update({new: self.jobs(docs).pop(old)})
+
+        self.assert_each_refused(
+            {
+                "extra job": (extra_job, fragment),
+                "accounts renamed": (rename("accounts", "daily-run"), fragment),
+                "report renamed": (rename("training-report", "report"), fragment),
+                "report job deleted": (lambda docs: self.jobs(docs).pop("training-report"), fragment),
+            }
+        )
+
+    def test_accounts_matrix_lists_each_account_once_and_never_fails_fast(self):
+        fail_fast, matrix = "fail-fast: false", "matrix must be only `account:`"
+
+        def strategy(change):
+            return self.edit(lambda docs: self.accounts_job(docs)["strategy"], change)
+
+        def accounts(value):
+            return strategy(lambda s: s["matrix"].update(account=value))
+
+        self.assert_each_refused(
+            {
+                "strategy deleted": (lambda docs: self.accounts_job(docs).pop("strategy"), fail_fast),
+                "fail-fast deleted": (strategy(lambda s: s.pop("fail-fast")), fail_fast),
+                "fail-fast true": (strategy(lambda s: s.update({"fail-fast": "true"})), fail_fast),
+                "matrix deleted": (strategy(lambda s: s.pop("matrix")), matrix),
+                "matrix as text": (strategy(lambda s: s.update(matrix="account")), matrix),
+                # An include could add a leg or rewrite one leg's values; an exclude could silently drop an account.
+                "include": (strategy(lambda s: s["matrix"].update(include=[{"account": "6"}])), matrix),
+                "exclude": (strategy(lambda s: s["matrix"].update(exclude=[{"account": "5"}])), matrix),
+                "second axis": (strategy(lambda s: s["matrix"].update(os=["ubuntu-latest"])), matrix),
+                "no accounts": (accounts([]), matrix),
+                "account listed twice": (accounts(["1", "2", "2"]), matrix),
+                "account zero": (accounts(["0", "1"]), matrix),
+                "account with a leading zero": (accounts(["01"]), matrix),
+                "account list in one string": (accounts(["1,2"]), matrix),
+                "accounts as an expression": (accounts("${{ fromJSON(vars.ACCOUNTS) }}"), matrix),
+                "nested list": (accounts([["1"]]), matrix),
+            }
+        )
+
+    # Verifies: S06-R1
+    def test_account_step_stays_skippable_through_legacy_run_skip(self):
+        self.assertEqual(self.account_step(self.documents)["if"], ci.LEGACY_RUN_SKIP_CONDITION)
+        fragment = "skippable through LEGACY_RUN_SKIP"
+        old_literal = "${{ !contains(format(',{0},', vars.LEGACY_RUN_SKIP), ',5,') }}"
+
+        def condition(value):
+            return self.edit(self.account_step, lambda step: step.update({"if": value}))
+
+        self.assert_each_refused(
+            {
+                "condition deleted": (self.edit(self.account_step, lambda step: step.pop("if")), fragment),
+                # A fixed account number skips the same account in every leg, whichever one LEGACY_RUN_SKIP names.
+                "one fixed account": (condition(old_literal), fragment),
+                "skip always ignored": (condition("${{ always() }}"), fragment),
+                "another variable": (condition(ci.LEGACY_RUN_SKIP_CONDITION.replace("LEGACY_RUN_SKIP", "X")), fragment),
+                "negation dropped": (
+                    condition(ci.LEGACY_RUN_SKIP_CONDITION.replace("!contains", "contains")),
+                    fragment,
+                ),
+                "partly outside the expression": (condition(ci.LEGACY_RUN_SKIP_CONDITION + " && true"), fragment),
+            }
+        )
+        bare = ci.LEGACY_RUN_SKIP_CONDITION.removeprefix("${{ ").removesuffix(" }}")
+        self.assert_each_accepted(
+            {
+                "without the ${{ }} wrapper": condition(bare),
+                "without spaces": condition("".join(ci.LEGACY_RUN_SKIP_CONDITION.split())),
+            }
+        )
+
+    # Verifies: S06-R5
+    def test_each_leg_reads_only_its_own_accounts_secrets(self):
+        step = self.account_step(self.documents)
+        self.assertEqual(step["env"]["PSS_EMAIL"], "${{ secrets[format('PSS_ACCOUNT_{0}_EMAIL', matrix.account)] }}")
+        self.assertEqual(
+            step["env"]["PSS_PASSWORD"], "${{ secrets[format('PSS_ACCOUNT_{0}_PASSWORD', matrix.account)] }}"
+        )
+        matrix_form = "only as secrets\\[format\\('PSS_ACCOUNT_\\{0\\}_<NAME>', matrix.account\\)\\]"
+        only_account = "only the account step may read secrets"
+
+        def set_env(getter, value):
+            return self.edit(getter, lambda step: step.setdefault("env", {}).update(X=value))
+
+        def install_step(docs):
+            steps = self.accounts_job(docs)["steps"]
+            return steps[self.find(steps, lambda step: step.get("name") == "Install dependencies")]
+
+        self.assert_each_refused(
+            {
+                # Every leg would log in to account 5.
+                "literal account secret": (
+                    set_env(self.account_step, "${{ secrets.PSS_ACCOUNT_5_EMAIL }}"),
+                    matrix_form,
+                ),
+                "literal index": (set_env(self.account_step, "${{ secrets['PSS_ACCOUNT_5_EMAIL'] }}"), matrix_form),
+                "fixed format argument": (
+                    set_env(self.account_step, "${{ secrets[format('PSS_ACCOUNT_{0}_EMAIL', 5)] }}"),
+                    matrix_form,
+                ),
+                "account secret in the install step": (
+                    set_env(install_step, "${{ secrets[format('PSS_ACCOUNT_{0}_EMAIL', matrix.account)] }}"),
+                    "exactly one account step",
+                ),
+                "second account step": (self.duplicate(self.accounts_job, self.is_account), "exactly one account step"),
+                "account step deleted": (self.delete(self.accounts_job, self.is_account), "exactly one account step"),
+                "other secret in the install step": (
+                    set_env(install_step, "${{ secrets.email_password }}"),
+                    only_account,
+                ),
+                "accounts job env": (
+                    lambda docs: self.accounts_job(docs).update(env={"X": "${{ secrets.email_password }}"}),
+                    "not the env of the accounts job",
+                ),
+                "workflow env": (
+                    lambda docs: docs["daily-run.yml"].update(env={"X": "${{ secrets.email_password }}"}),
+                    "not the workflow env",
+                ),
+                "secret in the journal upload": (
+                    set_env(self.journal_upload, "${{ secrets.email_password }}"),
+                    only_account,
+                ),
+            }
+        )
+
+    # Verifies: S06-R5
+    def test_account_step_journals_training_under_its_legs_alias(self):
+        step = self.account_step(self.documents)
+        self.assertEqual(step["env"]["ACCOUNT_NUMBER"], "${{ matrix.account }}")
+        self.assertEqual(step["run"].count('--account-alias "account-$ACCOUNT_NUMBER"'), 1)
+        self.assertEqual(step["run"].count(ci.DAILY_TRAINING_JOURNAL_ARG), 1)
+        arg, flag = ci.DAILY_TRAINING_JOURNAL_ARG, '--account-alias "account-$ACCOUNT_NUMBER"'
+        alias, journal, number = (
+            "must pass --account-alias account-\\$ACCOUNT_NUMBER",
+            "must journal training",
+            ("must set ACCOUNT_NUMBER"),
+        )
+        keep_going = "must keep continue-on-error: true"
+
+        def run(old, new):
+            return self.edit_run(self.account_step, old, new)
+
+        def env(change):
+            return self.edit(self.account_step, lambda step: change(step["env"]))
+
+        self.assert_each_refused(
+            {
+                "journal arg dropped": (run(arg, ""), journal),
+                "journal arg twice": (run(arg, f"{arg} {arg}"), journal),
+                "journal in the checkout": (run("$RUNNER_TEMP", "$GITHUB_WORKSPACE"), journal),
+                "alias dropped": (run(flag, ""), alias),
+                "one fixed alias": (run(flag, "--account-alias account-5"), alias),
+                "default alias": (run(flag, "--account-alias primary"), alias),
+                "two alias flags": (run(flag, f"{flag} {flag}"), alias),
+                "ACCOUNT_NUMBER deleted": (env(lambda e: e.pop("ACCOUNT_NUMBER")), number),
+                "ACCOUNT_NUMBER fixed": (env(lambda e: e.update(ACCOUNT_NUMBER="5")), number),
+                "env deleted": (self.edit(self.account_step, lambda step: step.pop("env")), "exactly one account step"),
+                "continue-on-error deleted": (
+                    self.edit(self.account_step, lambda step: step.pop("continue-on-error")),
+                    keep_going,
+                ),
+                "continue-on-error false": (
+                    self.edit(self.account_step, lambda step: step.update({"continue-on-error": "false"})),
+                    keep_going,
+                ),
+                # Regression: a mapping where a scalar belongs raised AttributeError instead of a ValueError.
+                "run is a mapping": (
+                    self.edit(self.account_step, lambda step: step.update(run={"x": step["run"]})),
+                    alias,
+                ),
+            }
+        )
+        # Regression: the alias pattern kept shell quotes, so a correctly quoted alias was refused.
+        self.assert_each_accepted(
+            {
+                quoted: run(flag, quoted)
+                for quoted in (
+                    "--account-alias account-$ACCOUNT_NUMBER",
+                    "--account-alias 'account-$ACCOUNT_NUMBER'",
+                    '--account-alias="account-$ACCOUNT_NUMBER"',
+                )
+            }
+        )
+
+    def test_each_leg_uploads_its_own_journal_for_the_report_job(self):
+        upload = self.journal_upload(self.documents)
+        self.assertEqual(upload["with"]["name"], "training-journal-account-${{ matrix.account }}")
+        self.assertEqual(upload["with"]["path"], "${{ runner.temp }}/tachikoma-training/journals")
+        self.assertEqual(upload["with"]["overwrite"], "true")
+        steps = self.accounts_job(self.documents)["steps"]
+        self.assertGreater(steps.index(upload), self.find(steps, self.is_account))
+        path, retention = "journal upload step must upload only", "journal upload needs retention-days between 1 and 30"
+
+        def inputs(change):
+            return self.edit(self.journal_upload, lambda step: change(step["with"]))
+
+        def set_input(key, value):
+            return inputs(lambda w: w.update({key: value}))
+
+        self.assert_each_refused(
+            {
+                "upload deleted": (self.delete(self.accounts_job, self.is_upload), "exactly one artifact upload step"),
+                "second upload": (
+                    self.duplicate(self.accounts_job, self.is_upload),
+                    "exactly one artifact upload step",
+                ),
+                "before the account step": (
+                    self.move(self.accounts_job, self.is_upload, self.is_account),
+                    "must come after the account step",
+                ),
+                "condition deleted": (
+                    self.edit(self.journal_upload, lambda step: step.pop("if")),
+                    "journal upload step must run with if: always\\(\\)",
+                ),
+                "continue-on-error deleted": (
+                    self.edit(self.journal_upload, lambda step: step.pop("continue-on-error")),
+                    "journal upload step must keep continue-on-error: true",
+                ),
+                "whole runner temp": (set_input("path", "${{ runner.temp }}"), path),
+                "checkout": (set_input("path", "."), path),
+                "path is a list": (set_input("path", ["a"]), path),
+                "with as text": (self.edit(self.journal_upload, lambda step: step.update({"with": "path"})), path),
+                # Every leg would write one artifact name: all but one upload would fail, or overwrite each other.
+                "one fixed name": (set_input("name", "training-journal-account-5"), "must be named"),
+                "name deleted": (inputs(lambda w: w.pop("name")), "must be named"),
+                "overwrite deleted": (inputs(lambda w: w.pop("overwrite")), "must set overwrite: true"),
+                "overwrite false": (set_input("overwrite", "false"), "must set overwrite: true"),
+                "retention deleted": (inputs(lambda w: w.pop("retention-days")), retention),
+                "retention 90": (set_input("retention-days", "90"), retention),
+                "hidden files": (set_input("include-hidden-files", "true"), "unexpected journal upload inputs"),
+            }
+        )
+
+    def test_report_job_runs_after_every_leg_even_when_one_failed(self):
+        job = self.report_job(self.documents)
+        self.assertEqual(job["if"], "always()")
+        fragment_needs, fragment_if = "must need accounts", "training-report job must run with if: always\\(\\)"
+
+        def job_edit(change):
+            return self.edit(self.report_job, change)
+
+        self.assert_each_refused(
+            {
+                "needs deleted": (job_edit(lambda j: j.pop("needs")), fragment_needs),
+                "needs another job": (job_edit(lambda j: j.update(needs="other")), fragment_needs),
+                "condition deleted": (job_edit(lambda j: j.pop("if")), fragment_if),
+                "only on success": (job_edit(lambda j: j.update({"if": "success()"})), fragment_if),
+            }
+        )
+        self.assert_each_accepted(
+            {
+                "needs as a list": job_edit(lambda j: j.update(needs=["accounts"])),
+                "if wrapped": job_edit(lambda j: j.update({"if": "${{ always() }}"})),
+            }
+        )
+
+    def test_report_job_merges_only_this_runs_journals(self):
+        download = self.report_step(self.documents, self.is_download)["with"]
+        self.assertEqual(
+            download,
+            {
+                "pattern": "training-journal-account-*",
+                "path": "${{ runner.temp }}/tachikoma-training/journals",
+                "merge-multiple": "true",
+            },
+        )
+        fragment = "download step must merge only training-journal-account-\\*"
+
+        def set_input(key, value):
+            return self.edit(
+                lambda docs: self.report_step(docs, self.is_download), lambda s: s["with"].update({key: value})
+            )
+
+        def drop_input(key):
+            return self.edit(lambda docs: self.report_step(docs, self.is_download), lambda s: s["with"].pop(key))
+
+        self.assert_each_refused(
+            {
+                "download deleted": (self.delete(self.report_job, self.is_download), "exactly one download step"),
+                "second download": (self.duplicate(self.report_job, self.is_download), "exactly one download step"),
+                "every artifact": (set_input("pattern", "*"), fragment),
+                "pattern deleted": (drop_input("pattern"), fragment),
+                "into the checkout": (set_input("path", "."), fragment),
+                # Without merge-multiple each artifact lands in its own subdirectory, which the report's glob misses.
+                "not merged": (set_input("merge-multiple", "false"), fragment),
+                "another run": (set_input("run-id", "1"), fragment),
+                "with a token": (set_input("github-token", "${{ github.token }}"), fragment),
+                "report before download": (
+                    self.move(self.report_job, self.is_report, self.is_download),
+                    "report step must come after the download step",
+                ),
+            }
+        )
+
+    def test_training_report_step_keeps_its_status_and_gets_no_credentials(self):
+        report = self.report_step(self.documents, self.is_report)
+        self.assertEqual(report["if"], "always()")
+        self.assertNotIn("env", report)
+
+        def getter(docs):
+            return self.report_step(docs, self.is_report)
+
+        def run(old, new):
+            return self.edit_run(getter, old, new)
+
+        def edit(change):
+            return self.edit(getter, change)
+
+        swallow = "report step must not swallow"
+        self.assert_each_refused(
+            {
+                "report deleted": (self.delete(self.report_job, self.is_report), "exactly one training report step"),
+                "second report": (self.duplicate(self.report_job, self.is_report), "exactly one training report step"),
+                "runs only on success": (edit(lambda step: step.update({"if": "success()"})), "if: always\\(\\)"),
+                "no job summary": (run('>> "$GITHUB_STEP_SUMMARY"', "> /dev/null"), "job summary"),
+                "no JSON report": (run(" --report-format json", ""), "JSON report"),
+                "journals read from the checkout": (
+                    run('root="$RUNNER_TEMP/tachikoma-training"', 'root="$GITHUB_WORKSPACE/tachikoma-training"'),
+                    "must read the journals under \\$RUNNER_TEMP/tachikoma-training",
+                ),
+                "continue-on-error": (
+                    edit(lambda step: step.update({"continue-on-error": "true"})),
+                    "report step must not carry continue-on-error",
+                ),
+                "given a password file": (
+                    run("--report-format json", '--report-format json --password-file "$pw"'),
+                    "must not be given credentials",
+                ),
+                "|| true": (
+                    run('> "$root/report/training-report.md"', '> "$root/report/training-report.md" || true'),
+                    swallow,
+                ),
+                "exit 0": (edit(lambda step: step.update(run=step["run"] + "exit 0\n")), swallow),
+                "errexit off": (run("set -euo pipefail", "set -uo pipefail"), "set -euo pipefail"),
+            }
+        )
+
+    def test_report_job_never_sees_a_secret(self):
+        fragment = "not the training-report job"
+
+        def report_edit(change):
+            return self.edit(lambda docs: self.report_step(docs, self.is_report), change)
+
+        self.assert_each_refused(
+            {
+                "secret in the report env": (
+                    report_edit(lambda step: step.update(env={"X": "${{ secrets.email_password }}"})),
+                    fragment,
+                ),
+                "all secrets in the report": (
+                    report_edit(lambda step: step.update(run=step["run"] + 'echo "${{ toJSON(secrets) }}"\n')),
+                    fragment,
+                ),
+                # Regression: the expression match stopped at the first `}`, so a `}` inside the expression (here a
+                # format() placeholder) hid the secrets reference after it.
+                "secret behind a format() placeholder": (
+                    report_edit(lambda step: step.update(env={"X": "${{ format('{0}', secrets.email_password) }}"})),
+                    fragment,
+                ),
+                "multiline expression": (
+                    report_edit(
+                        lambda step: step.update(
+                            run=step["run"] + "echo \"${{ format(\n  '{0}-{1}',\n  github.run_id,\n"
+                            '  secrets.email_password\n) }}"\n'
+                        )
+                    ),
+                    fragment,
+                ),
+                "job env": (
+                    self.edit(self.report_job, lambda job: job.update(env={"X": "${{ secrets.email_password }}"})),
+                    fragment,
+                ),
+                "account secret in the download": (
+                    self.edit(
+                        lambda docs: self.report_step(docs, self.is_download),
+                        lambda step: step.update(env={"X": "${{ secrets.PSS_ACCOUNT_1_EMAIL }}"}),
+                    ),
+                    fragment,
+                ),
+            }
+        )
+        self.assertIsNotNone(ci.SECRETS_EXPRESSION_RE.search("${{\n  format('{0}',\n  secrets.x)\n}}"))
+        self.assertIsNone(ci.SECRETS_EXPRESSION_RE.search("${{ runner.temp }}/secrets ${{ github.run_id }}"))
+
+    def test_training_artifact_uploads_only_the_training_directory(self):
+        upload = self.report_step(self.documents, self.is_upload)
+        self.assertEqual(upload["with"]["path"], "${{ runner.temp }}/tachikoma-training")
+        self.assertEqual(upload["with"]["retention-days"], "14")
+
+        def getter(docs):
+            return self.report_step(docs, self.is_upload)
+
+        def set_input(key, value):
+            return self.edit(getter, lambda step: step["with"].update({key: value}))
+
+        path, retention = "training upload step must upload only", "retention-days between 1 and 30"
+        self.assert_each_refused(
+            {
+                "upload deleted": (self.delete(self.report_job, self.is_upload), "exactly one artifact upload step"),
+                "second upload": (self.duplicate(self.report_job, self.is_upload), "exactly one artifact upload step"),
+                "condition deleted": (
+                    self.edit(getter, lambda step: step.pop("if")),
+                    "training upload step must run with if: always\\(\\)",
+                ),
+                "continue-on-error deleted": (
+                    self.edit(getter, lambda step: step.pop("continue-on-error")),
+                    "training upload step must keep continue-on-error: true",
+                ),
+                "whole runner temp": (set_input("path", "${{ runner.temp }}"), path),
+                "checkout as a second line": (
+                    set_input("path", "${{ runner.temp }}/tachikoma-training\n${{ github.workspace }}\n"),
+                    path,
+                ),
+                "before the report": (
+                    self.move(self.report_job, self.is_upload, self.is_report),
+                    "upload step must come after the training report step",
+                ),
+                "retention 0": (set_input("retention-days", "0"), retention),
+                "retention not a number": (set_input("retention-days", "x"), retention),
+                "hidden files": (set_input("include-hidden-files", "true"), "unexpected training upload inputs"),
+            }
+        )
+
+    def test_always_conditions_accept_either_spelling(self):
+        # Regression: the report and upload checks compared `if` with the text "always()", so the equivalent
+        # `${{ always() }}` was refused. Any other condition, inside or outside an expression, is still refused.
+        steps = {
+            "journal upload": (self.journal_upload, "journal upload step must run with if: always\\(\\)"),
+            "report": (
+                lambda docs: self.report_step(docs, self.is_report),
+                "report step must run with if: always\\(\\)",
+            ),
+            "training upload": (
+                lambda docs: self.report_step(docs, self.is_upload),
+                "training upload step must run with if: always\\(\\)",
+            ),
+        }
+        for kind, (getter, fragment) in steps.items():
+            for spelling in ("${{ always() }}", "${{always()}}", "  ${{\n  always()\n}}  ", " always() "):
+                docs = copy.deepcopy(self.documents)
+                getter(docs)["if"] = spelling
+                with self.subTest(step=kind, accepted=spelling):
+                    self.assertIsNone(ci.check_workflows(docs))
+            for spelling in ("${{ success() }}", "${{ always() && false }}", "${{ always() }} && false", "${{ }}", ""):
+                docs = copy.deepcopy(self.documents)
+                getter(docs)["if"] = spelling
+                with self.subTest(step=kind, refused=spelling), self.assertRaisesRegex(ValueError, fragment):
+                    ci.check_workflows(docs)
 
 
 PSS5_WORKFLOWS = ("daily-run.yml", "live-trial.yml", "live-trial-schedule.yml")
