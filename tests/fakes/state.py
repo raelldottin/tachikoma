@@ -187,6 +187,7 @@ class TrainingDesign:
     gain: int
     fatigue: int
     duration: datetime.timedelta
+    price: str | None = None
 
 
 @dataclass
@@ -261,6 +262,7 @@ class World:
     character_designs: list[CharacterDesign] = field(default_factory=list)
     characters: list[Character] = field(default_factory=list)
     training_designs: list[TrainingDesign] = field(default_factory=list)
+    report_resource_items: bool = False
     items: list[Item] = field(default_factory=list)
     task_designs: list[TaskDesign] = field(default_factory=list)
     tasks: list[Task] = field(default_factory=list)

@@ -1,0 +1,240 @@
+{
+  "schema_version": 1,
+  "seeds": [
+    13,
+    29,
+    73
+  ],
+  "legacy_control": {
+    "input": {
+      "account": "academy-alpha",
+      "minerals": 499,
+      "gas": 700,
+      "mineral_reserve": 0,
+      "course_mineral_cost": 0,
+      "character_id": 1001,
+      "character_design_id": 501,
+      "character_name": "Galactic Succubus",
+      "room_id": 103,
+      "course_id": 11,
+      "course_name": "Read Expert Weapon Theory",
+      "research": {
+        "Education": 1
+      }
+    },
+    "expected": {
+      "add_training_requests": 1,
+      "mineral_delta": 0,
+      "gas_delta": 0,
+      "verified_starts": 1
+    }
+  },
+  "cases": [
+    {
+      "id": "role-coverage",
+      "kind": "role-coverage",
+      "input": {
+        "roles": [
+          "shields",
+          "repair",
+          "weapons"
+        ],
+        "crew": [
+          {
+            "character_id": 510,
+            "science": 10,
+            "repair": 9,
+            "weapon": 0
+          },
+          {
+            "character_id": 511,
+            "science": 9,
+            "repair": 0,
+            "weapon": 0
+          },
+          {
+            "character_id": 512,
+            "science": 0,
+            "repair": 0,
+            "weapon": 10
+          }
+        ]
+      },
+      "expected": {
+        "assignments": {
+          "shields": 511,
+          "repair": 510,
+          "weapons": 512
+        },
+        "unfilled_roles": []
+      }
+    },
+    {
+      "id": "preview-prestige",
+      "kind": "preview-prestige",
+      "input": {
+        "roster_design_quantities": {
+          "501": 1
+        },
+        "recipe": {
+          "target_design_id": 601,
+          "ingredients": [
+            501,
+            501
+          ]
+        }
+      },
+      "expected": {
+        "missing_ingredient_quantities": {
+          "501": 1
+        },
+        "add_training_requests": 0
+      }
+    },
+    {
+      "id": "paid-boundary",
+      "kind": "paid-boundary",
+      "input": {
+        "account": "academy-alpha",
+        "minerals": 499,
+        "gas": 700,
+        "mineral_reserve": 0,
+        "course_mineral_cost": 500,
+        "character_id": 1001,
+        "character_design_id": 501,
+        "character_name": "Galactic Succubus",
+        "room_id": 103,
+        "course_id": 11,
+        "course_name": "Read Expert Weapon Theory",
+        "research": {
+          "Education": 1
+        }
+      },
+      "expected": {
+        "add_training_requests": 0,
+        "mineral_delta": 0,
+        "gas_delta": 0,
+        "verified_starts": 0
+      }
+    },
+    {
+      "id": "stale-preflight",
+      "kind": "stale-preflight",
+      "input": {
+        "planned": {
+          "character_id": 1001,
+          "room_id": 103,
+          "room_status": "Normal",
+          "course_id": 11,
+          "course_mineral_cost": 500,
+          "minerals": 500,
+          "research": {
+            "Education": 1
+          }
+        },
+        "before_dispatch": {
+          "room_status": "Upgrading"
+        }
+      },
+      "expected": {
+        "add_training_requests": 0,
+        "verified_starts": 0,
+        "mineral_delta": 0
+      }
+    },
+    {
+      "id": "reconciliation",
+      "kind": "reconciliation",
+      "input": {
+        "character_id": 1001,
+        "requested_course_id": 11,
+        "minerals": 500,
+        "course_mineral_cost": 500,
+        "server_reports_success": true,
+        "observed_course_id": null,
+        "observed_training_end": "2026-11-20T13:00:00Z"
+      },
+      "expected": {
+        "add_training_requests": 1,
+        "verified_starts": 0,
+        "mineral_delta": -500,
+        "account_training_paused": true
+      }
+    },
+    {
+      "id": "persisted-intent-restart",
+      "kind": "persisted-intent-restart",
+      "input": {
+        "character_id": 1001,
+        "course_id": 11,
+        "interrupt_after_send": true,
+        "next_candidate": {
+          "character_id": 1002,
+          "course_id": 21
+        }
+      },
+      "expected": {
+        "add_training_requests": 1,
+        "next_dispatch_add_training_requests": 0,
+        "durable_pending_intent": true
+      }
+    },
+    {
+      "id": "overlapping-dispatch",
+      "kind": "overlapping-dispatch",
+      "input": {
+        "account": "academy-alpha",
+        "eligible_character_ids": [
+          1001,
+          1002
+        ],
+        "course_id": 11,
+        "overlap_barrier": "first-dispatch-holds-account-lock"
+      },
+      "expected": {
+        "add_training_requests": 1,
+        "overlap_observed": true,
+        "losing_dispatch_writes": 0
+      }
+    },
+    {
+      "id": "distinct-accounts",
+      "kind": "distinct-accounts",
+      "input": {
+        "locked_account": "academy-alpha",
+        "other_account": "academy-bravo",
+        "other_character_id": 2001,
+        "other_course_id": 11,
+        "other_minerals": 500,
+        "course_mineral_cost": 500
+      },
+      "expected": {
+        "other_add_training_requests": 1,
+        "other_mineral_delta": -500,
+        "overlap_observed": true
+      }
+    },
+    {
+      "id": "store-stop-controls",
+      "kind": "store-stop-controls",
+      "input": {
+        "refusal_cases": [
+          "owner-stop",
+          "missing-established-store",
+          "pre-send-store-failure"
+        ],
+        "post_send_failure_case": "settlement-unacknowledged"
+      },
+      "expected": {
+        "refusal_add_training_requests": [
+          0,
+          0,
+          0
+        ],
+        "post_send_add_training_requests": 1,
+        "durable_pending_intent": true,
+        "next_dispatch_add_training_requests": 0
+      }
+    }
+  ]
+}
