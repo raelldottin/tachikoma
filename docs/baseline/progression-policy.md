@@ -20,7 +20,7 @@ Rules applied to every candidate:
 
 ## Differences from run.py
 
-- **Training is not modelled.** `Client.manageTraining` chooses training tiers from research, fatigue and role data that the catalog doesn't express. Every plan carries an `add_training` rejection saying so.
+- **Training is not modelled by baseline-v1** (nor by fleet-v1 and hull-reserve-v1, which build on it). Every such plan carries an `add_training` rejection saying so. [training-v1](#training-v1) models it.
 - **Spend is deducted cumulatively.** `run.py` re-checks its last collected totals, while baseline-v1 subtracts planned spend, so it is slightly more conservative within one plan.
 - **No concurrency cap.** As in `run.py`, the server's concurrent-construction limit is discovered at execution time; the R2 scheduler stops on it.
 - Steps outside the catalog (flying starbux, task rewards, mining drones, market and messages, crew upgrades) are not part of the plan.
@@ -53,3 +53,28 @@ Rules applied to every candidate:
 - A hull upgrade already in progress, and starbux-priced hulls, are not observed. Starbux is never spent either way.
 
 **Comparing with baseline-v1.** Give comparable accounts `baseline-v1` and `hull-reserve-v1` as their `policy_id`, or run one account under each for matched periods. Then record an `sdk.experiments.Experiment` with `baseline="baseline-v1"`, `candidate="hull-reserve-v1"` and a stated metric. Good metrics are days from "crew capped" to an observed `hull_level` increase, and crew levels or trophies gained per day after it. Use [progression metrics](progression-metrics.md) such as `gained_per_hour` as a guard against starving the economy. Build `MeanSample`s from the per-period values and call `decide`. Only `adopt` with both intervals clear of each other supports switching. Until then, the variant is a hypothesis. See the [experiment loop](experiment-loop.md).
+
+## training-v1
+
+`training-v1` is `fleet-v1` followed by crew training. `sdk/policy/training.py` plans it with the pure planner in `sdk/training` (`plan_training` and the owner-approved `DEFAULT_STRATEGY`) from the same snapshot. Nothing selects it unless a [registry](fleet-accounts.md) profile names it as its `policy_id`. `--fleet-execute` needs a stamped dry run with the same policy id, so an operator must dry-run `training-v1` (and read its training block and rejections) before it can execute. fleet-v1 accounts, their dry-run stamps and the simulation golden digests are unchanged.
+
+**Plan order.**
+
+1. fleet-v1's requests, unchanged. `run.py` manages training last, and putting training last means the account's own economy requests run before any training request on the day. It does not contain a training fault: an uncertain start or consumable use stops the account and, under the default halt share, the fleet, every day until reconciled (see [known limitations](known-limitations.md)).
+2. Every `finish_training`, in crew order. It is safe to retry, so stat gains are banked before a start (not idempotent) can stop the scheduler.
+3. Every `add_training` and `use_consumable`, in crew order.
+
+`max_requests` cuts the whole plan, so training is cut first. Under the orchestrator `max_requests` is the profile's `max_actions`: raise it on training-v1 accounts so the training block fits.
+
+**Rules.**
+
+- **Clock.** The plan is made at `snapshot.observed_at`, never the wall clock.
+- **Deferral.** After a finish, the planner adds an advisory decision for the same crew, planned from the stats *before* the finish, so it may name the wrong tier. A once-per-run plan cannot see the state after the finish, so that decision is dropped and recorded as a rejection (`deferred to the next run: ...`). The next daily run plans it from fresh stats. Each crew member therefore trains once every two daily runs.
+- **Plan-time checks.** Every training request goes through the catalog's preconditions on the snapshot, and a failure is a rejection. For example, a finish is planned only when the training ended at least 60 seconds before the observation, so it never pays to speed one up. A start needs an idle crew member. A consumable must be held in exactly one inventory record.
+- **Skips.** Every crew member the planner skips gets a `training <id>` rejection with the reason code and detail, for example `training 105: unknown_role: 'Ada' has no training role`.
+- **Fail closed.** A crew member whose training state, any of the nine stats, or fatigue was not observed, or whose id is not a positive whole number, is left out with a `training <id>` rejection. The parser would otherwise read each gap as a value (idle, 0 or dropped). No crew section, or no `TrainingDesign` or `CharacterDesign` records in the design data, plans no training and gives the reason as a `training` rejection. The snapshot is rebuilt into raw records and parsed again by `sdk.training.parse`, so a training end date that parser rejects (even one `sdk.state` accepts) skips that crew member.
+- **Training errors.** A `ValueError` from `sdk.training` while planning (for example a custom strategy that rejects a consumable the item designs name) plans no training and is a `training` rejection (`training not planned: ValueError: ...`). fleet-v1's requests are kept.
+- **Cost.** `add_training` and `use_consumable` cost no minerals or gas, so they carry an explicit zero (`{"minerals": 0, "gas": 0}`). The [execute gate](action-catalog.md) runs them under caps only with that declaration. `finish_training` plans no cost. No request ever names starbux.
+- **Consumables.** `DEFAULT_STRATEGY` maps no consumables, so the item designs' consumables are attached (`parse_consumable_designs`, `with_consumables`). A live `use_consumable` still has to be listed in the authorization file, and the dry run shows it first.
+
+**Design data.** `DesignData.from_records(training_designs=..., character_designs=..., item_designs=...)` keeps those records as raw `DesignRecord`s for the planner's parser, which is the single authority on their meaning. Character designs supply the training capacity and rarity, which the snapshot doesn't carry. They are empty by default, so other callers are unchanged. The live fleet path (`read_design_data`) fills them from the `listAllDesigns4` reply it already reads, but only for an account whose policy models training; for other accounts they stay empty. For such an account whose policy models training, a TrainingDesign or CharacterDesign list that reply did not give is read with `listAllTrainingDesigns2` or `listAllCharacterDesigns2` (read-only, the reads `run.py`'s training uses). A list that still gives none stays empty with an account note, and training-v1 plans no training and says why. Item designs come only from `listAllDesigns4`, so without it no consumable is planned. A research design's raw `@Level` is kept (`ResearchDesign.level`) and passed to the parser, which reads a research level from it before the name's "Lv N" suffix. Simulation scenarios pass them in their `design` block.

@@ -38,6 +38,8 @@ class ResearchDesign:
     name: str = ""
     gas_cost: Optional[int] = None  # None when @GasCost is missing or unparseable
     starbux_cost: Optional[int] = 0  # a missing @StarbuxCost is 0; None when unparseable
+    # The raw @Level text (None when missing), kept for sdk.training's parser, which owns its meaning (training-v1).
+    level: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -74,18 +76,50 @@ def _price(price: Any) -> tuple[Optional[str], Optional[int]]:
 
 
 @dataclass(frozen=True)
+class DesignRecord:
+    """One design record kept as raw text attributes (sorted by name), for a parser that owns its meaning.
+
+    training-v1 hands TrainingDesign, CharacterDesign and ItemDesign records to ``sdk.training``'s parser, the single
+    authority on what they mean, so they are not re-modelled here. Frozen and hashable, like the rest of DesignData.
+    """
+
+    attributes: tuple[tuple[str, str], ...] = ()
+
+    @classmethod
+    def of(cls, record: Mapping[str, Any]) -> "DesignRecord":
+        """Keep the text and whole-number attributes as text; None, bools, floats and nested values are dropped."""
+        return cls(tuple(sorted((str(key), str(value)) for key, value in record.items()
+                                if isinstance(value, (str, int)) and not isinstance(value, bool))))
+
+    def as_dict(self) -> dict[str, str]:
+        return dict(self.attributes)
+
+
+def _design_records(records: Iterable[Any]) -> tuple[DesignRecord, ...]:
+    return tuple(DesignRecord.of(record) for record in records if isinstance(record, Mapping))
+
+
+@dataclass(frozen=True)
 class DesignData:
     rooms: tuple[RoomDesign, ...] = ()
     research: tuple[ResearchDesign, ...] = ()
     # Hull (ShipDesign) levels and mineral prices. Only hull-reserve-v1 reads them; empty by default.
     hulls: tuple[HullDesign, ...] = ()
+    # Raw TrainingDesign, CharacterDesign and ItemDesign records. Only training-v1 reads them; empty by default.
+    training_designs: tuple[DesignRecord, ...] = ()
+    character_designs: tuple[DesignRecord, ...] = ()
+    item_designs: tuple[DesignRecord, ...] = ()
 
     @classmethod
     def from_records(
         cls, room_designs: Iterable[Mapping[str, Any]] = (), research_designs: Iterable[Mapping[str, Any]] = (),
-        ship_designs: Iterable[Mapping[str, Any]] = (),
+        ship_designs: Iterable[Mapping[str, Any]] = (), training_designs: Iterable[Mapping[str, Any]] = (),
+        character_designs: Iterable[Mapping[str, Any]] = (), item_designs: Iterable[Mapping[str, Any]] = (),
     ) -> "DesignData":
-        """Parse ``RoomDesign``, ``ResearchDesign`` and ``ShipDesign`` records as the client receives them."""
+        """Parse ``RoomDesign``, ``ResearchDesign`` and ``ShipDesign`` records as the client receives them.
+
+        ``TrainingDesign``, ``CharacterDesign`` and ``ItemDesign`` records are kept as ``DesignRecord``s (entries
+        that are not mappings are skipped)."""
         rooms = []
         for record in room_designs:
             kind, amount = _price(record.get("@PriceString"))
@@ -108,6 +142,7 @@ class DesignData:
                 # Gas-priced research carries no starbux price, so a missing @StarbuxCost is 0,
                 # as Client.upgradeResearches reads it. A present but unparseable one is unknown.
                 starbux_cost=_cost(record.get("@StarbuxCost", 0)),
+                level=str(record["@Level"]) if record.get("@Level") not in (None, "") else None,
             )
             for record in research_designs
         ]
@@ -123,7 +158,9 @@ class DesignData:
             )
             for record in ship_designs
         ]
-        return cls(rooms=tuple(rooms), research=tuple(research), hulls=tuple(hulls))
+        return cls(rooms=tuple(rooms), research=tuple(research), hulls=tuple(hulls),
+                   training_designs=_design_records(training_designs),
+                   character_designs=_design_records(character_designs), item_designs=_design_records(item_designs))
 
 
 @dataclass(frozen=True)
@@ -217,9 +254,11 @@ def _unmet_preconditions(action_id: str, snapshot: AccountSnapshot, params: Mapp
 class BaselineV1:
     """run.py's daily order: research, room upgrades (each followed by a
     resource collection, as ``Client.upgradeRooms`` does), then the daily
-    reward. Crew training is not modelled; see the policy doc."""
+    reward. Crew training is not modelled (training-v1 models it); see the policy doc."""
 
     name = "baseline-v1"
+    # training-v1 sets it: the plan then carries no "not modelled" rejection, and its training block follows.
+    models_training = False
 
     def plan(self, snapshot: AccountSnapshot, design: DesignData, config: PolicyConfig) -> Plan:
         requests: list[ActionRequest] = []
@@ -297,7 +336,8 @@ class BaselineV1:
         # 3. Daily reward.
         admit("collect_daily_reward", {}, "daily reward", "collect_daily_reward")
 
-        rejected.append(Rejection("add_training", f"crew training is not modelled by {self.name}"))
+        if not self.models_training:
+            rejected.append(Rejection("add_training", f"crew training is not modelled by {self.name}"))
 
         requests, rejected = _cap_requests(requests, rejected, config.max_requests)
 
@@ -460,9 +500,9 @@ class FleetV1(BaselineV1):
     Order mirrors run.py's main loop: grab_flying_starbux and collect_task_reward first, then baseline-v1's
     research, room upgrades (each followed by collect_all_resources) and daily reward, then
     collect_available_markers and collect_mining_drones. None of the added actions has a planned cost, so the
-    baseline's budget decisions are unchanged. Crew training is not modelled. The inter-fleet actions
-    (fleet_pool_resources, fleet_marketplace_sync, fleet_battle_coordinate, fleet_share_crew_xp) are fleet-level
-    and are never planned for a single account.
+    baseline's budget decisions are unchanged. Crew training is not modelled (training-v1 models it). The
+    inter-fleet actions (fleet_pool_resources, fleet_marketplace_sync, fleet_battle_coordinate, fleet_share_crew_xp)
+    are fleet-level and are never planned for a single account.
     """
 
     name = "fleet-v1"
@@ -488,9 +528,16 @@ class FleetV1(BaselineV1):
         return replace(base, requests=tuple(requests), rejected=tuple(rejected))
 
 
-POLICIES: dict[str, ProgressionPolicy] = {
-    BaselineV1.name: BaselineV1(), HullReserveV1.name: HullReserveV1(), FleetV1.name: FleetV1(),
-}
+def _registry() -> dict[str, ProgressionPolicy]:
+    # training-v1 builds on FleetV1 above, so a top-level import would be circular. Whichever module is imported
+    # first, everything training.py needs from here is defined by the time this runs.
+    from sdk.policy.training import TrainingV1
+
+    return {BaselineV1.name: BaselineV1(), HullReserveV1.name: HullReserveV1(), FleetV1.name: FleetV1(),
+            TrainingV1.name: TrainingV1()}
+
+
+POLICIES: dict[str, ProgressionPolicy] = _registry()
 
 
 def get_policy(name: str) -> ProgressionPolicy:
