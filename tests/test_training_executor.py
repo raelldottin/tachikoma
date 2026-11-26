@@ -8,7 +8,9 @@ attributes the real Client uses) and applies AddTraining, FinishTraining and use
 
 from __future__ import annotations
 
+import dataclasses
 import datetime
+import logging
 import tempfile
 import unittest
 from dataclasses import dataclass, field
@@ -112,6 +114,9 @@ class FakeTrainingClient:
     training_designs: list[str] = field(default_factory=lambda: list(COURSES))
     calls: list[tuple] = field(default_factory=list)
     scripts: dict[str, list[Act]] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        self.crew = [dict(record) for record in self.crew]  # the world owns its records: callers may reuse theirs
 
     def script(self, name: str, *acts: Act) -> None:
         self.scripts.setdefault(name, []).extend(acts)
@@ -230,6 +235,20 @@ def logged(test: unittest.TestCase, client: FakeTrainingClient, **kwargs: Any):
     with test.assertLogs(LOGGER, level="INFO") as logs:
         result = run(client, **kwargs)
     return result, [f"{record.levelname} {record.getMessage()}" for record in logs.records]
+
+
+_QUIET = logging.NullHandler()
+
+
+def setUpModule() -> None:
+    # Runs that do not capture the executor's log (assertLogs does) stay quiet instead of printing to stderr.
+    logging.getLogger(LOGGER).addHandler(_QUIET)
+    logging.getLogger(LOGGER).propagate = False
+
+
+def tearDownModule() -> None:
+    logging.getLogger(LOGGER).removeHandler(_QUIET)
+    logging.getLogger(LOGGER).propagate = True
 
 
 SUMMARY_ZERO = "INFO [Cap] training: started=0 finished=0 consumables=0 skipped=0 failed=0"
@@ -890,6 +909,69 @@ class ClassificationTests(unittest.TestCase):
         source = Path(executor.__file__).read_text(encoding="utf-8")
         for call in ("datetime.now(", "utcnow(", "time.time(", "date.today("):
             self.assertNotIn(call, source)
+
+
+class ResponseAndShapeTests(unittest.TestCase):
+    def responses(self, client: FakeTrainingClient) -> list[tuple]:
+        journal = MemoryJournal()
+        run(client, journal=journal)
+        return [(e.action_id, e.response_ok) for e in journal.read() if e.action_id != "training_decision"]
+
+    def test_the_runner_sees_a_bool_response_for_each_mutation(self):
+        self.assertEqual(self.responses(FakeTrainingClient([ended()], researches=("1", "2"))),
+                         [("finish_training", True), ("add_training", True)])
+        refused = FakeTrainingClient([ended()])
+        refused.script("finishTraining", Act(apply=False, result=None))
+        self.assertEqual(self.responses(refused), [("finish_training", False)])
+
+    def test_only_exactly_true_is_a_successful_response(self):
+        for name, crew, kwargs in (("addTraining", delish(), {}), ("useConsumable", low(), {"items": {"101": 5}})):
+            with self.subTest(name=name):
+                client = FakeTrainingClient([crew], **kwargs)
+                client.script(name, Act(result="yes"))
+                journal = MemoryJournal()
+                run(client, journal=journal, item_designs_raw=CONSUMABLE_DESIGNS)
+                self.assertEqual([e.response_ok for e in journal.read() if e.action_id != "training_decision"],
+                                 [False])
+                client = FakeTrainingClient([crew], **kwargs)
+                journal = MemoryJournal()
+                run(client, journal=journal, item_designs_raw=CONSUMABLE_DESIGNS)
+                self.assertEqual([e.response_ok for e in journal.read() if e.action_id != "training_decision"],
+                                 [True])
+
+    def test_a_finish_at_capacity_reports_no_stat_change(self):
+        client = FakeTrainingClient([dict(ended(Weapon=100), **{"@TrainingCapacity": "100"})])
+
+        def finish(character_id):
+            client.calls.append(("finishTraining", character_id))
+            client.record(character_id)["@TrainingDesignId"] = "0"
+            return dict(client.record(character_id))
+
+        client.finishTraining = finish
+        result, lines = logged(self, client)
+        self.assertEqual(lines[0], "INFO [Cap] Completed training for Delish in Galaxy Gym with no stat change")
+        self.assertEqual(result.crew[0].finish.reason, "training of 1001 finished at capacity; no gain expected")
+
+    def test_an_exception_around_the_finish_leaves_the_crew_skipped(self):
+        class NoFinishEvents(MemoryJournal):
+            def append(self, event):
+                if event.action_id == "finish_training":
+                    raise JournalError("refused")
+                super().append(event)
+
+        client = FakeTrainingClient([ended(), maiden()])
+        result = run(client, journal=NoFinishEvents())
+        self.assertEqual(result.crew[0].decision, Skip(1001, "training_in_progress", "finish_training not run"))
+        self.assertEqual((result.crew[0].finish, result.crew[0].error), (None, "JournalError: refused"))
+        self.assertEqual(client.mutations(), [("finishTraining", "1001"), ("addTraining", "3", "1002")])
+        self.assertEqual(result.counts, TrainingCounts(started=1, skipped=1, failed=1))
+
+    def test_results_are_immutable(self):
+        result = run(FakeTrainingClient([delish()]))
+        for value, attribute in ((result, "readable"), (result.crew[0], "error"), (result.crew[0].action, "reason"),
+                                 (result.counts, "started")):
+            with self.subTest(type=type(value).__name__), self.assertRaises(dataclasses.FrozenInstanceError):
+                setattr(value, attribute, None)
 
 
 if __name__ == "__main__":

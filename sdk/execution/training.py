@@ -152,9 +152,6 @@ class TrainingClient:
         self._invalidate()
         return self._client.useConsumable(item_design_id, character_id) is True
 
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._client, name)
-
 
 @dataclass(frozen=True)
 class ActionResult:
@@ -163,7 +160,7 @@ class ActionResult:
     verification: str
     reason: str
     attempted: bool
-    harmless: bool = False
+    harmless: bool  # not verified, yet no failure (a finish that was not due, or already collected)
 
     @property
     def failed(self) -> bool:
@@ -409,7 +406,6 @@ class _Session:
     def _finish(self, decision: FinishTraining, crew: CrewState) -> tuple[ActionResult, Optional[CrewState]]:
         """Run finish_training; the result and the crew rebuilt from the reply (None without a usable reply)."""
         key = str(crew.character_id)
-        self.proxy.finish_replies.pop(key, None)
         result = _run_action(self.runner, decision,
                              _finish_harmless(lambda: self.cache.last, key, lambda: key in self.proxy.finish_replies))
         reply = self.proxy.finish_replies.pop(key, None)
