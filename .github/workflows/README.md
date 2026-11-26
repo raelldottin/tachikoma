@@ -81,6 +81,17 @@ No repository settings are changed merely by adding these files.
   to 30 days, and no secrets outside the account steps (a `secrets` reference
   anywhere inside a `${{ }}` expression counts). The report and upload `if:`
   may be written `always()` or `${{ always() }}`.
+- `daily-run.yml` (00:00, 08:00 and 16:00 UTC), `live-trial.yml` (owner
+  dispatch only) and `live-trial-schedule.yml` (the R2 trial, once a day at
+  04:30 UTC) all act on pss5 and share the workflow-level concurrency group
+  `live-trial` with `cancel-in-progress: false`, so GitHub never runs two of
+  them at once (SPEC-06 S06-R6). The group is the guarantee; the 04:30 time
+  only makes queueing behind the daily run less likely. A group holds one
+  running and one pending run, so a third run that queues cancels the
+  pending one. While a file under `docs/experiments/live/` declares
+  `legacy_run_serialized`, `scripts/ci.py`
+  (`check_serialized_legacy_run`) requires the same fixed group, set at the
+  workflow level only and with `cancel-in-progress: false`, in all three.
 - New workflows pin external actions to full commit hashes, use bounded
   job timeouts, cache pip downloads, and disable checkout credential
   persistence. Validation defaults to `contents: read`.

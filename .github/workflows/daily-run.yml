@@ -10,6 +10,14 @@ on:
 permissions:
   contents: read
 
+# SPEC-06 S06-R6: the group named live-trial now covers every workflow that touches pss5 (this one,
+# live-trial.yml and live-trial-schedule.yml), so GitHub never runs two of them at the same time. The pss5
+# authorization files claim this with legacy_run_serialized, and scripts/ci.py checks it. A group holds one
+# running and one pending run; a third run queuing cancels the pending one.
+concurrency:
+  group: live-trial
+  cancel-in-progress: false
+
 jobs:
   daily-run:
     name: 'Runs daily'

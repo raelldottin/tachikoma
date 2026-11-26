@@ -18,6 +18,8 @@ Credentials stay in the repository secrets. The live steps run only when the own
    gh variable set LEGACY_RUN_SKIP --body 5
    ```
 
+   Done on 2026-11-12 and undone on 2026-11-26, when the owner deleted `LEGACY_RUN_SKIP`. The legacy daily run acts on pss5 again. It never runs at the same time as `live-trial.yml` or `live-trial-schedule.yml`, because all three share the workflow-level concurrency group `live-trial`; the pss5 authorization files say so with `legacy_run_serialized: [5]` ([SPEC-06](../../specs/SPEC-06-legacy-daily-run.md) S06-R6). A concurrency group holds one running and one pending run, and a third run that queues cancels the pending one: before you dispatch `live-trial.yml` or `daily-run.yml` by hand, check that no pss5 workflow is running or waiting.
+
 3. Disable the LangGraph daily run while the trial lasts. It logs in to all five accounts in one step and cannot skip one:
 
    ```bash
@@ -79,7 +81,7 @@ SPEC-07 needs a canary whose collection reconciles `verified` before trial block
 Canary 43305786623 settled which: pss5 has no mineral or gas collector and no storage room ([G2 evidence](g2-evidence.md#why-the-collections-had-nothing-to-collect)), so there is nothing to collect. To get a verified one:
 
 1. Give pss5 a collector. Done on 2026-11-13: the owner cannot tell which game account is pss5, so SPEC-13's `step=place` placed a Gas Collector Lv1 at row 1, column 1 (run 43393262041, verified, 10 minerals).
-2. Give it time to produce. The legacy daily run skips pss5, so nothing else collects from it. Wait several hours. A skipped account also writes no crew-training journal: the daily run's `Training report` summary lists only the `account-N.jsonl` journals that were written, so account 5 is absent from it while `LEGACY_RUN_SKIP` names it.
+2. Give it time to produce. At the time the legacy daily run skipped pss5, so nothing else collected from it. Wait several hours. A skipped account also writes no crew-training journal: the daily run's `Training report` summary lists only the `account-N.jsonl` journals that were written, so account 5 is absent from it while `LEGACY_RUN_SKIP` names it. Since 2026-11-26 `LEGACY_RUN_SKIP` is deleted, so the legacy daily run collects from pss5 three times a day and writes `account-5.jsonl`.
 3. Dispatch `gh workflow run live-trial.yml -f step=canary`. It runs a fresh dry run first. The canary authorization runs until 2026-11-26.
 
 Done on 2026-11-13: canary 43394041693 reconciled `verified` (minerals +10), so S07-R2 is met ([G2 evidence](g2-evidence.md#the-verified-canary)).
@@ -117,5 +119,5 @@ A new authorization file with `full` mode follows once the plan is written.
 ## Stopping
 
 - Cancel a running dispatch: `gh run cancel <run id>`.
-- Put pss5 back in the daily run: `gh variable delete LEGACY_RUN_SKIP`.
-- Re-enable LangGraph: `gh workflow enable daily-run-langgraph.yml`.
+- pss5 is back in the daily run since 2026-11-26 (`LEGACY_RUN_SKIP` deleted). To take it out again: `gh variable set LEGACY_RUN_SKIP --body 5`.
+- Re-enable LangGraph: `gh workflow enable daily-run-langgraph.yml`. Only after the trial: it logs in to pss5 and is not in the `live-trial` concurrency group, so while it is enabled the pss5 authorization files' `legacy_run_serialized` claim is false.

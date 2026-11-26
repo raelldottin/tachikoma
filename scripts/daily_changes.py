@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""What changed on a trial account each day, from its evening snapshots (SPEC-07 support).
+"""What changed on a trial account each day, from its daily snapshots (SPEC-07 support).
 
 Reads baseline snapshot files (``<alias>-<UTC>.json``, as ``run.py --baseline``
 writes them and the trial's ``trial-snapshot-*`` artifacts hold them), pairs
@@ -14,8 +14,12 @@ consecutive snapshots of each account, and prints one section per day:
 - the change in minerals, gas, starbux, trophies and ship level, and crew level-ups;
 - the sections a snapshot did not observe, so an unknown is never shown as "no change".
 
-A day is the date (UTC) of the later snapshot of the pair: the 23:30 UTC snapshot
-closes that day. It reads files only: no game traffic, no network, no writes.
+A day is the trial day the later snapshot of the pair closes (``trial_day``): a
+snapshot taken before 12:00 UTC closes the previous date. The trial's snapshots
+ran at 23:30 UTC, closing that date, until the schedule moved in late November 2026;
+now they run at 04:30 UTC, closing the day before, even when GitHub starts the run
+hours late.
+It reads files only: no game traffic, no network, no writes.
 
     python scripts/daily_changes.py DIR_OR_FILE... [--alias pss5] [--schedule PATH]
                                      [--from YYYY-MM-DD] [--to YYYY-MM-DD]
@@ -29,7 +33,7 @@ import os
 import sys
 from collections import Counter
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterable, Mapping, Optional, Sequence
 
@@ -83,6 +87,15 @@ def load_schedule(path: Path | str) -> tuple[Block, ...]:
         if later.start <= earlier.end:
             raise ScheduleError(f"blocks {earlier.name} and {later.name} overlap")
     return tuple(blocks)
+
+
+# A snapshot taken before this hour (UTC) closes the previous date's trial day.
+DAY_CLOSES_BEFORE_HOUR = 12
+
+
+def trial_day(observed_at: datetime) -> date:
+    """The trial day a snapshot taken at ``observed_at`` closes: its UTC date, or the date before before 12:00 UTC."""
+    return (observed_at.astimezone(timezone.utc) - timedelta(hours=DAY_CLOSES_BEFORE_HOUR)).date()
 
 
 def block_on(blocks: Sequence[Block], day: date) -> Optional[Block]:
@@ -169,7 +182,7 @@ def summarize(series: Sequence[AccountSnapshot], blocks: Sequence[Block] = (),
         return ["Fewer than two snapshots: no day to compare."]
     out = []
     for before, after in zip(series, series[1:]):
-        day = after.observed_at.astimezone(timezone.utc).date()
+        day = trial_day(after.observed_at)
         if (first and day < first) or (last and day > last):
             continue
         block = block_on(blocks, day)
