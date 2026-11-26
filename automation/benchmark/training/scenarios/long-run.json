@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "name": "long-run",
+  "description": "Twelve mixed crew over ten days in all four training rooms with partial research: saturation near the horizon and runtime.",
+  "tags": ["multi-day"],
+  "seed": 1109,
+  "start": "2027-07-05T00:00:00+00:00",
+  "days": 10,
+  "tick_minutes": 60,
+  "fatigue_recovery_seconds": 360,
+  "rooms": [
+    {"id": 7001, "design": "GYM"},
+    {"id": 7002, "design": "Academy"},
+    {"id": 7003, "design": "Galaxy Gym"},
+    {"id": 7004, "design": "Lunar College"}
+  ],
+  "research": ["Fitness", "Fitness Lv2", "Fitness Lv3", "Education", "Education Lv2"],
+  "inventory": {"Common ATK Consumable": 2, "Common SCI Consumable": 2, "Hero ATK Consumable": 1},
+  "crew": [
+    {"id": 901, "name": "Galactic Succubus", "design": "epic", "room": 7002},
+    {"id": 902, "name": "Galactic Snow Maiden", "design": "epic", "room": 7004, "stats": {"Weapon": 40}},
+    {"id": 903, "name": "Delish", "design": "epic", "room": 7002, "stats": {"Weapon": 60}},
+    {"id": 904, "name": "Mistycball", "design": "epic", "room": 7002},
+    {"id": 905, "name": "C.P.U.", "design": "unique", "room": 7004, "stats": {"Science": 30}},
+    {"id": 906, "name": "r2e", "design": "epic", "room": 7002, "stats": {"Science": 66}},
+    {"id": 907, "name": "The Conjoint Archon", "design": "unique", "room": 7001},
+    {"id": 908, "name": "Galactic Sprite", "design": "hero", "room": 7003, "stats": {"Attack": 45}},
+    {"id": 909, "name": "Huge Hellaluya", "design": "epic", "room": 7001, "stats": {"Stamina": 20}},
+    {"id": 910, "name": "Cyber Duck", "design": "hero", "room": 7003},
+    {"id": 911, "name": "Admiral Serena", "design": "captain", "room": 7001},
+    {"id": 912, "name": "King Dong", "design": "legendary", "room": 7003, "stats": {"Attack": 50}}
+  ],
+  "faults": []
+}

@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "name": "fault-raise",
+  "description": "A start that took effect and a finish that did not both raise a connection error: the finished crew's advisory decision is dropped and retried.",
+  "tags": ["fault-raise"],
+  "seed": 1112,
+  "start": "2027-07-05T00:00:00+00:00",
+  "days": 7,
+  "tick_minutes": 60,
+  "fatigue_recovery_seconds": 360,
+  "rooms": [{"id": 7001, "design": "GYM"}],
+  "research": ["Fitness", "Fitness Lv2", "Fitness Lv3"],
+  "inventory": {},
+  "crew": [
+    {"id": 1201, "name": "King Dong", "design": "legendary", "room": 7001},
+    {"id": 1202, "name": "Huntress", "design": "unique", "room": 7001, "stats": {"Attack": 30}},
+    {"id": 1203, "name": "Admiral Serena", "design": "captain", "room": 7001}
+  ],
+  "faults": [
+    {"kind": "raise", "method": "addTraining", "day": 0, "call": 2, "effect": true},
+    {"kind": "raise", "method": "finishTraining", "day": 1, "call": 1, "effect": false}
+  ]
+}

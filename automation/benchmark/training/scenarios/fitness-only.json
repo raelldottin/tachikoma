@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "name": "fitness-only",
+  "description": "Only Fitness and Fitness Lv2 researched: the band gate accepts either family while each design needs its own family's research.",
+  "tags": ["research-split"],
+  "seed": 1115,
+  "start": "2027-07-05T00:00:00+00:00",
+  "days": 7,
+  "tick_minutes": 60,
+  "fatigue_recovery_seconds": 360,
+  "rooms": [{"id": 7001, "design": "GYM"}, {"id": 7002, "design": "Academy"}],
+  "research": ["Fitness", "Fitness Lv2"],
+  "inventory": {},
+  "crew": [
+    {"id": 1501, "name": "Galactic Succubus", "design": "epic", "room": 7002, "stats": {"Weapon": 55}},
+    {"id": 1502, "name": "The Conjoint Archon", "design": "unique", "room": 7001, "stats": {"Attack": 55}},
+    {"id": 1503, "name": "Mistycball", "design": "epic", "room": 7002, "stats": {"Science": 10}},
+    {"id": 1504, "name": "King Dong", "design": "legendary", "room": 7001, "stats": {"Attack": 100}}
+  ],
+  "faults": []
+}

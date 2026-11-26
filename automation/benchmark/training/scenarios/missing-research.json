@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "name": "missing-research",
+  "description": "No research at all: the primary T1 gate (oracle), the ungated secondary T1 band and the research_missing consumable fallback.",
+  "tags": ["missing-research"],
+  "seed": 1104,
+  "start": "2027-07-05T00:00:00+00:00",
+  "days": 7,
+  "tick_minutes": 60,
+  "fatigue_recovery_seconds": 360,
+  "rooms": [{"id": 7001, "design": "GYM"}, {"id": 7002, "design": "Academy"}],
+  "research": [],
+  "inventory": {"Common WPN Consumable": 3, "Common ATK Consumable": 3},
+  "crew": [
+    {"id": 401, "name": "Galactic Succubus", "design": "epic", "room": 7002},
+    {"id": 402, "name": "Delish", "design": "epic", "room": 7002, "stats": {"Weapon": 20}},
+    {"id": 403, "name": "Cyber Duck", "design": "elite", "room": 7001, "stats": {"Attack": 72}},
+    {"id": 404, "name": "King Dong", "design": "legendary", "room": 7001}
+  ],
+  "faults": []
+}

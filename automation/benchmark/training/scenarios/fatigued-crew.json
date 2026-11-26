@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "name": "fatigued-crew",
+  "description": "Fatigue recovers one point per two hours. Crew at or near the maximum sit at 100 between sessions, so the fatigue gate at 100 fires again and again and sessions started at fatigue 99 gain nothing; a rested captain on primary T3 gains less with every session until it saturates too; the Hero consumable rule (90% and fatigue 100) fires.",
+  "tags": ["fatigued"],
+  "seed": 1107,
+  "start": "2027-07-05T00:00:00+00:00",
+  "days": 7,
+  "tick_minutes": 60,
+  "fatigue_recovery_seconds": 7200,
+  "rooms": [{"id": 7001, "design": "GYM"}, {"id": 7002, "design": "Academy"}],
+  "research": ["Fitness", "Fitness Lv2", "Fitness Lv3", "Education", "Education Lv2", "Education Lv3"],
+  "inventory": {"Hero ATK Consumable": 2, "Hero WPN Consumable": 1},
+  "crew": [
+    {"id": 701, "name": "Cyber Duck", "design": "elite", "room": 7001, "stats": {"Attack": 90}, "fatigue": 100},
+    {"id": 702, "name": "King Dong", "design": "legendary", "room": 7001, "fatigue": 100},
+    {"id": 703, "name": "Galactic Succubus", "design": "epic", "room": 7002, "stats": {"Weapon": 10}, "fatigue": 99},
+    {"id": 704, "name": "Admiral Serena", "design": "captain", "room": 7001, "stats": {"Attack": 130}}
+  ],
+  "faults": []
+}

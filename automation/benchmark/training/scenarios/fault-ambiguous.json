@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "name": "fault-ambiguous",
+  "description": "A finish that took effect and a start that did not both return no answer: no replan after an ambiguous finish, the crew is picked up a tick later.",
+  "tags": ["fault-ambiguous"],
+  "seed": 1113,
+  "start": "2027-07-05T00:00:00+00:00",
+  "days": 7,
+  "tick_minutes": 60,
+  "fatigue_recovery_seconds": 360,
+  "rooms": [{"id": 7001, "design": "GYM"}],
+  "research": ["Fitness", "Fitness Lv2", "Fitness Lv3"],
+  "inventory": {},
+  "crew": [
+    {"id": 1301, "name": "Admiral Serena", "design": "captain", "room": 7001},
+    {"id": 1302, "name": "King Dong", "design": "legendary", "room": 7001, "stats": {"Attack": 20}},
+    {"id": 1303, "name": "Ancestral Spirit", "design": "unique", "room": 7001}
+  ],
+  "faults": [
+    {"kind": "ambiguous-response", "method": "finishTraining", "day": 0, "call": 1, "effect": true},
+    {"kind": "ambiguous-response", "method": "addTraining", "day": 1, "call": 2, "effect": false}
+  ]
+}

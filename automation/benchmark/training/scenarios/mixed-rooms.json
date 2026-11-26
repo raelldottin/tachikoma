@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "name": "mixed-rooms",
+  "description": "All four training room names and their upgrade lineage, crew sitting in the wrong room type ('move to') and band gates met through Education only.",
+  "tags": ["mixed-rooms"],
+  "seed": 1105,
+  "start": "2027-07-05T00:00:00+00:00",
+  "days": 7,
+  "tick_minutes": 60,
+  "fatigue_recovery_seconds": 360,
+  "rooms": [
+    {"id": 7001, "design": "GYM"},
+    {"id": 7002, "design": "Academy"},
+    {"id": 7003, "design": "Galaxy Gym"},
+    {"id": 7004, "design": "Lunar College"}
+  ],
+  "research": ["Education", "Education Lv2", "Education Lv3"],
+  "inventory": {},
+  "crew": [
+    {"id": 501, "name": "Galactic Succubus", "design": "epic", "room": 7004},
+    {"id": 502, "name": "r2e", "design": "epic", "room": 7002, "stats": {"Science": 55}},
+    {"id": 503, "name": "Galactic Sprite", "design": "hero", "room": 7003, "stats": {"Attack": 20}},
+    {"id": 504, "name": "Delish", "design": "epic", "room": 7003, "stats": {"Weapon": 30}},
+    {"id": 505, "name": "The Conjoint Archon", "design": "unique", "room": 7004, "stats": {"Attack": 10}},
+    {"id": 506, "name": "Turkey Hero", "design": "hero", "room": 7001, "stats": {"Attack": 90}}
+  ],
+  "faults": []
+}

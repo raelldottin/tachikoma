@@ -1,0 +1,72 @@
+{
+  "benchmark": "crew-training",
+  "composite": 67.261087,
+  "lowered": [],
+  "qa_eval": {
+    "equivalent": [],
+    "min_detection_rate": 0.9
+  },
+  "scenarios": {
+    "consumable-windows": {
+      "score": 41.153274,
+      "trace_digest": "sha256:e4177dc66d30e0c91fcb40be0cb8c69a4a8f99eff1f9ad0ffd493de0f2e78370"
+    },
+    "fatigued-crew": {
+      "score": 8.944731,
+      "trace_digest": "sha256:bf1cadb9012e7184f14ee66408b77606cb488ce508a8843d41d5272e5ec2a684"
+    },
+    "fault-ambiguous": {
+      "score": 84.704006,
+      "trace_digest": "sha256:1afd246a00bd0dc6c55ed35913ffc0cbec15197ce40c04ae30233933c3e9415c"
+    },
+    "fault-contradicted": {
+      "score": 91.252056,
+      "trace_digest": "sha256:0076427bcefbf3e49e8962707685a5660da6aaa5ec236d1f988db34d553d39eb"
+    },
+    "fault-raise": {
+      "score": 84.626497,
+      "trace_digest": "sha256:3e4e39ad5709bdc9194145eec5af48b10a7cd39fac0908190f44d5a8f499b1e9"
+    },
+    "fault-reject": {
+      "score": 88.59283,
+      "trace_digest": "sha256:cbbf529a5645d7f34ec54d742fdfddc3858cd9e1e8df119c88dcb07bf10ecfc7"
+    },
+    "fault-snapshot": {
+      "score": 89.099699,
+      "trace_digest": "sha256:0c014b0ab1a2950326a7783f373d65974c4a5365e2527e0b6157f48924ac10f0"
+    },
+    "fitness-only": {
+      "score": 40.203946,
+      "trace_digest": "sha256:bc31fefe41439c4519aee625824138d014033c28d0821f3ab397ab81809f3635"
+    },
+    "fresh-crew": {
+      "score": 90.093743,
+      "trace_digest": "sha256:fdb47e7ee22d3fe5786a7486d3801e8f796618b877730982e76b3ff2fbf111d1"
+    },
+    "long-run": {
+      "score": 70.962044,
+      "trace_digest": "sha256:bc233909b366d5e561ae9a5b3e47548aa8db1606294554cb99bf6a8b786aa6d2"
+    },
+    "mid-level-crew": {
+      "score": 97.030142,
+      "trace_digest": "sha256:e43add93c80f278a16721155f665d423f43e9356c9a1dc4b639f168805cc3603"
+    },
+    "missing-research": {
+      "score": 4.29658,
+      "trace_digest": "sha256:16bb3359119154810e92a31ef038c5b8c030c5ac5fef89ce85cc5953076b3deb"
+    },
+    "mixed-rooms": {
+      "score": 65.743764,
+      "trace_digest": "sha256:c6bea7429bc6e12f46feb8c7140b0fc6f47ec206564e023b298de6b2d9e454a2"
+    },
+    "near-cap-crew": {
+      "score": 96.965681,
+      "trace_digest": "sha256:41054285130b8b0e14616011d45ee071858b35c684aca182e0958bacac6dd8b0"
+    },
+    "no-training-room": {
+      "score": 55.247307,
+      "trace_digest": "sha256:abb39453e3f8e6d1c97d1d170b9c8a8b1f8a52e9f7f186d071bc112ec2892140"
+    }
+  },
+  "schema_version": 2
+}
