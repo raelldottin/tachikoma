@@ -147,9 +147,48 @@ def run_progression_dry_run(client, account_alias, journal_path):
     return 0
 
 
+class TrainingJournalError(Exception):
+    """--training-journal-dir cannot be used: a bad --account-alias, or a directory or file that cannot be created."""
+
+
+def open_training_journal(journal_dir, account_alias):
+    """Create journal_dir and an empty <alias>.jsonl in it (kept if present); return a GameplayJournal on it.
+
+    Runs before any login, so an unusable directory fails the run early, and the file exists even when nothing
+    is journaled (the training report refuses a missing journal). A refused alias is never repeated in an error; a
+    file-system error names the journal path, which holds the alias only once it has been validated.
+    """
+    from sdk.journal import GameplayJournal
+    from sdk.state.snapshot import ACCOUNT_ALIAS_PATTERN
+
+    # fullmatch, not match: the pattern ends in $, which also accepts a trailing newline. The alias is never
+    # repeated, so an e-mail address given as an alias cannot reach a CI log.
+    if not isinstance(account_alias, str) or not ACCOUNT_ALIAS_PATTERN.fullmatch(account_alias):
+        raise TrainingJournalError("--account-alias must be a lowercase alias (a-z, 0-9, '_' or '-', starting with a "
+                                   "letter or digit, at most 64 characters) to name a training journal")
+    # Path("") is the working directory: an empty DIR (an unset variable in a workflow) would journal into it.
+    if not str(journal_dir).strip():
+        raise TrainingJournalError("--training-journal-dir needs a directory, not an empty value")
+    directory = Path(journal_dir)
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+    except OSError as error:
+        raise TrainingJournalError(
+            f"cannot create training journal directory {directory}: {error.strerror or error}"
+        ) from None
+    path = directory / f"{account_alias}{TRAINING_JOURNAL_SUFFIX}"
+    try:
+        with path.open("a", encoding="utf-8"):
+            pass
+    except OSError as error:
+        raise TrainingJournalError(f"cannot create training journal {path}: {error.strerror or error}") from None
+    return GameplayJournal(path)
+
+
 # Native checksum settings every game client gets (RebuildAmmo3, UserEmailPasswordAuthorize4).
 CLIENT_CHECKSUM_SETTINGS = {"checksum_key": "5343", "savy_checksum": "Savvy!s0d@"}
 FLEET_JOURNAL_DIR_DEFAULT = "tachikoma-fleet-journals"  # holds <alias>.log files; *.log is gitignored
+TRAINING_JOURNAL_SUFFIX = ".jsonl"  # not gitignored: give --training-journal-dir a directory outside the checkout
 
 
 def _md_cell(value):
@@ -1386,13 +1425,21 @@ def main():
         "--account-alias",
         dest="account_alias",
         default="primary",
-        help="lowercase account alias used in the progression journal (default: primary)",
+        help="lowercase account alias used in the progression and training journals (default: primary)",
     )
     parser.add_argument(
         "--progression-journal",
         dest="progression_journal",
         default=PROGRESSION_JOURNAL_DEFAULT,
         help=f"progression journal path (default: {PROGRESSION_JOURNAL_DEFAULT})",
+    )
+    parser.add_argument(
+        "--training-journal-dir",
+        dest="training_journal_dir",
+        default=None,
+        metavar="DIR",
+        help="daily run only: create DIR and DIR/<--account-alias>.jsonl before login and hand that journal to crew "
+        "training; refused with --report, --progression-dry-run and the fleet, baseline and capture commands",
     )
     parser.add_argument(
         "--report",
@@ -1570,6 +1617,7 @@ def main():
         ("--progression-dry-run", args.progression_dry_run), ("--run-battle", args.run_battle),
         ("--auth-file", args.auth_file), ("--login-email", args.login_email),
         ("--password-file", args.password_file), ("--device-key", args.device_key),
+        ("--training-journal-dir", args.training_journal_dir is not None),
     )
     # --fleet-execute takes the SMTP flags for its one alert summary e-mail (SPEC-11); the dry run does not.
     smtp_flags = (
@@ -1646,6 +1694,10 @@ def main():
                      "or --fleet-execute (--concurrent and --identity-salt-env also with --baseline, "
                      "--identity-salt-env also with --capture-reads)")
 
+    if args.training_journal_dir is not None and (args.report or args.progression_dry_run):
+        parser.error("--training-journal-dir is only used by the daily run; it cannot be combined with --report or "
+                     "--progression-dry-run")
+
     # Offline reports read local journals only: handled before any SMTP setup,
     # Device/Client construction, credential prompt, login or network access.
     if args.report:
@@ -1659,6 +1711,16 @@ def main():
                                     output_path=args.output))
     if args.journals or args.registry or args.output:
         parser.error("--journal, --registry and --output are only used with --report")
+
+    # The training journal is opened before SMTP setup, Device/Client construction and login: a bad alias or an
+    # unwritable directory exits 2 without touching the network.
+    training_journal = None
+    if args.training_journal_dir is not None:  # an empty DIR is refused, not read as "no journal"
+        try:
+            training_journal = open_training_journal(args.training_journal_dir, args.account_alias)
+        except TrainingJournalError as error:
+            print(f"error: {error}", file=sys.stderr)
+            sys.exit(2)
 
     # Validate SMTP configuration before Device/Client creation or network activity
     smtp_email = args.smtp_email
@@ -1856,6 +1918,9 @@ def main():
             except Exception as e:
                 logging.error(f"infoBux failed: {redact_secrets(str(e))}")
 
+            if training_journal is not None:  # read by manageTraining (Unit 9); without the flag nothing is set
+                client.training_journal = training_journal
+                client.training_account_alias = args.account_alias
             try:
                 res = client.manageTraining()
                 if res is False:
