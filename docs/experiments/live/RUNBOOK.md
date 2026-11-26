@@ -79,7 +79,7 @@ SPEC-07 needs a canary whose collection reconciles `verified` before trial block
 Canary 43305786623 settled which: pss5 has no mineral or gas collector and no storage room ([G2 evidence](g2-evidence.md#why-the-collections-had-nothing-to-collect)), so there is nothing to collect. To get a verified one:
 
 1. Give pss5 a collector. Done on 2026-11-13: the owner cannot tell which game account is pss5, so SPEC-13's `step=place` placed a Gas Collector Lv1 at row 1, column 1 (run 43393262041, verified, 10 minerals).
-2. Give it time to produce. The legacy daily run skips pss5, so nothing else collects from it. Wait several hours.
+2. Give it time to produce. The legacy daily run skips pss5, so nothing else collects from it. Wait several hours. A skipped account also writes no crew-training journal: the daily run's `Training report` summary lists only the `account-N.jsonl` journals that were written, so account 5 is absent from it while `LEGACY_RUN_SKIP` names it.
 3. Dispatch `gh workflow run live-trial.yml -f step=canary`. It runs a fresh dry run first. The canary authorization runs until 2026-11-26.
 
 Done on 2026-11-13: canary 43394041693 reconciled `verified` (minerals +10), so S07-R2 is met ([G2 evidence](g2-evidence.md#the-verified-canary)).
