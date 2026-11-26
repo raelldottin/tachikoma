@@ -57,14 +57,24 @@ No repository settings are changed merely by adding these files.
   test exercises this guard using a synthetic connection attempt blocked
   before any connection is established.
   The `daily-run.yml` and `daily-run-langgraph.yml` schedules are separate
-  operational workflows. `daily-run.yml` passes each account step
-  `--account-alias account-N --training-journal-dir
-  "$RUNNER_TEMP/tachikoma-training/journals"`, so each account journals its
-  crew training under its own alias. A final `Training report` step
-  (`if: always()`, given no credentials) appends the list of journals
-  written to the job summary, then runs `run.py --report training` over them,
-  writes `report/training-report.md` and `.json`, and appends the Markdown
-  report; a failing report run fails the step after the list is written. An
+  operational workflows. `daily-run.yml` runs every account at the same
+  time: the `accounts` job is a matrix with one leg per account number
+  (`fail-fast: false`), each on its own runner. A leg's single account step
+  reads only that leg's `PSS_ACCOUNT_<N>_*` secrets, as
+  `secrets[format('PSS_ACCOUNT_{0}_<NAME>', matrix.account)]`, is skipped
+  when `LEGACY_RUN_SKIP` lists its `matrix.account`, and passes
+  `--account-alias "account-$ACCOUNT_NUMBER" --training-journal-dir
+  "$RUNNER_TEMP/tachikoma-training/journals"` (with `ACCOUNT_NUMBER` set from
+  `matrix.account`), so each account journals its crew training under its own
+  alias. The leg then uploads its journal directory as
+  `training-journal-account-<N>` (`if: always()`, `continue-on-error: true`,
+  `overwrite: true` so a re-run leg replaces its journal, kept 1 day). The
+  `training-report` job (`needs: accounts`, `if: always()`, given no secrets)
+  downloads every `training-journal-account-*` artifact of the run, merged,
+  into the same directory, appends the list of journals to the job summary,
+  then runs `run.py --report training` over them, writes
+  `report/training-report.md` and `.json`, and appends the Markdown report; a
+  failing report run fails the step after the list is written. An
   `actions/upload-artifact` step (`if: always()`, `continue-on-error: true`,
   so an artifact service failure cannot fail the run) then uploads only
   `$RUNNER_TEMP/tachikoma-training` as `training-report-<run id>-<attempt>`
@@ -72,15 +82,30 @@ No repository settings are changed merely by adding these files.
   account that failed at login is listed with an empty journal; only an
   account skipped through `LEGACY_RUN_SKIP` (or one that stopped before
   `run.py` ran) writes no journal and is not listed. `scripts/ci.py`
-  (`check_daily_training`) enforces this shape: each account's alias and
-  journal flag exactly once and its `continue-on-error`, a single report step
-  in the account steps' job after every one of them, under `set -euo
-  pipefail`, without `continue-on-error`, credentials, `||`, `exit 0`,
-  `set +e` or a trap, an upload of only the training directory, in the
-  report's job after it, with `continue-on-error: true` and a retention of 1
-  to 30 days, and no secrets outside the account steps (a `secrets` reference
-  anywhere inside a `${{ }}` expression counts). The report and upload `if:`
-  may be written `always()` or `${{ always() }}`.
+  (`check_daily_run`) enforces this shape: exactly the two jobs; a matrix of
+  only distinct positive account numbers (no `include` or `exclude`) with
+  `fail-fast: false`; one account step reading account secrets only in the
+  `matrix.account` form, with the `LEGACY_RUN_SKIP` condition, its alias and
+  journal flag exactly once and `continue-on-error: true`; one journal upload
+  after it, named per leg, with `overwrite: true`; in the report job, one
+  download of only `training-journal-account-*`, merged into the journal
+  directory, then a single report step under `set -euo pipefail`, without
+  `continue-on-error`, credentials, `||`, `exit 0`, `set +e` or a trap, then
+  an upload of only the training directory with a retention of 1 to 30 days;
+  and no secrets outside the account step (a `secrets` reference anywhere
+  inside a `${{ }}` expression counts). Each `if: always()` may be written
+  `always()` or `${{ always() }}`.
+- `daily-run.yml` (00:00, 08:00 and 16:00 UTC), `live-trial.yml` (owner
+  dispatch only) and `live-trial-schedule.yml` (the R2 trial, once a day at
+  04:30 UTC) all act on pss5 and share the workflow-level concurrency group
+  `live-trial` with `cancel-in-progress: false`, so GitHub never runs two of
+  them at once (SPEC-06 S06-R6). The group is the guarantee; the 04:30 time
+  only makes queueing behind the daily run less likely. A group holds one
+  running and one pending run, so a third run that queues cancels the
+  pending one. While a file under `docs/experiments/live/` declares
+  `legacy_run_serialized`, `scripts/ci.py`
+  (`check_serialized_legacy_run`) requires the same fixed group, set at the
+  workflow level only and with `cancel-in-progress: false`, in all three.
 - New workflows pin external actions to full commit hashes, use bounded
   job timeouts, cache pip downloads, and disable checkout credential
   persistence. Validation defaults to `contents: read`.

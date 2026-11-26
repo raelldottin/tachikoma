@@ -405,7 +405,7 @@ def run_report_step(test: unittest.TestCase, runner_temp: Path):
     the parsed JSON report.
     """
     documents = ci.workflow_documents(ci.ROOT)
-    (job,) = documents["daily-run.yml"]["jobs"].values()
+    job = documents["daily-run.yml"]["jobs"][ci.DAILY_REPORT_JOB]
     (step,) = [step for step in job["steps"] if ci.DAILY_TRAINING_REPORT_COMMAND in step.get("run", "")]
     temporary = tempfile.TemporaryDirectory(prefix="tachikoma-report-step-")
     test.addCleanup(temporary.cleanup)

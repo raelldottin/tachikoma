@@ -2,22 +2,30 @@ name: Live trial schedule (SPEC-07)
 
 # Runs the owner-approved R2 progression trial on pss5
 # (docs/experiments/r2-progression-trial.md) on a schedule, so nobody has to
-# dispatch it twice a day:
-#   23:30 UTC, 2026-11-16 to 2026-12-20: a read-only snapshot of pss5
-#   00:30 UTC, 2026-11-30 to 2026-12-13: a dry run, then --fleet-execute --mode full
-# Outside those dates, and on any day the stop file below exists, it does nothing.
-# The owner stops the automated arm by committing
-# docs/experiments/r2-progression-trial/STOP, or by disabling this workflow.
-# Output is uploaded as an artifact kept 90 days, for the exit report.
+# dispatch it every day. One run a day, at 04:30 UTC, dated by its UTC start date D:
+#   D = 2026-11-17 to 2026-12-21: a read-only snapshot of pss5, which closes trial day D-1
+#     (trial days 2026-11-16 to 2026-12-20);
+#   D = 2026-11-30 to 2026-12-13: then, in the same job, a dry run and --fleet-execute --mode full,
+#     which open trial day D (the automated days).
+# So each day's snapshot always comes before that day's execute run. Outside those dates it does
+# nothing. The owner stops the automated arm by committing docs/experiments/r2-progression-trial/STOP
+# (the snapshot still runs), or by disabling this workflow.
+# Snapshot and execute output are uploaded as trial-snapshot-* and trial-execute-* artifacts kept
+# 90 days, for the exit report.
+#
+# The legacy daily run (daily-run.yml, 00:00, 08:00 and 16:00 UTC) acts on pss5 too. The concurrency
+# group below is the guarantee that the two never run at the same time (SPEC-06 S06-R6): 04:30 sits
+# in a gap of the daily run only to make queueing behind it less likely, because GitHub often starts
+# scheduled runs hours late.
 
 on:
   schedule:
-    - cron: '30 23 * * *'
-    - cron: '30 0 * * *'
+    - cron: '30 4 * * *'
 
 permissions:
   contents: read
 
+# Shared with daily-run.yml and live-trial.yml: every workflow that touches pss5 (S06-R6).
 concurrency:
   group: live-trial
   cancel-in-progress: false
@@ -27,9 +35,10 @@ jobs:
     name: Trial day
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     env:
       OUT: ${{ github.workspace }}/live-out
+      EXECUTE_OUT: ${{ github.workspace }}/live-out-execute
       SNAPSHOT_REGISTRY: docs/experiments/live/registry-g2-pss5.json
       TRIAL_REGISTRY: docs/experiments/live/registry-g2-pss5-trial.json
       TRIAL_AUTHORIZATION: docs/experiments/live/authorization-g2-pss5-trial.json
@@ -47,27 +56,32 @@ jobs:
         id: day
         env:
           SCHEDULE: ${{ github.event.schedule }}
+        # today is the run's UTC start date. Its snapshot closes trial day today-1, so snapshot dates are the
+        # trial days plus one; its execute run opens trial day today, so execute dates are the automated days.
         run: |
           set -euo pipefail
           today=$(date -u +%F)
-          step=none
-          if [ "$SCHEDULE" = '30 23 * * *' ] && [[ "$today" > "2026-11-15" && "$today" < "2026-12-21" ]]; then
-            step=snapshot
-          elif [ "$SCHEDULE" = '30 0 * * *' ] && [[ "$today" > "2026-11-29" && "$today" < "2026-12-14" ]]; then
-            step=execute
-            if [ -e "$STOP_FILE" ]; then step=stopped; fi
+          snapshot=no
+          execute=no
+          if [ "$SCHEDULE" = '30 4 * * *' ]; then
+            if [[ "$today" > "2026-11-16" && "$today" < "2026-12-22" ]]; then snapshot=yes; fi
+            if [[ "$today" > "2026-11-29" && "$today" < "2026-12-14" ]]; then
+              execute=yes
+              if [ -e "$STOP_FILE" ]; then execute=stopped; fi
+            fi
           fi
-          echo "$today: $step"
-          echo "step=$step" >> "$GITHUB_OUTPUT"
+          echo "$today: snapshot=$snapshot execute=$execute"
+          echo "snapshot=$snapshot" >> "$GITHUB_OUTPUT"
+          echo "execute=$execute" >> "$GITHUB_OUTPUT"
 
       - name: Install dependencies
-        if: steps.day.outputs.step == 'snapshot' || steps.day.outputs.step == 'execute'
+        if: steps.day.outputs.snapshot == 'yes' || steps.day.outputs.execute == 'yes'
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
       - name: Read-only snapshot of pss5
-        if: steps.day.outputs.step == 'snapshot'
+        if: steps.day.outputs.snapshot == 'yes'
         env:
           PSS_ACCOUNT_5_EMAIL: ${{ secrets.PSS_ACCOUNT_5_EMAIL }}
           PSS_ACCOUNT_5_PASSWORD: ${{ secrets.PSS_ACCOUNT_5_PASSWORD }}
@@ -79,8 +93,9 @@ jobs:
           python run.py --baseline --registry "$SNAPSHOT_REGISTRY" --output "$OUT/baselines" \
             --identity-salt-env TACHIKOMA_FLEET_SALT --baseline-summary "$OUT/baselines/SUMMARY.md"
 
+      # Runs even if the snapshot failed, as it did when the two were separate runs.
       - name: Automated day (baseline-v1, full mode)
-        if: steps.day.outputs.step == 'execute'
+        if: ${{ !cancelled() && steps.day.outputs.execute == 'yes' }}
         env:
           PSS_ACCOUNT_5_EMAIL: ${{ secrets.PSS_ACCOUNT_5_EMAIL }}
           PSS_ACCOUNT_5_PASSWORD: ${{ secrets.PSS_ACCOUNT_5_PASSWORD }}
@@ -88,17 +103,26 @@ jobs:
         run: |
           set -euo pipefail
           umask 077
-          mkdir -p "$OUT/journals"
-          python run.py --fleet-dry-run --registry "$TRIAL_REGISTRY" --fleet-journal-dir "$OUT/journals" \
+          mkdir -p "$EXECUTE_OUT/journals"
+          python run.py --fleet-dry-run --registry "$TRIAL_REGISTRY" --fleet-journal-dir "$EXECUTE_OUT/journals" \
             --identity-salt-env TACHIKOMA_FLEET_SALT
           python run.py --fleet-execute --registry "$TRIAL_REGISTRY" --authorization "$TRIAL_AUTHORIZATION" \
-            --mode full --identity-salt-env TACHIKOMA_FLEET_SALT --fleet-journal-dir "$OUT/journals"
+            --mode full --identity-salt-env TACHIKOMA_FLEET_SALT --fleet-journal-dir "$EXECUTE_OUT/journals"
 
-      - name: Upload sanitized output
-        if: always() && (steps.day.outputs.step == 'snapshot' || steps.day.outputs.step == 'execute')
+      - name: Upload sanitized snapshot output
+        if: always() && steps.day.outputs.snapshot == 'yes'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: trial-${{ steps.day.outputs.step }}-${{ github.run_id }}
+          name: trial-snapshot-${{ github.run_id }}
           path: ${{ env.OUT }}
+          retention-days: 90
+          if-no-files-found: ignore
+
+      - name: Upload sanitized execute output
+        if: always() && steps.day.outputs.execute == 'yes'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: trial-execute-${{ github.run_id }}
+          path: ${{ env.EXECUTE_OUT }}
           retention-days: 90
           if-no-files-found: ignore

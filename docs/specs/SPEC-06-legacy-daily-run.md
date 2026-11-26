@@ -1,7 +1,7 @@
 # SPEC-06: Fence the legacy daily run away from trial accounts
 
 **Status:** Verified offline
-**Done offline:** S06-R1 (#181, the owner's `LEGACY_RUN_SKIP` step conditions), S06-R2 (#169, the execute-time check), S06-R5 (#209, the owner's hardening of `daily-run.yml`, and `spec06-policy-coverage`, which brings `daily-run.yml` and `live-trial.yml` under `scripts/ci.py repository`). S06-AC2 has live evidence. S06-AC4 (trial interventions) waits for the SPEC-07 trial; S06-R4 waits for the owner's decision (S06-Q1).
+**Done offline:** S06-R1 (#181, the owner's `LEGACY_RUN_SKIP` step conditions), S06-R2 (#169, the execute-time check), S06-R5 (#209, the owner's hardening of `daily-run.yml`, and `spec06-policy-coverage`, which brings `daily-run.yml` and `live-trial.yml` under `scripts/ci.py repository`), S06-R6 (the serialized mode, added 2026-11-26 after the owner deleted `LEGACY_RUN_SKIP`). S06-AC2 has live evidence. S06-AC4 (trial interventions) waits for the SPEC-07 trial; S06-R4 waits for the owner's decision (S06-Q1).
 **Approval:** owner, 2026-11-11, through the session goal "complete the plan in docs/specs/". This approves building and testing the spec offline; owner questions take their safe defaults. It does not open any live gate (G1–G5), so live acceptance criteria stay pending.
 **Release:** operations (prerequisite for SPEC-07 and SPEC-10)
 **Owner gate:** G2 (the owner edits the workflow)
@@ -24,11 +24,15 @@
 - **S06-R3 (MUST)** The legacy run's actions during a trial window are recorded as interventions in the trial record (owner step), if any happen.
 - **S06-R4 (SHOULD)** The owner decides, and records in this spec, whether the legacy run is retired, kept for non-trial accounts, or replaced by a scheduled `--fleet-execute` (SPEC-11).
 - **S06-R5 (MUST)** Workflow policy hardening for `daily-run.yml` (pinned actions, read-only permissions, timeouts) is applied by the owner, and the repository's workflow policy check covers the file afterwards.
+- **S06-R6 (MUST)** Serialized mode: the legacy run may act on a trial account if it never runs at the same time as a run that acts on that account under an authorization. `daily-run.yml`, `live-trial.yml` and `live-trial-schedule.yml` share one fixed workflow-level concurrency group with `cancel-in-progress: false`. The owner claims this in the authorization file with `legacy_run_serialized: [N]`, and `--fleet-execute` accepts an account with `legacy_run_account: N` when N is in `legacy_run_skipped` or `legacy_run_serialized`, and refuses it otherwise. While any authorization file under `docs/experiments/live/` declares `legacy_run_serialized`, `scripts/ci.py repository` refuses the workflows unless all three set the same fixed group at the workflow level only, with `cancel-in-progress: false`. The claim covers those three workflows on `main` only: `daily-run-langgraph.yml`, which also logs in to the trial accounts, must stay disabled (see Open questions), and a `--fleet-execute` run started outside them is not serialized.
 
 ## Interfaces
 
-- `daily-run.yml`: a step-level `if:` on `vars.LEGACY_RUN_SKIP` (owner edit).
+- `daily-run.yml`: a step-level `if:` on `vars.LEGACY_RUN_SKIP` (owner edit). Since 2026-11-26 every account runs in its own leg of one matrix job, all at the same time; the account step's `if:` compares `LEGACY_RUN_SKIP` with the leg's `matrix.account`, and the leg reads only its own `PSS_ACCOUNT_<N>_*` secrets, as `secrets[format('PSS_ACCOUNT_{0}_…', matrix.account)]`. The workflow-level `live-trial` group (S06-R6) covers the whole run, every leg included.
 - `AccountProfile.legacy_run_account` (optional int) and an authorization field `legacy_run_skipped: [N]`.
+- An authorization field `legacy_run_serialized: [N]` (S06-R6): distinct positive integers, none also in `legacy_run_skipped`. The refusal names both fields.
+- `daily-run.yml`, `live-trial.yml`, `live-trial-schedule.yml`: `concurrency: {group: live-trial, cancel-in-progress: false}` at the workflow level (S06-R6; the `daily-run.yml` block is an owner-requested edit).
+- `scripts/ci.py`: `serialized_authorizations` and `check_serialized_legacy_run`, run by `scripts/ci.py repository` (S06-R6).
 
 ## Safety invariants
 
@@ -44,6 +48,7 @@
 | S06-AC2 | R1 | live | The owner sets `LEGACY_RUN_SKIP`, and the next scheduled run's log shows the skipped account's step skipped |
 | S06-AC3 | R5 | offline, after owner edit | `scripts/ci.py repository` covers `daily-run.yml` and passes |
 | S06-AC4 | R3 | live | Each trial record has an intervention log, which lists any legacy-run actions on trial accounts during the window or states there were none |
+| S06-AC5 | R6 | offline | An execute run is accepted for a profile whose `legacy_run_account` is in `legacy_run_serialized`, and refused when it is in neither list; `scripts/ci.py repository` refuses each way of breaking the shared group (missing from one workflow, another name, an expression, `cancel-in-progress: true` or missing, set on a job instead of or as well as the workflow) while a file declares `legacy_run_serialized` |
 
 ## Test plan
 
@@ -72,6 +77,7 @@ Extend `tests/test_fleet_execute.py` (SPEC-05) and `tests/test_ci.py` once the o
 | S06-AC2 | Pass (live) | With `LEGACY_RUN_SKIP=5` set by the owner, the scheduled run [43260995664](https://github.com/raelldottin/tachikoma/actions/runs/43260995664) (2026-11-12T16:39Z) ran the steps for accounts 1–4 and skipped `Process account 5` |
 | S06-AC3 | Pass (offline) | `scripts/ci.py` lists `daily-run.yml` and `live-trial.yml` in `WORKFLOWS`. `tests/test_ci.py` plants an unpinned action, a missing timeout, a persisted checkout token and widened permissions in each one, and sees each refused. It also checks that every account step in `daily-run.yml` keeps its `LEGACY_RUN_SKIP` condition and that `live-trial.yml` runs only on a manual dispatch |
 | S06-AC4 | Pending | Waits for the SPEC-07 trial record |
+| S06-AC5 | Pass (offline) | `tests/test_fleet_authorization.py` (field validation, overlap, hashing, the check with each list, and the four committed pss5 files with and without the claim), `tests/test_fleet_execute.py` (`--fleet-execute` offline), `tests/test_ci.py` (`SerializedLegacyRunTests` mutates each of the three workflows each way and sees each refused by its own message) (`# Verifies: S06-R6`) |
 
 ## Open questions and risks
 
