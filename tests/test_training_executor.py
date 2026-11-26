@@ -33,7 +33,7 @@ from sdk.execution.training import (
     run_training,
     verification_of,
 )
-from sdk.training.model import FinishTraining, Skip, StartTraining, UseConsumable
+from sdk.training.model import CANONICAL_STATS, FinishTraining, Skip, StartTraining, UseConsumable
 from sdk.training.parse import parse_consumable_designs
 from sdk.training.strategy import DEFAULT_STRATEGY, with_consumables
 
@@ -474,7 +474,7 @@ class StartTests(unittest.TestCase):
         client = FakeTrainingClient([delish()])
         self.assertEqual(run(client, journal=journal, account_alias="primary").counts, TrainingCounts(started=1))
 
-    def test_crew_error_message_is_redacted(self):
+    def test_a_refused_action_event_is_logged_redacted_and_fails_nothing(self):
         class Refusing(MemoryJournal):
             def append(self, event):
                 if event.params.get("character_id") == "1001":
@@ -483,10 +483,21 @@ class StartTests(unittest.TestCase):
 
         client = FakeTrainingClient([delish(), maiden()])
         result, lines = logged(self, client, journal=Refusing())
-        self.assertIn("ERROR [Cap] training: Delish (1001) failed: JournalError: refused accessToken=***REDACTED***",
-                      lines)
-        self.assertEqual(result.crew[0].error, "JournalError: refused accessToken=***REDACTED***")
-        self.assertEqual(result.counts, TrainingCounts(started=1, failed=1))
+        self.assertEqual(lines[0], "ERROR [Cap] training: journal refused the add_training event: JournalError: "
+                                   "refused accessToken=***REDACTED***")
+        self.assertEqual(lines[1], STARTED)
+        self.assertEqual((result.crew[0].error, result.crew[0].action.verification), (None, "verified"))
+        self.assertEqual(result.counts, TrainingCounts(started=2))
+
+    def test_crew_error_message_is_redacted(self):
+        client = FakeTrainingClient([ended(), maiden()])
+        raising = RuntimeError("GET /x?accessToken=00000002-1111-2222-3333-444444444444")
+        with mock.patch.object(executor, "crew_from_reply", side_effect=raising):
+            result, lines = logged(self, client)
+        error = "RuntimeError: GET /x?accessToken=***REDACTED***"
+        self.assertIn(f"ERROR [Cap] training: Delish (1001) failed: {error}", lines)
+        self.assertEqual(result.crew[0].error, error)
+        self.assertEqual(result.counts, TrainingCounts(started=1, skipped=1, failed=1))
 
 
 ENDED_2H = stamp(NOW - datetime.timedelta(hours=2))
@@ -559,12 +570,11 @@ class FinishTests(unittest.TestCase):
         self.assertEqual(client.mutations(), [("finishTraining", "1001")])
         self.assertEqual(lines, [
             f"WARNING [Cap] training: Delish (1001) finish_training no-change: {reason}",
-            f"INFO [Cap] training: Delish (1001) skip training_in_progress: finish_training no-change: {reason}",
+            "INFO [Cap] training: Delish (1001) skip training_in_progress: finish_training no-change",
             "INFO [Cap] training: started=0 finished=0 consumables=0 skipped=1 failed=1"])
         self.assertEqual(result.crew[0].finish, ActionResult("finish_training", FINISH, "no-change", reason, True,
                                                              False))
-        self.assertEqual(result.crew[0].decision,
-                         Skip(1001, "training_in_progress", f"finish_training no-change: {reason}"))
+        self.assertEqual(result.crew[0].decision, Skip(1001, "training_in_progress", "finish_training no-change"))
 
     def test_finish_not_yet_past_grace_is_harmless(self):
         client = FakeTrainingClient([ended(end=stamp(NOW - datetime.timedelta(seconds=30)))])
@@ -574,7 +584,7 @@ class FinishTests(unittest.TestCase):
         self.assertEqual(client.mutations(), [])
         self.assertEqual(lines, [
             f"INFO [Cap] training: Delish (1001) finish_training skipped: {reason}",
-            f"INFO [Cap] training: Delish (1001) skip training_in_progress: finish_training skipped: {reason}",
+            "INFO [Cap] training: Delish (1001) skip training_in_progress: finish_training skipped",
             "INFO [Cap] training: started=0 finished=0 consumables=0 skipped=1 failed=0"])
         self.assertEqual(result.crew[0].finish, ActionResult("finish_training", FINISH, "skipped", reason, False, True))
 
@@ -606,13 +616,13 @@ class FinishTests(unittest.TestCase):
         client = FakeTrainingClient([ended()])
         client.script("finishTraining", Act(apply=False, result=None, then=collected_elsewhere(client, gain=False)))
         result, lines = logged(self, client)
-        self.assertEqual(client.mutations(), [("finishTraining", "1001")])
+        self.assertEqual(client.mutations(), [("finishTraining", "1001"), ("addTraining", "3", "1001")])
         self.assertEqual(result.crew[0].finish.verification, "unknown")
         self.assertIs(result.crew[0].finish.harmless, True)
         self.assertEqual(lines[0], "INFO [Cap] training: Delish (1001) finish_training unknown: training of 1001 "
                                    "finished with no stat gain; capacity not observed (a training at capacity gains "
                                    "nothing)")
-        self.assertEqual(result.counts, TrainingCounts(skipped=1))
+        self.assertEqual(result.counts, TrainingCounts(started=1))
 
     def test_a_contradicted_finish_is_never_harmless(self):
         # No reply and the design cleared, as for "No training to finish" -- but the stats fell: a real failure.
@@ -652,27 +662,34 @@ class FinishTests(unittest.TestCase):
 
     def test_a_finish_refused_over_a_readable_training_state_is_harmless(self):
         # Refused, but the state was readable: no training running ("not training"), or no design left to collect
-        # (an unreadable end then does not matter: there is nothing to finish).
+        # (an unreadable end then does not matter: there is nothing to finish). Either way the crew member is idle and
+        # replanned from that observation, as the next run's read would plan it: Bench Press. For the unreadable end,
+        # add_training's own precondition then refuses the start (a counted failure, as on any run).
         def clear_end(client):
             return lambda: client.record("1001").update({"@TrainingEndDate": ""})
 
         def collected_garbled_end(client):
             return lambda: client.record("1001").update({"@TrainingDesignId": "0", "@TrainingEndDate": "soon"})
 
-        cases = ((clear_end, "1001 is not training"),
-                 (collected_garbled_end, "training end of 1001 is not a readable server time"))
-        for change, reason in cases:
+        cases = ((clear_end, "1001 is not training", [("addTraining", "3", "1001")], TrainingCounts(started=1)),
+                 (collected_garbled_end, "training end of 1001 is not a readable server time", [],
+                  TrainingCounts(failed=1)))
+        for change, reason, mutations, counts in cases:
             with self.subTest(reason=reason):
                 client = FakeTrainingClient([ended()])
                 client.script("listAllCharactersOfUser", Act(), Act(then=change(client)))
                 result, lines = logged(self, client)
-                self.assertEqual(client.mutations(), [])
+                self.assertEqual(client.mutations(), mutations)
                 self.assertEqual(lines[0], f"INFO [Cap] training: Delish (1001) finish_training skipped: "
                                            f"preconditions failed: {reason}")
                 self.assertIs(result.crew[0].finish.harmless, True)
-                self.assertEqual(result.counts, TrainingCounts(skipped=1))
+                self.assertEqual(result.crew[0].decision,
+                                 StartTraining(1001, 3, "secondary T1 Bench Press at 72% in gym"))
+                self.assertEqual(result.counts, counts)
 
-    def test_finish_reply_without_id_or_stats_is_not_replanned(self):
+    def test_a_finish_reply_without_id_or_stats_is_replanned_from_the_observation(self):
+        # The reply cannot be trusted for the next tier, but the after-snapshot the runner took can: the collected
+        # Bench Press shows there (Hp +2, design cleared), so the crew member is replanned and restarted this run.
         broken = ({"@Fatigue": "0", "@HpImprovement": "n/a"},
                   dict(ended(), **{"@CharacterId": "1002"}),
                   dict(ended(), **{"@HpImprovement": "n/a"}),
@@ -684,13 +701,65 @@ class FinishTests(unittest.TestCase):
                 client = FakeTrainingClient([ended()], researches=("1", "2"))
                 client.script("finishTraining", Act(result=reply))
                 result, lines = logged(self, client)
-                self.assertEqual(client.mutations(), [("finishTraining", "1001")])
-                self.assertEqual(lines[0], "INFO [Cap] Completed training for Delish in Galaxy Gym with stat changes "
-                                           "not reported")
-                self.assertEqual(result.crew[0].decision, Skip(
-                    1001, "training_in_progress",
-                    "finish_training verified: training of 1001 finished; stat improvements +2"))
-                self.assertEqual(result.counts, TrainingCounts(finished=1, skipped=1))
+                self.assertEqual(client.mutations(), [("finishTraining", "1001"), ("addTraining", "4", "1001")])
+                self.assertEqual(lines, [
+                    "INFO [Cap] Completed training for Delish in Galaxy Gym with stat changes not reported",
+                    "INFO [Cap] Starting training Muscle Beach for Delish in Galaxy Gym with 74% training complete",
+                    "INFO [Cap] training: started=1 finished=1 consumables=0 skipped=0 failed=0"])
+                self.assertEqual(result.crew[0].decision,
+                                 StartTraining(1001, 4, "secondary T2 Muscle Beach at 74% in gym"))
+
+    def test_a_verified_finish_still_showing_its_training_keeps_the_crew_member_in_training(self):
+        # Stats rose (verified), but the after-snapshot still reports the ended training's design: nothing is
+        # replanned over a training that may still be uncollected.
+        client = FakeTrainingClient([ended()], researches=("1", "2"))
+
+        def finish(character_id):
+            client.calls.append(("finishTraining", character_id))
+            client.record(character_id)["@HpImprovement"] = "2"
+            return {"@CharacterId": character_id}
+
+        client.finishTraining = finish
+        journal = MemoryJournal()
+        result = run(client, journal=journal)
+        self.assertEqual(client.mutations(), [("finishTraining", "1001")])
+        self.assertEqual(result.crew[0].decision, Skip(1001, "training_in_progress", "finish_training verified"))
+        self.assertEqual(result.counts, TrainingCounts(finished=1, skipped=1))
+        self.assertEqual(decision_records(journal)[0].evidence,
+                         evidence("1001", "skip", True, False, "training_in_progress"))
+
+    def test_nothing_to_finish_is_replanned_from_the_observation(self):
+        # Collected by another device between the read and the action: the precondition refuses (harmless), and the
+        # crew member is replanned from the snapshot that saw it idle, not left "in training".
+        # Sent with no reply, the collection must gain nothing: a stat gain would verify the finish itself.
+        cases = {
+            "refused before the call": (lambda client: client.script(
+                "listAllCharactersOfUser", Act(), Act(then=collected_elsewhere(client))),
+                StartTraining(1001, 4, "secondary T2 Muscle Beach at 74% in gym")),
+            "sent, no reply": (lambda client: client.script(
+                "finishTraining", Act(apply=False, result=None, then=collected_elsewhere(client, gain=False))),
+                StartTraining(1001, 3, "secondary T1 Bench Press at 72% in gym")),
+        }
+        for case, (arrange, start) in cases.items():
+            with self.subTest(case=case):
+                journal = MemoryJournal()
+                client = FakeTrainingClient([ended()], researches=("1", "2"))
+                arrange(client)
+                result = run(client, journal=journal)
+                self.assertIs(result.crew[0].finish.harmless, True)
+                self.assertEqual(client.mutations()[-1], ("addTraining", str(start.training_design_id), "1001"))
+                self.assertEqual(result.crew[0].decision, start)
+                self.assertEqual(result.counts, TrainingCounts(started=1))
+                self.assertEqual(decision_records(journal)[0].evidence, evidence("1001", "start", True, True))
+
+    def test_nothing_to_finish_records_the_replanned_skip_code(self):
+        journal = MemoryJournal()
+        client = FakeTrainingClient([ended()])  # no research: the replanned tier is gated
+        client.script("listAllCharactersOfUser", Act(), Act(then=collected_elsewhere(client)))
+        result = run(client, journal=journal)
+        self.assertEqual(result.crew[0].decision, Skip(1001, "research_missing", "secondary T2 research gate not met"))
+        self.assertEqual(decision_records(journal)[0].evidence,
+                         evidence("1001", "skip", True, False, "research_missing"))
 
     def test_replan_keeps_the_crew_identity_a_reply_leaves_out(self):
         # Name (role), design (capacity) and room come from the read the plan used; the reply supplies stats and fatigue.
@@ -707,6 +776,51 @@ class FinishTests(unittest.TestCase):
                 self.assertEqual(client.mutations(), [("finishTraining", "1001"), ("addTraining", "4", "1001")])
                 self.assertEqual(result.crew[0].decision,
                                  StartTraining(1001, 4, "secondary T2 Muscle Beach at 74% in gym"))
+
+    def test_a_message_that_cannot_be_logged_never_changes_the_outcome(self):
+        # A log filter that raises (as a broken handler or formatter could) on the finish line, then on the start
+        # line: the verified finish and the verified start stand, nothing is failed, and the failure itself is logged.
+        class Refusing(logging.Filter):
+            def filter(self, record):
+                if record.getMessage().startswith(("[Cap] Completed", "[Cap] Starting")):
+                    raise ValueError("cannot format password=hunter2")
+                return True
+
+        refusing = Refusing()
+        logger = logging.getLogger(LOGGER)
+        logger.addFilter(refusing)
+        self.addCleanup(logger.removeFilter, refusing)
+        client = FakeTrainingClient([ended()], researches=("1", "2"))
+        journal = MemoryJournal()
+        result, lines = logged(self, client, journal=journal)
+        self.assertEqual(client.mutations(), [("finishTraining", "1001"), ("addTraining", "4", "1001")])
+        self.assertEqual(lines, [
+            "ERROR [Cap] training: Delish (1001) message not logged: ValueError: cannot format password=***REDACTED***",
+            "ERROR [Cap] training: Delish (1001) message not logged: ValueError: cannot format password=***REDACTED***",
+            "INFO [Cap] training: started=1 finished=1 consumables=0 skipped=0 failed=0"])
+        outcome = result.crew[0]
+        self.assertEqual((outcome.finish.verification, outcome.action.verification, outcome.error),
+                         ("verified", "verified", None))
+        self.assertEqual(outcome.decision, StartTraining(1001, 4, "secondary T2 Muscle Beach at 74% in gym"))
+        self.assertEqual(decision_records(journal)[0].evidence, evidence("1001", "start", True, True))
+
+    def test_a_skip_message_that_cannot_be_logged_never_changes_the_outcome(self):
+        class Refusing(logging.Filter):
+            def filter(self, record):
+                if " skip " in record.getMessage():
+                    raise ValueError("cannot format")
+                return True
+
+        refusing = Refusing()
+        logger = logging.getLogger(LOGGER)
+        logger.addFilter(refusing)
+        self.addCleanup(logger.removeFilter, refusing)
+        result, lines = logged(self, FakeTrainingClient([crew_record("1010", "Rookie Pilot", Hp=10), delish()]))
+        self.assertEqual(lines, [
+            "ERROR [Cap] training: Rookie Pilot (1010) message not logged: ValueError: cannot format",
+            STARTED,
+            "INFO [Cap] training: started=1 finished=0 consumables=0 skipped=1 failed=0"])
+        self.assertEqual(result.crew[0].error, None)
 
     def test_a_raising_finish_stops_only_that_crew(self):
         client = FakeTrainingClient([ended(), maiden()])
@@ -979,6 +1093,79 @@ class DecisionRecordTests(unittest.TestCase):
         self.assertEqual([r.evidence["character_id"] for r in decision_records(journal)], ["1002"])
 
 
+    def test_a_journal_that_refuses_every_event_changes_no_training(self):
+        class Refusing(MemoryJournal):
+            def append(self, event):
+                raise JournalError("refused accessToken=00000002-1111-2222-3333-444444444444")
+
+        def world() -> FakeTrainingClient:
+            return FakeTrainingClient([ended(), maiden(), crew_record("1010", "Rookie Pilot", Hp=10)],
+                                      researches=("1", "2"))
+
+        working = world()
+        expected = run(working, journal=MemoryJournal())
+        client = world()
+        result, lines = logged(self, client, journal=Refusing())
+        self.assertIs(result.readable, True)
+        self.assertEqual(client.calls, working.calls)
+        self.assertEqual(result.crew, expected.crew)
+        self.assertEqual(result.counts, TrainingCounts(started=2, finished=1, skipped=1))
+        refused = "JournalError: refused accessToken=***REDACTED***"
+        self.assertEqual(lines, [
+            f"ERROR [Cap] training: journal refused the finish_training event: {refused}",
+            f"ERROR [Cap] training: journal refused the add_training event: {refused}",
+            "INFO [Cap] Completed training for Delish in Galaxy Gym with Hp +2",
+            "INFO [Cap] Starting training Muscle Beach for Delish in Galaxy Gym with 74% training complete",
+            f"ERROR [Cap] training: Delish (1001) decision record not written: {refused}",
+            f"ERROR [Cap] training: journal refused the add_training event: {refused}",
+            "INFO [Cap] Starting training Bench Press for Galactic Snow Maiden in GYM with 72% training complete",
+            f"ERROR [Cap] training: Galactic Snow Maiden (1002) decision record not written: {refused}",
+            "INFO [Cap] training: Rookie Pilot (1010) skip unknown_role: 'Rookie Pilot' has no training role",
+            f"ERROR [Cap] training: Rookie Pilot (1010) decision record not written: {refused}",
+            "INFO [Cap] training: started=2 finished=1 consumables=0 skipped=1 failed=0"])
+
+    def test_no_request_url_reply_or_exception_text_reaches_the_journal(self):
+        # Decision-record reasons are planner details or the step's own fixed words; the runner journals an exception's
+        # class, never its text; a crew failure's text is only logged (redacted).
+        leak = "POST https://api.example/TrainingService/FinishTraining?characterId=1001 <Character Fatigue='9'/>"
+        journal = MemoryJournal()
+        client = FakeTrainingClient([ended(), maiden(), crew_record("1003", "Delish", training="3", end=ENDED_2H,
+                                                                    Weapon=72)])
+        client.script("finishTraining", Act(apply=False, raises=ConnectionError(leak)))
+        client.script("addTraining", Act(apply=False, raises=ConnectionError(leak)))
+        crew_from_reply = executor.crew_from_reply
+
+        def raising_for_1003(reply, crew, **kwargs):
+            if crew.character_id == 1003:
+                raise ValueError(leak)
+            return crew_from_reply(reply, crew, **kwargs)
+
+        with mock.patch.object(executor, "crew_from_reply", side_effect=raising_for_1003):
+            result = run(client, journal=journal)
+        self.assertEqual([outcome.failed for outcome in result.crew], [True, True, True])
+        for event in journal.read():
+            with self.subTest(event=event.action_id):
+                line = event.to_json_line()
+                for fragment in ("https://", "TrainingService", "<Character", leak):
+                    self.assertNotIn(fragment, line)
+        self.assertEqual([record.reason for record in decision_records(journal)], [
+            "finish_training unknown", "secondary T1 Bench Press at 72% in gym", "finish_training did not complete"])
+
+    def test_an_unreadable_journal_is_taken_as_an_empty_history(self):
+        class Unreadable(MemoryJournal):
+            def read(self):
+                raise OSError("cannot read /j?password=hunter2")
+
+        journal = Unreadable()
+        client = FakeTrainingClient([delish()])
+        result, lines = logged(self, client, journal=journal)
+        self.assertEqual(client.mutations(), [("addTraining", "3", "1001")])
+        self.assertEqual(result.counts, TrainingCounts(started=1))
+        self.assertEqual(lines[0], "ERROR [Cap] training: journal not readable, taken as an empty history: OSError: "
+                                   "cannot read /j?password=***REDACTED***")
+        self.assertEqual([event.action_id for event in journal._events], ["add_training", "training_decision"])
+        self.assertIs(result.journal, journal)
+
     def test_a_decision_record_spans_the_crew_member_s_turn(self):
         class AdvancingClock(Clock):
             def __call__(self) -> datetime.datetime:
@@ -1111,16 +1298,11 @@ class ResponseAndShapeTests(unittest.TestCase):
         self.assertEqual(result.crew[0].finish.reason, "training of 1001 finished at capacity; no gain expected")
 
     def test_an_exception_around_the_finish_leaves_the_crew_skipped(self):
-        class NoFinishEvents(MemoryJournal):
-            def append(self, event):
-                if event.action_id == "finish_training":
-                    raise JournalError("refused")
-                super().append(event)
-
         client = FakeTrainingClient([ended(), maiden()])
-        result = run(client, journal=NoFinishEvents())
+        with mock.patch.object(executor, "crew_from_reply", side_effect=RuntimeError("refused")):
+            result = run(client)
         self.assertEqual(result.crew[0].decision, Skip(1001, "training_in_progress", "finish_training did not complete"))
-        self.assertEqual((result.crew[0].finish, result.crew[0].error), (None, "JournalError: refused"))
+        self.assertEqual((result.crew[0].finish, result.crew[0].error), (None, "RuntimeError: refused"))
         self.assertEqual(client.mutations(), [("finishTraining", "1001"), ("addTraining", "3", "1002")])
         self.assertEqual(result.counts, TrainingCounts(started=1, skipped=1, failed=1))
 
@@ -1241,19 +1423,102 @@ class FinishIsHarmlessTests(unittest.TestCase):
                                             attempted=attempted), False)
 
 
+def seen(*, design: str | None = None, end: str | None = ENDED_2H, observed: bool = True, fatigue: int | None = 10,
+         **stats: int | None) -> CrewMember:
+    """Delish as a snapshot saw her: Weapon 72 and Hp 2 unless ``stats`` (CrewMember field names) say otherwise."""
+    values: dict[str, int | None] = {name: 0 for name in STAT_FIELDS}
+    values.update({"weapon_improvement": 72, "hp_improvement": 2})
+    values.update(stats)
+    return CrewMember("1001", "1", "Delish", 40, fatigue, "201", training_observed=observed, training_design_id=design,
+                      training_end=end, **values)
+
+
+STAT_FIELDS = ("hp_improvement", "pilot_improvement", "repair_improvement", "weapon_improvement",
+               "science_improvement", "engine_improvement", "attack_improvement", "ability_improvement",
+               "stamina_improvement")
+
+
+class CrewFromObservationTests(unittest.TestCase):
+    def setUp(self):
+        self.crew = crew_state(FakeTrainingClient([ended()]))
+
+    def test_an_idle_observation_supplies_stats_and_fatigue_and_clears_the_training(self):
+        for design, end in ((None, ENDED_2H), (None, ""), ("3", None), (None, "soon")):
+            with self.subTest(design=design, end=end):
+                rebuilt = executor.crew_from_observation(self.crew, seen(design=design, end=end))
+                self.assertEqual(rebuilt, dataclasses.replace(
+                    self.crew, stats=dict(self.crew.stats, HpImprovement=2), fatigue=10, training_design_id=None,
+                    training_end=None))
+
+    def test_every_stat_is_taken_from_the_observation(self):
+        stats = {name: index for index, name in enumerate(STAT_FIELDS, start=1)}
+        rebuilt = executor.crew_from_observation(self.crew, dataclasses.replace(seen(), **stats))
+        assert rebuilt is not None
+        self.assertEqual(dict(rebuilt.stats), dict(zip(CANONICAL_STATS, range(1, 10))))
+
+    def test_an_observation_that_cannot_rule_out_an_uncollected_training_or_lacks_a_value_is_refused(self):
+        cases = {
+            "no snapshot saw the crew member": None,
+            "training not observed": seen(observed=False, end=None),
+            "the training is still there": seen(design="3"),
+            "fatigue missing": seen(fatigue=None),
+            "a stat missing": seen(stamina_improvement=None),
+            "the first stat missing": seen(hp_improvement=None),
+        }
+        for case, observed in cases.items():
+            with self.subTest(case=case):
+                self.assertIsNone(executor.crew_from_observation(self.crew, observed))
+
+
 class DecisionAfterFinishTests(unittest.TestCase):
-    def test_an_unverified_finish_or_an_unusable_reply_keeps_the_crew_member_in_training(self):
-        client = FakeTrainingClient([ended()], researches=("1", "2"))
-        ctx = context(client)
-        crew = ctx.crew[0]
+    def setUp(self):
+        self.ctx = context(FakeTrainingClient([ended()], researches=("1", "2")))
+        self.crew = self.ctx.crew[0]
+        self.fresh = dataclasses.replace(self.crew, stats=dict(self.crew.stats, HpImprovement=2),
+                                         training_design_id=None, training_end=None)
+        self.other = dataclasses.replace(self.fresh, stats=dict(self.fresh.stats, HpImprovement=50))
+
+    def after(self, verification: str, rebuilt, observed, *, harmless: bool = False, stock=None):
+        finish = ActionResult("finish_training", FINISH, verification, "why", True, harmless)
+        return executor.decision_after_finish(self.crew, finish, rebuilt, observed, ctx=self.ctx,
+                                              strategy=DEFAULT_STRATEGY, stock={} if stock is None else stock)
+
+    def test_a_failed_finish_keeps_the_crew_member_in_training_whatever_was_seen(self):
         stock = {101: 2}
-        for verification, rebuilt in (("unknown", crew), ("verified", None)):
-            with self.subTest(verification=verification, rebuilt=rebuilt):
-                finish = ActionResult("finish_training", FINISH, verification, "why", True, False)
-                decision, planned, left = executor.decision_after_finish(
-                    crew, finish, rebuilt, ctx=ctx, strategy=DEFAULT_STRATEGY, stock=stock)
-                self.assertEqual(decision, Skip(1001, "training_in_progress", f"finish_training {verification}: why"))
-                self.assertEqual((planned, left), (crew, stock))
+        for verification in ("unknown", "no-change", "contradicted", "skipped"):
+            with self.subTest(verification=verification):
+                decision, planned, left = self.after(verification, self.fresh, self.fresh, stock=stock)
+                self.assertEqual(decision, Skip(1001, "training_in_progress", f"finish_training {verification}"))
+                self.assertEqual((planned, left), (self.crew, stock))
+
+    def test_nothing_usable_keeps_the_crew_member_in_training(self):
+        for verification, harmless in (("verified", False), ("skipped", True)):
+            with self.subTest(verification=verification):
+                decision, planned, _ = self.after(verification, None, None, harmless=harmless)
+                self.assertEqual(decision, Skip(1001, "training_in_progress", f"finish_training {verification}"))
+                self.assertIs(planned, self.crew)
+
+    def test_a_verified_finish_replans_from_the_reply_before_the_observation(self):
+        decision, planned, _ = self.after("verified", self.fresh, self.other)
+        self.assertEqual(decision, StartTraining(1001, 4, "secondary T2 Muscle Beach at 74% in gym"))
+        self.assertIs(planned, self.fresh)
+
+    def test_a_verified_or_harmless_finish_without_a_reply_replans_from_the_observation(self):
+        for verification, harmless in (("verified", False), ("skipped", True), ("unknown", True)):
+            with self.subTest(verification=verification):
+                decision, planned, _ = self.after(verification, None, self.fresh, harmless=harmless)
+                self.assertEqual(decision, StartTraining(1001, 4, "secondary T2 Muscle Beach at 74% in gym"))
+                self.assertIs(planned, self.fresh)
+
+    def test_a_replan_takes_its_consumable_from_the_stock(self):
+        ctx = context(FakeTrainingClient([low(training="21", end=ENDED_2H)]))
+        crew = ctx.crew[0]
+        finish = ActionResult("finish_training", FINISH, "verified", "why", True, False)
+        strategy = with_consumables(DEFAULT_STRATEGY, parse_consumable_designs(CONSUMABLE_DESIGNS))
+        decision, _, left = executor.decision_after_finish(crew, finish, None, crew, ctx=ctx, strategy=strategy,
+                                                           stock={101: 2})
+        self.assertEqual(decision, UseConsumable(1001, 101, decision.reason))
+        self.assertEqual(left, {101: 1})
 
     def test_a_consumable_is_recorded_as_the_crew_member_s_primary_decision_without_items(self):
         # Even for a crew member whose training is still uncollected: the record names the skip, not the finish.

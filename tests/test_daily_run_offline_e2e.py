@@ -917,6 +917,29 @@ class DailyRunFailureContinuationTests(NeedsHealthyBaseline):
         self.assertEqual(daily.traffic_by_step()["upgradeCharacters"], baseline().traffic_by_step()["upgradeCharacters"])
         assert_protocol_clean(self, fake)
 
+    def test_a_journal_that_refuses_every_event_changes_neither_training_nor_the_exit_code(self):
+        # A real journal can refuse an event (GameplayJournal refuses a secret-shaped value). The refusal is logged,
+        # redacted, and the run trains and exits exactly as without a journal.
+        class RefusingJournal:
+            def append(self, event):
+                raise OSError("cannot write /journal?password=hunter2")
+
+            def read(self):
+                return []
+
+        self.assertEqual((Client.training_journal, Client.training_account_alias), (None, "legacy"))
+        fake = FakePss(default_world())
+        with patch.object(Client, "training_journal", RefusingJournal()):
+            daily = run_daily(fake)
+        self.assertEqual(daily.code, 0, daily.log[-2000:])
+        self.assertEqual(daily.traffic_by_step()["manageTraining"], baseline().traffic_by_step()["manageTraining"])
+        self.assertIn("ERROR [SyntheticCaptain] training: journal refused the finish_training event: OSError: cannot "
+                      "write /journal?password=***REDACTED***\n", daily.log)
+        self.assertIn("training: started=0 finished=3 consumables=0 skipped=17 failed=0\n", daily.log)
+        self.assertNotIn("hunter2", daily.log)
+        self.assertNotIn("manageTraining failed", daily.log)
+        assert_protocol_clean(self, fake)
+
     def test_a_plan_that_does_not_pair_with_the_roster_stops_training_loudly(self):
         # A planner whose output shape changed is a defect, not a crew failure: no training request is sent, the
         # step fails by name and the run exits 1.
