@@ -15,7 +15,7 @@ make training-benchmark                                  # the CI gate: exit 0 p
 make training-benchmark ARGS="--update-baseline"         # rewrite baseline.json (only ever up)
 make training-benchmark ARGS="--update-baseline --allow-lower 'reason'"
 make training-benchmark ARGS="--quick"                   # 2-day runs, report only
-make training-benchmark ARGS="--qa-eval --jobs 8"        # local only, about 15 minutes
+make training-benchmark ARGS="--qa-eval --jobs 12"       # local only, about 5.5 minutes
 ```
 
 | Flag | Meaning |
@@ -37,7 +37,7 @@ Flags a mode would ignore are a usage error (exit 2):
 - `--qa-eval` with `--gate`, `--update-baseline`, `--quick`, `--seed` or `--scenario`.
 - `--update-baseline` with `--quick`, `--seed` or `--scenario`.
 
-The CI job `training-benchmark` in `.github/workflows/python-tests.yml` runs `make training-benchmark ARGS="--gate --json training-benchmark.json --summary $GITHUB_STEP_SUMMARY"` and uploads the JSON report. It is blocking: `blocking-ci.yml` calls that workflow as its `tests` job, which `CI required` needs. Locally the gate takes about 5.5 seconds: 15 scenarios × 3 seeds, run twice.
+The CI job `training-benchmark` in `.github/workflows/python-tests.yml` runs `make training-benchmark ARGS="--gate --json training-benchmark.json --summary $GITHUB_STEP_SUMMARY"` and uploads the JSON report. It is blocking: `blocking-ci.yml` calls that workflow as its `tests` job, which `CI required` needs. Locally the gate takes about 5 seconds: 15 scenarios × 3 seeds, run twice.
 
 ## How a run works
 
@@ -367,7 +367,39 @@ A smoke run of six mutants (`--only` the ids below, `--jobs 4`) took 55 s. It fo
 
 ### qa-eval results
 
-> **Placeholder: to be filled by the benchmark step.** Run `make training-benchmark ARGS="--qa-eval --jobs 8 --markdown qa.md"` and paste three things: the summary (benchmark rate and tests rate first); the "caught only by the benchmark", "caught by neither" and "drift only" tables; and the equivalent-mutant list, with a reason for each entry.
+Measured on 2026-11-25 at commit `dc872ad`, with both channels:
+
+```bash
+.venv/bin/python scripts/training_benchmark.py --qa-eval --jobs 12 --json qa.json --markdown qa.md
+```
+
+The run took 324 s of wall time (3362 s of CPU time) and exited 0, with the qa-eval passing.
+
+| Rate | Value | Over |
+| --- | ---: | --- |
+| Benchmark channel | 0.588 | 197 of 335 importable |
+| Tests channel | 1.000 | 335 of 335 importable |
+| Detection, gated (minimum 0.9) | 1.000 | 415 of 415 eligible |
+| Detection, importable only | 1.000 | 335 of 335 importable |
+
+| Target | Mutants | Invalid strategy | Both | Tests-only | Benchmark-only | Drift-only | Neither | Benchmark rate | Detection |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `sdk/training/planner.py` | 207 | 0 | 159 | 48 | 0 | 0 | 0 | 0.768 | 1.000 |
+| `sdk/training/strategy.py` | 208 | 80 | 38 | 90 | 0 | 0 | 0 | 0.297 | 1.000 |
+| **total** | **415** | **80** | **197** | **138** | **0** | **0** | **0** | **0.588** | **1.000** |
+
+No mutant was incompetent, equivalent, benchmark-only, drift-only or caught by neither channel. `qa_eval.equivalent` stays empty, and no entry was reported stale.
+
+The benchmark-channel rate on `strategy.py` is low because most of its importable mutants change validation messages, frozen or normalised fields, or table rows that no scenario reaches. Only the tests catch those.
+
+Round history:
+
+| Round | Gated detection | Importable only | Tests channel | Benchmark channel | Neither |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 1 | 0.940 | 0.925 | 0.925 | 0.588 | 25 (6 planner, 19 strategy) |
+| 2 | 1.000 | 1.000 | 1.000 | 0.588 | 0 |
+
+Between the rounds, the QA loop killed all 25 neither mutants with `PlannerContractTests`. The benchmark channel did not change, because no planner or strategy code changed.
 
 ## Known limitations
 

@@ -46,7 +46,7 @@ mutation:
 
 # make training-benchmark runs the crew-training simulator benchmark gate (docs/baseline/training-benchmark.md):
 # scores at or above automation/benchmark/training/baseline.json, no policy violations, byte-identical reruns.
-# ARGS passes options instead, e.g. ARGS="--update-baseline" or ARGS="--qa-eval --jobs 8" (local, ~15 minutes).
+# ARGS passes options instead, e.g. ARGS="--update-baseline" or ARGS="--qa-eval --jobs 12" (local only; about 5.5 minutes at 12 jobs, longer with fewer).
 training-benchmark:
 	@$(REQUIRE_311)
 	PYTHONDONTWRITEBYTECODE=1 "$(TEST_PYTHON)" "$(CURDIR)/scripts/training_benchmark.py" $(ARGS)
