@@ -37,9 +37,11 @@ from sdk.training.parse import (
     parse_crew,
     parse_datetime,
     parse_items,
+    parse_research_family_levels,
     parse_research_levels,
     parse_rooms,
     parse_training_designs,
+    research_course,
     to_int,
 )
 from sdk.training.planner import plan_training, remaining_stock, replan_after_finish
@@ -93,12 +95,14 @@ __all__ = (
     "parse_crew",
     "parse_datetime",
     "parse_items",
+    "parse_research_family_levels",
     "parse_research_levels",
     "parse_rooms",
     "parse_training_designs",
     "plan_training",
     "remaining_stock",
     "replan_after_finish",
+    "research_course",
     "to_int",
     "with_consumables",
 )
