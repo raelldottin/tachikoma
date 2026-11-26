@@ -56,22 +56,79 @@ No repository settings are changed merely by adding these files.
   hook and fails even if a test catches the resulting error. A regression
   test exercises this guard using a synthetic connection attempt blocked
   before any connection is established.
-  The existing `daily-run.yml` and `daily-run-langgraph.yml` schedules are
-  separate operational workflows and retain their existing behavior.
+  The `daily-run.yml` and `daily-run-langgraph.yml` schedules are separate
+  operational workflows. `daily-run.yml` passes each account step
+  `--account-alias account-N --training-journal-dir
+  "$RUNNER_TEMP/tachikoma-training/journals"`, so each account journals its
+  crew training under its own alias. A final `Training report` step
+  (`if: always()`, given no credentials) appends the list of journals
+  written to the job summary, then runs `run.py --report training` over them,
+  writes `report/training-report.md` and `.json`, and appends the Markdown
+  report; a failing report run fails the step after the list is written. An
+  `actions/upload-artifact` step (`if: always()`, `continue-on-error: true`,
+  so an artifact service failure cannot fail the run) then uploads only
+  `$RUNNER_TEMP/tachikoma-training` as `training-report-<run id>-<attempt>`
+  (kept 14 days). `run.py` creates an account's journal before login, so an
+  account that failed at login is listed with an empty journal; only an
+  account skipped through `LEGACY_RUN_SKIP` (or one that stopped before
+  `run.py` ran) writes no journal and is not listed. `scripts/ci.py`
+  (`check_daily_training`) enforces this shape: each account's alias and
+  journal flag exactly once and its `continue-on-error`, a single report step
+  in the account steps' job after every one of them, under `set -euo
+  pipefail`, without `continue-on-error`, credentials, `||`, `exit 0`,
+  `set +e` or a trap, an upload of only the training directory, in the
+  report's job after it, with `continue-on-error: true` and a retention of 1
+  to 30 days, and no secrets outside the account steps (a `secrets` reference
+  anywhere inside a `${{ }}` expression counts). The report and upload `if:`
+  may be written `always()` or `${{ always() }}`.
 - New workflows pin external actions to full commit hashes, use bounded
   job timeouts, cache pip downloads, and disable checkout credential
   persistence. Validation defaults to `contents: read`.
-- `python-tests.yml` also runs an advisory mutation job (`scripts/mutation.py`,
+- `python-tests.yml` also runs two mutation jobs (`scripts/mutation.py`,
   Ubuntu / Python 3.13) when its `run-mutation` input is true. Only Blocking CI
-  passes `run-mutation: true`; post-merge and release runs skip the job. The
-  job installs `.github/requirements-ci.txt` with the same pip cache as the
-  tests job. The mutation step uses `continue-on-error: true` and a 15-minute
-  timeout inside the job's 20-minute timeout, so a score below a target's
-  `min_score` in `automation/mutation/config.json` (a warning annotation), a
-  harness error (exit 2, an error annotation) or a slow run is reported but
-  cannot fail `CI required`. The job itself has no `continue-on-error`, so a
-  failed checkout, setup or dependency install still fails it.
-- The mutation step writes `mutation.json` and, through
+  passes `run-mutation: true`; post-merge and release runs skip both. Each job
+  installs `.github/requirements-ci.txt` with the same pip cache as the tests
+  job and gets its targets from `python scripts/ci.py mutation-config
+  --blocking` or `--advisory`, which prints the matching part of
+  `automation/mutation/config.json` to `$RUNNER_TEMP` for `--config`.
+- The `mutation-gate` job (blocking) runs the `sdk/training/` targets. It has
+  no `continue-on-error`, and its step runs under `set -euo pipefail` with a
+  25-minute timeout inside the job's 30-minute timeout, so a training target
+  below its `min_score` (exit 1), a config, baseline or harness error (exit 2)
+  or a timeout fails the job, the reusable workflow and `CI required`.
+  `mutation-config` refuses a config that drops `sdk/training/model.py`,
+  `parse.py`, `planner.py` or `strategy.py` or stops running
+  `tests.test_training_planner` and `tests.test_training_parse` for one of
+  them. Every `sdk/training/` target blocks, so any of them, those four or a
+  new one, is refused if it lists no tests, narrows itself with `functions` or
+  `operators`, sets its `timeout` (a tiny one would count every mutant as a
+  killing timeout), or sets a `min_score` that is not a finite number of at
+  least 0.90 (every entry is checked). A target path must be written the way
+  `scripts/mutation.py` normalizes it (no `./`, `//` or backslashes) and a glob
+  target must not be able to reach `sdk/training/`, so neither spelling can
+  slip a training file into the advisory job; `scripts/ci.py repository` runs the
+  same check. Listing a mutant under `equivalent` stays possible and
+  is left to review. `check_mutation_gate` keeps the job's shape: its
+  condition, no `continue-on-error` outside the upload, no `if:` on the
+  mutation step, exactly `set -euo pipefail`, the `config=` line and the
+  `mutation-config --blocking` line before one plain `scripts/mutation.py`
+  command that reads `--config "$config"` and takes only `--config`, `--jobs`,
+  `--json`, `--summary`, `--quiet` and `--scratch-dir`, no `||`, `exit 0`,
+  `set +e` or trap, and `run-mutation: true` in Blocking CI. Besides that
+  step the job may only check out, set up Python, run
+  `python -m pip install -r .github/requirements-ci.txt` and upload, so no
+  earlier step can rewrite the config, the tests or `sdk/training`. The
+  advisory job's `mutation-config --advisory` skips the training policy, so a
+  weakened training target fails only the gate. The step writes `mutation-gate.json`,
+  uploaded as `mutation-gate-report-<attempt>` like the advisory report below.
+- The advisory job runs every other target. Its mutation step uses
+  `continue-on-error: true` and a 15-minute timeout inside the job's 20-minute
+  timeout, so a score below a target's `min_score` (a warning annotation), a
+  harness or `mutation-config` error (exit 2, an error annotation) or a slow
+  run is reported but cannot fail `CI required`. The job itself has no
+  `continue-on-error`, so a failed checkout, setup or dependency install still
+  fails it.
+- Each mutation step writes its JSON report and, through
   `--summary "$GITHUB_STEP_SUMMARY"`, appends a Markdown report to the job
   summary: each target's score, minimum and headroom, operators used,
   per-operator counts, surviving mutants and any `ratchet:` hint. A ratchet hint appears when a
@@ -79,8 +136,8 @@ No repository settings are changed merely by adding these files.
   the new floor (the score rounded down to two decimals) to record in the
   config. The summary's headroom is rounded down too, so it never shows two
   points without a ratchet hint, nor zero or more next to a failure.
-- A following step uploads `mutation.json` as the `mutation-report-<attempt>`
-  artifact (`actions/upload-artifact`, pinned to a commit; kept 14 days). It
+- In the advisory job, a following step uploads `mutation.json` as the
+  `mutation-report-<attempt>` artifact (`actions/upload-artifact`, pinned to a commit; kept 14 days). It
   runs with `if: always()`, so the report survives a failed mutation step, and
   with `continue-on-error: true`, so a failed upload cannot fail the job;
   a missing file is ignored.
