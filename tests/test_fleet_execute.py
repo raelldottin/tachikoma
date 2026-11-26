@@ -12,6 +12,7 @@ import io
 import json
 import logging
 import os
+import random
 import socket
 import sys
 import tempfile
@@ -24,7 +25,7 @@ from unittest.mock import patch
 from urllib.parse import urlsplit
 
 import run  # imported here so run.py's log file opens in the repository, not a test tmpdir
-from sdk.fleet.accounts import load_registry
+from sdk.fleet.accounts import AccountProfile, load_registry, registry_from_dict
 from sdk.fleet.authorization import (
     HullUpgrade,
     Placement,
@@ -40,19 +41,24 @@ from sdk.fleet.factory import (
     DryRunJournal,
     ExecutionGate,
     AuthorizedPolicy,
+    BATTLE_REARM_ALLOWANCE,
     EnvironmentAccountFactory,
     ExecutionRefusedError,
     GatedActionRunner,
     HullUpgradePolicy,
     _ExecuteGateMixin,
+    ZERO_COST_ACTIONS,
     canary_choice,
+    declares_zero_cost,
     registry_hash,
     registry_stamp,
 )
+from sdk.execution.runner import planned_cost
 from sdk.fleet.orchestrator import FleetOrchestrator
 from sdk.journal import GameplayEvent, GameplayJournal, JournalError, read_events
-from sdk.policy import ActionRequest, DesignData, Plan, PolicyConfig, get_policy
+from sdk.policy import ActionRequest, DesignData, Plan, PolicyConfig, Rejection, get_policy
 from sdk.policy.progression import next_hull_design
+from sdk.simulation.game import SimulatedClock, SimulatedGame
 from sdk.state import build_snapshot
 from sdk.state.snapshot import game_identity_fingerprint
 from tests.synthetic_fixtures import SYNTHETIC_DEVICE_KEY_IOS, SYNTHETIC_DEVICE_KEY_MAC
@@ -74,6 +80,7 @@ from tests.test_fleet_dry_run import (
 )
 from tests.test_fleet_dry_run import ENV as CREDENTIALS
 from tests import test_room_placement as placement_tests  # a module import: its test cases are not rerun here
+from tests import training_fixtures as training_tests
 
 REPO_ROOT = Path(os.path.abspath(__file__)).parents[1]
 SALT_ENV = "FLEET_SALT"
@@ -853,6 +860,26 @@ class StopConditionTests(FleetExecuteTestCase):
         self.assertEqual(ExecClient.executed, [("1001", "runBattleEndToEnd")])
         battle = self.attempted("alpha")[-1]
         self.assertEqual(battle.cost["minerals_delta"], -50)
+
+    def test_a_battle_passes_the_cost_gate_when_each_cap_leaves_exactly_its_rearm_allowance(self):
+        # Nothing spent in the period: a kind with no recorded spend counts as 0 spent, so a cap of exactly the
+        # allowance is enough, and one less is not.
+        battle_auth = {"actions": ["run_pvp_battle", *SAFE_ACTIONS], "battles": {"max_per_window": 5, "window_hours": 24}}
+        gate = ExecutionGate(authorization_from_dict(authorization_payload(**battle_auth)),
+                             load_registry(self.registry), "full", lambda: datetime.now(timezone.utc))
+
+        def runner(cap):
+            return GatedActionRunner(gate, {"minerals": cap, "gas": cap, "starbux": 0}, timedelta(hours=24), "alpha",
+                                     ExecClient(), lambda: build_snapshot("alpha", datetime.now(timezone.utc), "test"),
+                                     GameplayJournal(self.journal_dir / "alpha.log"))
+
+        # Past the gate (a refusal raises), the runner's own checks stop it: the empty snapshot has no ship.
+        result = runner(BATTLE_REARM_ALLOWANCE).run("run_pvp_battle", dry_run=True)
+        self.assertEqual(result.reason, "preconditions failed: ship section was not observed before the action")
+        with self.assertRaises(ExecutionRefusedError) as raised:
+            runner(BATTLE_REARM_ALLOWANCE - 1).run("run_pvp_battle", dry_run=True)
+        self.assertIn("a battle may rearm at an unrecorded minerals cost", str(raised.exception))
+        self.assertEqual(ExecClient.executed, [])
 
     # Verifies: S05-R5, S08-R2
     def test_the_battle_cap_is_enforced_by_the_execute_run(self):
@@ -1717,6 +1744,186 @@ class UpgradeShipModeTests(FleetExecuteTestCase):
         for bad in ("", "x", "0", "-3", "3.0", "3@1"):
             with self.subTest(text=bad), self.assertRaises(ValueError):
                 run.parse_upgrade_ship(bad)
+
+
+TRAINING_ACTION_IDS = ["add_training", "finish_training", "use_consumable"]
+UNCOSTED = "a non-idempotent action without a planned cost cannot be checked against the caps"
+START_101 = {"training_design_id": "5010", "character_id": "101"}
+
+
+def training_game(crew_records=(training_tests.crew(),)):
+    """A simulated account with the training-v1 fixture's rooms, research, one consumable and ``crew_records``."""
+    state = {"minerals": 500, "gas": 500, "rooms": [dict(room) for room in training_tests.ROOMS],
+             "research": [dict(entry) for entry in training_tests.RESEARCH],
+             "inventory": [training_tests.item()], "crew": [dict(record) for record in crew_records]}
+    training = {"character_designs": training_tests.CHARACTER_DESIGNS,
+                "training_designs": training_tests.TRAINING_DESIGNS, "item_designs": training_tests.ITEM_DESIGNS}
+    return SimulatedGame("alpha", state, training_tests.design(), random.Random(0),
+                         SimulatedClock(datetime(2027, 6, 1, 6, 0, tzinfo=timezone.utc)), training=training)
+
+
+def training_gate(actions=(*TRAINING_ACTION_IDS, "upgrade_room", *SAFE_ACTIONS), mode="full"):
+    return ExecutionGate(authorization_from_dict(authorization_payload(actions=list(actions))),
+                         registry_from_dict(registry_payload()), mode, lambda: datetime.now(timezone.utc))
+
+
+class TrainingCostGateTests(unittest.TestCase):
+    """Under caps, add_training and use_consumable run only with an explicit zero for every capped kind."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+
+    def runner(self, game, budgets=None):
+        self.journal = GameplayJournal(Path(self.tmp.name) / "unit.log")
+        return GatedActionRunner(training_gate(), budgets or {"minerals": 1000, "gas": 1000, "starbux": 0},
+                                 timedelta(hours=24), "alpha", game, game.snapshot, self.journal)
+
+    def assert_refused(self, game, action_id, params, expected_cost, message):
+        with self.assertRaises(ExecutionRefusedError) as raised:
+            self.runner(game).run(action_id, params, expected_cost=expected_cost)
+        self.assertEqual(str(raised.exception), message)
+        self.assertEqual(game.calls, [])
+        last = self.journal.read()[-1]
+        self.assertEqual((last.action_id, last.outcome, last.attempted, last.error_class),
+                         (action_id, "skipped", False, "ExecutionRefusedError"))
+
+    def test_training_with_an_explicit_zero_runs_under_caps(self):
+        game = training_game()
+        result = self.runner(game).run("add_training", START_101, expected_cost={"minerals": 0, "gas": 0})
+        self.assertEqual(result.outcome, "verified")
+        self.assertEqual(game.calls, ["addTraining"])
+
+    def test_training_without_the_explicit_zero_is_still_refused(self):
+        for cost in ({}, None):
+            with self.subTest(cost=cost):
+                self.assert_refused(training_game(), "add_training", START_101, cost, UNCOSTED)
+
+    def test_an_incomplete_or_malformed_zero_declaration_is_refused(self):
+        for cost in ({"minerals": 0}, {"gas": 0}, {"minerals": 0, "gas": 0, "crew": 0}, {"minerals": False, "gas": 0},
+                     {"minerals": 0.0, "gas": 0}, {"minerals": "0", "gas": "0"}, {"minerals": -1, "gas": 0}):
+            with self.subTest(cost=cost):
+                self.assert_refused(training_game(), "add_training", START_101, cost, UNCOSTED)
+
+    def test_training_with_starbux_is_refused(self):
+        self.assert_refused(training_game(), "add_training", START_101, {"minerals": 0, "gas": 0, "starbux": 5},
+                            "starbux spending is disabled in execute runs")
+
+    def test_other_uncosted_non_idempotent_actions_stay_refused_even_with_a_zero(self):
+        self.assert_refused(training_game(), "upgrade_room", {"room_id": "11", "upgrade_room_design_id": "301"},
+                            {"minerals": 0, "gas": 0}, UNCOSTED)
+
+    def test_a_fractional_cost_that_truncates_to_zero_is_no_planned_cost(self):
+        # planned_cost truncates with int(): {"minerals": 0.5} becomes {"minerals": 0}, a truthy dict that must not
+        # pass for a planned cost (an all-zero planned cost cannot be checked against the caps either).
+        upgrade = {"room_id": "11", "upgrade_room_design_id": "301"}
+        self.assertEqual(planned_cost({"minerals": 0.5}), {"minerals": 0})
+        for action_id, params, cost in (("upgrade_room", upgrade, {"minerals": 0.5}),
+                                        ("upgrade_room", upgrade, {"minerals": 0.9, "gas": 0.1}),
+                                        ("add_training", START_101, {"minerals": 0.5, "gas": 0})):
+            with self.subTest(action_id=action_id, cost=cost):
+                self.assert_refused(training_game(), action_id, params, cost, UNCOSTED)
+        # paired controls: a positive amount still reaches the cap loop, and training's explicit zero still passes
+        runner = self.runner(training_game(), {"minerals": 10, "gas": 1000, "starbux": 0})
+        self.assertIsNone(runner._refusal("upgrade_room", {"minerals": 5}))
+        self.assertIsNone(runner._refusal("upgrade_room", {"minerals": 0.5, "gas": 3}))
+        self.assertEqual(runner._refusal("upgrade_room", {"minerals": 50}),
+                         "minerals cap would be exceeded (0 spent + 50 planned > 10)")
+        self.assertIsNone(runner._refusal("add_training", {"minerals": 0, "gas": 0}))
+
+    def test_use_consumable_with_a_real_mineral_cost_is_still_cap_checked(self):
+        game = training_game([training_tests.CPU])
+        with self.assertRaises(ExecutionRefusedError) as raised:
+            self.runner(game, {"minerals": 10, "gas": 1000, "starbux": 0}).run(
+                "use_consumable", {"item_design_id": "902", "character_id": "104"},
+                expected_cost={"minerals": 50, "gas": 0})
+        self.assertEqual(str(raised.exception), "minerals cap would be exceeded (0 spent + 50 planned > 10)")
+        self.assertEqual(game.calls, [])
+        used = self.runner(game).run("use_consumable", {"item_design_id": "902", "character_id": "104"},
+                                     expected_cost={"minerals": 0, "gas": 0})  # paired control
+        self.assertEqual((used.outcome, game.calls), ("verified", ["activateItem3"]))
+
+    def test_finish_training_is_unaffected(self):
+        game = training_game([training_tests.crew(training="5010", end="2027-06-01T05:00:00")])
+        result = self.runner(game).run("finish_training", {"character_id": "101"}, expected_cost={})
+        self.assertEqual(result.outcome, "verified")
+        self.assertEqual(game.calls, ["finishTraining"])
+
+    def test_declares_zero_cost_truth_table(self):
+        for cost, expected in (({"minerals": 0, "gas": 0}, True), ({"mineral": 0, "gas": 0}, True),
+                               ({"Minerals": 0, "GAS": 0}, True), ({"minerals": 0, "gas": 0, "starbux": 0}, True),
+                               (None, False), ({}, False), ([("minerals", 0), ("gas", 0)], False),
+                               ({"minerals": 0}, False), ({"gas": 0}, False), ({"minerals": 1, "gas": 0}, False),
+                               ({"minerals": 0, "gas": -1}, False), ({"minerals": True, "gas": 0}, False),
+                               ({"minerals": 0, "gas": 0.0}, False), ({"minerals": "0", "gas": 0}, False),
+                               ({"minerals": 0, "gas": 0, "crew": 0}, False)):
+            with self.subTest(cost=cost):
+                self.assertIs(declares_zero_cost(cost), expected)
+        from sdk.policy import training  # the set is defined once there; tests.test_training_policy pins it
+
+        self.assertIs(ZERO_COST_ACTIONS, training.ZERO_COST_ACTIONS)
+
+
+class TrainingAuthorizationTests(unittest.TestCase):
+    """AuthorizedPolicy keeps authorized training requests intact and rejects the rest."""
+
+    def snapshot(self):
+        records = [training_tests.ended(), training_tests.crew("102", "Delish", room="12"), training_tests.CPU]
+        return training_tests.snap(records, inventory=[training_tests.item()])
+
+    def plan(self, gate):
+        return AuthorizedPolicy(get_policy("training-v1"), gate).plan(self.snapshot(), training_tests.design(),
+                                                                      PolicyConfig())
+
+    def test_authorized_training_requests_pass_authorized_policy(self):
+        planned = training_tests.training_requests(self.plan(training_gate()))
+        self.assertEqual([(request.action_id, dict(request.params), dict(request.expected_cost))
+                          for request in planned], [
+            ("finish_training", {"character_id": "101"}, {}),
+            ("add_training", {"training_design_id": "5030", "character_id": "102"}, {"minerals": 0, "gas": 0}),
+            ("use_consumable", {"item_design_id": "902", "character_id": "104"}, {"minerals": 0, "gas": 0}),
+        ])
+
+    def test_unauthorized_training_requests_are_rejected(self):
+        result = self.plan(training_gate(actions=["finish_training", "use_consumable", *SAFE_ACTIONS]))
+        self.assertIn(Rejection("add_training 5030 102",
+                                "not authorized: action 'add_training' is not allowed by the authorization"),
+                      result.rejected)
+        self.assertEqual([request.action_id for request in training_tests.training_requests(result)],
+                         ["finish_training", "use_consumable"])
+
+    def test_canary_never_runs_training(self):
+        result = self.plan(training_gate(mode="canary"))
+        self.assertEqual(training_tests.training_requests(result), [])
+        rejected = training_tests.reasons(result)
+        self.assertEqual(rejected["add_training 5030 102"], "canary: not safe to retry")
+        self.assertEqual(rejected["use_consumable 902 104"], "canary: not safe to retry")
+        self.assertEqual(rejected["finish_training 101"], "canary: safe to retry, but not canary-safe")
+
+
+class TrainingDesignReadTests(unittest.TestCase):
+    """The factory reads the per-list training designs only for an account whose policy models training."""
+
+    def test_the_factory_reads_training_lists_only_for_a_training_policy(self):
+        class TrainingListsClient(FakeClient):  # listAllDesigns4 gives hulls but no training records
+            def listAllTrainingDesigns2(self):
+                self.calls.append("listAllTrainingDesigns2")
+                self.trainingDesigns = {"TrainingDesigns": {"TrainingDesign": training_tests.TRAINING_DESIGNS}}
+                return True
+
+            def listAllCharacterDesigns2(self):
+                self.calls.append("listAllCharacterDesigns2")
+                self.allCharacterDesigns = {"CharacterDesigns": {"CharacterDesign": training_tests.CHARACTER_DESIGNS}}
+                return True
+
+        for policy_id, expected in (("training-v1", len(training_tests.TRAINING_DESIGNS)), ("fleet-v1", 0)):
+            with self.subTest(policy_id=policy_id), tempfile.TemporaryDirectory() as tmp:
+                factory = EnvironmentAccountFactory(tmp, client_cls=TrainingListsClient, environ=CREDENTIALS,
+                                                    identity_salt=SALT)
+                context = factory(AccountProfile(alias="bravo", objective="grow", policy_id=policy_id,
+                                                 credentials_secret="BRAVO"))
+                self.assertEqual(len(context.design.training_designs), expected)
+                self.assertEqual("listAllTrainingDesigns2" in FakeClient.instances[-1].calls, bool(expected))
 
 
 if __name__ == "__main__":

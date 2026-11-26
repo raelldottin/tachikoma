@@ -175,6 +175,16 @@ class BaselineV1Tests(unittest.TestCase):
         with self.assertRaises(KeyError):
             get_policy("greedy-v9")
 
+    def test_registry_lists_training_v1(self):
+        from sdk.fleet import registry_from_dict
+        from sdk.policy import POLICIES, TrainingV1
+
+        self.assertEqual(sorted(POLICIES), ["baseline-v1", "fleet-v1", "hull-reserve-v1", "training-v1"])
+        self.assertIsInstance(get_policy("training-v1"), TrainingV1)
+        registry = registry_from_dict({"version": 1, "accounts": [
+            {"alias": "alpha", "objective": "grow", "policy_id": "training-v1", "credentials_secret": "ALPHA_AUTH"}]})
+        self.assertEqual(registry.get("alpha").policy_id, "training-v1")
+
 
 class HullDesignRaceTests(unittest.TestCase):
     """Hull designs carry their race: one hull design per race per level."""

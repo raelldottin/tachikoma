@@ -101,7 +101,7 @@ from sdk.actions import Idempotency, check_preconditions, get_spec
 from sdk.client import _extract_collection
 from sdk.device import Device
 from sdk.execution import ActionRunner, UncertainPriorAttemptError
-from sdk.execution.runner import planned_cost
+from sdk.execution.runner import COST_KINDS, planned_cost
 from sdk.fleet.accounts import REGISTRY_VERSION, AccountProfile, AccountRegistry
 from sdk.fleet.authorization import (
     BATTLE_ACTION_ID,
@@ -126,7 +126,16 @@ from sdk.fleet.orchestrator import (
     spent_in_period,
 )
 from sdk.journal import GameplayEvent, GameplayJournal, new_attempt_id
-from sdk.policy import ActionRequest, DesignData, Plan, PolicyConfig, ProgressionPolicy, Rejection, get_policy
+from sdk.policy import (
+    ZERO_COST_ACTIONS,
+    ActionRequest,
+    DesignData,
+    Plan,
+    PolicyConfig,
+    ProgressionPolicy,
+    Rejection,
+    get_policy,
+)
 from sdk.policy.placement import ShipLayout, first_free, placement_refusal
 from sdk.policy.progression import next_hull_design
 from sdk.redaction import redact_secrets
@@ -357,10 +366,36 @@ def isolate_session(client: Any) -> None:
     client.session = session
 
 
-def read_design_data(client: Any) -> tuple[DesignData, tuple[str, ...]]:
-    """Room, research and hull designs from read-only calls, and notes on what was not available."""
+def _read_design_list(client: Any, method: str, attribute: str, tag: str) -> tuple[list, Optional[str]]:
+    """The ``tag`` records one read-only design list call leaves in ``client.<attribute>``, or [] and a note.
+
+    The attribute is read only after the call reports success: a failed call leaves an earlier reply in place.
+    """
+    try:
+        loaded = getattr(client, method)()
+    except Exception as error:  # training designs are optional; training-v1's rejection then says why
+        return [], f"{tag} records unavailable ({method} raised {type(error).__name__})"
+    records = _extract_collection(getattr(client, attribute, None), tag) if loaded else []
+    if not records:
+        return [], f"{tag} records unavailable ({method} returned no data)"
+    return records, None
+
+
+def read_design_data(client: Any, *, training: bool = False) -> tuple[DesignData, tuple[str, ...]]:
+    """Room, research and hull designs from read-only calls, and notes on what was not available.
+
+    The training, character and item designs training-v1 plans with come from the same ``listAllDesigns4`` reply,
+    and only with ``training`` (the account's policy models training): otherwise they stay empty, so an account
+    that plans no training pays nothing to convert them. With ``training``, a TrainingDesign or CharacterDesign list
+    that reply did not give is read with ``listAllTrainingDesigns2`` / ``listAllCharacterDesigns2``, the reads
+    ``run.py``'s training uses; one that still gives none stays empty with a note, and training-v1's rejection says
+    why.
+    """
     notes = []
     ship_designs: list = []
+    training_designs: list = []
+    character_designs: list = []
+    item_designs: list = []
     try:
         loaded = client.listAllDesigns4()
     except Exception as error:  # hull designs are optional; the other designs are not
@@ -373,12 +408,25 @@ def read_design_data(client: Any) -> tuple[DesignData, tuple[str, ...]]:
         ship_designs = _extract_collection(getattr(client, "shipDesigns", None), "ShipDesign")
         if not ship_designs and not notes:
             notes.append("hull designs unavailable (no ShipDesign records)")
+    if loaded is not False and training:  # only an account whose policy models training pays for the conversion
+        training_designs = _extract_collection(getattr(client, "trainingDesigns", None), "TrainingDesign")
+        character_designs = _extract_collection(getattr(client, "characterDesigns", None), "CharacterDesign")
+        item_designs = _extract_collection(getattr(client, "itemDesigns", None), "ItemDesign")
     client.listRoomDesigns2()
     client.listAllResearchDesigns2()
+    if training and not training_designs:
+        training_designs, note = _read_design_list(client, "listAllTrainingDesigns2", "trainingDesigns",
+                                                   "TrainingDesign")
+        notes.extend([note] if note else [])
+    if training and not character_designs:
+        character_designs, note = _read_design_list(client, "listAllCharacterDesigns2", "allCharacterDesigns",
+                                                    "CharacterDesign")
+        notes.extend([note] if note else [])
     design = DesignData.from_records(
         _extract_collection(getattr(client, "roomDesigns", None), "RoomDesign"),
         _extract_collection(getattr(client, "allResearchDesigns", None), "ResearchDesign"),
-        ship_designs,
+        ship_designs, training_designs=training_designs, character_designs=character_designs,
+        item_designs=item_designs,
     )
     return design, tuple(notes)
 
@@ -490,7 +538,8 @@ class EnvironmentAccountFactory:
             with self._lock:
                 self._game_versions[profile.alias] = server_game_version(client)
             if read_designs:
-                design, notes = read_design_data(client)
+                design, notes = read_design_data(
+                    client, training=getattr(get_policy(profile.policy_id), "models_training", False))
                 # Live ship items carry no type, so minerals and gas are told apart by their item designs.
                 resource_kinds = item_resource_kinds(
                     _extract_collection(getattr(client, "itemDesigns", None), "ItemDesign"))
@@ -760,6 +809,27 @@ DEFAULT_HALT_SHARE = 0.0  # any stopped account halts the fleet (S05-Q2 safe def
 # A battle rearms first (RebuildAmmo3) at a cost the repo does not record, so it may only start while at least
 # this much of each capped mineral and gas budget is left this period. It is a floor, not an estimate.
 BATTLE_REARM_ALLOWANCE = 1
+# ZERO_COST_ACTIONS (defined once, in sdk.policy.training): actions with no mineral or gas price, so a planned cost
+# is never positive. Under caps the gate accepts one without a positive planned cost only when the request declares
+# an explicit 0 for every capped kind (training-v1 does); without that declaration it is refused like any other
+# uncosted not-idempotent action.
+
+
+def declares_zero_cost(expected_cost: Optional[Mapping[str, Any]]) -> bool:
+    """Whether ``expected_cost`` names every kind in CAP_KINDS with the integer 0, and nothing but zeros.
+
+    Read from the raw mapping: ``planned_cost`` drops zero amounts. Every key must be a ``COST_KINDS`` kind and every
+    amount the int 0 (not a bool, float or string).
+    """
+    if not isinstance(expected_cost, Mapping) or not expected_cost:
+        return False
+    named = set()
+    for kind, amount in expected_cost.items():
+        name = COST_KINDS.get(str(kind).lower())
+        if name is None or isinstance(amount, bool) or not isinstance(amount, int) or amount != 0:
+            return False
+        named.add(name)
+    return set(CAP_KINDS) <= named
 
 
 class ExecutionRefusedError(UncertainPriorAttemptError):
@@ -1101,8 +1171,11 @@ class GatedActionRunner(ActionRunner):
     fleet); an action outside the authorization (account, action, time, mode,
     or the battle cap checked with this journal's events); any planned
     starbux cost; a non-idempotent action other than a battle that carries no
-    planned cost while the account has caps, because its spend could not be
-    checked; a battle while any capped mineral or gas budget has less than
+    planned cost (or one whose amounts all truncate to 0) while the account
+    has caps, because its spend could not be
+    checked (except an action in ``ZERO_COST_ACTIONS`` whose request declares
+    an explicit 0 for every capped kind: ``declares_zero_cost``); a battle
+    while any capped mineral or gas budget has less than
     ``BATTLE_REARM_ALLOWANCE`` left this period (``Client.runBattleEndToEnd``
     first rearms with ``rebuildAmmo``, ``RebuildAmmo3``, whose cost the repo
     does not record, so a battle has no planned cost and is held to this
@@ -1121,7 +1194,8 @@ class GatedActionRunner(ActionRunner):
         self.period = period
         self.halted = halted
 
-    def _refusal(self, action_id: str, planned: Mapping[str, int]) -> Optional[str]:
+    def _refusal(self, action_id: str, expected_cost: Optional[Mapping[str, Any]]) -> Optional[str]:
+        planned = planned_cost(expected_cost)
         halt = self.halted()
         if halt is not None:
             return halt
@@ -1130,9 +1204,12 @@ class GatedActionRunner(ActionRunner):
             return refusal
         if planned.get("starbux"):
             return "starbux spending is disabled in execute runs"
-        if (not planned and action_id != BATTLE_ACTION_ID
+        # planned_cost truncates with int(), so {"minerals": 0.5} plans {"minerals": 0}: an all-zero planned cost is
+        # no planned cost.
+        if (not any(planned.values()) and action_id != BATTLE_ACTION_ID
                 and get_spec(action_id).idempotency is Idempotency.NOT_IDEMPOTENT
-                and any(self.budgets.get(kind) is not None for kind in CAP_KINDS)):
+                and any(self.budgets.get(kind) is not None for kind in CAP_KINDS)
+                and not (action_id in ZERO_COST_ACTIONS and declares_zero_cost(expected_cost))):
             return "a non-idempotent action without a planned cost cannot be checked against the caps"
         spent = spent_in_period(self.journal, self.account_alias, self.clock() - self.period)
         if action_id == BATTLE_ACTION_ID:
@@ -1149,7 +1226,7 @@ class GatedActionRunner(ActionRunner):
 
     def run(self, action_id: str, params: Optional[Mapping[str, Any]] = None, *, dry_run: bool = False,
             allow_after_uncertain: bool = False, expected_cost: Optional[Mapping[str, Any]] = None):
-        refusal = self._refusal(action_id, planned_cost(expected_cost)) or self.gate.params_refusal(
+        refusal = self._refusal(action_id, expected_cost) or self.gate.params_refusal(
             action_id, dict(params or {}))
         if refusal is not None:
             self._record(get_spec(action_id), self.clock(), dict(params or {}), outcome="skipped",

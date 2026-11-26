@@ -1375,7 +1375,7 @@ class TestStructure(unittest.TestCase):
                         self.assertLessEqual({alias.name for alias in node.names}, leveling_constants)
         sources = sorted(PACKAGE_DIR.glob("*.py"))
         names = {path.name for path in sources}
-        self.assertEqual(names, {"__init__.py", "model.py", "strategy.py", "parse.py", "planner.py"})
+        self.assertEqual(names, {"__init__.py", "actions.py", "model.py", "strategy.py", "parse.py", "planner.py"})
         for path in sources:
             tree = ast.parse(path.read_text(encoding="utf-8"))
             for node in ast.walk(tree):
