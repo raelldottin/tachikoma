@@ -283,7 +283,8 @@
       "evidence": "mocked-test",
       "tests": [
         "tests/test_e2e_live_fixes.py",
-        "tests/test_runtime_guards.py"
+        "tests/test_runtime_guards.py",
+        "tests/test_training_endpoints.py"
       ]
     },
     {
@@ -297,15 +298,10 @@
       "name": "finishTraining",
       "pillar": "B",
       "kind": "mutating",
-      "evidence": "untested",
-      "tests": []
-    },
-    {
-      "name": "getTrainingUpdate",
-      "pillar": "A",
-      "kind": "read-only",
-      "evidence": "untested",
-      "tests": []
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_training_endpoints.py"
+      ]
     },
     {
       "name": "listAllDesigns4",
@@ -331,8 +327,10 @@
       "name": "addTraining",
       "pillar": "B",
       "kind": "mutating",
-      "evidence": "untested",
-      "tests": []
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_training_endpoints.py"
+      ]
     },
     {
       "name": "manageTraining",
@@ -341,22 +339,18 @@
       "evidence": "mocked-test",
       "tests": [
         "tests/test_e2e_live_fixes.py",
-        "tests/test_runtime_guards.py"
+        "tests/test_runtime_guards.py",
+        "tests/test_training_endpoints.py"
       ]
-    },
-    {
-      "name": "getCharacterRooms",
-      "pillar": "A",
-      "kind": "read-only",
-      "evidence": "untested",
-      "tests": []
     },
     {
       "name": "upgradeCharacter",
       "pillar": "B",
       "kind": "mutating",
-      "evidence": "untested",
-      "tests": []
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_training_endpoints.py"
+      ]
     },
     {
       "name": "upgradeCharacters",
@@ -417,15 +411,19 @@
       "name": "activateItem3",
       "pillar": "B",
       "kind": "mutating",
-      "evidence": "untested",
-      "tests": []
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_training_endpoints.py"
+      ]
     },
     {
       "name": "useConsumable",
       "pillar": "B",
       "kind": "mutating",
-      "evidence": "untested",
-      "tests": []
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_training_endpoints.py"
+      ]
     },
     {
       "name": "findConsumableDesignId",
@@ -597,15 +595,19 @@
       "name": "getResearchLevel",
       "pillar": "A",
       "kind": "read-only",
-      "evidence": "untested",
-      "tests": []
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_training_endpoints.py"
+      ]
     },
     {
       "name": "hasResearch",
       "pillar": "A",
       "kind": "read-only",
-      "evidence": "untested",
-      "tests": []
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_training_endpoints.py"
+      ]
     },
     {
       "name": "upgradeRoom",
@@ -621,6 +623,15 @@
       "name": "upgradeShip",
       "pillar": "B",
       "kind": "mutating",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_runtime_guards.py"
+      ]
+    },
+    {
+      "name": "nextHullDesign",
+      "pillar": "B",
+      "kind": "read-only",
       "evidence": "mocked-test",
       "tests": [
         "tests/test_runtime_guards.py"
@@ -1163,6 +1174,15 @@
     },
     {
       "flag": "--place-room",
+      "pillar": "E",
+      "kind": "read-only",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_fleet_execute.py"
+      ]
+    },
+    {
+      "flag": "--upgrade-ship",
       "pillar": "E",
       "kind": "read-only",
       "evidence": "mocked-test",

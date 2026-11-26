@@ -10,6 +10,7 @@ from sdk.actions.catalog import ROOM_FILL_EMPTY_NOTE, ROOM_FILL_UNREAD_REASON
 from sdk.execution import ActionRunner, UncertainPriorAttemptError, call_arguments
 from sdk.journal import GameplayJournal, summarize
 from sdk.state import AccountMismatchError, build_snapshot
+from tests.test_action_catalog import DUE, STATS
 
 T0 = datetime(2026, 11, 10, 12, 0, tzinfo=timezone.utc)
 BASE = dict(
@@ -210,6 +211,77 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual((summary["attempted"], summary["verified"], summary["skipped"]), (1, 1, 1))
 
 
+DUE_TRAINING = {"@CharacterId": "c1", "@Level": "3", "@TrainingEndDate": DUE,
+                "@TrainingDesignId": "7", **STATS}
+
+
+def finish_due_training(state):
+    state["crew"] = [{**DUE_TRAINING, "@TrainingEndDate": "", "@TrainingDesignId": "0", "@HpImprovement": "2"}]
+
+
+def use_item(state):
+    state["inventory"] = []
+
+
+class TrainingAndConsumableRunnerTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.journal = GameplayJournal(Path(self.tmp.name) / "events.jsonl")
+        self.clock = FakeClock()
+        self.world = FakeWorld(self.clock)
+        self.world.state["crew"] = [dict(DUE_TRAINING)]
+        self.world.state["inventory"] = [{"@ItemDesignId": "900", "@Quantity": "1"}]
+        self.runner = ActionRunner("alpha", self.world, self.world.snapshot, self.journal, clock=self.clock)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_finish_training_calls_the_client_with_the_character(self):
+        self.world.effect = finish_due_training
+        result = self.runner.run("finish_training", {"character_id": "c1"})
+        self.assertEqual(self.world.calls, [("finishTraining", ("c1",))])
+        self.assertEqual(result.outcome, "verified", result.reason)
+
+    def test_uncertain_finish_training_may_be_retried(self):
+        self.world.raise_on_call = TimeoutError("synthetic timeout")
+        self.assertEqual(self.runner.run("finish_training", {"character_id": "c1"}).outcome, "unknown")
+        self.world.raise_on_call = None
+        self.world.effect = finish_due_training
+        self.assertEqual(self.runner.run("finish_training", {"character_id": "c1"}).outcome, "verified")
+        self.assertEqual(len(self.world.calls), 2)
+
+    def test_a_second_finish_after_a_verified_one_is_skipped_without_a_call(self):
+        # Whether the server clears the training or leaves a placeholder end with no design, nothing is left to finish.
+        def placeholder(state):
+            state["crew"] = [{**DUE_TRAINING, "@TrainingEndDate": "0001-01-01T00:00:00", "@TrainingDesignId": "0",
+                              "@HpImprovement": "2"}]
+
+        for name, effect in (("cleared", finish_due_training), ("placeholder end", placeholder)):
+            with self.subTest(server=name):
+                self.world.state["crew"] = [dict(DUE_TRAINING)]
+                self.world.calls.clear()
+                self.world.effect = effect
+                self.assertEqual(self.runner.run("finish_training", {"character_id": "c1"}).outcome, "verified")
+                second = self.runner.run("finish_training", {"character_id": "c1"})
+                self.assertEqual(second.outcome, "skipped", second.reason)
+                self.assertEqual(self.world.calls, [("finishTraining", ("c1",))])
+
+    def test_use_consumable_passes_the_design_then_the_character(self):
+        self.world.effect = use_item
+        result = self.runner.run("use_consumable", {"item_design_id": "900", "character_id": "c1"})
+        self.assertEqual(self.world.calls, [("useConsumable", ("900", "c1"))])
+        self.assertEqual(result.outcome, "verified", result.reason)
+
+    def test_uncertain_use_consumable_blocks_a_retry(self):
+        params = {"item_design_id": "900", "character_id": "c1"}
+        self.world.raise_on_call = TimeoutError("synthetic timeout")
+        self.assertEqual(self.runner.run("use_consumable", params).outcome, "unknown")
+        self.world.raise_on_call = None
+        with self.assertRaises(UncertainPriorAttemptError):
+            self.runner.run("use_consumable", params)
+        self.assertEqual(len(self.world.calls), 1)
+
+
 def place_gas_collector(state):
     state["rooms"] = BASE["rooms"] + [{"@RoomId": "room-instance-5512", "@RoomDesignId": "42",
                                        "@RoomStatus": "Building", "@Row": "1", "@Column": "1"}]
@@ -251,7 +323,7 @@ class PlaceRoomRunnerTests(unittest.TestCase):
             with self.subTest(params=params), self.assertRaises(UncertainPriorAttemptError):
                 self.runner.run("place_room", params)
         self.assertEqual(len(self.world.calls), 1)  # nothing after the uncertain call reached the game
-        self.assertIn("a previous placement on this account is still uncertain", self.journal.read()[-1].reason)
+        self.assertIn("a previous place_room attempt on this account is still uncertain", self.journal.read()[-1].reason)
 
     # Verifies: S13-R6
     def test_a_definite_success_without_a_room_is_not_observed_and_does_not_block(self):
@@ -271,6 +343,50 @@ class PlaceRoomRunnerTests(unittest.TestCase):
         self.runner.run("upgrade_room", {"room_id": "r2", "upgrade_room_design_id": "12"})  # not blocked
         with self.assertRaises(UncertainPriorAttemptError):
             self.runner.run("upgrade_room", {"room_id": "r1", "upgrade_room_design_id": "12"})
+
+
+LEVEL_1_SHIP = {"@ShipDesignId": "2", "@ShipLevel": "1", "@UpgradeShipDesignId": "0"}
+
+
+def start_hull_upgrade(state):
+    state["ship"] = {**LEVEL_1_SHIP, "@UpgradeShipDesignId": "3", "@UpgradeStartDate": "2026-11-10T12:00:05"}
+    state["resources"] = {"minerals": "40", "gas": "100", "starbux": "5"}
+
+
+class UpgradeShipRunnerTests(unittest.TestCase):
+    """``upgrade_ship`` through the runner: verified by the ship record, any uncertain attempt blocks the account."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.journal = GameplayJournal(Path(self.tmp.name) / "events.jsonl")
+        self.clock = FakeClock()
+        self.world = FakeWorld(self.clock)
+        self.world.state["ship"] = LEVEL_1_SHIP
+        self.runner = ActionRunner("alpha", self.world, self.world.snapshot, self.journal, clock=self.clock)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_a_started_upgrade_is_verified_from_a_raw_response(self):
+        self.world.effect = start_hull_upgrade
+        self.world.result = object()  # Client.upgradeShip returns the raw response
+        result = self.runner.run("upgrade_ship", {"ship_design_id": "3"}, expected_cost={"mineral": 60})
+        self.assertEqual(result.outcome, "verified", result.reason)
+        self.assertEqual(self.world.calls, [("upgradeShip", ("3",))])
+        self.assertEqual(result.event.cost["minerals_delta"], -60)
+        self.assertEqual(result.event.evidence, {"server_reply": None})  # no upgradeShipReply on this client
+
+    def test_an_unchanged_ship_after_a_raw_response_is_unknown_and_blocks_every_later_upgrade(self):
+        self.world.result = object()
+        first = self.runner.run("upgrade_ship", {"ship_design_id": "3"}, expected_cost={"mineral": 60})
+        self.assertEqual(first.outcome, "unknown")
+        self.assertEqual(first.event.cost["minerals_delta"], 0)
+        for params in ({"ship_design_id": "3"}, {"ship_design_id": "4"}):
+            with self.subTest(params=params), self.assertRaises(UncertainPriorAttemptError):
+                self.runner.run("upgrade_ship", params)
+        self.assertEqual(len(self.world.calls), 1)
+        self.assertIn("a previous upgrade_ship attempt on this account is still uncertain",
+                      self.journal.read()[-1].reason)
 
 
 # Room instance ids that must never reach the journal.

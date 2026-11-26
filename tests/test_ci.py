@@ -14,6 +14,7 @@ import subprocess
 import sys
 import tarfile
 from tempfile import TemporaryDirectory
+import textwrap
 import unittest
 from unittest.mock import patch
 
@@ -42,7 +43,7 @@ def child_env(**extra):
 
 # Path(__file__).resolve() and os.path.realpath(__file__) follow symlinks, so under Bazel's runfiles tree they
 # escape to the source checkout. Every test module and each file listed here must use os.path.abspath instead.
-FILE_RESOLUTION_GUARDED_FILES = ("scripts/ci.py",)
+FILE_RESOLUTION_GUARDED_FILES = ("scripts/ci.py", "scripts/mutation.py")
 # The one known runtime exception: sdk/simulation/game.py sets SCENARIO_DIR with Path(__file__).resolve() so the
 # bundled scenarios are found next to the installed module. It is outside the guard and recorded by a test below.
 FILE_RESOLUTION_RUNTIME_EXCEPTION = "sdk/simulation/game.py"
@@ -86,7 +87,9 @@ def file_resolution_violations(root, listed=FILE_RESOLUTION_GUARDED_FILES):
 
 class RequiredGateTests(unittest.TestCase):
     def test_all_success_is_required(self):
-        ci.require_success({"checks": {"result": "success"}, "tests": {"result": "success"}}, ["checks", "tests"])
+        self.assertIsNone(
+            ci.require_success({"checks": {"result": "success"}, "tests": {"result": "success"}}, ["checks", "tests"])
+        )
 
     def test_every_other_upstream_state_fails(self):
         for result in ("failure", "cancelled", "skipped", "neutral", "", None, True):
@@ -135,6 +138,7 @@ class TestIsolationTests(unittest.TestCase):
         self.assertEqual(file_resolution_violations(ci.ROOT), [])
 
     def test_file_resolution_guard_catches_planted_calls_and_missing_listed_files(self):
+        listed = ("scripts/ci.py",)
         with TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "tests" / "nested").mkdir(parents=True)
@@ -144,7 +148,7 @@ class TestIsolationTests(unittest.TestCase):
                 "ROOT = Path(os.path.abspath(__file__)).parents[1]\nTEXT = 'Path(__file__).resolve()'\n",
                 encoding="utf-8",
             )
-            self.assertEqual(file_resolution_violations(root), [])
+            self.assertEqual(file_resolution_violations(root, listed), [])
 
             (root / "tests" / "test_planted.py").write_text(
                 "import os\nREPO = Path(__file__).resolve().parents[1]\n", encoding="utf-8"
@@ -156,7 +160,7 @@ class TestIsolationTests(unittest.TestCase):
                 "ROOT = pathlib.Path(__file__).resolve().parent\n", encoding="utf-8"
             )
             self.assertEqual(
-                file_resolution_violations(root),
+                file_resolution_violations(root, listed),
                 [
                     "tests/nested/helper.py:1: resolves __file__ through symlinks",
                     "tests/test_planted.py:2: resolves __file__ through symlinks",
@@ -259,13 +263,1014 @@ class LintRatchetTests(unittest.TestCase):
                 ci.check_lint(ci.ROOT)
 
 
+HOLLOW_SAMPLE_PATH = "tests/test_sample.py"
+HOLLOW_SAMPLE_HEADER = "import unittest\nfrom unittest.mock import MagicMock\n\n\nclass Sample(unittest.TestCase):\n"
+
+
+def hollow(methods):
+    """Hollow findings for methods (dedented source) placed in a unittest.TestCase subclass named Sample."""
+    source = HOLLOW_SAMPLE_HEADER + textwrap.indent(textwrap.dedent(methods), "    ")
+    return ci.hollow_tests_in_source(source, HOLLOW_SAMPLE_PATH)
+
+
+def hollow_body(body):
+    """Hollow findings for one Sample.test_x method whose body is the dedented source body."""
+    return hollow("def test_x(self):\n" + textwrap.indent(textwrap.dedent(body), "    "))
+
+
+def hollow_module(source):
+    return ci.hollow_tests_in_source(textwrap.dedent(source), HOLLOW_SAMPLE_PATH)
+
+
+def sample_id(qualname):
+    return f"{HOLLOW_SAMPLE_PATH}::{qualname}"
+
+
+# The unittest.mock assertion methods, pinned here rather than read from ci.MOCK_CALL_ASSERTIONS.
+MOCK_ASSERTION_METHODS = (
+    "assert_any_await",
+    "assert_any_call",
+    "assert_awaited",
+    "assert_awaited_once",
+    "assert_awaited_once_with",
+    "assert_awaited_with",
+    "assert_called",
+    "assert_called_once",
+    "assert_called_once_with",
+    "assert_called_with",
+    "assert_has_awaits",
+    "assert_has_calls",
+    "assert_not_awaited",
+    "assert_not_called",
+)
+
+
+class HollowTestDetectorTests(unittest.TestCase):
+    """ci.hollow_tests_in_source finds tests that assert nothing, only mock calls, or only literals."""
+
+    def test_assertion_free_test_is_no_assertion(self):
+        self.assertEqual(hollow_body("run()\n"), [(sample_id("Sample.test_x"), "no-assertion")])
+
+    def test_real_assertions_are_recognised(self):
+        bodies = (
+            "self.assertEqual(run(), 3)\n",
+            "assert run() == 3\n",
+            "if run():\n    self.fail('x')\n",
+            "with self.assertRaises(ValueError):\n    run()\n",
+            "with self.assertLogs() as logs:\n    run()\n",
+            "self.assertRaisesRegex(ValueError, 'x', run)\n",
+            "with self.subTest(i=1):\n    self.assertTrue(run())\n",
+            "self.assertIsInstance(run(), dict)\n",
+            "assert_shape(run())\n",
+            "self._assert_ok(run())\n",
+        )
+        for body in bodies:
+            with self.subTest(body=body):
+                self.assertEqual(hollow_body(body), [])
+
+    def test_helpers_are_followed(self):
+        self.assertEqual(
+            hollow(
+                """
+                def _check(self, value):
+                    self.assertEqual(value, 1)
+
+                def test_x(self):
+                    self._check(run())
+                """
+            ),
+            [],
+        )
+        self.assertEqual(
+            hollow_module(
+                """
+                import unittest
+
+
+                def verify(value):
+                    assert value == run()
+
+
+                class Sample(unittest.TestCase):
+                    def test_x(self):
+                        verify(2)
+                """
+            ),
+            [],
+        )
+        self.assertEqual(
+            hollow(
+                """
+                def _prepare(self):
+                    run()
+
+                def test_x(self):
+                    self._prepare()
+                """
+            ),
+            [(sample_id("Sample.test_x"), "no-assertion")],
+        )
+        self.assertEqual(
+            hollow(
+                """
+                def _loop(self):
+                    self._loop()
+
+                def test_x(self):
+                    self._loop()
+                """
+            ),
+            [(sample_id("Sample.test_x"), "no-assertion")],
+        )
+
+    def test_helpers_passed_by_reference_are_followed(self):
+        for methods in (
+            "def _check(self):\n    self.assertEqual(run(), 1)\n\ndef test_x(self):\n    self.addCleanup(self._check)\n",
+            "def _check(self, v):\n    self.assertEqual(v, 1)\n\ndef test_x(self):\n    Sample._check(self, run())\n",
+        ):
+            with self.subTest(methods=methods):
+                self.assertEqual(hollow(methods), [])
+
+    def test_self_helpers_resolve_through_the_test_class_and_its_bases(self):
+        source = """
+        import unittest
+
+
+        class Base(unittest.TestCase):
+            def _check(self):
+                self.assertTrue(run())
+
+
+        class ViaSuper(Base):
+            def _check(self):
+                run()
+
+            def test_super(self):
+                super()._check()
+
+
+        class Quiet(unittest.TestCase):
+            def _check(self):
+                run()
+
+            def test_own_helper(self):
+                self._check()
+
+
+        class Inherits(Base):
+            def test_inherited(self):
+                self._check()
+        """
+        self.assertEqual(hollow_module(source), [(sample_id("Quiet.test_own_helper"), "no-assertion")])
+
+    def test_fail_counts_only_on_the_test_case(self):
+        self.assertEqual(hollow_body("job = run()\njob.fail()\n"), [(sample_id("Sample.test_x"), "no-assertion")])
+        self.assertEqual(hollow_body("if run():\n    cls = self\n    cls.fail('x')\n"), [])
+
+    def test_nested_function_assertions_count_only_when_the_function_is_referenced(self):
+        check = "def check(*args):\n    self.assertEqual(run(), 1)\n\n"
+        self.assertEqual(hollow_body(check + "run()\n"), [(sample_id("Sample.test_x"), "no-assertion")])
+        for use in ("check()\n", "run(side_effect=check)\n"):
+            with self.subTest(use=use):
+                self.assertEqual(hollow_body(check + use), [])
+
+    def test_assertions_in_a_nested_fake_class_count(self):
+        body = (
+            "test = self\n\nclass Fake:\n    def send(self, value):\n        test.assertEqual(value, 1)\n\n"
+            "run(Fake())\n"
+        )
+        self.assertEqual(hollow_body(body), [])
+
+    def test_helpers_imported_from_other_test_modules_are_followed(self):
+        sources = {
+            "tests/helpers.py": (
+                "import unittest\n\n\ndef verify(value):\n    assert value == run()\n\n\ndef prepare():\n    run()\n\n\n"
+                "class Checks:\n    def _check(self):\n        self.assertEqual(run(), 1)\n"
+            ),
+            "tests/test_a.py": (
+                "import unittest\nfrom tests.helpers import Checks, prepare, verify as check\n"
+                "from tests import helpers as h\nimport tests.helpers as hh\nfrom . import helpers as rel\n\n\n"
+                "class A(Checks, unittest.TestCase):\n"
+                "    def test_imported(self):\n        check(run())\n\n"
+                "    def test_module_alias(self):\n        h.verify(run())\n\n"
+                "    def test_import_as(self):\n        hh.verify(run())\n\n"
+                "    def test_relative(self):\n        rel.verify(run())\n\n"
+                "    def test_inherited_helper(self):\n        self._check()\n\n"
+                "    def test_imported_non_asserting(self):\n        prepare()\n"
+            ),
+        }
+        self.assertEqual(
+            ci.hollow_tests_in_sources(sources),
+            [("tests/test_a.py::A.test_imported_non_asserting", "no-assertion")],
+        )
+
+    def test_imported_bases_count_only_when_they_are_test_cases(self):
+        sources = {
+            "tests/fakes.py": "class FakeClient:\n    pass\n",
+            "tests/test_base.py": "import unittest\n\n\nclass BaseTests(unittest.TestCase):\n    pass\n",
+            "tests/test_b.py": (
+                "from tests.fakes import FakeClient\nfrom tests.test_base import BaseTests\n\n\n"
+                "class Stub(FakeClient):\n    def test_mode(self):\n        run()\n\n\n"
+                "class Child(BaseTests):\n    def test_c(self):\n        run()\n"
+            ),
+        }
+        self.assertEqual(ci.hollow_tests_in_sources(sources), [("tests/test_b.py::Child.test_c", "no-assertion")])
+
+    def test_mock_call_assertions_are_the_unittest_mock_assertion_methods(self):
+        self.assertEqual(sorted(ci.MOCK_CALL_ASSERTIONS), sorted(MOCK_ASSERTION_METHODS))
+
+    def test_mock_call_assertions_alone_are_mock_only(self):
+        # Iterates the pinned literal, not ci.MOCK_CALL_ASSERTIONS, so a name dropped from the detector fails here.
+        bodies = [f"m = MagicMock()\nrun(m)\nm.{name}()\n" for name in MOCK_ASSERTION_METHODS]
+        bodies += [
+            "m = MagicMock()\nrun(m)\nself.assertEqual(m.call_count, 2)\n",
+            "m = MagicMock()\nrun(m)\nassert m.call_count == 2\n",
+            "m = MagicMock()\nrun(m)\nself.assertTrue(m.called)\n",
+            "m = MagicMock()\nrun(m)\nself.assertFalse(m.called)\n",
+            "m = MagicMock()\nrun(m)\nassert not m.called\n",
+            "m = MagicMock()\nrun(m)\nexpected = 2\nself.assertEqual(m.await_count, expected)\n",
+            # A recorded call compared with anything is a mock call assertion, like assert_called_with.
+            "m = MagicMock()\nrun(m)\nself.assertEqual(m.call_count, len(run()))\n",
+            "m = MagicMock()\nrun(m)\nself.assertEqual(m.call_args_list, [call(1)])\n",
+            "m = MagicMock()\nrun(m)\nself.assertEqual(m.call_args, call(run()))\n",
+            "m = MagicMock()\nrun(m)\nself.assertIn('x', m.call_args[0][0])\n",
+            "m = MagicMock()\nrun(m)\nself.assertEqual(m.call_args.kwargs['body'], 'x')\n",
+            "m = MagicMock()\nrun(m)\nassert m.mock_calls == []\n",
+            "m = MagicMock()\nrun(m)\nself.assertEqual(m.method_calls[0], call.send(1))\n",
+            "m = AsyncMock()\nrun(m)\nself.assertEqual(m.await_args, call(1))\n",
+            "m = AsyncMock()\nrun(m)\nself.assertEqual(m.await_args_list, [])\n",
+        ]
+        for body in bodies:
+            with self.subTest(body=body):
+                self.assertEqual(hollow_body(body), [(sample_id("Sample.test_x"), "mock-only")])
+
+    def test_mock_assertion_beside_tautology_is_mock_only(self):
+        # Neither checks project behaviour; the mock call assertion names the more specific rule.
+        for body in (
+            "m = MagicMock()\nrun(m)\nm.assert_called_once()\nself.assertTrue(True)\n",
+            "m = MagicMock()\nrun(m)\nself.assertEqual(m.call_count, 1)\nx = 4\nself.assertEqual(x, 4)\n",
+        ):
+            with self.subTest(body=body):
+                self.assertEqual(hollow_body(body), [(sample_id("Sample.test_x"), "mock-only")])
+
+    def test_behaviour_assertion_beside_mock_assertion_is_not_hollow(self):
+        for body in (
+            "m = MagicMock()\nm.assert_called_once()\nself.assertEqual(run(m), 3)\n",
+            "m = MagicMock()\nrun(m)\nself.assertIn('x', m.call_args[0][0])\nself.assertTrue(run())\n",
+        ):
+            with self.subTest(body=body):
+                self.assertEqual(hollow_body(body), [])
+
+    def test_tautologies(self):
+        bodies = (
+            "self.assertTrue(True)\n",
+            "assert True\n",
+            "self.assertFalse(False)\n",
+            "self.assertIsNone(None)\n",
+            "self.assertIsNotNone(1)\n",
+            "x = 4\nself.assertEqual(x, 4)\n",
+            "trophies = 1000\nxp = trophies / 10\nself.assertEqual(xp, 100)\n",
+            "value = run()\nself.assertEqual(value, value)\n",
+            # Always truthy: a non-empty display, or a mock assertion method that is never called.
+            "assert (run(), 'msg')\n",
+            "self.assertTrue([run()])\n",
+            "m = MagicMock()\nrun(m)\nself.assertTrue(m.assert_called_once)\n",
+            "self.assertEqual(2 + 2, 4)\n",
+            "self.assertIn('a', 'abc')\n",
+            "self.assertIs(None, None)\n",
+            "self.assertAlmostEqual(1.0, 1.0)\n",
+        )
+        for body in bodies:
+            with self.subTest(body=body):
+                self.assertEqual(hollow_body(body), [(sample_id("Sample.test_x"), "tautology")])
+
+    def test_project_values_and_mutated_names_are_not_tautologies(self):
+        bodies = (
+            "callers = []\nfor p in run():\n    callers.append(p)\nself.assertEqual(callers, [])\n",
+            "out = {}\nfill(out)\nself.assertEqual(out, {})\n",
+            "seen = False\n\ndef mark():\n    nonlocal seen\n    seen = True\n\nrun(mark)\nself.assertTrue(seen)\n",
+            "self.assertEqual(run(), run())\n",
+            "for x in [1]:\n    self.assertEqual(x, 1)\n",
+            "try:\n    run()\nexcept ValueError:\n    return\nassert False, 'expected'\n",
+            "if run():\n    self.assertTrue(False, 'unexpected')\n",
+            # Rebound under control flow: the assertion depends on what project code returned.
+            "flag = False\nif run() is False:\n    flag = True\nself.assertTrue(flag)\n",
+            "count = 0\nfor _ in run():\n    count += 1\nself.assertEqual(count, 3)\n",
+            "found = False\nfor m in run():\n    if 'x' in m:\n        found = True\nself.assertTrue(found)\n",
+            "raised = False\ntry:\n    run()\nexcept ValueError:\n    raised = True\nself.assertTrue(raised)\n",
+            "n = 0\nwhile poll():\n    n += 1\nassert n == 2\n",
+            "if run():\n    x = 1\nself.assertEqual(x, 1)\n",
+            # Handed to project code inside another binding's value.
+            "out = {}\nresult = fill(out)\nself.assertEqual(out, {'a': 1})\n",
+            # The list is filled through an alias handed to project code.
+            "expected = []\ncaptured = expected\nfill(captured)\nself.assertEqual(expected, [1])\n",
+            # Match patterns rebind names without an ast.Name node.
+            "x = 1\nmatch run():\n    case [x]:\n        pass\nself.assertEqual(x, 1)\n",
+            "x = 1\nmatch run():\n    case [*x]:\n        pass\nself.assertEqual(x, 1)\n",
+            "x = 1\nmatch run():\n    case {**x}:\n        pass\nself.assertEqual(x, 1)\n",
+            # A test-built value compared with a project value: every operand of the comparison counts.
+            "value = 3\nassert value == run()\n",
+            "value = 3\nassert 0 < value <= run()\n",
+            # Rebound by an except clause: the name holds whatever project code raised.
+            "err = None\ntry:\n    run()\nexcept ValueError as err:\n    pass\nself.assertIsNone(err)\n",
+            # Declared global: project code can rebind it.
+            "global FLAG\nFLAG = False\nrun()\nself.assertFalse(FLAG)\n",
+        )
+        for body in bodies:
+            with self.subTest(body=body):
+                self.assertEqual(hollow_body(body), [])
+
+    def test_original_status_aggregation_test_is_a_tautology(self):
+        # Verbatim from tests/test_e2e_live_fixes.py before this check existed: it never runs run.py, it only
+        # reads back return values it configured on its own MagicMock.
+        original = '''
+        def test_run_py_status_aggregation_failure(self):
+            """Proves that a failure in secondary operations propagates to runtime_failed."""
+            mock_client = MagicMock()
+            mock_client.grabFlyingStarbux = MagicMock()
+            mock_client.freeStarbuxToday = 10
+            mock_client.freeStarbuxMax = 5
+            mock_client.collectTaskReward = MagicMock(return_value=False)  # Secondary action fails!
+            mock_client.getCrewInfo = MagicMock(return_value=True)
+            mock_client.upgradeResearches = MagicMock(return_value=True)
+            mock_client.upgradeRooms = MagicMock(return_value=True)
+            mock_client.collectDailyReward = MagicMock(return_value=True)
+            mock_client.listActiveMarketplaceMessages = MagicMock(return_value=True)
+            mock_client.getMessages = MagicMock(return_value=True)
+            mock_client.manageTraining = MagicMock(return_value=True)
+            mock_client.upgradeCharacters = MagicMock(return_value=True)
+            mock_client.info = {"@Name": "TestBot"}
+
+            runtime_failed = False
+            if mock_client.collectTaskReward() is False:
+                runtime_failed = True
+            if mock_client.getCrewInfo() is False:
+                runtime_failed = True
+
+            self.assertTrue(runtime_failed)
+        '''
+        self.assertEqual(hollow(original), [(sample_id("Sample.test_run_py_status_aggregation_failure"), "tautology")])
+
+    def test_values_from_mocks_no_project_code_sees_are_tautologies(self):
+        bodies = (
+            "m = MagicMock(return_value=3)\nself.assertEqual(m(), 3)\n",
+            "m = mock.MagicMock()\nm.fetch.return_value = 5\nassert m.fetch() == 5\n",
+            "m = Mock(ok=True)\nself.assertTrue(m.ok)\n",
+            "m = AsyncMock()\nm.reset_mock()\nself.assertIsNotNone(m.x)\n",
+            "m = MagicMock(return_value=False)\nflag = False\nif m() is False:\n    flag = True\nself.assertTrue(flag)\n",
+            "m = MagicMock()\nm.ok.return_value = True\nx = 1 if m.ok() else 2\nself.assertEqual(x, 1)\n",
+            "seen = []\nseen.append(1)\nself.assertEqual(seen, [1])\n",
+            "flag = False\nif True:\n    flag = True\nelse:\n    flag = None\nself.assertTrue(flag)\n",
+        )
+        for body in bodies:
+            with self.subTest(body=body):
+                self.assertEqual(hollow_body(body), [(sample_id("Sample.test_x"), "tautology")])
+
+    def test_mocks_project_code_can_see_are_not_test_controlled(self):
+        bodies = (
+            # Handed to project code, directly, through a container, an attribute or a nested function.
+            "m = MagicMock(return_value=3)\nrun(m)\nself.assertEqual(m(), 3)\n",
+            "m = MagicMock()\nholder = [m]\nrun(holder)\nself.assertEqual(m.x(), 1)\n",
+            "m = MagicMock()\nself.client.request = m\nrun(self.client)\nself.assertEqual(m(), 1)\n",
+            "m = MagicMock()\n\ndef get():\n    return m\n\nrun(get)\nself.assertEqual(m.x(), 1)\n",
+            # Created by patch(), so the patched project code sees it.
+            "with patch('run.Client') as m:\n    m.return_value = 3\n    self.assertEqual(m(), 3)\n",
+            "m = patch('run.Client').start()\nm.return_value = 3\nself.assertEqual(m(), 3)\n",
+            # Configured with project code or a project value.
+            "m = MagicMock(side_effect=run)\nself.assertEqual(m(), 3)\n",
+            "m = MagicMock()\nm.x.return_value = run()\nself.assertEqual(m.x(), 3)\n",
+            # Configured or called under control flow that depends on project code.
+            "m = MagicMock()\nif run():\n    m.x.return_value = 1\nself.assertEqual(m.x(), 1)\n",
+            "m = MagicMock(return_value=False)\nflag = False\nfor _ in run():\n    if m() is False:\n        flag = True\n"
+            "self.assertTrue(flag)\n",
+            "seen = []\nfor item in run():\n    seen.append(1)\nself.assertEqual(seen, [])\n",
+        )
+        for body in bodies:
+            with self.subTest(body=body):
+                self.assertEqual(hollow_body(body), [])
+
+    def test_unconditional_skips_are_exempt_conditional_are_not(self):
+        for methods in (
+            "def test_x(self):\n    self.skipTest('later')\n    run()\n",
+            "@unittest.skip('x')\ndef test_x(self):\n    run()\n",
+            "def test_x(self):\n    raise unittest.SkipTest('x')\n",
+        ):
+            with self.subTest(methods=methods):
+                self.assertEqual(hollow(methods), [])
+        for methods in (
+            "def test_x(self):\n    if os.environ.get('X') is None:\n        self.skipTest('x')\n    run()\n",
+            "@unittest.skipIf(True, 'x')\ndef test_x(self):\n    run()\n",
+        ):
+            with self.subTest(methods=methods):
+                self.assertEqual(hollow(methods), [(sample_id("Sample.test_x"), "no-assertion")])
+        skipped_class = "import unittest\n\n\n@unittest.skip('x')\nclass Sample(unittest.TestCase):\n    def test_x(self):\n        run()\n"
+        self.assertEqual(hollow_module(skipped_class), [])
+
+    def test_only_unittest_test_methods_are_examined(self):
+        cases = (
+            (
+                """
+                class Tree:
+                    def tests(self):
+                        run()
+
+                    def test_build(self):
+                        run()
+                """,
+                [],
+            ),
+            (
+                """
+                import unittest
+
+
+                class Sample(unittest.TestCase):
+                    def helper(self):
+                        run()
+
+                    def test_ok(self):
+                        self.assertEqual(run(), 1)
+                """,
+                [],
+            ),
+            (
+                """
+                import unittest
+
+
+                class Sample(unittest.TestCase):
+                    def test_outer(self):
+                        class Probe(unittest.TestCase):
+                            def test_inner(self):
+                                self.assertTrue(run())
+
+                        run(Probe)
+                """,
+                [(sample_id("Sample.test_outer"), "no-assertion")],
+            ),
+            (
+                """
+                import unittest
+
+
+                class Mixin:
+                    def test_shared(self):
+                        run()
+
+
+                class Concrete(Mixin, unittest.TestCase):
+                    pass
+                """,
+                [(sample_id("Mixin.test_shared"), "no-assertion")],
+            ),
+            (
+                """
+                import unittest
+
+
+                class Base(unittest.TestCase):
+                    pass
+
+
+                class Child(Base):
+                    def test_c(self):
+                        run()
+                """,
+                [(sample_id("Child.test_c"), "no-assertion")],
+            ),
+            (
+                """
+                from tests.test_other import OtherTests
+
+
+                class Child(OtherTests):
+                    def test_c(self):
+                        run()
+                """,
+                [(sample_id("Child.test_c"), "no-assertion")],
+            ),
+            (
+                """
+                from elsewhere import Thing
+
+
+                class X(Thing):
+                    def test_x(self):
+                        run()
+                """,
+                [],
+            ),
+            (
+                """
+                import unittest
+
+
+                class Outer(unittest.TestCase):
+                    class Inner(unittest.TestCase):
+                        def test_i(self):
+                            run()
+                """,
+                # unittest's loader collects only module-level TestCase classes.
+                [],
+            ),
+            (
+                # unittest never collects module-level functions.
+                """
+                def test_function():
+                    run()
+                """,
+                [],
+            ),
+            (
+                """
+                import unittest
+
+
+                class Sample(unittest.IsolatedAsyncioTestCase):
+                    async def test_async(self):
+                        await run()
+                """,
+                [(sample_id("Sample.test_async"), "no-assertion")],
+            ),
+        )
+        for source, expected in cases:
+            with self.subTest(source=source):
+                self.assertEqual(hollow_module(source), expected)
+
+    def test_results_sorted_with_path_prefix(self):
+        source = """
+        import unittest
+        from unittest.mock import MagicMock
+
+
+        class Zeta(unittest.TestCase):
+            def test_b(self):
+                run()
+
+            def test_a(self):
+                self.assertTrue(True)
+
+
+        class Alpha(unittest.TestCase):
+            def test_c(self):
+                m = MagicMock()
+                m.assert_called()
+        """
+        self.assertEqual(
+            hollow_module(source),
+            [
+                (sample_id("Alpha.test_c"), "mock-only"),
+                (sample_id("Zeta.test_a"), "tautology"),
+                (sample_id("Zeta.test_b"), "no-assertion"),
+            ],
+        )
+
+    def test_unparsable_source_names_the_file(self):
+        with self.assertRaisesRegex(ValueError, "tests/test_bad.py"):
+            ci.hollow_tests_in_source("def broken(:\n", "tests/test_bad.py")
+
+    def test_test_cases_are_resolved_through_unittest_imports(self):
+        hollow_test = "    def test_a(self):\n        run()\n"
+        cases = (
+            ("from unittest import TestCase as TC\n\n\nclass T(TC):\n" + hollow_test, ["T.test_a"]),
+            ("import unittest as ut\n\n\nclass T(ut.TestCase):\n" + hollow_test, ["T.test_a"]),
+            ("import unittest.mock\n\n\nclass T(unittest.TestCase):\n" + hollow_test, ["T.test_a"]),
+            ("from unittest.case import TestCase\n\n\nclass T(TestCase):\n" + hollow_test, ["T.test_a"]),
+            (
+                "from unittest import IsolatedAsyncioTestCase\n\n\nclass T(IsolatedAsyncioTestCase):\n"
+                "    async def test_a(self):\n        await run()\n",
+                ["T.test_a"],
+            ),
+            # A class defined in the tree is a test base only when it subclasses a TestCase, whatever its name.
+            ("class FakeTestCase:\n    pass\n\n\nclass T(FakeTestCase):\n" + hollow_test, []),
+            ("import unittest\n\n\nclass T(unittest.FakeTestCase):\n" + hollow_test, []),
+            # A base from outside the tree is trusted by name: a third-party unittest subclass.
+            ("from django.test import TestCase\n\n\nclass T(TestCase):\n" + hollow_test, ["T.test_a"]),
+            ("from absl.testing import absltest\n\n\nclass T(absltest.TestCase):\n" + hollow_test, ["T.test_a"]),
+        )
+        for source, expected in cases:
+            with self.subTest(source=source):
+                self.assertEqual(hollow_module(source), [(sample_id(name), "no-assertion") for name in expected])
+        sources = {
+            "tests/fakes.py": "class FakeTestCase:\n    pass\n",
+            "tests/base.py": "from unittest import TestCase\n",
+            "tests/test_b.py": (
+                "from tests.fakes import FakeTestCase\nfrom tests.base import TestCase\nfrom tests import fakes\n\n\n"
+                "class Fake(FakeTestCase):\n"
+                + hollow_test
+                + "\n\nclass Dotted(fakes.FakeTestCase):\n"
+                + hollow_test
+                + "\n\nclass Real(TestCase):\n"
+                + hollow_test
+            ),
+        }
+        self.assertEqual(ci.hollow_tests_in_sources(sources), [("tests/test_b.py::Real.test_a", "no-assertion")])
+
+    def test_assert_named_helpers_defined_in_the_tree_are_followed(self):
+        self.assertEqual(
+            hollow("def assert_ok(self, value):\n    pass\n\ndef test_x(self):\n    self.assert_ok(run())\n"),
+            [(sample_id("Sample.test_x"), "no-assertion")],
+        )
+        self.assertEqual(
+            hollow(
+                "def _assert_ok(self, value):\n    self.assertEqual(value, run())\n\ndef test_x(self):\n    self._assert_ok(1)\n"
+            ),
+            [],
+        )
+        source = """
+        import unittest
+
+
+        def assert_shape(value):
+            print(value)
+
+
+        class Sample(unittest.TestCase):
+            def test_x(self):
+                assert_shape(run())
+        """
+        self.assertEqual(hollow_module(source), [(sample_id("Sample.test_x"), "no-assertion")])
+        sources = {
+            "tests/helpers.py": "def assert_valid(value):\n    return value\n",
+            "tests/test_a.py": (
+                "import unittest\nfrom tests.helpers import assert_valid\n\n\nclass A(unittest.TestCase):\n"
+                "    def test_a(self):\n        assert_valid(run())\n"
+            ),
+        }
+        self.assertEqual(ci.hollow_tests_in_sources(sources), [("tests/test_a.py::A.test_a", "no-assertion")])
+
+    def test_helpers_resolve_only_through_their_own_scope(self):
+        source = """
+        import unittest
+
+
+        class Fake:
+            def _check(self):
+                assert run() == 1
+
+            def verify(self):
+                assert run() == 1
+
+
+        class Sample(unittest.TestCase):
+            def test_self_attribute_missing_from_the_class(self):
+                self._check()
+
+            def test_bare_name_of_a_method(self):
+                verify()
+
+            def test_defines_check(self):
+                def check():
+                    self.assertEqual(run(), 1)
+
+                check()
+
+            def test_uses_another_tests_nested_function(self):
+                check()
+        """
+        self.assertEqual(
+            hollow_module(source),
+            [
+                (sample_id("Sample.test_bare_name_of_a_method"), "no-assertion"),
+                (sample_id("Sample.test_self_attribute_missing_from_the_class"), "no-assertion"),
+                (sample_id("Sample.test_uses_another_tests_nested_function"), "no-assertion"),
+            ],
+        )
+
+    def test_detector_runs_without_match_statement_nodes(self):
+        # Python 3.9 has no ast.Match* classes; the detector must not reference them unconditionally.
+        removed = {name: getattr(ast, name) for name in ("MatchAs", "MatchStar", "MatchMapping") if hasattr(ast, name)}
+        try:
+            for name in removed:
+                delattr(ast, name)
+            self.assertEqual(
+                hollow_body("x = 4\nself.assertEqual(x, 4)\n"), [(sample_id("Sample.test_x"), "tautology")]
+            )
+        finally:
+            for name, value in removed.items():
+                setattr(ast, name, value)
+
+    def test_identical_operands_are_a_tautology_only_for_reflexive_comparisons(self):
+        for body in (
+            "value = run()\nassert value == value\n",
+            "value = run()\nassert value is value\n",
+            "value = run()\nassert value >= value\n",
+            "value = run()\nself.assertLessEqual(value, value)\n",
+            "value = run()\nself.assertCountEqual(value, value)\n",
+        ):
+            with self.subTest(body=body):
+                self.assertEqual(hollow_body(body), [(sample_id("Sample.test_x"), "tautology")])
+        # Always false: a reached-the-wrong-branch marker, like self.fail().
+        for body in (
+            "value = run()\nself.assertNotEqual(value, value)\n",
+            "value = run()\nself.assertIsNot(value, value)\n",
+            "value = run()\nself.assertLess(value, value)\n",
+            "value = run()\nself.assertGreater(value, value)\n",
+            "value = run()\nassert value != value\n",
+            "value = run()\nassert value < value\n",
+        ):
+            with self.subTest(body=body):
+                self.assertEqual(hollow_body(body), [])
+
+    def test_test_classes_across_an_import_cycle_do_not_depend_on_module_order(self):
+        modules = (
+            (
+                "tests/test_a.py",
+                "import unittest\nfrom tests.test_b import BBase\n\n\nclass ABase(unittest.TestCase):\n    pass\n\n\n"
+                "class A(BBase):\n    def test_a(self):\n        run()\n",
+            ),
+            (
+                "tests/test_b.py",
+                "from tests.test_a import ABase\n\n\nclass BBase(ABase):\n    pass\n\n\n"
+                "class B(BBase):\n    def test_b(self):\n        run()\n",
+            ),
+        )
+        expected = [("tests/test_a.py::A.test_a", "no-assertion"), ("tests/test_b.py::B.test_b", "no-assertion")]
+        for ordered in (modules, modules[::-1]):
+            with self.subTest(first=ordered[0][0]):
+                self.assertEqual(ci.hollow_tests_in_sources(dict(ordered)), expected)
+
+    def test_mixins_imported_from_other_test_modules_are_examined(self):
+        sources = {
+            "tests/mixins.py": (
+                "class SharedChecks:\n    def test_shared(self):\n        run()\n\n\n"
+                "class Unused:\n    def test_unused(self):\n        run()\n"
+            ),
+            "tests/test_c.py": (
+                "import unittest\nfrom tests.mixins import SharedChecks\n\n\n"
+                "class C(SharedChecks, unittest.TestCase):\n    pass\n"
+            ),
+        }
+        self.assertEqual(
+            ci.hollow_tests_in_sources(sources), [("tests/mixins.py::SharedChecks.test_shared", "no-assertion")]
+        )
+
+    def test_side_effect_free_builtins_do_not_hand_a_value_to_project_code(self):
+        for body in (
+            "x = 4\nprint(x)\nself.assertEqual(x, 4)\n",
+            "x = [1]\nself.assertEqual(len(x), 1)\n",
+            "x = 4\ny = str(x)\nself.assertEqual(y, '4')\n",
+            "x = (2, 1)\nself.assertEqual(sorted(x), [1, 2])\n",
+        ):
+            with self.subTest(body=body):
+                self.assertEqual(hollow_body(body), [(sample_id("Sample.test_x"), "tautology")])
+        # Rebound names are not the builtins: project code may run.
+        self.assertEqual(hollow_body("len = run\nx = [1]\nself.assertEqual(len(x), 1)\n"), [])
+        shadowed = """
+        import unittest
+        from project import print
+
+
+        class Sample(unittest.TestCase):
+            def test_x(self):
+                x = 4
+                print(x)
+                self.assertEqual(x, 4)
+        """
+        self.assertEqual(hollow_module(shadowed), [])
+
+
+HOLLOW_FIXTURE_FILES = {
+    "tests/test_a.py": (
+        "import unittest\n\n\nclass A(unittest.TestCase):\n"
+        "    def test_hollow(self):\n        run()\n\n"
+        "    def test_fine(self):\n        self.assertEqual(run(), 1)\n"
+    ),
+    "tests/sub/test_b.py": "import unittest\n\n\nclass B(unittest.TestCase):\n    def test_hollow(self):\n        run()\n",
+    # Not a test module: never examined, however hollow it looks.
+    "tests/helper.py": "import unittest\n\n\nclass H(unittest.TestCase):\n    def test_hollow(self):\n        run()\n",
+}
+HOLLOW_FIXTURE_ENTRIES = [
+    {"test": "tests/sub/test_b.py::B.test_hollow", "rule": "no-assertion"},
+    {"test": "tests/test_a.py::A.test_hollow", "rule": "no-assertion"},
+]
+
+
+def write_hollow_fixture(root, entries):
+    for name, text in HOLLOW_FIXTURE_FILES.items():
+        path = root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+    write_hollow_baseline(root, entries)
+
+
+def write_hollow_baseline(root, entries):
+    path = root / ci.HOLLOW_BASELINE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"schema_version": 1, "hollow_tests": entries}), encoding="utf-8")
+
+
+class HollowTestRatchetTests(unittest.TestCase):
+    """The committed baseline records every legacy hollow test; new ones and stale entries both fail."""
+
+    def test_hollow_baseline_parses_entries(self):
+        payload = {
+            "schema_version": 1,
+            "hollow_tests": [
+                {"test": "tests/test_a.py::A.test_x", "rule": "no-assertion"},
+                {"test": "tests/test_a.py::A.test_y", "rule": "mock-only"},
+                {"test": "tests/test_b.py::test_z", "rule": "tautology"},
+            ],
+        }
+        self.assertEqual(
+            ci.hollow_baseline(payload),
+            {
+                ("tests/test_a.py::A.test_x", "no-assertion"),
+                ("tests/test_a.py::A.test_y", "mock-only"),
+                ("tests/test_b.py::test_z", "tautology"),
+            },
+        )
+
+    def test_invalid_hollow_baselines_fail(self):
+        entry = {"test": "tests/test_a.py::A.test_x", "rule": "no-assertion"}
+        invalid_schemas = (
+            [],
+            {"schema_version": 2, "hollow_tests": []},
+            {"schema_version": "1", "hollow_tests": []},
+            {"schema_version": True, "hollow_tests": []},
+            {"schema_version": 1},
+            {"schema_version": 1, "hollow_tests": {}},
+        )
+        for payload in invalid_schemas:
+            with self.subTest(payload=payload):
+                with self.assertRaisesRegex(ValueError, r"^invalid hollow-test baseline schema$"):
+                    ci.hollow_baseline(payload)
+        invalid_entries = (
+            ["tests/test_a.py::A.test_x"],
+            [{"test": "tests/test_a.py::A.test_x"}],
+            [{**entry, "rule": "weak"}],
+            [{**entry, "rule": ["no-assertion"]}],
+            [{**entry, "test": 3}],
+            [{**entry, "test": "tests/test_a.py"}],
+            [{**entry, "count": 1}],
+            [entry, entry],
+            [entry, {**entry, "rule": "mock-only"}],
+        )
+        for entries in invalid_entries:
+            with self.subTest(entries=entries):
+                with self.assertRaisesRegex(ValueError, r"^duplicate or invalid hollow-test baseline entry$"):
+                    ci.hollow_baseline({"schema_version": 1, "hollow_tests": entries})
+
+    def test_unsorted_hollow_baseline_fails(self):
+        entries = [
+            {"test": "tests/test_b.py::B.test_x", "rule": "no-assertion"},
+            {"test": "tests/test_a.py::A.test_x", "rule": "no-assertion"},
+        ]
+        with self.assertRaisesRegex(ValueError, r"^hollow-test baseline entries must be sorted$"):
+            ci.hollow_baseline({"schema_version": 1, "hollow_tests": entries})
+
+    def test_hollow_scan_reads_only_tracked_regular_test_modules(self):
+        hollow_module_text = HOLLOW_FIXTURE_FILES["tests/test_a.py"]
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            ci.git(root, "init", "-b", "main")
+            write_hollow_fixture(root, HOLLOW_FIXTURE_ENTRIES)
+            (root / "tests/test_link.py").symlink_to("test_a.py")
+            ci.git(root, "add", "tests")
+            (root / "tests/test_untracked.py").write_text(hollow_module_text, encoding="utf-8")
+            output = io.StringIO()
+            with redirect_stdout(output):
+                self.assertIsNone(ci.check_hollow_tests(root))
+            self.assertEqual(
+                output.getvalue(), "No new hollow tests; 2 explicitly recorded legacy hollow tests remain.\n"
+            )
+
+    def test_repository_check_scans_the_files_git_tracks(self):
+        tracked = b"".join(name.encode() + b"\0" for name in HOLLOW_FIXTURE_FILES)
+
+        def fake_git(repo, *args):
+            return tracked if args[:1] == ("ls-files",) else b""
+
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_hollow_fixture(root, HOLLOW_FIXTURE_ENTRIES)
+            (root / "tests/test_untracked.py").write_text(HOLLOW_FIXTURE_FILES["tests/test_a.py"], encoding="utf-8")
+            with (
+                patch.object(ci, "workflow_documents", return_value={}),
+                patch.object(ci, "check_workflows"),
+                patch.object(ci, "git", side_effect=fake_git),
+                redirect_stdout(io.StringIO()),
+            ):
+                self.assertIsNone(ci.check_repository(root))
+
+    def test_hollow_test_changes_lists_new_then_resolved(self):
+        a = ("tests/test_a.py::A.test_a", "no-assertion")
+        b = ("tests/test_a.py::A.test_b", "mock-only")
+        c = ("tests/test_a.py::A.test_c", "tautology")
+        self.assertEqual(
+            ci.hollow_test_changes({a, b}, {b, c}),
+            [
+                "NEW: tests/test_a.py::A.test_a: no-assertion",
+                "REMOVE FIXED BASELINE ENTRY: tests/test_a.py::A.test_c: tautology",
+            ],
+        )
+        self.assertEqual(ci.hollow_test_changes({a, b}, {a, b}), [])
+        self.assertEqual(
+            ci.hollow_test_changes({(a[0], "mock-only")}, {a}),
+            [
+                "NEW: tests/test_a.py::A.test_a: mock-only",
+                "REMOVE FIXED BASELINE ENTRY: tests/test_a.py::A.test_a: no-assertion",
+            ],
+        )
+
+    def test_check_hollow_tests_ratchets_on_synthetic_repo(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_hollow_fixture(root, [])
+            output = io.StringIO()
+            with redirect_stdout(output), self.assertRaisesRegex(ValueError, r"^hollow tests changed"):
+                ci.check_hollow_tests(root)
+            self.assertEqual(
+                output.getvalue(),
+                "NEW: tests/sub/test_b.py::B.test_hollow: no-assertion\n"
+                "NEW: tests/test_a.py::A.test_hollow: no-assertion\n",
+            )
+
+            write_hollow_baseline(root, HOLLOW_FIXTURE_ENTRIES)
+            output = io.StringIO()
+            with redirect_stdout(output):
+                self.assertIsNone(ci.check_hollow_tests(root))
+            self.assertEqual(
+                output.getvalue(), "No new hollow tests; 2 explicitly recorded legacy hollow tests remain.\n"
+            )
+
+            (root / "tests/test_a.py").write_text(
+                "import unittest\n\n\nclass A(unittest.TestCase):\n"
+                "    def test_hollow(self):\n        self.assertEqual(run(), 2)\n",
+                encoding="utf-8",
+            )
+            output = io.StringIO()
+            with redirect_stdout(output), self.assertRaisesRegex(ValueError, r"^hollow tests changed"):
+                ci.check_hollow_tests(root)
+            self.assertEqual(
+                output.getvalue(), "REMOVE FIXED BASELINE ENTRY: tests/test_a.py::A.test_hollow: no-assertion\n"
+            )
+
+    def test_cli_and_repository_check_enforce_ratchet(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_hollow_fixture(root, [])
+            stderr = io.StringIO()
+            with patch.object(ci, "ROOT", root), redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                self.assertEqual(ci.main(["hollow-tests"]), 1)
+            self.assertIn("CI check failed: hollow tests changed", stderr.getvalue())
+
+            tracked = b"".join(name.encode() + b"\0" for name in HOLLOW_FIXTURE_FILES)
+            with (
+                patch.object(ci, "workflow_documents", return_value={}),
+                patch.object(ci, "check_workflows"),
+                patch.object(ci, "git", side_effect=lambda repo, *args: tracked if args[:1] == ("ls-files",) else b""),
+            ):
+                with redirect_stdout(io.StringIO()), self.assertRaisesRegex(ValueError, r"^hollow tests changed"):
+                    ci.check_repository(root)
+                write_hollow_baseline(root, HOLLOW_FIXTURE_ENTRIES)
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    self.assertIsNone(ci.check_repository(root))
+            self.assertEqual(
+                output.getvalue().splitlines()[-1],
+                "Workflow policies, tracked-file syntax, blob sizes, whitespace and hollow tests passed.",
+            )
+
+            with patch.object(ci, "ROOT", root), redirect_stdout(io.StringIO()):
+                self.assertEqual(ci.main(["hollow-tests"]), 0)
+
+            (root / ci.HOLLOW_BASELINE).unlink()
+            stderr = io.StringIO()
+            with patch.object(ci, "ROOT", root), redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                self.assertEqual(ci.main(["hollow-tests"]), 1)
+            self.assertIn("CI check failed:", stderr.getvalue())
+
+    def test_committed_tree_matches_committed_hollow_baseline(self):
+        output = io.StringIO()
+        with redirect_stdout(output):
+            self.assertIsNone(ci.check_hollow_tests(ci.ROOT))
+        self.assertRegex(
+            output.getvalue(), r"^No new hollow tests; \d+ explicitly recorded legacy hollow tests remain\.\n$"
+        )
+        payload = json.loads((ci.ROOT / ci.HOLLOW_BASELINE).read_text(encoding="utf-8"))
+        hardened = (
+            "tests/test_e2e_live_fixes.py::",
+            "tests/test_crew_leveling.py::",
+            "tests/test_runtime_guards.py::",
+        )
+        self.assertEqual([entry for entry in payload["hollow_tests"] if entry["test"].startswith(hardened)], [])
+
+    def test_hollow_baseline_is_canonical(self):
+        text = (ci.ROOT / ci.HOLLOW_BASELINE).read_text(encoding="utf-8")
+        payload = json.loads(text)
+        self.assertEqual(text, json.dumps(payload, indent=2) + "\n")
+        keys = [(entry["test"], entry["rule"]) for entry in payload["hollow_tests"]]
+        self.assertEqual(keys, sorted(keys))
+
+
 @skip_unless_dependency(yaml, "install .github/requirements-ci.txt for workflow checks")
 class WorkflowPolicyTests(unittest.TestCase):
     def setUp(self):
         self.documents = ci.workflow_documents(ci.ROOT)
 
     def test_actual_workflows_pass_policy(self):
-        ci.check_workflows(self.documents)
+        self.assertIsNone(ci.check_workflows(self.documents))
 
     def test_pull_requests_keep_github_default_merge_checkout(self):
         for filename in ("blocking-ci.yml", "automation-check.yml", "python-tests.yml"):
@@ -375,6 +1380,26 @@ class WorkflowPolicyTests(unittest.TestCase):
                 secret = profile.credentials_secret
                 for suffix in ("_EMAIL", "_PASSWORD"):
                     self.assertEqual(step["env"][secret + suffix], f"${{{{ secrets.{secret}{suffix} }}}}")
+
+    def test_upgrade_ship_step_runs_one_authorized_hull_upgrade_on_pss5_only(self):
+        from sdk.fleet.authorization import load_authorization
+
+        workflow = self.documents["live-trial.yml"]
+        job = next(iter(workflow["jobs"].values()))
+        self.assertIn("upgrade-ship", workflow["on"]["workflow_dispatch"]["inputs"]["step"]["options"])
+        step = next(step for step in job["steps"] if step.get("if") == "inputs.step == 'upgrade-ship'")
+        self.assertIn("--mode upgrade-ship --upgrade-ship", step["run"])
+        self.assertNotIn("--fleet-dry-run", step["run"])
+        self.assertEqual(set(step["env"]), {"PSS_ACCOUNT_5_EMAIL", "PSS_ACCOUNT_5_PASSWORD", "TACHIKOMA_FLEET_SALT"})
+        # The runner's own loaders: files it would refuse (exit 2) fail here.
+        registry = load_registry(ci.ROOT / job["env"]["G7_REGISTRY"])
+        authorization = load_authorization(ci.ROOT / job["env"]["G7_AUTHORIZATION"])
+        self.assertEqual([profile.alias for profile in registry.enabled()], ["pss5"])
+        self.assertEqual((authorization.accounts, authorization.actions), (("pss5",), ("upgrade_ship",)))
+        self.assertEqual(authorization.modes, ("upgrade-ship",))
+        self.assertEqual(len(authorization.hull_upgrades["pss5"]), 1)  # the step reads the one entry
+        self.assertEqual(authorization.cap("pss5", "gas"), 0)
+        self.assertEqual(registry.get("pss5").budget("minerals"), authorization.cap("pss5", "minerals"))
 
     def test_only_release_publisher_has_write_permissions(self):
         for filename, document in self.documents.items():

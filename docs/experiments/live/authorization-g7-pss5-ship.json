@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "owner": "owner",
+  "purpose": "G7 PLACEHOLDER, not yet approved: upgrade pss5's hull once to its race-matched next hull design. ship_design_id 1 and the 0 mineral cap are placeholders that make the live step refuse before any upgrade call; the owner fills in the real ship_design_id and its @MineralCost (cap and registry budget) from a read-only capture, and the dates, before dispatching",
+  "accounts": [
+    "pss5"
+  ],
+  "actions": [
+    "upgrade_ship"
+  ],
+  "not_before": "2026-11-22T00:00:00Z",
+  "expires": "2026-11-29T00:00:00Z",
+  "caps": {
+    "pss5": {
+      "minerals": 0,
+      "gas": 0
+    }
+  },
+  "modes": [
+    "upgrade-ship"
+  ],
+  "legacy_run_skipped": [
+    5
+  ],
+  "hull_upgrades": {
+    "pss5": [
+      {
+        "ship_design_id": 1
+      }
+    ]
+  }
+}

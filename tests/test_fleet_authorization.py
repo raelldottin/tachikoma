@@ -3,6 +3,7 @@
 import copy
 import dataclasses
 import json
+import os
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -12,7 +13,10 @@ from sdk.fleet import registry_from_dict
 from sdk.fleet.authorization import (
     Authorization,
     AuthorizationError,
+    HullUpgrade,
     Placement,
+    hull_upgrade_refusal_reason,
+    parse_hull_upgrade,
     parse_placement,
     placement_refusal_reason,
     TradeRecord,
@@ -121,6 +125,10 @@ class LoadTests(unittest.TestCase):
                 authorization_from_dict(payload(actions=actions))
         auth = authorization_from_dict(payload(actions=["upgrade_room"]))
         self.assertEqual(auth.actions, ("upgrade_room",))
+
+    def test_training_and_consumable_actions_are_authorizable(self):
+        actions = ["add_training", "finish_training", "use_consumable"]
+        self.assertEqual(authorization_from_dict(payload(actions=actions)).actions, tuple(actions))
 
     # Verifies: S05-R2
     def test_window_must_be_utc_and_at_most_fourteen_days(self):
@@ -604,6 +612,82 @@ class PlacementTests(unittest.TestCase):
         no_action = authorization_from_dict(payload())
         self.assertIn("not allowed", placement_refusal_reason(no_action, "alpha", Placement(42)))
         self.assertEqual(parse_placement({"room_design_id": 42, "row": 0, "column": 3}), Placement(42, 0, 3))
+
+
+def hull_upgrade_payload(**overrides):
+    fields = dict(accounts=["alpha"], actions=["upgrade_ship"], modes=["upgrade-ship"],
+                  caps={"alpha": {"minerals": 3200, "gas": 0}},
+                  hull_upgrades={"alpha": [{"ship_design_id": 3}]})
+    fields.update(overrides)
+    return payload(**fields)
+
+
+class HullUpgradeTests(unittest.TestCase):
+    """The authorization's upgrade-ship mode and hull_upgrades section."""
+
+    def test_a_hull_upgrade_authorization_loads(self):
+        auth = authorization_from_dict(hull_upgrade_payload())
+        self.assertEqual(auth.hull_upgrades, {"alpha": (HullUpgrade(3),)})
+        self.assertIn("upgrade-ship", auth.modes)
+        self.assertEqual(auth.to_dict()["hull_upgrades"], {"alpha": [{"ship_design_id": 3}]})
+        self.assertNotIn("placements", auth.to_dict())
+
+    def test_hull_upgrades_go_with_upgrade_ship_only(self):
+        with self.assertRaisesRegex(AuthorizationError, "hull_upgrades section is required"):
+            authorization_from_dict(hull_upgrade_payload(actions=["collect_all_resources"]))
+        bare = hull_upgrade_payload()
+        del bare["hull_upgrades"]
+        with self.assertRaisesRegex(AuthorizationError, "hull_upgrades section is required"):
+            authorization_from_dict(bare)
+
+    def test_malformed_hull_upgrades_are_refused(self):
+        bad = {
+            "a zero design": [{"ship_design_id": 0}],
+            "a text design": [{"ship_design_id": "3"}],
+            "a boolean design": [{"ship_design_id": True}],
+            "an extra field": [{"ship_design_id": 3, "level": 2}],
+            "a starbux field": [{"ship_design_id": 3, "starbux": 1}],
+            "no design": [{}],
+            "not an object": [3],
+            "duplicates": [{"ship_design_id": 3}] * 2,
+            "an empty list": [],
+        }
+        for name, entries in bad.items():
+            with self.subTest(case=name), self.assertRaises(AuthorizationError):
+                authorization_from_dict(hull_upgrade_payload(hull_upgrades={"alpha": entries}))
+        with self.assertRaisesRegex(AuthorizationError, "not in accounts"):
+            authorization_from_dict(hull_upgrade_payload(hull_upgrades={"bravo": [{"ship_design_id": 3}]}))
+        with self.assertRaises(AuthorizationError):
+            authorization_from_dict(hull_upgrade_payload(hull_upgrades={}))
+
+    def test_files_without_hull_upgrades_hash_as_before(self):
+        auth = authorization_from_dict(payload())
+        self.assertNotIn("hull_upgrades", auth.to_dict())
+        self.assertEqual(auth.hull_upgrades, {})
+        # The hash main's code gave this file before placements existed (commit a089f0e).
+        self.assertEqual(authorization_hash(auth),
+                         "sha256:381f11eb7553c04cd2abffd0a958da204e59f434349ab80abce06f9831efb5db")
+        # The G6 placement file hashes as it did before hull_upgrades existed.
+        g6 = load_authorization(Path(os.path.abspath(__file__)).parents[1] / "docs" / "experiments" / "live"
+                                / "authorization-g6-pss5-place.json")
+        self.assertEqual(authorization_hash(g6),
+                         "sha256:9749ac313ed65b38d1d370cf8a3c9b85fdf46f4ea782d8db76f86f1a46ae4fa0")
+
+    def test_a_hull_upgrade_must_match_an_entry_exactly(self):
+        auth = authorization_from_dict(hull_upgrade_payload())
+        self.assertIsNone(hull_upgrade_refusal_reason(auth, "alpha", HullUpgrade(3)))
+        for name, alias, upgrade in (("another design", "alpha", HullUpgrade(4)),
+                                     ("another account", "bravo", HullUpgrade(3))):
+            with self.subTest(case=name):
+                self.assertIn("not named", hull_upgrade_refusal_reason(auth, alias, upgrade))
+        no_action = authorization_from_dict(payload())
+        self.assertIn("not allowed", hull_upgrade_refusal_reason(no_action, "alpha", HullUpgrade(3)))
+        self.assertEqual(parse_hull_upgrade({"ship_design_id": 7}), HullUpgrade(7))
+
+    def test_the_mode_alone_is_checked_like_any_other(self):
+        auth = authorization_from_dict(hull_upgrade_payload(modes=["canary"]))
+        reasons = check_authorization(auth, registry(), INSIDE, ["alpha"], ["upgrade_ship"], "upgrade-ship")
+        self.assertTrue(any("mode 'upgrade-ship' is not allowed" in reason for reason in reasons), reasons)
 
 
 if __name__ == "__main__":

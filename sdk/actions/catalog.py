@@ -9,11 +9,13 @@ evidence of an effect.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from enum import Enum
 from typing import Any, Callable, Mapping, Optional
 
-from sdk.state import AccountSnapshot, Completeness, SnapshotDelta, diff_snapshots
+from sdk.state import AccountSnapshot, Completeness, CrewMember, SnapshotDelta, diff_snapshots
 from sdk.state.profile_reads import ATTACKER, BattleRecord, int_or_none, matching_battle, parse_battles
 
 
@@ -75,6 +77,45 @@ class ActionSpecError(ValueError):
     """Raised for an unknown action or missing parameters."""
 
 
+# finish_training runs only on a training that ended at least this long before the before-snapshot's observation.
+# The observation time comes from the local clock, which may run ahead of the server's; the margin keeps a training
+# that has not yet ended on the server from being finished early, which could cost starbux.
+FINISH_TRAINING_GRACE = timedelta(seconds=60)
+
+
+class _TrainingPhase(str, Enum):
+    IDLE = "idle"
+    RUNNING = "running"
+    ENDED = "ended"
+
+
+def _training_phase(member: CrewMember, at: datetime) -> Optional[_TrainingPhase]:
+    """Where ``member``'s training stands at the moment ``at``, judged by its end time, not by whether an end is set.
+
+    An ended training stays on the record until it is collected; an idle member may carry a placeholder end in the
+    past with no training design.
+
+    | Training observed | End                                       | Design reported | Phase    |
+    |-------------------|-------------------------------------------|-----------------|----------|
+    | no                | -                                         | -               | None     |
+    | yes               | empty                                     | -               | idle     |
+    | yes               | unreadable, or ``at`` not timezone-aware  | -               | None     |
+    | yes               | after ``at``                              | either          | running  |
+    | yes               | at or before ``at``                       | yes             | ended    |
+    | yes               | at or before ``at``                       | no              | idle     |
+    """
+    if not member.training_observed:
+        return None
+    if not member.training_active:
+        return _TrainingPhase.IDLE
+    end = member.training_end_utc
+    if end is None or at.utcoffset() is None:
+        return None
+    if end > at:
+        return _TrainingPhase.RUNNING
+    return _TrainingPhase.ENDED if member.training_design_id is not None else _TrainingPhase.IDLE
+
+
 # --- preconditions -----------------------------------------------------------------
 
 
@@ -114,6 +155,140 @@ def _placement_params_valid(snapshot: AccountSnapshot, params: Params) -> Option
     for name in ("row", "column"):
         if not _is_int_at_least(params.get(name), 0):
             return f"{name} must be a non-negative integer"
+    return None
+
+
+def _hull_design_id_valid(snapshot: AccountSnapshot, params: Params) -> Optional[str]:
+    """``upgrade_ship`` needs a numeric hull (ship) design id."""
+    if not str(params.get("ship_design_id") or "").strip().isdigit():
+        return "ship_design_id must be a numeric hull design id"
+    return None
+
+
+def _numeric_id_param(name: str) -> Precondition:
+    """The parameter ``name`` must be a numeric design id: a positive int (never a bool) or text matching ``[1-9][0-9]*``.
+
+    The client gets the raw value, so whitespace-padded text or a non-ASCII digit is refused rather than stripped or
+    converted. Zero-padded text (``"007"``) is refused too: the server reports ``"7"``, so the sent id would never match
+    the reported one. Zero (``0``, ``"0"``, ``"00"``) is refused: the game uses it for "no design", never as a design id.
+    """
+
+    def check(snapshot: AccountSnapshot, params: Params) -> Optional[str]:
+        value = params.get(name)
+        if isinstance(value, int) and not isinstance(value, bool):
+            value = str(value)
+        if not isinstance(value, str) or not re.fullmatch(r"[1-9][0-9]*", value):
+            return f"{name} must be a numeric design id"
+        return None
+
+    return check
+
+
+def _training_finishable(snapshot: AccountSnapshot, params: Params) -> Optional[str]:
+    """``finish_training`` runs only on a training that ended a full ``FINISH_TRAINING_GRACE`` before the observation.
+
+    It must never pay to speed a running training up. The observation time comes from the local clock, so the grace
+    covers a local clock that runs a little ahead of the server's.
+
+    | # | Member before the call                                          | Result                          |
+    |---|-----------------------------------------------------------------|---------------------------------|
+    | 1 | absent (or crew unobserved)                                     | None: an earlier check reports  |
+    | 2 | training not observed                                           | refused                         |
+    | 3 | no training end                                                 | refused: not training           |
+    | 4 | training end not a readable server time                         | refused                         |
+    | 5 | observation time not timezone-aware                             | refused (never compared)        |
+    | 6 | no reported training design (an idle member's placeholder end)  | refused: nothing to finish      |
+    | 7 | end later than the grace before the observation                 | refused: could cost starbux     |
+    | 8 | end at least the grace before the observation                   | passes                          |
+    """
+    character_id = str(params["character_id"])
+    member = snapshot.crew_member(character_id)
+    if member is None:
+        return None
+    if not member.training_observed:
+        return f"training state of {character_id} was not observed before the action"
+    if not member.training_active:
+        return f"{character_id} is not training"
+    end = member.training_end_utc
+    if end is None:
+        return f"training end of {character_id} is not a readable server time"
+    if snapshot.observed_at.utcoffset() is None:
+        # Snapshots built by build_snapshot, baselines and trial records are always aware; a naive one is refused
+        # rather than compared, which would raise.
+        return "observation time of the before-snapshot is not timezone-aware"
+    if member.training_design_id is None:
+        return f"{character_id} has no reported training design, so there is no training to finish"
+    if end > snapshot.observed_at - FINISH_TRAINING_GRACE:
+        return (
+            f"{character_id}'s training ends at {member.training_end}, less than"
+            f" {int(FINISH_TRAINING_GRACE.total_seconds())} seconds before the observation;"
+            " finishing now could cost starbux"
+        )
+    return None
+
+
+def _training_idle(snapshot: AccountSnapshot, params: Params) -> Optional[str]:
+    """``add_training`` starts a training only on an idle crew member, judged by time (``_training_phase``).
+
+    | # | Member before the call                                           | Result                          |
+    |---|------------------------------------------------------------------|---------------------------------|
+    | 1 | absent (or crew unobserved)                                      | None: an earlier check reports  |
+    | 2 | training not observed                                            | refused                         |
+    | 3 | training end not readable (or observation time not tz-aware)     | refused                         |
+    | 4 | a training running (with or without a reported design)           | refused                         |
+    | 5 | an ended training with a reported design, not yet collected      | refused: finish it first        |
+    | 6 | idle: no end, or a placeholder end with no design                | passes                          |
+    """
+    character_id = str(params["character_id"])
+    member = snapshot.crew_member(character_id)
+    if member is None:
+        return None
+    if not member.training_observed:
+        return f"training state of {character_id} was not observed before the action"
+    phase = _training_phase(member, snapshot.observed_at)
+    if phase is None:
+        return f"training end of {character_id} is not a readable server time"
+    if phase is _TrainingPhase.RUNNING:
+        design = member.training_design_id or "(design not reported)"
+        return f"{character_id} is already training {design} until {member.training_end}"
+    if phase is _TrainingPhase.ENDED:
+        return (
+            f"{character_id} has an ended training {member.training_design_id} (ended {member.training_end})"
+            " that was not collected"
+        )
+    return None
+
+
+def _inventory_quantities(snapshot: AccountSnapshot) -> dict[str, Optional[int]]:
+    """Quantity by item design id; the last record of a design wins, as in ``diff_snapshots``."""
+    return {item.item_design_id: item.quantity for item in snapshot.inventory}
+
+
+def _inventory_records(snapshot: AccountSnapshot, design: str) -> int:
+    """How many inventory records hold ``design``. Above one, the per-design quantity is only the last stack's."""
+    return sum(1 for item in snapshot.inventory if item.item_design_id == design)
+
+
+def _item_in_inventory(snapshot: AccountSnapshot, params: Params) -> Optional[str]:
+    """``use_consumable`` needs at least one of the item; an unobserved inventory is reported by its own check.
+
+    A design held in several records is refused: ``useConsumable`` uses the first record, while the snapshot diff
+    sees only the last, so the use could read as not-observed and a not-idempotent use would repeat.
+    """
+    if snapshot.section("inventory") is Completeness.MISSING:
+        return None
+    design = str(params["item_design_id"]).strip()
+    records = _inventory_records(snapshot, design)
+    if records > 1:
+        return f"item {design} is held in {records} inventory records, so its use cannot be reconciled"
+    quantities = _inventory_quantities(snapshot)
+    if design not in quantities:
+        return f"item {design} is not in the inventory"
+    quantity = quantities[design]
+    if quantity is None:
+        return f"quantity of item {design} was not observed"
+    if quantity < 1:
+        return f"item {design} has quantity {quantity}"
     return None
 
 
@@ -173,8 +348,23 @@ def _reward_received(delta, before, after, params):
 
 
 def _training_started(delta, before, after, params):
+    """A started training, decided from the crew member's training before and after the call.
+
+    | # | Observed                                           | Status         |
+    |---|----------------------------------------------------|----------------|
+    | 1 | crew not observed on both sides                    | unknown        |
+    | 2 | member gone after                                  | contradicted   |
+    | 3 | member absent before, or training unobserved       | unknown        |
+    | 4 | not training after                                 | not observed   |
+    | 5 | same (design, end) as before: not this call's      | not observed   |
+    | 6 | changed, but the end is not after the observation  | unknown        |
+    |   | before the call (unreadable, or already over)      |                |
+    | 7 | a new training of the requested design             | verified       |
+    | 8 | a new training whose design is not reported        | unknown        |
+    | 9 | a new training of another design                   | contradicted   |
+    """
     character_id = str(params["character_id"])
-    requested = str(params["training_design_id"])
+    requested = str(params["training_design_id"]).strip()
     if "crew" in delta.unknown_sections:
         return ReconciliationStatus.UNKNOWN, "crew was not observed on both sides"
     old, new = before.crew_member(character_id), after.crew_member(character_id)
@@ -182,15 +372,179 @@ def _training_started(delta, before, after, params):
         return ReconciliationStatus.CONTRADICTED, f"crew member {character_id} disappeared"
     if old is None or not (old.training_observed and new.training_observed):
         return ReconciliationStatus.UNKNOWN, f"training state of {character_id} was not observed on both sides"
-    if new.training_design_id == requested and new.training_active:
+    if not new.training_active:
+        return ReconciliationStatus.NOT_OBSERVED, f"{character_id} is not training after the call"
+    if (old.training_design_id, old.training_end) == (new.training_design_id, new.training_end):
+        return (
+            ReconciliationStatus.NOT_OBSERVED,
+            f"training of {character_id} unchanged ({new.training_design_id} until {new.training_end})",
+        )
+    if _training_phase(new, before.observed_at) is not _TrainingPhase.RUNNING:
+        return (
+            ReconciliationStatus.UNKNOWN,
+            f"{character_id} shows a training ending {new.training_end}, not after the observation before the call",
+        )
+    if new.training_design_id == requested:
         return ReconciliationStatus.VERIFIED, f"{character_id} is training {requested} until {new.training_end}"
-    if not old.training_active and new.training_active and new.training_design_id is None:
-        return ReconciliationStatus.VERIFIED, f"{character_id} started training ending {new.training_end}"
-    if new.training_active and new.training_design_id not in (None, requested) and (
-        (old.training_design_id, old.training_end) != (new.training_design_id, new.training_end)
-    ):
-        return ReconciliationStatus.CONTRADICTED, f"{character_id} started different training {new.training_design_id}"
-    return ReconciliationStatus.NOT_OBSERVED, f"training of {character_id} unchanged"
+    if new.training_design_id is None:
+        return (
+            ReconciliationStatus.UNKNOWN,
+            f"{character_id} started a training ending {new.training_end}, but its design was not reported",
+        )
+    return ReconciliationStatus.CONTRADICTED, f"{character_id} started different training {new.training_design_id}"
+
+
+def _training_finished(delta, before, after, params):
+    """A finished training, decided by time: it had ended before the call, nothing runs after, and the stats rose.
+
+    Whether the server then clears the end, rewrites it to the finish time, sets a placeholder or leaves the ended
+    training in place does not matter (none of these is verified live). Phases (``_training_phase``) are judged at
+    each snapshot's own observation time. The first matching row wins.
+
+    | #  | Observed                                                          | Status        |
+    |----|-------------------------------------------------------------------|---------------|
+    | 1  | crew not observed on both sides                                   | unknown       |
+    | 2  | member gone after                                                 | contradicted  |
+    | 3  | member absent before                                              | unknown       |
+    | 4  | stat improvements fell                                            | contradicted  |
+    | 5  | starbux fell: a due finish never spends any                       | contradicted  |
+    | 6  | training unobserved on either side                                | unknown       |
+    | 7  | training after the call not judgeable (unreadable end)            | unknown       |
+    | 8  | the same training still running after                             | not observed  |
+    | 9  | any other training running after                                  | contradicted  |
+    | 10 | training before the call not judgeable                            | unknown       |
+    | 11 | not training before (idle, or a placeholder end)                  | not observed  |
+    | 12 | the training was still running before the call                    | unknown       |
+    | 13 | ended before; stat improvements not observed on both sides        | unknown       |
+    | 14 | ended before; stat improvements rose                              | verified      |
+    | 15 | ended before; the same training and the same stats after          | not observed  |
+    | 16 | ended before; no gain, and the record before shows capacity reached | verified    |
+    | 17 | ended before; no gain, capacity not shown                         | unknown       |
+    """
+    character_id = str(params["character_id"])
+    if "crew" in delta.unknown_sections:
+        return ReconciliationStatus.UNKNOWN, "crew was not observed on both sides"
+    old, new = before.crew_member(character_id), after.crew_member(character_id)
+    if new is None:
+        return ReconciliationStatus.CONTRADICTED, f"crew member {character_id} disappeared"
+    if old is None:
+        return ReconciliationStatus.UNKNOWN, f"{character_id} was not observed before the call"
+    gain = delta.crew_stat_total.get(character_id, 0)
+    if gain < 0:
+        return ReconciliationStatus.CONTRADICTED, f"stat improvements of {character_id} fell by {-gain}"
+    if delta.starbux is not None and delta.starbux < 0:
+        return ReconciliationStatus.CONTRADICTED, f"starbux fell by {-delta.starbux}; a due finish spends none"
+    if not (old.training_observed and new.training_observed):
+        return ReconciliationStatus.UNKNOWN, f"training state of {character_id} was not observed on both sides"
+    old_phase, new_phase = _training_phase(old, before.observed_at), _training_phase(new, after.observed_at)
+    same_training = (old.training_design_id, old.training_end) == (new.training_design_id, new.training_end)
+    if new_phase is None:
+        return (
+            ReconciliationStatus.UNKNOWN,
+            f"training end of {character_id} after the call ({new.training_end}) is not readable",
+        )
+    if new_phase is _TrainingPhase.RUNNING:
+        if same_training:
+            return (
+                ReconciliationStatus.NOT_OBSERVED,
+                f"{character_id} is still training {new.training_design_id} until {new.training_end}",
+            )
+        return (
+            ReconciliationStatus.CONTRADICTED,
+            f"{character_id} shows training {new.training_design_id} running until {new.training_end} after the finish",
+        )
+    if old_phase is None:
+        return (
+            ReconciliationStatus.UNKNOWN,
+            f"training end of {character_id} before the call ({old.training_end}) is not readable",
+        )
+    if old_phase is _TrainingPhase.IDLE:
+        return ReconciliationStatus.NOT_OBSERVED, f"{character_id} was not training before the call"
+    if old_phase is _TrainingPhase.RUNNING:
+        return (
+            ReconciliationStatus.UNKNOWN,
+            f"training of {character_id} was still running before the call (until {old.training_end})",
+        )
+    if old.stat_total is None or new.stat_total is None:
+        return (
+            ReconciliationStatus.UNKNOWN,
+            f"training of {character_id} had ended, but stat improvements were not observed on both sides",
+        )
+    if gain > 0:
+        return ReconciliationStatus.VERIFIED, f"training of {character_id} finished; stat improvements {gain:+d}"
+    if same_training:
+        return (
+            ReconciliationStatus.NOT_OBSERVED,
+            f"the ended training of {character_id} is still in place and stat improvements are unchanged",
+        )
+    if old.training_capacity is not None and old.stat_total >= old.training_capacity:
+        return ReconciliationStatus.VERIFIED, f"training of {character_id} finished at capacity; no gain expected"
+    return (
+        ReconciliationStatus.UNKNOWN,
+        f"training of {character_id} finished with no stat gain; capacity not observed (a training at capacity gains"
+        " nothing)",
+    )
+
+
+def _consumable_used(delta, before, after, params):
+    """A used consumable, decided from the item's inventory quantity alone: one use takes exactly one item.
+
+    The crew member's stat improvement and fatigue change are named in the reason when observed, for the journal
+    only: fatigue falls on its own and a finished training raises stats, so neither decides the status. A rise is
+    unknown, not contradicted: an item arriving at the same time (a reward, a purchase) must not halt the account.
+
+    | # | Observed                                                  | Status        |
+    |---|-----------------------------------------------------------|---------------|
+    | 1 | crew observed on both sides and the member gone after     | contradicted  |
+    | 2 | inventory not observed on both sides                      | unknown       |
+    | 3 | item held in several inventory records on either side     | unknown       |
+    | 4 | item absent from a partial inventory after                | unknown       |
+    | 5 | item quantity unreadable on one side                      | unknown       |
+    | 6 | quantity rose                                             | unknown       |
+    | 7 | quantity fell by exactly 1 (to fewer, to 0, or to absent) | verified      |
+    | 8 | quantity fell by more than 1                              | unknown       |
+    | 9 | quantity unchanged                                        | not observed  |
+    """
+    character_id = str(params["character_id"])
+    design = str(params["item_design_id"]).strip()
+    if "crew" not in delta.unknown_sections and before.crew_member(character_id) is not None:
+        if after.crew_member(character_id) is None:
+            return ReconciliationStatus.CONTRADICTED, f"crew member {character_id} disappeared"
+    note = _member_change_note(delta, before, after, character_id)
+    if "inventory" in delta.unknown_sections:
+        return ReconciliationStatus.UNKNOWN, "inventory was not observed on both sides" + note
+    if max(_inventory_records(before, design), _inventory_records(after, design)) > 1:
+        return ReconciliationStatus.UNKNOWN, f"item {design} is held in several inventory records" + note
+    if design not in _inventory_quantities(after) and after.section("inventory") is Completeness.PARTIAL:
+        return ReconciliationStatus.UNKNOWN, f"item {design} is absent from a partial inventory" + note
+    change = delta.inventory_quantity.get(design, 0)
+    if change is None:
+        return ReconciliationStatus.UNKNOWN, f"quantity of item {design} was not readable on both sides" + note
+    if change > 0:
+        return (
+            ReconciliationStatus.UNKNOWN,
+            f"item {design} quantity rose by {change} after use; an item may have arrived at the same time" + note,
+        )
+    if change == -1:
+        return ReconciliationStatus.VERIFIED, f"item {design} quantity fell by 1" + note
+    if change < -1:
+        return ReconciliationStatus.UNKNOWN, f"item {design} quantity fell by {-change}, more than one use" + note
+    return ReconciliationStatus.NOT_OBSERVED, f"item {design} quantity unchanged" + note
+
+
+def _member_change_note(delta, before, after, character_id: str) -> str:
+    """``"; c1 stat improvements +n, fatigue -m"`` for what was observed on both sides, or ``""``; informational."""
+    if "crew" in delta.unknown_sections:
+        return ""
+    old, new = before.crew_member(character_id), after.crew_member(character_id)
+    if old is None or new is None:
+        return ""
+    parts = []
+    if old.stat_total is not None and new.stat_total is not None:
+        parts.append(f"stat improvements {new.stat_total - old.stat_total:+d}")
+    if old.fatigue is not None and new.fatigue is not None:
+        parts.append(f"fatigue {new.fatigue - old.fatigue:+d}")
+    return f"; {character_id} {', '.join(parts)}" if parts else ""
 
 
 def _room_placed(delta, before, after, params):
@@ -215,6 +569,28 @@ def _room_placed(delta, before, after, params):
         status = placed[0].status or "status not observed"
         return ReconciliationStatus.VERIFIED, f"a room of design {design} appeared at row {row}, column {column} ({status})"
     return ReconciliationStatus.NOT_OBSERVED, f"no new room of design {design} at row {row}, column {column}"
+
+
+def _hull_upgrade_started(delta, before, after, params):
+    """A hull upgrade, decided from the ship record alone.
+
+    Hull upgrades look timed: the ship record carries ``@UpgradeShipDesignId``
+    (the hull it is upgrading to) beside ``@ShipDesignId``. Verified when the
+    ship after the call shows the requested design as its hull (an instant
+    upgrade) or as its upgrade under way, and did not already show it before
+    (an effect present before the call is not this call's). ``ship`` is not a
+    delta section, so both snapshots' ship sections are checked here.
+    """
+    if before.section("ship") is Completeness.MISSING or after.section("ship") is Completeness.MISSING:
+        return ReconciliationStatus.UNKNOWN, "the ship was not observed on both sides"
+    target = str(params["ship_design_id"]).strip()
+    if target in (before.ship_design_id, before.upgrade_ship_design_id):
+        return ReconciliationStatus.NOT_OBSERVED, f"the ship already showed hull design {target} before the call"
+    if after.ship_design_id == target:
+        return ReconciliationStatus.VERIFIED, f"the ship's hull design is now {target}"
+    if after.upgrade_ship_design_id == target:
+        return ReconciliationStatus.VERIFIED, f"the ship started upgrading to hull design {target}"
+    return ReconciliationStatus.NOT_OBSERVED, f"the ship shows neither hull design {target} nor an upgrade to it"
 
 
 def _room_upgrade_started(delta, before, after, params):
@@ -562,11 +938,16 @@ def _build_collection_evidence(before: Mapping[str, Any], after: Mapping[str, An
 PLACE_REPLY_WITHHELD = "withheld: the leak scan flagged this text"
 
 
-def _placement_probe(client: Any) -> Mapping[str, Any]:
-    try:
-        return {"reply": getattr(client, "placeRoomReply", None)}
-    except Exception:  # the probe runs before and after the call and must not raise
-        return {_PROBE_FAILED: True}
+def _reply_probe(attribute: str) -> EvidenceProbe:
+    """A probe that reads the reply summary a client keeps in ``attribute`` (``None`` when it keeps none)."""
+
+    def probe(client: Any) -> Mapping[str, Any]:
+        try:
+            return {"reply": getattr(client, attribute, None)}
+        except Exception:  # the probe runs before and after the call and must not raise
+            return {_PROBE_FAILED: True}
+
+    return probe
 
 
 def _clean_reply_text(text: Any) -> str:
@@ -601,6 +982,12 @@ def _placement_evidence(before: Mapping[str, Any], after: Mapping[str, Any], sta
         return {"server_reply": None}
 
 
+# Hull upgrade evidence: ``Client.upgradeShip`` returns the raw UpgradeShip response. A
+# client that keeps a summary of it as ``client.upgradeShipReply`` (the shape of
+# ``placeRoomReply``) gets it journaled like a placement's reply, after redaction and the
+# leak scan; a client without one journals ``server_reply: None``. It never changes the outcome.
+
+
 CATALOG: dict[str, ActionSpec] = {
     spec.action_id: spec
     for spec in (
@@ -633,9 +1020,49 @@ CATALOG: dict[str, ActionSpec] = {
             mutating=True,
             idempotency=Idempotency.NOT_IDEMPOTENT,
             required_params=("training_design_id", "character_id"),
-            preconditions=(_section_observed("crew"), _crew_member_present),
+            preconditions=(
+                _section_observed("crew"),
+                _crew_member_present,
+                _numeric_id_param("training_design_id"),
+                _training_idle,
+            ),
             postcondition=_training_started,
             expected_effect="the crew member starts the requested training",
+        ),
+        # Safe to retry: the retry rebuilds its before-snapshot, so after a finish that cleared the training the member
+        # is idle and the precondition skips it, and a training started since ends in the future, which the
+        # precondition refuses. It runs only on a training that ended FINISH_TRAINING_GRACE before the local clock's
+        # observation, so it never pays to speed one up, and a starbux fall reconciles as contradicted. It changes
+        # crew stats for good, so it is never a canary.
+        ActionSpec(
+            action_id="finish_training",
+            client_method="finishTraining",
+            mutating=True,
+            idempotency=Idempotency.SAFE_TO_RETRY,
+            required_params=("character_id",),
+            preconditions=(_section_observed("crew"), _crew_member_present, _training_finishable),
+            postcondition=_training_finished,
+            expected_effect="a due training is cleared and the crew member's stat improvements rise",
+        ),
+        # useConsumable takes the item's design id: snapshots key the inventory by design and never keep item
+        # instance ids (account-specific, so they stay out of journaled params). It finds the instance in the
+        # client's cached items, which the runner's before-read refreshes. Each call uses up an item, so a repeat
+        # would use another: not idempotent.
+        ActionSpec(
+            action_id="use_consumable",
+            client_method="useConsumable",
+            mutating=True,
+            idempotency=Idempotency.NOT_IDEMPOTENT,
+            required_params=("item_design_id", "character_id"),
+            preconditions=(
+                _section_observed("inventory"),
+                _section_observed("crew"),
+                _crew_member_present,
+                _numeric_id_param("item_design_id"),
+                _item_in_inventory,
+            ),
+            postcondition=_consumable_used,
+            expected_effect="the consumable's inventory quantity falls by the use",
         ),
         ActionSpec(
             action_id="upgrade_room",
@@ -658,7 +1085,21 @@ CATALOG: dict[str, ActionSpec] = {
             preconditions=(_section_observed("rooms"), _placement_params_valid),
             postcondition=_room_placed,
             expected_effect="a room of the requested design appears at the requested row and column",
-            evidence_probe=_placement_probe,
+            evidence_probe=_reply_probe("placeRoomReply"),
+            evidence=_placement_evidence,
+        ),
+        # Only --fleet-execute --mode upgrade-ship plans this action (HullUpgradePolicy in sdk.fleet.factory): it
+        # resolves the race-matched next hull and its mineral cost before the runner is called.
+        ActionSpec(
+            action_id="upgrade_ship",
+            client_method="upgradeShip",
+            mutating=True,
+            idempotency=Idempotency.NOT_IDEMPOTENT,
+            required_params=("ship_design_id",),
+            preconditions=(_section_observed("ship"), _hull_design_id_valid),
+            postcondition=_hull_upgrade_started,
+            expected_effect="the ship's hull design, or the hull upgrade under way, becomes the requested design",
+            evidence_probe=_reply_probe("upgradeShipReply"),
             evidence=_placement_evidence,
         ),
         ActionSpec(

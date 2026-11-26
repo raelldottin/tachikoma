@@ -17,7 +17,7 @@ import hashlib
 import hmac
 import re
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Iterable, Mapping, Optional
 
@@ -29,6 +29,19 @@ GAME_IDENTITY_PATTERN = re.compile(r"^gid1-[0-9a-f]{32}$")
 GAME_USER_ID_PATTERN = re.compile(r"^[0-9]{1,20}$")
 MIN_IDENTITY_SALT_BYTES = 16
 _GAME_IDENTITY_DOMAIN = b"tachikoma/game-identity/v1\x00"
+# The nine stat improvements a character record carries, as (CrewMember field, XML attribute). The attribute names
+# are the ones Client.manageTraining reads; their order follows it.
+TRAINING_STAT_ATTRIBUTES: tuple[tuple[str, str], ...] = (
+    ("hp_improvement", "@HpImprovement"),
+    ("pilot_improvement", "@PilotImprovement"),
+    ("repair_improvement", "@RepairImprovement"),
+    ("weapon_improvement", "@WeaponImprovement"),
+    ("science_improvement", "@ScienceImprovement"),
+    ("engine_improvement", "@EngineImprovement"),
+    ("attack_improvement", "@AttackImprovement"),
+    ("ability_improvement", "@AbilityImprovement"),
+    ("stamina_improvement", "@StaminaImprovement"),
+)
 
 
 class SnapshotInputError(ValueError):
@@ -101,12 +114,40 @@ class CrewMember:
     training_observed: bool = False
     training_design_id: Optional[str] = None
     training_end: Optional[str] = None
+    # Stat improvements gained from training (TRAINING_STAT_ATTRIBUTES); None when the record lacks one or it is
+    # unparseable. Baselines keep them, so they stay part of equality.
+    hp_improvement: Optional[int] = None
+    pilot_improvement: Optional[int] = None
+    repair_improvement: Optional[int] = None
+    weapon_improvement: Optional[int] = None
+    science_improvement: Optional[int] = None
+    engine_improvement: Optional[int] = None
+    attack_improvement: Optional[int] = None
+    ability_improvement: Optional[int] = None
+    stamina_improvement: Optional[int] = None
+    # The most stat improvement training can give this crew member. It is a per-design value
+    # (listAllCharacterDesigns2), which the snapshot reads do not fetch, so it is read only if the character record
+    # itself carries @TrainingCapacity; in practice it is None.
+    training_capacity: Optional[int] = None
 
     @property
     def training_active(self) -> Optional[bool]:
         if not self.training_observed:
             return None
         return bool(self.training_end)
+
+    @property
+    def stat_total(self) -> Optional[int]:
+        """Sum of the nine stat improvements; None if any of them was not observed."""
+        values = [getattr(self, name) for name, _ in TRAINING_STAT_ATTRIBUTES]
+        if any(value is None for value in values):
+            return None
+        return sum(values)
+
+    @property
+    def training_end_utc(self) -> Optional[datetime]:
+        """The training end as an aware UTC time; None when unobserved, empty or unreadable."""
+        return _server_time(self.training_end)
 
 
 @dataclass(frozen=True)
@@ -157,6 +198,10 @@ class AccountSnapshot:
     # The ship's @ShipDesignId (its hull design, which gives the interior grid); None when not observed. Like
     # Room.row/column, it is read only by room placement and is not kept in baselines, so it is left out of equality.
     ship_design_id: Optional[str] = field(default=None, compare=False)
+    # The ship's @UpgradeShipDesignId: the hull design a timed hull upgrade is heading to; None when the record
+    # does not carry one, carries "0" (no upgrade under way) or carries the ship's own hull design (a leftover of a
+    # finished upgrade). Read only by hull upgrades, and left out of equality and baselines like ship_design_id.
+    upgrade_ship_design_id: Optional[str] = field(default=None, compare=False)
 
     def section(self, name: str) -> Completeness:
         return self.completeness.get(name, Completeness.MISSING)
@@ -181,6 +226,7 @@ class AccountSnapshot:
             "game_version": self.game_version,
             "hull_level": self.hull_level,
             "ship_design_id": self.ship_design_id,
+            "upgrade_ship_design_id": self.upgrade_ship_design_id,
             "trophies": self.trophies,
             "resources": {
                 "minerals": self.resources.minerals,
@@ -214,9 +260,46 @@ def _int_or_none(value: Any) -> Optional[int]:
         return None
 
 
+def _server_time(text: Optional[str]) -> Optional[datetime]:
+    """Parse a server timestamp as UTC. The server sends naive UTC text (as Client.manageTraining assumes)."""
+    if not text:
+        return None
+    try:
+        moment = datetime.fromisoformat(text.strip())
+        if moment.tzinfo is None:
+            return moment.replace(tzinfo=timezone.utc)
+        # An offset near datetime's range limits (year 1 or 9999) overflows on conversion.
+        return moment.astimezone(timezone.utc)
+    except (ValueError, OverflowError):
+        return None
+
+
 def _training_design_id(value: Any) -> Optional[str]:
+    """The reported training design, or None for "no design": empty, or any zero (``"0"``, ``"00"``, ``" 0"``).
+
+    Other text, numeric or not, is kept exactly as reported.
+    """
     text = _clean_text(value, "crew.training_design_id")
-    return None if text in (None, "", "0") else text
+    if text is None or text == "" or re.fullmatch(r"\s*0+\s*", text, flags=re.ASCII):
+        return None
+    return text
+
+
+def _crew_member(identifier: str, record: Mapping[str, Any]) -> CrewMember:
+    stats = {name: _int_or_none(record.get(attribute)) for name, attribute in TRAINING_STAT_ATTRIBUTES}
+    return CrewMember(
+        character_id=identifier,
+        design_id=_clean_text(record.get("@CharacterDesignId"), "crew.design_id"),
+        name=_clean_text(record.get("@CharacterName"), "crew.name"),
+        level=_int_or_none(record.get("@Level")),
+        fatigue=_int_or_none(record.get("@Fatigue")),
+        room_id=_clean_text(record.get("@RoomId"), "crew.room_id"),
+        training_observed="@TrainingEndDate" in record,
+        training_design_id=_training_design_id(record.get("@TrainingDesignId")),
+        training_end=_clean_text(record.get("@TrainingEndDate"), "crew.training_end") or None,
+        training_capacity=_int_or_none(record.get("@TrainingCapacity")),
+        **stats,
+    )
 
 
 def _records(value: Any) -> Optional[list[Mapping[str, Any]]]:
@@ -299,11 +382,14 @@ def build_snapshot(
 
     hull_level = None
     ship_design_id = None
+    upgrade_ship_design_id = None
     if ship is None:
         builder.completeness["ship"] = Completeness.MISSING
     else:
         hull_level = _int_or_none(ship.get("@ShipLevel"))
         ship_design_id = _clean_text(ship.get("@ShipDesignId"), "ship.design_id") or None
+        upgrade = (_clean_text(ship.get("@UpgradeShipDesignId"), "ship.upgrade_design_id") or "").strip()
+        upgrade_ship_design_id = None if upgrade in ("", "0", ship_design_id) else upgrade
         builder.completeness["ship"] = Completeness.COMPLETE if hull_level is not None else Completeness.PARTIAL
 
     if resources is None:
@@ -320,22 +406,7 @@ def build_snapshot(
             Completeness.COMPLETE if all(value is not None for value in known) else Completeness.PARTIAL
         )
 
-    crew_records = builder.parse_section(
-        "crew",
-        crew,
-        "@CharacterId",
-        lambda identifier, record: CrewMember(
-            character_id=identifier,
-            design_id=_clean_text(record.get("@CharacterDesignId"), "crew.design_id"),
-            name=_clean_text(record.get("@CharacterName"), "crew.name"),
-            level=_int_or_none(record.get("@Level")),
-            fatigue=_int_or_none(record.get("@Fatigue")),
-            room_id=_clean_text(record.get("@RoomId"), "crew.room_id"),
-            training_observed="@TrainingEndDate" in record,
-            training_design_id=_training_design_id(record.get("@TrainingDesignId")),
-            training_end=_clean_text(record.get("@TrainingEndDate"), "crew.training_end") or None,
-        ),
-    )
+    crew_records = builder.parse_section("crew", crew, "@CharacterId", _crew_member)
     room_records = builder.parse_section(
         "rooms",
         rooms,
@@ -381,6 +452,7 @@ def build_snapshot(
         notes=tuple(builder.notes),
         game_identity=game_identity,
         ship_design_id=ship_design_id,
+        upgrade_ship_design_id=upgrade_ship_design_id,
     )
 
 
@@ -416,6 +488,8 @@ class SnapshotDelta:
     # (training_design_id, training_end) before -> after, only for crew whose
     # training was observed on both sides.
     crew_training: Mapping[str, tuple[tuple, tuple]] = field(default_factory=dict)
+    # Change of CrewMember.stat_total, only for crew observed on both sides with both totals known and different.
+    crew_stat_total: Mapping[str, int] = field(default_factory=dict)
 
 
 def _keyed_changes(before: Iterable, after: Iterable, key, value) -> dict[str, tuple]:
@@ -478,6 +552,12 @@ def diff_snapshots(before: AccountSnapshot, after: AccountSnapshot) -> SnapshotD
         new_value = (member.training_design_id, member.training_end)
         if old_value != new_value:
             crew_training[member.character_id] = (old_value, new_value)
+    totals_before = {m.character_id: m.stat_total for m in observed("crew", before)}
+    crew_stat_total = {}
+    for member in observed("crew", after):
+        old_total, new_total = totals_before.get(member.character_id), member.stat_total
+        if old_total is not None and new_total is not None and old_total != new_total:
+            crew_stat_total[member.character_id] = new_total - old_total
     return SnapshotDelta(
         account_alias=after.account_alias,
         elapsed_seconds=elapsed,
@@ -498,4 +578,5 @@ def diff_snapshots(before: AccountSnapshot, after: AccountSnapshot) -> SnapshotD
         inventory_quantity=inventory_quantity,
         unknown_sections=unknown,
         crew_training=crew_training,
+        crew_stat_total=crew_stat_total,
     )
