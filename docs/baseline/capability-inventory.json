@@ -1024,6 +1024,15 @@
       ]
     },
     {
+      "flag": "--training-journal-dir",
+      "pillar": "platform",
+      "kind": "read-only",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_training_journal_cli.py"
+      ]
+    },
+    {
       "flag": "--report",
       "pillar": "platform",
       "kind": "read-only",

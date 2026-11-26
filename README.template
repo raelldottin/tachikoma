@@ -17,7 +17,7 @@ matrix. Version tags such as `1.2.3` or `v1.2.3` validate the tagged source
 and prepare a draft GitHub release with a reproducible source archive and
 SHA-256 checksums. These validation workflows use mocked game traffic.
 
-Mutation testing is advisory: `make mutation` mutates each module listed in
+Mutation testing: `make mutation` mutates each module listed in
 `automation/mutation/config.json` (or one module, `make mutation
 TARGET=sdk/crew_leveling.py`) inside a temporary copy, runs only its mapped
 tests, and fails below the module's recorded minimum score. A target can
@@ -35,9 +35,19 @@ Markdown report that lists the operators used. An `--only` run is not gated
 unless `--min-score` is given. Each mutant run times out after five times the
 baseline test time multiplied by the number of parallel runs (`--jobs`), at
 least 10 seconds, unless the config or `--timeout` sets it. Blocking CI (the
-`run-mutation` input of `python-tests.yml`) reports the score in the job
-summary and uploads `mutation.json` as an artifact without blocking merges;
-post-merge and release runs skip it.
+`run-mutation` input of `python-tests.yml`) runs two mutation jobs. The
+`mutation-gate` job runs the `sdk/training/` targets (`python scripts/ci.py
+mutation-config --blocking` prints them): a target below its minimum score, or
+a config, baseline or harness error, fails `CI required`, and `scripts/ci.py`
+refuses a config that drops one of the four training targets or stops running
+`tests.test_training_planner` and `tests.test_training_parse` for it, or in
+which any `sdk/training/` target, one of the four or a new one, lists no
+tests, narrows itself with `functions` or `operators`, sets its `timeout`, or
+sets its minimum below 0.90; target paths must be written in canonical form
+and no glob target may reach `sdk/training/`. The advisory job runs every other target (`--advisory`)
+without blocking merges. Each job reports its scores in the job summary and
+uploads its JSON report (`mutation-gate.json`, `mutation.json`) as an artifact;
+post-merge and release runs skip both.
 
 See [.github/workflows/README.md](.github/workflows/README.md) for the
 check coverage, lint and hollow-test baselines, local commands, and
@@ -47,7 +57,7 @@ branch-protection setup.
 
 - `.dockerignore`, `.gitignore`: Ignore files.
 - `.githooks/`: Custom Git hooks for the repository.
-- `.github/`: GitHub Actions workflow `daily-run.yml` (runs 3×/day at 00:00, 08:00, 16:00 UTC).
+- `.github/`: GitHub Actions workflow `daily-run.yml` (runs 3×/day at 00:00, 08:00, 16:00 UTC). Each account step journals crew training to `account-N.jsonl` (see [Training journal](#training-journal)); a final step, which is given no credentials, lists the journals written and writes the training report to the job summary, and uploads the journals and the report as the `training-report-<run id>-<attempt>` artifact, kept 14 days. An account that failed at login still leaves its empty journal; one skipped through `LEGACY_RUN_SKIP` leaves none.
 - `.python-version`: Version-specific configurations.
 - `LICENSE`: The license file.
 - `README.md`: This readme file.
@@ -80,10 +90,24 @@ branch-protection setup.
 python run.py --login-email you@example.com --progression-dry-run --account-alias primary
 ```
 
-- `--account-alias` is the lowercase label written to the journal (default `primary`). E-mail addresses and display names are refused.
+- `--account-alias` is the lowercase label written to the progression and training journals (default `primary`). E-mail addresses and display names are refused.
 - `--progression-journal` sets the journal path. The default, `tachikoma-progression.log`, is covered by the repository's `*.log` ignore rule.
 
 This command never executes. The only execute path is `--fleet-execute` (see [Fleet execute](#fleet-execute)); running it against a real account is each live trial's owner step.
+
+### Training journal
+
+`--training-journal-dir DIR` gives the daily run a crew-training journal. Before SMTP setup, device creation or login, `run.py` creates `DIR` and an empty `DIR/<alias>.jsonl` named after `--account-alias` (an existing journal is kept and appended to), then sets that journal and the alias on the client for crew training (`training_journal`, `training_account_alias`) just before `manageTraining` runs. The training executor writes its decision records into that journal; until it reads these attributes the journal stays empty and the daily report shows the empty report. The daily workflow passes `--account-alias account-N --training-journal-dir "$RUNNER_TEMP/tachikoma-training/journals"` for account N.
+
+```bash
+python run.py --login-email you@example.com --account-alias alpha --training-journal-dir ~/tachikoma-training
+python run.py --report training --journal ~/tachikoma-training/alpha.jsonl
+```
+
+- The journal file is created even when nothing is journaled, so `--report training` on it prints the empty report instead of failing with "journal not found".
+- An `--account-alias` that is not a lowercase alias (an e-mail address, capital letters, more than 64 characters), an empty `DIR`, or a directory or journal file that cannot be created, prints an error and exits with code 2 before any login. A refused alias is never repeated in the error.
+- `*.jsonl` is not covered by the repository's ignore rules: choose a directory outside the checkout. The journal is redacted like every gameplay journal (`sdk/journal.py`).
+- Without the flag the daily run is unchanged and nothing is set on the client. `--training-journal-dir` is refused with `--report`, `--progression-dry-run`, and the fleet, baseline and capture commands.
 
 ### Fleet dry run
 
@@ -183,6 +207,7 @@ python run.py --report training --journal alpha.log --journal bravo.log --report
 - `fleet`: throughput per account and for the fleet. Events are grouped by their own `account_alias` across all `--journal` files, so the file an event came from does not matter. With `--registry`, the isolation audit runs too and its incidents are counted. Because events are grouped by alias, the audit's `foreign-event` rule cannot fire here; the other rules apply.
 - `dashboard`: one self-contained HTML page with summary tiles (attempted, verified, success rate, uncertain, incidents), the progression table, the PvP scorecard, the fleet table, the audit incidents and the failure ledger. Rates show their sample size; values that were not observed show as `n/a`, and without `--registry` the incident count is `n/a` because the audit did not run. The page has no scripts, external assets or network references, escapes every value, and follows the system light or dark theme. It holds no generation time, so the same journals give the same file. `--output PATH` is required; the file is replaced atomically (owner-only permissions), its directory must exist, it may not be one of the `--journal` files or the `--registry` file, and the path is printed. `--output` is refused with any other report.
 - `training`: crew training outcomes per account and for the fleet: training actions attempted by outcome, training starts attempted and verified, finishes, dry runs, skip reasons, consumables used, counts of records that break the training record contract, and idle crew-hours in training rooms (an upper bound) from the journals' training decision records, which no action writes yet (see [docs/baseline/training-report.md](docs/baseline/training-report.md)). Records are grouped by their own `account_alias` and duplicate attempt ids are counted once. Training points and the training cap need snapshots, so the report says snapshots were not provided and shows them as `n/a`. Crew show as stable `crew-` pseudonyms (the same as in the `training-stalled` alert); room ids, crew ids and free-text reasons are never printed.
+- The daily workflow writes one training journal per account (see [Training journal](#training-journal)) and runs `--report training` over all of them into its job summary.
 - `--journal PATH` is repeatable and required. A missing or malformed journal, an invalid registry, or (for `training`) a record whose `finished_at` has no time zone, prints an error and exits with code 2. An empty journal prints the report's empty output.
 - `--report-format` is `markdown` (default) or `json`. `--registry` is read only for `fleet` and `dashboard` (never for `training`). The dashboard ignores `--report-format`.
 

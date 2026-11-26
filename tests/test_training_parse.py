@@ -1143,5 +1143,162 @@ class TestFuzz(unittest.TestCase):
                 self.assertGreaterEqual(count, 10, hits)
 
 
+def nest(inner: object, levels: int) -> object:
+    """``inner`` wrapped in ``levels`` single-key dicts, so it sits ``levels`` dicts below the top level."""
+    for _ in range(levels):
+        inner = {"Wrap": inner}
+    return inner
+
+
+def nest_in_lists(inner: object, levels: int) -> object:
+    """``inner`` wrapped in ``levels`` one-element lists (several sibling elements nest as lists)."""
+    for _ in range(levels):
+        inner = [inner]
+    return inner
+
+
+# The envelope search is bounded (a hostile or corrupt payload cannot exhaust the stack). The bound is part of the
+# contract: records, containers, junk items and errorMessages are seen down to 64 levels below the top level.
+SEARCH_DEPTH = 64
+
+
+class TestEnvelopeSearchDepth(unittest.TestCase):
+    def test_extract_collection_sees_records_down_to_the_depth_limit_and_no_deeper(self) -> None:
+        record = {"@a": "1"}
+        self.assertEqual(extract_collection(nest({"Item": record}, SEARCH_DEPTH), "Item"), [record])
+        self.assertEqual(extract_collection(nest({"Item": record}, SEARCH_DEPTH + 1), "Item"), [])
+        # The same bound applies through the typed parsers.
+        deep_items = nest({"Item": {"@ItemDesignId": "7", "@Quantity": "2"}}, SEARCH_DEPTH)
+        self.assertEqual(dict(parse_items(deep_items)), {7: 2})
+
+    def test_classify_payload_sees_a_container_down_to_the_depth_limit(self) -> None:
+        self.assertEqual(classify_payload(nest({"Characters": None}, SEARCH_DEPTH), "Character"), "empty")
+        self.assertEqual(classify_payload(nest({"Characters": None}, SEARCH_DEPTH + 1), "Character"), "error")
+
+    def test_classify_payload_sees_a_junk_item_at_the_depth_limit(self) -> None:
+        # Text where records belong is an unexpected schema ("error"), not an empty item element ("empty").
+        self.assertEqual(classify_payload(nest({"Character": "text"}, SEARCH_DEPTH), "Character"), "error")
+        self.assertEqual(classify_payload(nest({"Character": None}, SEARCH_DEPTH), "Character"), "empty")
+
+    def test_classify_payload_sees_an_error_message_at_the_depth_limit(self) -> None:
+        records = {"Characters": {"Character": {"@CharacterId": "1"}}}
+        self.assertEqual(classify_payload(records, "Character"), "ok")
+        # "Meta" is one level down, so SEARCH_DEPTH - 1 wrappers put the errorMessage at the limit.
+        for key in ("@errorMessage", "errorMessage"):
+            with self.subTest(key=key, via="dicts"):
+                raw = {**records, "Meta": nest({key: "x"}, SEARCH_DEPTH - 1)}
+                self.assertEqual(classify_payload(raw, "Character"), "error")
+            with self.subTest(key=key, via="lists"):
+                raw = {**records, "Meta": nest_in_lists({key: "x"}, SEARCH_DEPTH - 1)}
+                self.assertEqual(classify_payload(raw, "Character"), "error")
+
+    def test_deep_clean_subtree_beside_records_is_not_an_error(self) -> None:
+        # Running out of search depth is not evidence of an error: a clean subtree nested beyond the limit leaves
+        # a payload with records "ok".
+        records = {"Characters": {"Character": {"@CharacterId": "1"}}}
+        for deep in (nest({}, SEARCH_DEPTH + 6), nest_in_lists({}, SEARCH_DEPTH + 6)):
+            with self.subTest(deep=type(deep).__name__):
+                self.assertEqual(classify_payload({**records, "Meta": deep}, "Character"), "ok")
+
+
+# Every classify_payloads keyword with the record type it is bound to and that type's live container.
+PAYLOAD_KEYWORDS = {
+    "characters_raw": ("Character", "Characters"),
+    "character_designs_raw": ("CharacterDesign", "CharacterDesigns"),
+    "training_designs_raw": ("TrainingDesign", "TrainingDesigns"),
+    "rooms_raw": ("Room", "Rooms"),
+    "room_designs_raw": ("RoomDesign", "RoomDesigns"),
+    "researches_raw": ("Research", "Researches"),
+    "research_designs_raw": ("ResearchDesign", "ResearchDesigns"),
+    "items_raw": ("Item", "Items"),
+    "item_designs_raw": ("ItemDesign", "ItemDesigns"),
+}
+
+
+class TestPayloadBinding(unittest.TestCase):
+    def test_every_classify_payloads_keyword_reads_its_own_record_type(self) -> None:
+        for keyword, (item_key, container) in PAYLOAD_KEYWORDS.items():
+            with self.subTest(keyword=keyword):
+                filled = {"Svc": {container: {item_key: {"@Id": "1"}}}}
+                self.assertEqual(dict(classify_payloads(**{keyword: filled})), {keyword: "ok"})
+                empty = {"Svc": {container: None}}
+                self.assertEqual(dict(classify_payloads(**{keyword: empty})), {keyword: "empty"})
+                # Records of another type are not this keyword's data: an unexpected schema.
+                other = "Room" if item_key != "Room" else "Item"
+                wrong = {"Svc": {other + "s": {other: {"@Id": "1"}}}}
+                self.assertEqual(dict(classify_payloads(**{keyword: wrong})), {keyword: "error"})
+
+    def test_unknown_item_key_defaults_to_its_plural_container(self) -> None:
+        self.assertEqual(classify_payload({"Svc": {"Widgets": None}}, "Widget"), "empty")
+        self.assertEqual(classify_payload({"Svc": {"Widgets": {"Widget": {"@Id": "1"}}}}, "Widget"), "ok")
+        self.assertEqual(classify_payload({"Svc": {"Gadgets": None}}, "Widget"), "error")
+
+    def test_an_item_key_naming_no_record_type_never_borrows_a_known_container(self) -> None:
+        # The live-container table is keyed by record type only. The empty item key names no record type, so it
+        # falls back to "s" and a known container (present but empty) must not make its payload read as "empty".
+        for _item_key, container in PAYLOAD_KEYWORDS.values():
+            with self.subTest(container=container):
+                self.assertEqual(classify_payload({"Svc": {container: None}}, ""), "error")
+
+
+class TestLowestValidIds(unittest.TestCase):
+    """Id 1 and level 1 are ordinary values: every "positive" check must accept them."""
+
+    def test_required_research_id_one_resolves(self) -> None:
+        research_designs = {"ResearchDesign": {"@ResearchDesignId": "1", "@ResearchName": "Fitness Lv1"}}
+        designs = designs_envelope(
+            {"@TrainingDesignId": "1", "@TrainingName": "Bench Press", "@RequiredResearchDesignId": "1"}
+        )
+        (design,) = parse_training_designs(designs, research_designs)
+        self.assertEqual((design.id, design.required_research), (1, "Fitness Lv1"))
+        (unresolved,) = parse_training_designs(designs)
+        self.assertEqual(unresolved.required_research, "research_design:1")
+
+    def test_crew_room_id_and_training_design_id_one_are_kept(self) -> None:
+        record = {
+            **CHARACTER,
+            "@RoomId": "1",
+            "@TrainingDesignId": "1",
+            "@TrainingEndDate": "2026-03-01T13:00:00",
+        }
+        rooms = {"Room": {"@RoomId": "1", "@RoomDesignId": "1"}}
+        room_designs = {"RoomDesign": {"@RoomDesignId": "1", "@RoomName": "Academy"}}
+        (crew,) = parse_crew(characters_envelope(record), CHARACTER_DESIGNS, rooms, room_designs)
+        self.assertEqual((crew.room_id, crew.room_name), (1, "Academy"))
+        self.assertEqual(crew.training_design_id, 1)
+        self.assertEqual(crew.training_end, datetime(2026, 3, 1, 13, 0, tzinfo=UTC))
+
+    def test_item_design_id_one_is_counted(self) -> None:
+        items = {"Item": [{"@ItemDesignId": "1", "@Quantity": "2"}, {"@ItemDesignId": "1", "@Quantity": "3"}]}
+        self.assertEqual(dict(parse_items(items)), {1: 5})
+
+    def test_design_level_one_beats_the_name_suffix(self) -> None:
+        # @Level wins whenever it is positive, 1 included; the "Lv N" suffix only fills in for a missing @Level.
+        designs = {"ResearchDesign": {"@ResearchDesignId": "10", "@ResearchName": "Fitness Lv3", "@Level": "1"}}
+        researches = {"Research": {"@ResearchDesignId": "10", "@ResearchState": "Completed"}}
+        self.assertEqual(dict(parse_research_levels(researches, designs)), {"Fitness": 1, "Fitness Lv3": 1})
+
+    def test_research_level_one_beats_the_design_level(self) -> None:
+        # A positive @ResearchLevel, 1 included, wins over the design's level.
+        designs = {"ResearchDesign": {"@ResearchDesignId": "10", "@ResearchName": "Fitness", "@Level": "3"}}
+        researches = {
+            "Research": {"@ResearchDesignId": "10", "@ResearchState": "Completed", "@ResearchLevel": "1"}
+        }
+        self.assertEqual(dict(parse_research_levels(researches, designs)), {"Fitness": 1})
+
+
+class TestConsumableDesignFilter(unittest.TestCase):
+    def test_non_consumable_items_with_stat_and_tier_words_are_ignored(self) -> None:
+        designs = {
+            "ItemDesign": [
+                {"@ItemDesignId": "5", "@ItemName": "Legendary Weapon Mount", "@ItemSubType": "Equipment"},
+                {"@ItemDesignId": "6", "@ItemName": "Hero HP Armor", "@Rarity": "Hero"},
+                {"@ItemDesignId": "7", "@ItemName": "Legendary Weapon Consumable", "@ItemSubType": "Equipment"},
+                {"@ItemDesignId": "8", "@ItemName": "Hero HP Serum", "@ItemSubType": "Consumable"},
+            ]
+        }
+        self.assertEqual(dict(parse_consumable_designs(designs)), {("WPN", "Legendary"): 7, ("HP", "Hero"): 8})
+
+
 if __name__ == "__main__":
     unittest.main()

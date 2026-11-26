@@ -11,9 +11,11 @@ import hashlib
 import io
 import json
 import logging
+import math
 import os
 from pathlib import Path, PurePosixPath
 import re
+import shlex
 import subprocess
 import sys
 import tarfile
@@ -50,6 +52,53 @@ RELEASE_PRIVATE_WORDS = frozenset(
 # LEGACY_RUN_SKIP repository variable, so a trial account can be fenced off without deleting its secrets.
 LEGACY_ACCOUNT_SECRET_RE = re.compile(r"\$\{\{\s*secrets\.PSS_ACCOUNT_([0-9]+)_")
 LEGACY_RUN_SKIP_CONDITION = "${{{{ !contains(format(',{{0}},', vars.LEGACY_RUN_SKIP), ',{account},') }}}}"
+# Mutation testing: sdk/training/ targets block merges (python-tests.yml's mutation-gate job); every other target stays
+# advisory. Every sdk/training/ target needs a min_score of at least 0.90 and some tests; the four named ones must be
+# present and keep both training test modules.
+MUTATION_CONFIG = "automation/mutation/config.json"
+BLOCKING_MUTATION_PREFIX = "sdk/training/"
+BLOCKING_MUTATION_TESTS = ("tests.test_training_planner", "tests.test_training_parse")
+REQUIRED_BLOCKING_MUTATION_TARGETS = (
+    "sdk/training/model.py",
+    "sdk/training/parse.py",
+    "sdk/training/planner.py",
+    "sdk/training/strategy.py",
+)
+MIN_BLOCKING_MUTATION_SCORE = 0.90
+MUTATION_GATE_JOB = "mutation-gate"
+MUTATION_GATE_COMMAND = "python scripts/ci.py mutation-config --blocking"
+# The gate's scripts/mutation.py command may only pick its config, parallelism and outputs: --target, --only,
+# --operators, --tests, --min-score, --timeout or --list would narrow or skip what the blocking targets measure.
+MUTATION_GATE_RUNNER = ("python", "scripts/mutation.py")
+# Besides the mutation step, the gate job may only check out, set up Python, install the CI requirements and upload
+# its report: any other command could rewrite the config, the tests or sdk/training before the checked command runs.
+MUTATION_GATE_SETUP_RUNS = ("python -m pip install -r .github/requirements-ci.txt",)
+MUTATION_GATE_ACTIONS = ("actions/checkout@", "actions/setup-python@", "actions/upload-artifact@")
+MUTATION_GATE_ALLOWED_FLAGS = frozenset({"--config", "--jobs", "--json", "--summary", "--quiet", "--scratch-dir"})
+# The gate step's lines before its scripts/mutation.py command, exactly: nothing can rewrite the checked config.
+MUTATION_GATE_PRELUDE = (
+    "set -euo pipefail",
+    'config="$RUNNER_TEMP/mutation-blocking.json"',
+    f'{MUTATION_GATE_COMMAND} > "$config"',
+)
+# Target keys a blocking training target may not set: functions and operators narrow which mutants it generates, and
+# an explicit timeout replaces the one derived from the baseline, so a tiny value turns every mutant into a timeout,
+# which counts as killed.
+WEAKENING_MUTATION_TARGET_KEYS = ("functions", "operators", "timeout")
+# Shell that would let a failing command pass: an or-list, an explicit success exit, errexit turned off or a trap.
+SWALLOWING_SHELL_RE = re.compile(r"\|\||\bexit\s+0\b|\bset\s+\+[a-z]*e|\bset\s+\+o\b|\btrap\b")
+# daily-run.yml crew training: each account step journals training to $RUNNER_TEMP/tachikoma-training/journals under
+# its own alias, then one credential-free step reports on every journal and one uploads only that directory.
+DAILY_TRAINING_DIR = "$RUNNER_TEMP/tachikoma-training"
+DAILY_TRAINING_JOURNAL_ARG = f'--training-journal-dir "{DAILY_TRAINING_DIR}/journals"'
+DAILY_TRAINING_REPORT_COMMAND = "python run.py --report training"
+ACCOUNT_ALIAS_ARG_RE = re.compile(r"""--account-alias[ =](?:"([^"\s]*)"|'([^'\s]*)'|([^"'\s]+))""")
+# A `${{ }}` expression naming the secrets context anywhere before its closing `}}`: a lone `}` inside it (a format()
+# placeholder) or a line break does not end it.
+SECRETS_EXPRESSION_RE = re.compile(r"\$\{\{(?:(?!\}\}).)*?\bsecrets\b", re.DOTALL)
+DAILY_TRAINING_ARTIFACT_PATH = "${{ runner.temp }}/tachikoma-training"
+DAILY_TRAINING_UPLOAD_KEYS = frozenset({"name", "path", "retention-days", "if-no-files-found"})
+MAX_DAILY_TRAINING_RETENTION_DAYS = 30
 VERSION_RE = re.compile(r"v?((?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))\Z")
 # Hollow tests (`hollow-tests`): unittest tests that assert nothing about project behaviour. The baseline records the
 # legacy ones; a new hollow test, or a baseline entry whose test is no longer hollow, fails the check.
@@ -945,6 +994,8 @@ def check_workflows(documents: dict) -> None:
         if gate.get("if") != "${{ always() }}" or gate.get("needs") != ["checks", "tests"]:
             raise ValueError("aggregate gate must always evaluate all required workflows")
     check_legacy_run(documents["daily-run.yml"])
+    check_daily_training(documents["daily-run.yml"])
+    check_mutation_gate(documents)
     # live-trial.yml touches real accounts, so only an owner's manual dispatch may start it.
     if set(documents["live-trial.yml"]["on"]) != {"workflow_dispatch"}:
         raise ValueError("the live trial workflow must run only on a manual dispatch")
@@ -981,8 +1032,287 @@ def check_legacy_run(document: dict) -> None:
         raise ValueError("the legacy run must have one skippable step per account")
 
 
+def _text(value: object) -> str:
+    """A workflow scalar as text; a missing value or a mapping or list where a scalar belongs is the empty string."""
+    return value if isinstance(value, str) else ""
+
+
+def _condition(value: object) -> str:
+    """A step's `if:` without its optional `${{ }}` wrapper and without whitespace, so `${{ always() }}` and
+    `always()` compare equal; a condition only partly inside an expression keeps its `${{` and `}}` and matches
+    neither."""
+    text = _text(value).strip()
+    wrapped = re.fullmatch(r"\$\{\{(.*)\}\}", text, re.DOTALL)
+    return "".join((wrapped.group(1) if wrapped else text).split())
+
+
+def check_daily_training(document: dict) -> None:
+    """daily-run.yml journals each account's crew training under its own alias and reports on every journal.
+
+    Only the account steps read secrets. The report step runs after all of them, even when one failed or was skipped,
+    is given no credentials and cannot be skipped by continue-on-error.
+    """
+    if SECRETS_EXPRESSION_RE.search(json.dumps(document.get("env", {}))):
+        raise ValueError("daily-run: only the account steps may read secrets, not the workflow env")
+    reports = []  # (job name, step, its index, the index of the last account step of its job)
+    uploads = []  # (job name, step, its index)
+    for job_name, job in document.get("jobs", {}).items():
+        if SECRETS_EXPRESSION_RE.search(json.dumps(job.get("env", {}))):
+            raise ValueError(f"daily-run: only the account steps may read secrets, not the env of job {job_name}")
+        steps = job.get("steps", [])
+        last_account = -1
+        for index, step in enumerate(steps):
+            text = json.dumps(step)
+            numbers = set(LEGACY_ACCOUNT_SECRET_RE.findall(text))
+            if not numbers:
+                if SECRETS_EXPRESSION_RE.search(text):
+                    raise ValueError(f"daily-run: only the account steps may read secrets ({step.get('name', index)})")
+                continue
+            last_account = index
+            if len(numbers) != 1:  # check_legacy_run refuses this too; checked here so the alias check is not arbitrary
+                raise ValueError(f"daily-run: step {step.get('name', index)} reads several accounts' secrets")
+            account = numbers.pop()
+            run = _text(step.get("run"))
+            if ["".join(groups) for groups in ACCOUNT_ALIAS_ARG_RE.findall(run)] != [f"account-{account}"]:
+                raise ValueError(
+                    f"daily-run account {account} step must pass --account-alias account-{account} exactly once"
+                )
+            if run.count(DAILY_TRAINING_JOURNAL_ARG) != 1:
+                raise ValueError(
+                    f"daily-run account {account} step must journal training with "
+                    f"{DAILY_TRAINING_JOURNAL_ARG} exactly once"
+                )
+            if step.get("continue-on-error") != "true":
+                raise ValueError(
+                    f"daily-run account {account} step must keep continue-on-error: true, so one "
+                    "account's failure cannot skip the others"
+                )
+        reports += [
+            (job_name, step, index, last_account)
+            for index, step in enumerate(steps)
+            if DAILY_TRAINING_REPORT_COMMAND in _text(step.get("run"))
+        ]
+        uploads += [
+            (job_name, step, index)
+            for index, step in enumerate(steps)
+            if _text(step.get("uses")).startswith("actions/upload-artifact@")
+        ]
+    if len(reports) != 1:
+        raise ValueError("daily-run needs exactly one training report step")
+    ((report_job, report, report_index, last_account),) = reports
+    if _condition(report.get("if")) != "always()":
+        raise ValueError("the daily-run training report step must run with if: always()")
+    # A report in a job without the account steps runs on another runner and never sees their journals.
+    if last_account < 0 or report_index < last_account:
+        raise ValueError("the daily-run training report step must come after every account step, in their job")
+    if "continue-on-error" in report:
+        raise ValueError("the daily-run training report step must not carry continue-on-error")
+    run = _text(report.get("run"))
+    if "set -euo pipefail" not in run:
+        raise ValueError("the daily-run training report step must run under set -euo pipefail")
+    if SWALLOWING_SHELL_RE.search(run):
+        raise ValueError("the daily-run training report step must not swallow a failing exit status")
+    if '>> "$GITHUB_STEP_SUMMARY"' not in run:
+        raise ValueError("the daily-run training report step must append the report to the job summary")
+    if "--report-format json" not in run:
+        raise ValueError("the daily-run training report step must also write the JSON report")
+    if DAILY_TRAINING_DIR not in run:
+        raise ValueError(f"the daily-run training report step must read the journals under {DAILY_TRAINING_DIR}")
+    if any(flag in run for flag in ("--login-email", "--password-file", "--auth-file", "--smtp-")):
+        raise ValueError("the daily-run training report step must not be given credentials")
+    if len(uploads) != 1:
+        raise ValueError("daily-run needs exactly one artifact upload step, for the training journals and report")
+    ((upload_job, upload, upload_index),) = uploads
+    if _condition(upload.get("if")) != "always()":
+        raise ValueError("the daily-run training upload step must run with if: always()")
+    if upload.get("continue-on-error") != "true":
+        raise ValueError(
+            "the daily-run training upload step must keep continue-on-error: true, so an artifact service failure "
+            "cannot fail the daily run"
+        )
+    # Another job runs on another runner, whose $RUNNER_TEMP holds no journals or report.
+    if upload_job != report_job:
+        raise ValueError("the daily-run training upload step must run in the training report step's job")
+    if upload_index < report_index:
+        raise ValueError("the daily-run training upload step must come after the training report step")
+    inputs = upload.get("with")
+    if not isinstance(inputs, dict) or _text(inputs.get("path")).strip() != DAILY_TRAINING_ARTIFACT_PATH:
+        raise ValueError(f"the daily-run training upload step must upload only {DAILY_TRAINING_ARTIFACT_PATH}")
+    if not set(inputs) <= DAILY_TRAINING_UPLOAD_KEYS:
+        raise ValueError(f"unexpected upload inputs in daily-run: {sorted(set(inputs) - DAILY_TRAINING_UPLOAD_KEYS)}")
+    retention = _text(inputs.get("retention-days"))
+    if not (re.fullmatch(r"[0-9]+", retention) and 1 <= int(retention) <= MAX_DAILY_TRAINING_RETENTION_DAYS):
+        raise ValueError(
+            f"the daily-run training upload needs retention-days between 1 and {MAX_DAILY_TRAINING_RETENTION_DAYS}"
+        )
+
+
+def check_mutation_gate(documents: dict) -> None:
+    """python-tests.yml's mutation-gate job runs the sdk/training/ targets and can fail `CI required`."""
+    gate = documents["python-tests.yml"].get("jobs", {}).get(MUTATION_GATE_JOB)
+    if not isinstance(gate, dict):
+        raise ValueError(f"python-tests.yml needs the {MUTATION_GATE_JOB} job")
+    if gate.get("if") != "${{ inputs.run-mutation }}":
+        raise ValueError(f"the {MUTATION_GATE_JOB} job must run when inputs.run-mutation is set")
+    if "continue-on-error" in gate:
+        raise ValueError(f"the {MUTATION_GATE_JOB} job must not carry continue-on-error")
+    steps = gate.get("steps", [])
+    mutation_steps = [step for step in steps if "scripts/mutation.py" in _text(step.get("run"))]
+    if len(mutation_steps) != 1:
+        raise ValueError(f"the {MUTATION_GATE_JOB} job must run scripts/mutation.py in exactly one step")
+    (step,) = mutation_steps
+    if "continue-on-error" in step:
+        raise ValueError(f"the {MUTATION_GATE_JOB} step must not carry continue-on-error")
+    if "if" in step:
+        raise ValueError(f"the {MUTATION_GATE_JOB} step must not carry its own if: condition")
+    run = _text(step.get("run"))
+    for required in ("set -euo pipefail", MUTATION_GATE_COMMAND, '--config "$config"'):
+        if required not in run:
+            raise ValueError(f"the {MUTATION_GATE_JOB} step must run {required}")
+    if SWALLOWING_SHELL_RE.search(run):
+        raise ValueError(f"the {MUTATION_GATE_JOB} step must not swallow a failing exit status")
+    check_mutation_gate_command(run)
+    for other in steps:
+        if "continue-on-error" in other and not _text(other.get("uses")).startswith("actions/upload-artifact@"):
+            raise ValueError(f"in the {MUTATION_GATE_JOB} job only its upload step may carry continue-on-error")
+        if other is not step and "run" in other and _text(other.get("run")).strip() not in MUTATION_GATE_SETUP_RUNS:
+            raise ValueError(
+                f"the {MUTATION_GATE_JOB} job may run only {'; '.join(MUTATION_GATE_SETUP_RUNS)} besides scripts/mutation.py"
+            )
+        if "uses" in other and not _text(other.get("uses")).startswith(MUTATION_GATE_ACTIONS):
+            raise ValueError(f"the {MUTATION_GATE_JOB} job may use only {', '.join(MUTATION_GATE_ACTIONS)}")
+    if documents["blocking-ci.yml"].get("jobs", {}).get("tests", {}).get("with", {}).get("run-mutation") != "true":
+        raise ValueError(f"Blocking CI must run the {MUTATION_GATE_JOB} job (run-mutation: true)")
+
+
+def check_mutation_gate_command(run: str) -> None:
+    """The gate step is MUTATION_GATE_PRELUDE then one plain scripts/mutation.py command on the checked config, so
+    that command's exit status is the step's, and it takes no flag that narrows or skips the blocking targets
+    (--target, --only, --operators, --min-score, --list...)."""
+    lines = [line.strip() for line in run.splitlines() if line.strip()]
+    if tuple(lines[:-1]) != MUTATION_GATE_PRELUDE:
+        raise ValueError(
+            f"the {MUTATION_GATE_JOB} step must run exactly {'; '.join(MUTATION_GATE_PRELUDE)} before scripts/mutation.py"
+        )
+    try:
+        words = shlex.split(lines[-1]) if lines else []
+    except ValueError:
+        words = []
+    if tuple(words[:2]) != MUTATION_GATE_RUNNER or any(set(word) & set(";&|<>`") for word in words):
+        raise ValueError(f"the {MUTATION_GATE_JOB} step must end in one plain {' '.join(MUTATION_GATE_RUNNER)} command")
+    pairs = list(zip(words, words[1:]))
+    if pairs.count(("--config", "$config")) != 1 or sum(word.startswith("--config") for word in words) != 1:
+        raise ValueError(f'the {MUTATION_GATE_JOB} mutation command must read --config "$config" once')
+    flags = {word.split("=", 1)[0] for word in words[2:] if word.startswith("-")}
+    if not flags <= MUTATION_GATE_ALLOWED_FLAGS:
+        raise ValueError(
+            f"the {MUTATION_GATE_JOB} mutation command takes only {', '.join(sorted(MUTATION_GATE_ALLOWED_FLAGS))}, "
+            f"not {', '.join(sorted(flags - MUTATION_GATE_ALLOWED_FLAGS))}"
+        )
+
+
+def is_blocking_mutation_target(path: str) -> bool:
+    return path.startswith(BLOCKING_MUTATION_PREFIX)
+
+
+def mutation_config_subset(config: dict, *, blocking: bool) -> dict:
+    """A copy of the mutation config holding only its blocking (sdk/training/) or only its advisory targets."""
+    targets = [
+        target
+        for target in mutation_targets(config)
+        if is_blocking_mutation_target(_text(target.get("path"))) == blocking
+    ]
+    if not targets:
+        raise ValueError(f"the mutation config has no {'blocking' if blocking else 'advisory'} targets")
+    return {**config, "targets": targets}
+
+
+def mutation_targets(config: object) -> list[dict]:
+    """The config's target objects; a config that is not an object holding a list of objects is a ValueError."""
+    targets = config.get("targets") if isinstance(config, dict) else None
+    if not isinstance(targets, list) or not all(isinstance(target, dict) for target in targets):
+        raise ValueError("the mutation config needs a targets list of objects")
+    for target in targets:
+        check_mutation_target_path(target.get("path"))
+    return targets
+
+
+def check_mutation_target_path(path: object) -> None:
+    """A target path must be written the way scripts/mutation.py normalizes it, and a glob must not be able to reach
+    sdk/training/: otherwise "./sdk/training/x.py" or "sdk/*/x.py" would be classed advisory here yet mutate a
+    training file, dodging the blocking floor. Non-text paths are left to scripts/mutation.py to refuse."""
+    if not isinstance(path, str):
+        return
+    canonical = PurePosixPath(path.replace("\\", "/")).as_posix()
+    if canonical != path:
+        raise ValueError(f"mutation target {path!r} must be written as {canonical!r}")
+    if not any(character in path for character in "*?["):
+        return
+    literal = []
+    for part in PurePosixPath(path).parts:
+        if any(character in part for character in "*?["):
+            break
+        literal.append(part)
+    prefix = "/".join(literal)
+    blocking_dir = BLOCKING_MUTATION_PREFIX.rstrip("/")
+    if (
+        not prefix
+        or blocking_dir == prefix
+        or blocking_dir.startswith(f"{prefix}/")
+        or prefix.startswith(f"{blocking_dir}/")
+    ):
+        raise ValueError(
+            f"a glob mutation target must not reach {BLOCKING_MUTATION_PREFIX}: list each training file on its own "
+            f"line instead of {path!r}"
+        )
+
+
+def check_mutation_config(config: dict) -> None:
+    """Every blocking (sdk/training/) target, the four required ones and any other, keeps the floor, runs some tests
+    and mutates its whole file. The four required targets cannot be dropped, renamed or unmapped from the training
+    test modules. Every entry is checked, not only the last for a path."""
+    targets = mutation_targets(config)
+    for target in targets:
+        path = _text(target.get("path"))
+        if is_blocking_mutation_target(path):
+            check_blocking_mutation_target(path, target)
+    for path in REQUIRED_BLOCKING_MUTATION_TARGETS:
+        entries = [target for target in targets if target.get("path") == path]
+        if not entries:
+            raise ValueError(f"the mutation config is missing the blocking target {path}")
+        for target in entries:
+            if not set(BLOCKING_MUTATION_TESTS) <= set(target["tests"]):  # a list of text: checked above
+                raise ValueError(f"mutation target {path} must run {' and '.join(BLOCKING_MUTATION_TESTS)}")
+
+
+def check_blocking_mutation_target(path: str, target: dict) -> None:
+    weakening = [key for key in WEAKENING_MUTATION_TARGET_KEYS if key in target]
+    if weakening:
+        raise ValueError(
+            f"mutation target {path} must mutate the whole file with the baseline's timeout, without "
+            f"{' or '.join(weakening)}"
+        )
+    tests = target.get("tests")
+    if not isinstance(tests, list) or not tests or not all(isinstance(test, str) and test.strip() for test in tests):
+        raise ValueError(f"mutation target {path} needs a non-empty tests list of module names")
+    score = target.get("min_score")
+    # isfinite also refuses NaN (json.loads accepts it and it compares false with everything) and infinity.
+    if (
+        isinstance(score, bool)
+        or not isinstance(score, (int, float))
+        or not math.isfinite(score)
+        or score < MIN_BLOCKING_MUTATION_SCORE
+    ):
+        raise ValueError(f"mutation target {path} needs a numeric min_score of at least {MIN_BLOCKING_MUTATION_SCORE}")
+
+
+def check_mutation_policy(repo: Path) -> None:
+    check_mutation_config(json.loads((repo / MUTATION_CONFIG).read_text(encoding="utf-8")))
+
+
 def check_repository(repo: Path) -> None:
     check_workflows(workflow_documents(repo))
+    check_mutation_policy(repo)
     paths = tracked_files(repo)
     for relative in paths:
         path = repo / relative
@@ -1157,6 +1487,13 @@ def main(argv: list[str] | None = None) -> int:
     release.add_argument("--tag", required=True)
     release.add_argument("--main-ref", default="origin/main")
     release.add_argument("--output", type=Path, default=Path("dist"))
+    mutation_config = commands.add_parser(
+        "mutation-config", help="print the blocking (sdk/training/) or the advisory part of the mutation config"
+    )
+    selector = mutation_config.add_mutually_exclusive_group(required=True)
+    selector.add_argument("--blocking", action="store_true")
+    selector.add_argument("--advisory", action="store_true")
+    mutation_config.add_argument("--config", type=Path, default=ROOT / MUTATION_CONFIG)
     args = parser.parse_args(argv)
     try:
         if args.command == "gate":
@@ -1170,6 +1507,12 @@ def main(argv: list[str] | None = None) -> int:
             check_repository(ROOT)
         elif args.command == "test":
             return run_tests(args.names, verbosity=2 if args.verbose else 1)
+        elif args.command == "mutation-config":
+            # A JSONDecodeError is a ValueError, so an unreadable config fails here like a weakened one.
+            config = json.loads(args.config.read_text(encoding="utf-8"))
+            if args.blocking:  # the training policy belongs to the gate; the advisory job measures the rest regardless
+                check_mutation_config(config)
+            print(json.dumps(mutation_config_subset(config, blocking=args.blocking), indent=2))
         else:
             print(json.dumps(build_release(ROOT, args.tag, args.output, args.main_ref), sort_keys=True))
     except (ValueError, KeyError, OSError, subprocess.CalledProcessError) as error:

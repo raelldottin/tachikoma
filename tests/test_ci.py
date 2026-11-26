@@ -9,6 +9,7 @@ import json
 import logging
 import os
 from pathlib import Path, PurePosixPath, PureWindowsPath
+import re
 import shutil
 import subprocess
 import sys
@@ -1148,6 +1149,7 @@ class HollowTestRatchetTests(unittest.TestCase):
             with (
                 patch.object(ci, "workflow_documents", return_value={}),
                 patch.object(ci, "check_workflows"),
+                patch.object(ci, "check_mutation_policy"),
                 patch.object(ci, "git", side_effect=fake_git),
                 redirect_stdout(io.StringIO()),
             ):
@@ -1219,6 +1221,7 @@ class HollowTestRatchetTests(unittest.TestCase):
             with (
                 patch.object(ci, "workflow_documents", return_value={}),
                 patch.object(ci, "check_workflows"),
+                patch.object(ci, "check_mutation_policy"),
                 patch.object(ci, "git", side_effect=lambda repo, *args: tracked if args[:1] == ("ls-files",) else b""),
             ):
                 with redirect_stdout(io.StringIO()), self.assertRaisesRegex(ValueError, r"^hollow tests changed"):
@@ -1262,6 +1265,270 @@ class HollowTestRatchetTests(unittest.TestCase):
         self.assertEqual(text, json.dumps(payload, indent=2) + "\n")
         keys = [(entry["test"], entry["rule"]) for entry in payload["hollow_tests"]]
         self.assertEqual(keys, sorted(keys))
+
+
+class MutationConfigPolicyTests(unittest.TestCase):
+    """The mutation config split: sdk/training/ targets block merges (mutation-gate), the rest stay advisory."""
+
+    def setUp(self):
+        self.config = json.loads((ci.ROOT / ci.MUTATION_CONFIG).read_text(encoding="utf-8"))
+        # Every committed target outside sdk/training/, in config order, derived independently of the code under
+        # test, so adding an advisory target (a new policy or executor module) does not break these tests.
+        self.advisory_paths = [t["path"] for t in self.config["targets"] if not t["path"].startswith("sdk/training/")]
+        self.assertIn("sdk/crew_leveling.py", self.advisory_paths)
+
+    def test_subset_splits_on_the_training_prefix(self):
+        blocking = ci.mutation_config_subset(self.config, blocking=True)
+        advisory = ci.mutation_config_subset(self.config, blocking=False)
+        self.assertEqual(
+            [target["path"] for target in blocking["targets"]], list(ci.REQUIRED_BLOCKING_MUTATION_TARGETS)
+        )
+        self.assertEqual([target["path"] for target in advisory["targets"]], self.advisory_paths)
+        for subset in (blocking, advisory):
+            self.assertEqual(
+                {key: value for key, value in subset.items() if key != "targets"},
+                {key: value for key, value in self.config.items() if key != "targets"},
+            )
+            self.assertEqual(set(subset), set(self.config))
+        # Disjoint, together every target, each entry unchanged and in config order.
+        merged = sorted(blocking["targets"] + advisory["targets"], key=self.config["targets"].index)
+        self.assertEqual(merged, self.config["targets"])
+        extra = {"path": "sdk/training_extra.py", "tests": ["tests.test_x"], "min_score": 0.5}
+        widened = {**self.config, "targets": [*self.config["targets"], extra]}
+        self.assertIn(extra, ci.mutation_config_subset(widened, blocking=False)["targets"])
+        self.assertNotIn(extra, ci.mutation_config_subset(widened, blocking=True)["targets"])
+
+    def test_empty_subset_is_refused(self):
+        # mutation.py refuses an empty target list too, but only after the job has spent its setup.
+        training_only = ci.mutation_config_subset(self.config, blocking=True)
+        with self.assertRaisesRegex(ValueError, "no advisory targets"):
+            ci.mutation_config_subset(training_only, blocking=False)
+        self.assertEqual(ci.mutation_config_subset(training_only, blocking=True), training_only)
+
+    def test_shipped_config_holds_the_training_gate(self):
+        self.assertIsNone(ci.check_mutation_config(self.config))
+
+    def weakened(self, path, change):
+        config = copy.deepcopy(self.config)
+        index = next(i for i, target in enumerate(config["targets"]) if target["path"] == path)
+        change(config["targets"], index)
+        return config
+
+    def test_weakened_training_gate_is_refused(self):
+        planner, parse = "sdk/training/planner.py", "sdk/training/parse.py"
+
+        def set_score(score):
+            return lambda targets, index: targets[index].update(min_score=score)
+
+        missing = "missing the blocking target sdk/training/planner.py"
+        floor = "sdk/training/planner.py needs a numeric min_score of at least 0.9"
+        mutations = {
+            "planner dropped": (planner, lambda targets, index: targets.pop(index), missing),
+            "planner below 0.90": (planner, set_score(0.8999), floor),
+            "bool min_score": (planner, set_score(True), floor),
+            "string min_score": (planner, set_score("0.95"), floor),
+            "parse loses a test module": (
+                parse,
+                lambda targets, index: targets[index]["tests"].remove("tests.test_training_parse"),
+                "sdk/training/parse.py must run tests.test_training_planner and tests.test_training_parse",
+            ),
+            "path renamed": (
+                planner,
+                lambda targets, index: targets[index].update(path="sdk/training/plan.py"),
+                missing,
+            ),
+        }
+        for name, (path, change, fragment) in mutations.items():
+            with self.subTest(mutation=name), self.assertRaisesRegex(ValueError, fragment):
+                ci.check_mutation_config(self.weakened(path, change))
+        self.assertIsNone(ci.check_mutation_config(self.weakened(planner, set_score(0.90))))
+
+    def run_command(self, *argv):
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            code = ci.main(["mutation-config", *argv])
+        return code, stdout.getvalue(), stderr.getvalue()
+
+    def test_mutation_config_command_prints_a_config_mutation_loads(self):
+        from scripts import mutation
+
+        for selector, expected in (
+            ("--blocking", list(ci.REQUIRED_BLOCKING_MUTATION_TARGETS)),
+            ("--advisory", self.advisory_paths),
+        ):
+            with self.subTest(selector=selector), TemporaryDirectory() as temporary:
+                code, stdout, stderr = self.run_command(selector)
+                self.assertEqual(code, 0, stderr)
+                path = Path(temporary) / "config.json"
+                path.write_text(stdout, encoding="utf-8")
+                loaded = mutation.load_config(path)
+                self.assertEqual([target.path for target in loaded.targets], expected)
+
+    def test_narrowed_shadowed_or_malformed_training_gate_is_refused(self):
+        # Regression: functions/operators narrowed a blocking target to a few mutants and a tiny timeout turned every
+        # mutant into a timeout (counted as killed, so a score of 1.0); a weak entry was hidden by a
+        # later strong one for the same path (only the last was checked); NaN compared false with the floor; and a
+        # config that is not an object of target objects raised AttributeError instead of a ValueError.
+        planner = "sdk/training/planner.py"
+
+        def add(key, value):
+            return lambda targets, index: targets[index].update({key: value})
+
+        def shadowed(targets, index):
+            targets.insert(index, {**targets[index], "min_score": 0.1})
+
+        floor = f"{planner} needs a numeric min_score of at least 0.9"
+        whole = f"{planner} must mutate the whole file with the baseline's timeout, without"
+        for name, (change, fragment) in {
+            "functions": (add("functions", ["plan"]), f"{whole} functions"),
+            "operators": (add("operators", ["compare"]), f"{whole} operators"),
+            "tiny timeout": (add("timeout", 0.001), f"{whole} timeout"),
+            "weak entry before a strong one": (shadowed, floor),
+            "NaN floor": (add("min_score", float("nan")), floor),
+        }.items():
+            with self.subTest(mutation=name), self.assertRaisesRegex(ValueError, fragment):
+                ci.check_mutation_config(self.weakened(planner, change))
+        malformed = "needs a targets list of objects"
+        for name, config in {
+            "a list": [],
+            "targets an object": {**self.config, "targets": {}},
+            "a target that is text": {**self.config, "targets": [*self.config["targets"], "sdk/x.py"]},
+        }.items():
+            with self.subTest(config=name):
+                with self.assertRaisesRegex(ValueError, malformed):
+                    ci.check_mutation_config(config)
+                with self.assertRaisesRegex(ValueError, malformed):
+                    ci.mutation_config_subset(config, blocking=True)
+        with TemporaryDirectory() as temporary:
+            path = Path(temporary) / "config.json"
+            path.write_text("[]", encoding="utf-8")
+            code, stdout, stderr = self.run_command("--advisory", "--config", str(path))
+        self.assertEqual((code, stdout), (1, ""))
+        self.assertIn(malformed, stderr)
+
+    def test_every_training_target_is_held_to_the_blocking_floor(self):
+        # Regression: is_blocking_mutation_target makes every sdk/training/ target merge-blocking, but only the four
+        # named files were checked, so a new training target blocked merges at a min_score of 0.1, with no tests or
+        # with its mutants narrowed.
+        executor = "sdk/training/executor.py"
+        strong = {"path": executor, "tests": ["tests.test_x"], "min_score": 0.9, "equivalent": []}
+
+        def config_with(change):
+            target = copy.deepcopy(strong)
+            change(target)
+            return {**self.config, "targets": [*copy.deepcopy(self.config["targets"]), target]}
+
+        def set_key(key, value):
+            return lambda target: target.update({key: value})
+
+        def drop_key(key):
+            return lambda target: target.pop(key)
+
+        floor = f"mutation target {executor} needs a numeric min_score of at least 0.9"
+        tests = f"mutation target {executor} needs a non-empty tests list of module names"
+        whole = f"mutation target {executor} must mutate the whole file with the baseline's timeout, without"
+        for name, (change, fragment) in {
+            "min_score 0.1": (set_key("min_score", 0.1), floor),
+            "min_score just below": (set_key("min_score", 0.8999), floor),
+            "min_score missing": (drop_key("min_score"), floor),
+            "bool min_score": (set_key("min_score", True), floor),
+            "string min_score": (set_key("min_score", "0.95"), floor),
+            "NaN min_score": (set_key("min_score", float("nan")), floor),
+            "infinite min_score": (set_key("min_score", float("inf")), floor),
+            "no tests": (set_key("tests", []), tests),
+            "tests missing": (drop_key("tests"), tests),
+            "tests as text": (set_key("tests", "tests.test_x"), tests),
+            "a blank test module": (set_key("tests", ["tests.test_x", ""]), tests),
+            "a test module that is not text": (set_key("tests", [1]), tests),
+            "functions": (set_key("functions", ["run"]), f"{whole} functions"),
+            "operators": (set_key("operators", ["compare"]), f"{whole} operators"),
+            "tiny timeout": (set_key("timeout", 0.001), f"{whole} timeout"),
+        }.items():
+            with self.subTest(mutation=name), self.assertRaisesRegex(ValueError, re.escape(fragment)):
+                ci.check_mutation_config(config_with(change))
+        # At the floor it passes and blocks; its tests need not be the four named files' test modules.
+        accepted = config_with(lambda target: None)
+        self.assertIsNone(ci.check_mutation_config(accepted))
+        self.assertIn(strong, ci.mutation_config_subset(accepted, blocking=True)["targets"])
+        # Targets outside sdk/training/ stay advisory and keep their own floor.
+        advisory = {"path": "sdk/training_extra.py", "tests": ["tests.test_x"], "min_score": 0.1}
+        widened = {**self.config, "targets": [*self.config["targets"], advisory]}
+        self.assertIsNone(ci.check_mutation_config(widened))
+        self.assertIn(advisory, ci.mutation_config_subset(widened, blocking=False)["targets"])
+
+    def test_non_canonical_or_glob_paths_cannot_dodge_the_blocking_floor(self):
+        # Regression: scripts/mutation.py normalizes "./sdk/training/x.py" to sdk/training/x.py (and expands globs),
+        # but ci.py classified the raw text, so such a target ran as advisory below the 0.90 floor.
+        weak = {"tests": ["tests.test_x"], "min_score": 0.1, "equivalent": []}
+        canonical = "must be written as"
+        glob = "a glob mutation target must not reach sdk/training/"
+        for path, fragment in {
+            "./sdk/training/x.py": canonical,
+            "sdk//training/x.py": canonical,
+            "sdk/./training/x.py": canonical,
+            "sdk\\training\\x.py": canonical,
+            "sdk/training/x.py/": canonical,
+            "sdk/*/x.py": glob,
+            "sdk/**/*.py": glob,
+            "sdk/tr?ining/x.py": glob,
+            "sdk/[t]raining/x.py": glob,
+            "*/training/x.py": glob,
+            "sdk/training/*.py": glob,
+            "sdk/training/sub/*.py": glob,
+            "sdk/training/**/x.py": glob,
+        }.items():
+            config = {**self.config, "targets": [*copy.deepcopy(self.config["targets"]), {"path": path, **weak}]}
+            with self.subTest(path=path), self.assertRaisesRegex(ValueError, re.escape(fragment)):
+                ci.check_mutation_config(config)
+            with self.subTest(path=path, command="mutation-config"), self.assertRaisesRegex(ValueError, fragment):
+                ci.mutation_config_subset(config, blocking=False)
+        # A glob that cannot reach sdk/training/ stays an allowed advisory target.
+        fleet = {"path": "sdk/fleet/*.py", **weak}
+        widened = {**self.config, "targets": [*self.config["targets"], fleet]}
+        self.assertIsNone(ci.check_mutation_config(widened))
+        self.assertIn(fleet, ci.mutation_config_subset(widened, blocking=False)["targets"])
+        self.assertTrue(ci.is_blocking_mutation_target("sdk/training/x.py"))
+        self.assertFalse(ci.is_blocking_mutation_target("sdk/training_extra.py"))
+
+    def test_mutation_config_command_fails_on_weakened_config(self):
+        weakened = self.weakened("sdk/training/planner.py", lambda targets, index: targets[index].update(min_score=0.5))
+        for name, text in (("weakened", json.dumps(weakened)), ("not json", "{")):
+            with self.subTest(config=name), TemporaryDirectory() as temporary:
+                path = Path(temporary) / "config.json"
+                path.write_text(text, encoding="utf-8")
+                code, stdout, stderr = self.run_command("--blocking", "--config", str(path))
+                self.assertEqual(code, 1)
+                self.assertEqual(stdout, "")
+                self.assertIn("CI check failed", stderr)
+
+    def test_advisory_subset_is_not_held_to_the_training_policy(self):
+        # Regression: --advisory ran the training floor check, so a weakened training target also broke the advisory
+        # job (a misleading harness error) and its crew_leveling/game_formulas scores were lost for that PR.
+        weakened = self.weakened("sdk/training/planner.py", lambda targets, index: targets[index].update(min_score=0.5))
+        with TemporaryDirectory() as temporary:
+            path = Path(temporary) / "config.json"
+            path.write_text(json.dumps(weakened), encoding="utf-8")
+            code, stdout, stderr = self.run_command("--advisory", "--config", str(path))
+            self.assertEqual((code, stderr), (0, ""))
+            paths = [target["path"] for target in json.loads(stdout)["targets"]]
+            self.assertEqual(paths, self.advisory_paths)
+            code, stdout, _ = self.run_command("--blocking", "--config", str(path))
+            self.assertEqual((code, stdout), (1, ""))
+
+    def test_mutation_config_needs_exactly_one_selector(self):
+        for argv in ((), ("--blocking", "--advisory")):
+            with self.subTest(argv=argv), redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as raised:
+                ci.main(["mutation-config", *argv])
+            self.assertEqual(raised.exception.code, 2)
+
+    @skip_unless_dependency(yaml, "install .github/requirements-ci.txt for workflow checks")
+    def test_repository_check_runs_mutation_config_policy(self):
+        with (
+            patch.object(ci, "check_mutation_config", side_effect=ValueError("sentinel")) as check,
+            self.assertRaisesRegex(ValueError, "sentinel"),
+        ):
+            ci.check_repository(ci.ROOT)
+        self.assertEqual(check.call_args.args, (self.config,))
 
 
 @skip_unless_dependency(yaml, "install .github/requirements-ci.txt for workflow checks")
@@ -1343,6 +1610,591 @@ class WorkflowPolicyTests(unittest.TestCase):
                     del target[index]
             with self.subTest(mutation=mutation), self.assertRaises(ValueError):
                 ci.check_workflows(docs)
+
+    def daily_run_steps(self, docs):
+        job_name, _ = next(iter(self.documents["daily-run.yml"]["jobs"].items()))
+        return docs["daily-run.yml"]["jobs"][job_name]["steps"]
+
+    def assert_each_refused(self, mutations):
+        """Each mutation alone, on a fresh copy, must fail check_workflows with its own rule's message."""
+        for name, (mutate, fragment) in mutations.items():
+            docs = copy.deepcopy(self.documents)
+            mutate(docs)
+            with self.subTest(mutation=name), self.assertRaisesRegex(ValueError, fragment):
+                ci.check_workflows(docs)
+
+    # Verifies: S06-R5
+    def test_every_account_step_journals_training_under_its_own_alias(self):
+        steps = self.daily_run_steps(self.documents)
+        accounts = [i for i, step in enumerate(steps) if ci.LEGACY_ACCOUNT_SECRET_RE.search(json.dumps(step))]
+        self.assertEqual(len(accounts), 5)
+        for number, index in enumerate(accounts, start=1):
+            with self.subTest(account=number):
+                self.assertIn(f"--account-alias account-{number} ", steps[index]["run"])
+                self.assertEqual(steps[index]["run"].count(ci.DAILY_TRAINING_JOURNAL_ARG), 1)
+        last = accounts[-1]
+        arg = ci.DAILY_TRAINING_JOURNAL_ARG
+
+        def edit_run(old, new):
+            def mutate(docs):
+                step = self.daily_run_steps(docs)[last]
+                self.assertIn(old, step["run"])
+                step["run"] = step["run"].replace(old, new)
+
+            return mutate
+
+        def edit_step(change):
+            return lambda docs: change(self.daily_run_steps(docs)[last])
+
+        alias, journal, keep_going = (
+            "must pass --account-alias account-5 exactly once",
+            "must journal training",
+            ("must keep continue-on-error: true"),
+        )
+        self.assert_each_refused(
+            {
+                "journal arg dropped": (edit_run(arg, ""), journal),
+                "journal arg twice": (edit_run(arg, f"{arg} {arg}"), journal),
+                "journal in the checkout": (edit_run("$RUNNER_TEMP", "$GITHUB_WORKSPACE"), journal),
+                "alias dropped": (edit_run("--account-alias account-5", ""), alias),
+                "another account's alias": (edit_run("--account-alias account-5", "--account-alias account-4"), alias),
+                "default alias": (edit_run("--account-alias account-5", "--account-alias primary"), alias),
+                "two alias flags": (
+                    edit_run("--account-alias account-5", "--account-alias account-5 --account-alias=account-5"),
+                    alias,
+                ),
+                "quoted wrong alias": (
+                    edit_run("--account-alias account-5", '--account-alias "account-4"'),
+                    alias,
+                ),
+                "continue-on-error deleted": (edit_step(lambda step: step.pop("continue-on-error")), keep_going),
+                "continue-on-error false": (
+                    edit_step(lambda step: step.update({"continue-on-error": "false"})),
+                    keep_going,
+                ),
+            }
+        )
+
+    def test_quoted_account_alias_is_accepted(self):
+        # Regression: the alias pattern kept shell quotes, so a correctly quoted --account-alias "account-5" (the
+        # same style as the quoted journal directory) was refused.
+        steps = self.daily_run_steps(self.documents)
+        last = [i for i, step in enumerate(steps) if ci.LEGACY_ACCOUNT_SECRET_RE.search(json.dumps(step))][-1]
+        for quoted in ('--account-alias "account-5"', "--account-alias 'account-5'", '--account-alias="account-5"'):
+            docs = copy.deepcopy(self.documents)
+            step = self.daily_run_steps(docs)[last]
+            step["run"] = step["run"].replace("--account-alias account-5", quoted)
+            with self.subTest(alias=quoted):
+                self.assertIn(quoted, step["run"])
+                self.assertIsNone(ci.check_workflows(docs))
+
+    def training_step_index(self, docs, marker):
+        return next(i for i, step in enumerate(self.daily_run_steps(docs)) if marker(step))
+
+    @staticmethod
+    def is_report(step):
+        return ci.DAILY_TRAINING_REPORT_COMMAND in step.get("run", "")
+
+    @staticmethod
+    def is_upload(step):
+        return step.get("uses", "").startswith("actions/upload-artifact@")
+
+    def move_step(self, marker, before):
+        """Move the step ``marker`` finds to just before the step ``before`` finds."""
+
+        def mutate(docs):
+            steps = self.daily_run_steps(docs)
+            step = steps.pop(self.training_step_index(docs, marker))
+            steps.insert(self.training_step_index(docs, before), step)
+
+        return mutate
+
+    def edit_training_step(self, marker, change):
+        return lambda docs: change(self.daily_run_steps(docs)[self.training_step_index(docs, marker)])
+
+    def test_training_report_step_always_runs_after_every_account(self):
+        steps = self.daily_run_steps(self.documents)
+        (report,) = [step for step in steps if self.is_report(step)]
+        self.assertEqual(report["if"], "always()")
+        self.assertNotIn("env", report)
+        last_account = max(i for i, step in enumerate(steps) if ci.LEGACY_ACCOUNT_SECRET_RE.search(json.dumps(step)))
+        self.assertGreater(steps.index(report), last_account)
+
+        def edit(change):
+            return self.edit_training_step(self.is_report, change)
+
+        def edit_run(old, new):
+            return edit(lambda step: step.update(run=step["run"].replace(old, new)))
+
+        def duplicate(docs):
+            steps = self.daily_run_steps(docs)
+            steps.append(copy.deepcopy(steps[self.training_step_index(docs, self.is_report)]))
+
+        def last_account_step(step):
+            return step.get("name") == "Process account 5"
+
+        self.assert_each_refused(
+            {
+                "report deleted": (
+                    lambda docs: self.daily_run_steps(docs).pop(self.training_step_index(docs, self.is_report)),
+                    "exactly one training report step",
+                ),
+                "runs only on success": (edit(lambda step: step.update({"if": "success()"})), "if: always()"),
+                "condition deleted": (edit(lambda step: step.pop("if")), "if: always()"),
+                "before account 5": (self.move_step(self.is_report, last_account_step), "after every account step"),
+                "second report": (duplicate, "exactly one training report step"),
+                "no job summary": (edit_run('>> "$GITHUB_STEP_SUMMARY"', "> /dev/null"), "job summary"),
+                "no JSON report": (edit_run(" --report-format json", ""), "JSON report"),
+                "journals read from the checkout": (
+                    edit_run('root="$RUNNER_TEMP/tachikoma-training"', 'root="$GITHUB_WORKSPACE/tachikoma-training"'),
+                    "must read the journals under \\$RUNNER_TEMP/tachikoma-training",
+                ),
+                "continue-on-error": (
+                    edit(lambda step: step.update({"continue-on-error": "true"})),
+                    "report step must not carry continue-on-error",
+                ),
+                "given a password file": (
+                    edit_run("--report-format json", '--report-format json --password-file "$pw"'),
+                    "must not be given credentials",
+                ),
+                "reads a secret": (
+                    edit(lambda step: step.update(env={"X": "${{ secrets.email_password }}"})),
+                    "only the account steps may read secrets",
+                ),
+            }
+        )
+
+    def test_training_artifact_uploads_only_the_training_directory(self):
+        steps = self.daily_run_steps(self.documents)
+        (upload,) = [step for step in steps if self.is_upload(step)]
+        self.assertEqual(upload["with"]["path"], "${{ runner.temp }}/tachikoma-training")
+        self.assertEqual(upload["with"]["retention-days"], "14")
+        self.assertGreater(steps.index(upload), self.training_step_index(self.documents, self.is_report))
+
+        def edit_with(change):
+            return self.edit_training_step(self.is_upload, lambda step: change(step["with"]))
+
+        def set_with(key, value):
+            return edit_with(lambda inputs: inputs.update({key: value}))
+
+        def duplicate(docs):
+            steps = self.daily_run_steps(docs)
+            steps.append(copy.deepcopy(steps[self.training_step_index(docs, self.is_upload)]))
+
+        def own_job(docs):
+            # Another job runs on another runner, where $RUNNER_TEMP holds no journals or report.
+            upload = self.daily_run_steps(docs).pop(self.training_step_index(docs, self.is_upload))
+            docs["daily-run.yml"]["jobs"]["training-upload"] = {
+                "runs-on": "ubuntu-latest",
+                "timeout-minutes": "10",
+                "steps": [upload],
+            }
+
+        path, retention = "must upload only", "retention-days between 1 and 30"
+        self.assert_each_refused(
+            {
+                "upload deleted": (
+                    lambda docs: self.daily_run_steps(docs).pop(self.training_step_index(docs, self.is_upload)),
+                    "exactly one artifact upload step",
+                ),
+                "condition deleted": (
+                    self.edit_training_step(self.is_upload, lambda step: step.pop("if")),
+                    "upload step must run with if: always()",
+                ),
+                "whole runner temp": (set_with("path", "${{ runner.temp }}"), path),
+                "checkout": (set_with("path", "."), path),
+                "checkout as a second line": (
+                    set_with("path", "${{ runner.temp }}/tachikoma-training\n${{ github.workspace }}\n"),
+                    path,
+                ),
+                "before the report": (
+                    self.move_step(self.is_upload, self.is_report),
+                    "upload step must come after the training report step",
+                ),
+                "upload in another job": (own_job, "upload step must run in the training report step's job"),
+                "retention deleted": (edit_with(lambda inputs: inputs.pop("retention-days")), retention),
+                "retention 90": (set_with("retention-days", "90"), retention),
+                "retention 0": (set_with("retention-days", "0"), retention),
+                "retention not a number": (set_with("retention-days", "x"), retention),
+                "hidden files": (set_with("include-hidden-files", "true"), "unexpected upload inputs"),
+                "second upload": (duplicate, "exactly one artifact upload step"),
+                "reads a secret": (
+                    self.edit_training_step(
+                        self.is_upload, lambda step: step.update(env={"X": "${{ secrets.email_password }}"})
+                    ),
+                    "only the account steps may read secrets",
+                ),
+            }
+        )
+
+    def test_training_steps_accept_either_spelling_of_always(self):
+        # Regression: the report and upload checks compared `if` with the text "always()", so the equivalent
+        # `${{ always() }}` was refused. Any other condition, inside or outside an expression, is still refused.
+        for marker, kind in ((self.is_report, "report"), (self.is_upload, "upload")):
+            fragment = re.escape(f"the daily-run training {kind} step must run with if: always()")
+            for spelling in ("${{ always() }}", "${{always()}}", "  ${{\n  always()\n}}  ", " always() "):
+                docs = copy.deepcopy(self.documents)
+                self.daily_run_steps(docs)[self.training_step_index(docs, marker)]["if"] = spelling
+                with self.subTest(step=kind, accepted=spelling):
+                    self.assertIsNone(ci.check_workflows(docs))
+            for spelling in (
+                "${{ success() }}",
+                "${{ always() && false }}",
+                "${{ always() }} && false",
+                "${{ always() }} || ${{ false }}",
+                "${{ }}",
+                "",
+            ):
+                docs = copy.deepcopy(self.documents)
+                self.daily_run_steps(docs)[self.training_step_index(docs, marker)]["if"] = spelling
+                with self.subTest(step=kind, refused=spelling), self.assertRaisesRegex(ValueError, fragment):
+                    ci.check_workflows(docs)
+
+    # Verifies: S06-R5
+    def test_only_account_steps_read_secrets(self):
+        job_name, _ = next(iter(self.documents["daily-run.yml"]["jobs"].items()))
+
+        def install_step(docs):
+            return next(step for step in self.daily_run_steps(docs) if step.get("name") == "Install dependencies")
+
+        secret = "${{ secrets.email_password }}"
+        fragment = "only the account steps may read secrets"
+        self.assert_each_refused(
+            {
+                "install step": (lambda docs: install_step(docs).update(env={"X": secret}), fragment),
+                "job env": (lambda docs: docs["daily-run.yml"]["jobs"][job_name].update(env={"X": secret}), fragment),
+                "workflow env": (lambda docs: docs["daily-run.yml"].update(env={"X": secret}), fragment),
+                "all secrets in the report": (
+                    self.edit_training_step(
+                        self.is_report, lambda step: step.update(run=step["run"] + 'echo "${{ toJSON(secrets) }}"\n')
+                    ),
+                    fragment,
+                ),
+                # Regression: the expression match stopped at the first `}`, so a `}` inside the expression (here a
+                # format() placeholder) hid the secrets reference after it.
+                "secret behind a format() placeholder": (
+                    self.edit_training_step(
+                        self.is_report,
+                        lambda step: step.update(env={"X": "${{ format('{0}', secrets.email_password) }}"}),
+                    ),
+                    fragment,
+                ),
+                "account secret behind a format() placeholder": (
+                    self.edit_training_step(
+                        self.is_report,
+                        lambda step: step.update(env={"X": "${{ format('{0}', secrets.PSS_ACCOUNT_1_EMAIL) }}"}),
+                    ),
+                    fragment,
+                ),
+                "multiline expression": (
+                    self.edit_training_step(
+                        self.is_report,
+                        lambda step: step.update(
+                            run=step["run"] + "echo \"${{ format(\n  '{0}-{1}',\n  github.run_id,\n"
+                            '  secrets.email_password\n) }}"\n'
+                        ),
+                    ),
+                    fragment,
+                ),
+            }
+        )
+        # The match ends at the expression's closing `}}`, on raw (unserialised) text as on a step's JSON.
+        self.assertIsNotNone(ci.SECRETS_EXPRESSION_RE.search("${{\n  format('{0}',\n  secrets.x)\n}}"))
+        self.assertIsNone(ci.SECRETS_EXPRESSION_RE.search("${{ runner.temp }}/secrets ${{ github.run_id }}"))
+
+    def test_mutation_gate_stays_blocking(self):
+        gate = self.documents["python-tests.yml"]["jobs"][ci.MUTATION_GATE_JOB]
+        self.assertEqual(gate["if"], "${{ inputs.run-mutation }}")
+        (step,) = [step for step in gate["steps"] if "scripts/mutation.py" in step.get("run", "")]
+        self.assertIn(ci.MUTATION_GATE_COMMAND, step["run"])
+        self.assertLess(int(step["timeout-minutes"]), int(gate["timeout-minutes"]))
+
+        def edit_gate(change):
+            return lambda docs: change(docs["python-tests.yml"]["jobs"][ci.MUTATION_GATE_JOB])
+
+        def edit_step(change):
+            def mutate(docs):
+                steps = docs["python-tests.yml"]["jobs"][ci.MUTATION_GATE_JOB]["steps"]
+                change(next(step for step in steps if "scripts/mutation.py" in step.get("run", "")))
+
+            return mutate
+
+        def edit_run(change):
+            return edit_step(lambda step: step.update(run=change(step["run"])))
+
+        def install_continues(docs):
+            steps = docs["python-tests.yml"]["jobs"][ci.MUTATION_GATE_JOB]["steps"]
+            next(step for step in steps if "pip install" in step.get("run", ""))["continue-on-error"] = "true"
+
+        def mutation_step_index(steps):
+            return next(i for i, step in enumerate(steps) if "scripts/mutation.py" in step.get("run", ""))
+
+        def no_mutation_step(job):
+            job["steps"].pop(mutation_step_index(job["steps"]))
+
+        def two_mutation_steps(job):
+            steps = job["steps"]
+            index = mutation_step_index(steps)
+            steps.insert(index + 1, copy.deepcopy(steps[index]))
+
+        blocking_ci = "Blocking CI must run the mutation-gate job"
+        swallow = "must not swallow"
+        one_step = "mutation-gate job must run scripts/mutation.py in exactly one step"
+        self.assert_each_refused(
+            {
+                "no mutation step": (edit_gate(no_mutation_step), one_step),
+                "two mutation steps": (edit_gate(two_mutation_steps), one_step),
+                "job deleted": (
+                    lambda docs: docs["python-tests.yml"]["jobs"].pop(ci.MUTATION_GATE_JOB),
+                    "needs the mutation-gate job",
+                ),
+                "job continue-on-error": (
+                    edit_gate(lambda job: job.update({"continue-on-error": "true"})),
+                    "mutation-gate job must not carry continue-on-error",
+                ),
+                "step continue-on-error": (
+                    edit_step(lambda step: step.update({"continue-on-error": "true"})),
+                    "mutation-gate step must not carry continue-on-error",
+                ),
+                "|| true": (edit_run(lambda run: run.rstrip("\n") + " || true\n"), swallow),
+                "exit 0": (edit_run(lambda run: run + "exit 0\n"), swallow),
+                # These three name the required-text rule, not the prelude rule that check_mutation_gate_command
+                # would raise for the same edit.
+                "no pipefail": (
+                    edit_run(lambda run: run.replace("set -euo pipefail\n", "")),
+                    "mutation-gate step must run set -euo pipefail",
+                ),
+                "advisory targets": (
+                    edit_run(lambda run: run.replace("mutation-config --blocking", "mutation-config --advisory")),
+                    re.escape(f"mutation-gate step must run {ci.MUTATION_GATE_COMMAND}"),
+                ),
+                "default config": (
+                    edit_run(lambda run: run.replace(' --config "$config"', "")),
+                    re.escape('mutation-gate step must run --config "$config"'),
+                ),
+                "never runs": (edit_gate(lambda job: job.update({"if": "${{ false }}"})), "inputs.run-mutation"),
+                "install continue-on-error": (install_continues, "only its upload step may carry continue-on-error"),
+                "blocking CI skips it": (
+                    lambda docs: docs["blocking-ci.yml"]["jobs"]["tests"]["with"].update({"run-mutation": "false"}),
+                    blocking_ci,
+                ),
+                "blocking CI passes no inputs": (
+                    lambda docs: docs["blocking-ci.yml"]["jobs"]["tests"].pop("with"),
+                    blocking_ci,
+                ),
+            }
+        )
+
+    def test_mutation_gate_job_runs_no_other_commands(self):
+        # Regression: only the mutation step was pinned, so an earlier step in the same job could rewrite the config,
+        # delete the training tests or replace sdk/training before the checked command ran.
+        def insert_step(step, *, before_mutation=True):
+            def mutate(docs):
+                steps = docs["python-tests.yml"]["jobs"][ci.MUTATION_GATE_JOB]["steps"]
+                index = next(i for i, other in enumerate(steps) if "scripts/mutation.py" in other.get("run", ""))
+                steps.insert(index if before_mutation else index + 1, step)
+
+            return mutate
+
+        def edit_install(change):
+            def mutate(docs):
+                steps = docs["python-tests.yml"]["jobs"][ci.MUTATION_GATE_JOB]["steps"]
+                change(next(step for step in steps if "pip install" in step.get("run", "")))
+
+            return mutate
+
+        other_command = "mutation-gate job may run only"
+        other_action = "mutation-gate job may use only"
+        sed = "sed -i 's/1.0/0.0/' automation/mutation/config.json"
+        self.assert_each_refused(
+            {
+                "config rewritten first": (insert_step({"run": sed}), other_command),
+                "tests deleted first": (insert_step({"run": "rm tests/test_training_planner.py"}), other_command),
+                "command after the gate": (insert_step({"run": "true"}, before_mutation=False), other_command),
+                "install widened": (
+                    edit_install(lambda step: step.update(run=step["run"] + " && rm -r tests")),
+                    other_command,
+                ),
+                "third-party action": (
+                    insert_step({"uses": "someone/rewrite@" + "a" * 40}),
+                    other_action,
+                ),
+                "pinned first-party action": (insert_step({"uses": "actions/github-script@" + "b" * 40}), other_action),
+            }
+        )
+
+    def test_mutation_gate_command_cannot_be_narrowed_or_skipped(self):
+        # Regression: the gate only looked for required substrings, so a skipped step or a narrowed or inverted
+        # scripts/mutation.py command passed the policy while measuring nothing that could fail.
+        def edit_step(change):
+            def mutate(docs):
+                steps = docs["python-tests.yml"]["jobs"][ci.MUTATION_GATE_JOB]["steps"]
+                change(next(step for step in steps if "scripts/mutation.py" in step.get("run", "")))
+
+            return mutate
+
+        def edit_command(old, new):
+            def change(step):
+                self.assertIn(old, step["run"])
+                step["run"] = step["run"].replace(old, new)
+
+            return edit_step(change)
+
+        command = "python scripts/mutation.py --config"
+        plain, swallow, narrowing = "must end in one plain python scripts/mutation.py", "must not swallow", "takes only"
+        self.assert_each_refused(
+            {
+                "step skipped": (edit_step(lambda step: step.update({"if": "${{ false }}"})), "its own if: condition"),
+                "min score zero": (
+                    edit_command(command, "python scripts/mutation.py --min-score 0 --config"),
+                    narrowing,
+                ),
+                "one target": (
+                    edit_command(command, "python scripts/mutation.py --target sdk/training/model.py --config"),
+                    narrowing,
+                ),
+                "list only": (edit_command(command, "python scripts/mutation.py --list --config"), narrowing),
+                "some mutants": (
+                    edit_command(command, "python scripts/mutation.py --only x:1:1:op:0 --config"),
+                    narrowing,
+                ),
+                "one operator": (
+                    edit_command(command, "python scripts/mutation.py --operators=compare --config"),
+                    narrowing,
+                ),
+                "inverted": (edit_command(command, "! " + command), plain),
+                "inside if": (
+                    edit_step(
+                        lambda step: step.update(run=step["run"].replace(command, "if " + command) + "then :; fi\n")
+                    ),
+                    "must run exactly set -euo pipefail",
+                ),
+                "errexit off": (
+                    edit_step(
+                        lambda step: step.update(
+                            run=step["run"].replace("set -euo pipefail", "set -euo pipefail\nset +e") + "true\n"
+                        )
+                    ),
+                    swallow,
+                ),
+                "exit trap": (
+                    edit_step(lambda step: step.update(run="trap 'exit $((0))' EXIT\n" + step["run"])),
+                    swallow,
+                ),
+                "errexit off by name": (
+                    edit_step(
+                        lambda step: step.update(
+                            run=step["run"].replace("set -euo pipefail", "set -euo pipefail\nset +o errexit") + "true\n"
+                        )
+                    ),
+                    swallow,
+                ),
+                "checked config overwritten": (
+                    edit_command(command, "printf '{}' > \"$config\"\n" + command),
+                    "must run exactly set -euo pipefail",
+                ),
+                "another config file": (
+                    edit_command('--config "$config"', '--config "$config" --config other.json'),
+                    'must read --config "\\$config" once',
+                ),
+                "second config given with =": (
+                    edit_command('--config "$config"', '--config "$config" --config=other.json'),
+                    'must read --config "\\$config" once',
+                ),
+                "config value suffixed": (
+                    edit_command('--config "$config"', '--config "$config"x'),
+                    'must read --config "\\$config" once',
+                ),
+                "chained command": (edit_command("--jobs 4", "--jobs 4 ; true"), plain),
+                "piped command": (edit_command("--jobs 4", "--jobs 4 | cat"), plain),
+                "backgrounded command": (edit_command("--jobs 4", "--jobs 4 &"), plain),
+                "redirected status": (edit_command("--jobs 4", "--jobs 4 >/dev/null"), plain),
+            }
+        )
+
+    def test_training_report_must_share_the_account_job_and_keep_its_status(self):
+        # Regression: a report moved to its own job (another runner, no journals) passed because that job's
+        # last account index was -1, and `|| true` in the report run was not refused.
+        job_name, _ = next(iter(self.documents["daily-run.yml"]["jobs"].items()))
+
+        def own_job(docs):
+            jobs = docs["daily-run.yml"]["jobs"]
+            steps = jobs[job_name]["steps"]
+            report = steps.pop(self.training_step_index(docs, self.is_report))
+            upload = steps.pop(self.training_step_index(docs, self.is_upload))
+            jobs["training-report"] = {"runs-on": "ubuntu-latest", "timeout-minutes": "10", "steps": [report, upload]}
+
+        def edit_run(change):
+            return self.edit_training_step(self.is_report, lambda step: step.update(run=change(step["run"])))
+
+        swallow = "report step must not swallow"
+        self.assert_each_refused(
+            {
+                "report in its own job": (own_job, "after every account step, in their job"),
+                "|| true": (
+                    edit_run(
+                        lambda run: run.replace(
+                            '> "$root/report/training-report.md"', '> "$root/report/training-report.md" || true'
+                        )
+                    ),
+                    swallow,
+                ),
+                "exit 0": (edit_run(lambda run: run + "exit 0\n"), swallow),
+                "errexit off": (
+                    edit_run(lambda run: run.replace("set -euo pipefail", "set -uo pipefail")),
+                    "set -euo pipefail",
+                ),
+            }
+        )
+
+    def test_malformed_training_steps_raise_value_error(self):
+        # Regression: a mapping where a scalar belongs, or `with:` given as text, raised AttributeError, which
+        # scripts/ci.py's main does not catch, instead of a ValueError naming the rule.
+        def account_run_mapping(docs):
+            step = next(s for s in self.daily_run_steps(docs) if s.get("name") == "Process account 5")
+            step["run"] = {"script": step["run"]}
+
+        self.assert_each_refused(
+            {
+                "account run is a mapping": (account_run_mapping, "must pass --account-alias account-5"),
+                "upload with is text": (
+                    self.edit_training_step(self.is_upload, lambda step: step.update({"with": "path"})),
+                    "must upload only",
+                ),
+                "upload path is a list": (
+                    self.edit_training_step(self.is_upload, lambda step: step["with"].update(path=["a"])),
+                    "must upload only",
+                ),
+            }
+        )
+
+    def test_training_upload_cannot_fail_the_daily_run(self):
+        # Regression: the upload had no continue-on-error, so an artifact service failure turned the daily run red
+        # although every account step and the report had passed.
+        (upload,) = [step for step in self.daily_run_steps(self.documents) if self.is_upload(step)]
+        self.assertEqual(upload["continue-on-error"], "true")
+        fragment = "upload step must keep continue-on-error: true"
+        self.assert_each_refused(
+            {
+                "deleted": (
+                    self.edit_training_step(self.is_upload, lambda step: step.pop("continue-on-error")),
+                    fragment,
+                ),
+                "false": (
+                    self.edit_training_step(self.is_upload, lambda step: step.update({"continue-on-error": "false"})),
+                    fragment,
+                ),
+            }
+        )
+
+    def test_daily_training_refuses_a_step_with_several_accounts_on_its_own(self):
+        # Regression: check_daily_training popped an arbitrary account from a step naming several and relied on
+        # check_legacy_run having refused that step first.
+        docs = copy.deepcopy(self.documents)
+        step = next(s for s in self.daily_run_steps(docs) if s.get("name") == "Process account 5")
+        step["env"]["OTHER"] = "${{ secrets.PSS_ACCOUNT_4_EMAIL }}"
+        with self.assertRaisesRegex(ValueError, "reads several accounts' secrets"):
+            ci.check_daily_training(docs["daily-run.yml"])
 
     def test_trial_schedule_runs_only_on_its_schedule(self):
         self.assertEqual(set(self.documents["live-trial-schedule.yml"]["on"]), {"schedule"})
@@ -1588,7 +2440,11 @@ class SourceReleaseTests(unittest.TestCase):
     def test_blob_policy_rejects_oversized_tracked_file(self):
         (self.root / "large.bin").write_bytes(b"0" * (ci.MAX_BLOB_BYTES + 1))
         ci.git(self.root, "add", "large.bin")
-        with patch.object(ci, "workflow_documents", return_value={}), patch.object(ci, "check_workflows"):
+        with (
+            patch.object(ci, "workflow_documents", return_value={}),
+            patch.object(ci, "check_workflows"),
+            patch.object(ci, "check_mutation_policy"),
+        ):
             with self.assertRaisesRegex(ValueError, "blob policy"):
                 ci.check_repository(self.root)
 
