@@ -256,15 +256,19 @@ def _finish_harmless(snapshot: Callable[[], Optional[AccountSnapshot]], characte
 _STAT_KEYS = tuple("@" + stat for stat in CANONICAL_STATS)
 
 
-def crew_from_reply(reply: Mapping, character_id: int, *, character_designs_raw: Any, rooms_raw: Any,
+def crew_from_reply(reply: Mapping, crew: CrewState, *, character_designs_raw: Any, rooms_raw: Any,
                     room_designs_raw: Any) -> Optional[CrewState]:
-    """The crew member rebuilt from a FinishTraining reply, or None unless it names ``character_id`` and carries all
-    nine stat improvements as whole numbers (a partial reply must never plan the next tier from wrong stats)."""
-    if reply.get("@CharacterId") != str(character_id):
+    """``crew`` with the stats, fatigue and training of a FinishTraining reply, or None unless the reply names ``crew``
+    and carries all nine stat improvements and the fatigue as whole numbers (a partial reply must never plan the next
+    tier from wrong stats). Name, design and room stay those of ``crew``: a reply that leaves them out changes no role,
+    capacity or room."""
+    if reply.get("@CharacterId") != str(crew.character_id):
         return None
-    if not all(re.fullmatch(r"[0-9]+", str(reply.get(key))) for key in _STAT_KEYS):
+    if not all(re.fullmatch(r"[0-9]+", str(reply.get(key))) for key in (*_STAT_KEYS, "@Fatigue")):
         return None
-    return parse_crew({"Character": dict(reply)}, character_designs_raw, rooms_raw, room_designs_raw)[0]
+    parsed = parse_crew({"Character": dict(reply)}, character_designs_raw, rooms_raw, room_designs_raw)[0]
+    return replace(crew, stats=parsed.stats, fatigue=parsed.fatigue, training_design_id=parsed.training_design_id,
+                   training_end=parsed.training_end)
 
 
 def _stat_changes(before: CrewState, after: Optional[CrewState]) -> str:
@@ -346,7 +350,7 @@ class _Session:
         who = f"{crew.name} ({cid})"
         room = resolve_room_name(crew, self.ctx) or "no room"
         decision = primary if finish_decision is None else Skip(cid, SKIP_TRAINING_IN_PROGRESS,
-                                                                "finish_training not run")
+                                                                "finish_training did not complete")
         planned = crew
         finish = action = error = None
         started_at = self.now()
@@ -417,7 +421,7 @@ class _Session:
         reply = self.proxy.finish_replies.pop(key, None)
         if reply is None:
             return result, None
-        return result, crew_from_reply(reply, crew.character_id,
+        return result, crew_from_reply(reply, crew,
                                        character_designs_raw=self.payloads["character designs"],
                                        rooms_raw=self.payloads["ship"], room_designs_raw=self.payloads["room designs"])
 

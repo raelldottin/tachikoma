@@ -631,7 +631,8 @@ class FinishTests(unittest.TestCase):
         broken = ({"@Fatigue": "0", "@HpImprovement": "n/a"},
                   dict(ended(), **{"@CharacterId": "1002"}),
                   dict(ended(), **{"@HpImprovement": "n/a"}),
-                  {key: value for key, value in ended().items() if key != "@StaminaImprovement"})
+                  {key: value for key, value in ended().items() if key != "@StaminaImprovement"},
+                  {key: value for key, value in ended().items() if key != "@Fatigue"})  # fatigue gates the replan
         for reply in broken:
             with self.subTest(reply=reply):
                 client = FakeTrainingClient([ended()], researches=("1", "2"))
@@ -644,6 +645,22 @@ class FinishTests(unittest.TestCase):
                     1001, "training_in_progress",
                     "finish_training verified: training of 1001 finished; stat improvements +2"))
                 self.assertEqual(result.counts, TrainingCounts(finished=1, skipped=1))
+
+    def test_replan_keeps_the_crew_identity_a_reply_leaves_out(self):
+        # Name (role), design (capacity) and room come from the read the plan used; the reply supplies stats and fatigue.
+        for key in ("@CharacterName", "@CharacterDesignId", "@RoomId"):
+            with self.subTest(key=key):
+                client = FakeTrainingClient([ended()], researches=("1", "2"))
+                applied = client.finishTraining
+
+                def finish(character_id, applied=applied, key=key):
+                    return {name: value for name, value in applied(character_id).items() if name != key}
+
+                client.finishTraining = finish
+                result = run(client)
+                self.assertEqual(client.mutations(), [("finishTraining", "1001"), ("addTraining", "4", "1001")])
+                self.assertEqual(result.crew[0].decision,
+                                 StartTraining(1001, 4, "secondary T2 Muscle Beach at 74% in gym"))
 
     def test_a_raising_finish_stops_only_that_crew(self):
         client = FakeTrainingClient([ended(), maiden()])
@@ -1007,7 +1024,7 @@ class ResponseAndShapeTests(unittest.TestCase):
 
         client = FakeTrainingClient([ended(), maiden()])
         result = run(client, journal=NoFinishEvents())
-        self.assertEqual(result.crew[0].decision, Skip(1001, "training_in_progress", "finish_training not run"))
+        self.assertEqual(result.crew[0].decision, Skip(1001, "training_in_progress", "finish_training did not complete"))
         self.assertEqual((result.crew[0].finish, result.crew[0].error), (None, "JournalError: refused"))
         self.assertEqual(client.mutations(), [("finishTraining", "1001"), ("addTraining", "3", "1002")])
         self.assertEqual(result.counts, TrainingCounts(started=1, skipped=1, failed=1))
