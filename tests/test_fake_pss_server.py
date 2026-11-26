@@ -409,9 +409,10 @@ class StateTransitionTests(FakeTestCase):
         reply = self.call("POST", "/ResearchService/AddResearch", researchDesignId="10", researchStartDate=NOW)
         self.assertIsNone(self.error_of(reply))
         self.assertEqual([(r.design_id, r.state) for r in self.fake.state.researches],
-                         [("1", "Completed"), ("10", "Researching")])
+                         [("1", "Completed"), ("2", "Completed"), ("3", "Completed"), ("4", "Completed"),
+                          ("10", "Researching")])
         self.assertEqual(self.fake.state.resources.gas, 38000)
-        reply = self.call("POST", "/ResearchService/AddResearch", researchDesignId="2", researchStartDate=NOW)
+        reply = self.call("POST", "/ResearchService/AddResearch", researchDesignId="5", researchStartDate=NOW)
         self.assertEqual(self.error_of(reply), "Another research is in progress")
         self.assertEqual(self.fake.state.resources.gas, 38000)
 
@@ -1067,7 +1068,8 @@ class ShapeContractTests(FakeTestCase):
 
     def test_research_records_carry_no_name_or_level_unless_set(self):
         rows = _extract_collection(self.read("GET", "/ResearchService/ListAllResearches", {}), "Research")
-        self.assertEqual(rows, [{"@ResearchDesignId": "1", "@ResearchState": "Completed"}])  # D1
+        self.assertEqual(rows, [{"@ResearchDesignId": design_id, "@ResearchState": "Completed"}  # D1
+                                for design_id in ("1", "2", "3", "4")])
 
     def test_design_version_and_user_id_mismatches_are_violations(self):
         self.read("GET", "/RoomService/ListRoomDesigns2", {"designVersion": "1"})

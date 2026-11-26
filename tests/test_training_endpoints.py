@@ -15,11 +15,13 @@ from unittest.mock import MagicMock, patch
 from urllib.parse import parse_qsl, urlsplit
 
 import requests
+import xmltodict
 
 from sdk import client as client_module
 from sdk.client import Client, DotNet, _extract_collection
 from sdk.device import Device
 from sdk.execution.training import MemoryJournal
+from sdk.training.parse import parse_research_levels
 from tests.fakes.pss_server import FakePss
 from tests.fakes.state import FAKE_PASSWORD, Item, default_world, minimal_world, stats
 from tests.synthetic_fixtures import SYNTHETIC_EMAIL
@@ -467,32 +469,72 @@ def research_designs(*designs):
         for design_id, name in designs]}}}}
 
 
-def completed(records, designs):
-    return client_module._completed_research_names(records, designs)
+class TestResearchLevelOfLoadedLists(unittest.TestCase):
+    """getResearchLevel on lists already loaded: the join, the line and the level all come from sdk.training.parse."""
 
-
-class TestCompletedResearchNames(unittest.TestCase):
-    """The join of per-account research records onto research designs, on plain parsed payloads."""
+    def level(self, records, designs, line):
+        client = Client.__new__(Client)
+        client.allResearches, client.allResearchDesigns = records, designs
+        client.listAllResearches = client.listAllResearchDesigns2 = MagicMock(side_effect=AssertionError("fetched"))
+        return client.getResearchLevel(line)
 
     def test_joins_on_the_research_design_id(self):
-        self.assertEqual(completed(researches(("1", "900", "Completed")), research_designs(("900", "Fitness 201"))),
-                         ["Fitness 201"])
+        self.assertEqual(self.level(researches(("1", "900", "Completed")), research_designs(("900", "Fitness 201")),
+                                    "Fitness"), 201)
 
     def test_only_completed_research_counts(self):
         designs = research_designs(("900", "Fitness 201"))
         for state in ("Researching", "", "None", "Cancelled", "completed"):
             with self.subTest(state=state):
-                self.assertEqual(completed(researches(("1", "900", state)), designs), [])
+                self.assertEqual(self.level(researches(("1", "900", state)), designs, "Fitness"), 0)
 
-    def test_join_ignores_the_root_research_design_id(self):
+    def test_a_record_naming_only_a_root_id_counts_nothing(self):
         designs = research_designs(("9", "Fitness 203"))
         designs["ResearchService"]["ListAllResearchDesigns"]["ResearchDesigns"]["ResearchDesign"][0][
             "@RootResearchDesignId"] = "5"
-        self.assertEqual(completed(researches(("1", "5", "Completed")), designs), [])
+        self.assertEqual(self.level(researches(("1", "5", "Completed")), designs, "Fitness"), 0)
 
     def test_join_uses_the_design_id_not_the_research_id(self):
         designs = research_designs(("7", "Fitness 203"), ("9", "Fitness 101"))
-        self.assertEqual(completed(researches(("7", "9", "Completed")), designs), ["Fitness 101"])
+        self.assertEqual(self.level(researches(("7", "9", "Completed")), designs, "Fitness"), 101)
+
+    def test_highest_course_of_the_line_wins(self):
+        designs = research_designs(("1", "Fitness 203"), ("2", "Fitness 101"), ("3", "Fitness 201"))
+        records = researches(("a", "1", "Completed"), ("b", "2", "Completed"), ("c", "3", "Completed"))
+        self.assertEqual(self.level(records, designs, "Fitness"), 203)
+
+    def test_other_lines_sharing_a_prefix_do_not_count(self):
+        designs = research_designs(("1", "Education 203"), ("2", "Fitness Center 301"))
+        records = researches(("a", "1", "Completed"), ("b", "2", "Completed"))
+        self.assertEqual(self.level(records, designs, "Fitness"), 0)
+        self.assertEqual(self.level(records, designs, "Education"), 203)
+        self.assertEqual(self.level(records, designs, "Fitness Center"), 301)
+
+    def test_a_course_number_in_the_line_is_ignored(self):
+        """Documented behaviour: callers pass the line; a course in it does not cap or filter the result."""
+        records, designs = researches(("1", "900", "Completed")), research_designs(("900", "Fitness 201"))
+        for line in ("Fitness 101", "Fitness 999", " Fitness 101 ", "  Fitness\t"):
+            with self.subTest(line=line):
+                self.assertEqual(self.level(records, designs, line), 201)
+
+    def test_unnumbered_and_lv_names_follow_the_shared_contract(self):
+        # Regression: the client's own parser gave 0 for "Advanced Training" (an unnumbered first level) and for
+        # "Advanced Training Lv2", while crew training's parser read 1 and 2. One contract now serves both.
+        designs = research_designs(("38", "Advanced Training"), ("39", "Advanced Training Lv2"),
+                                   ("5", "Fitness ٢٠١"))
+        self.assertEqual(self.level(researches(("a", "38", "Completed")), designs, "Advanced Training"), 1)
+        records = researches(("a", "38", "Completed"), ("b", "39", "Completed"), ("c", "5", "Completed"))
+        self.assertEqual(self.level(records, designs, "Advanced Training"), 2)
+        self.assertEqual(self.level(records, designs, "Fitness"), 0)  # non-ASCII digits are part of the name
+
+    def test_a_line_query_is_never_answered_by_an_exact_design_name(self):
+        # Review: "Night Classes" is a course of the Education line (its root), not a line of its own.
+        designs = research_designs(("101", "Education 101"), ("107", "Night Classes"), ("108", "Night Classes 202"))
+        for record in designs["ResearchService"]["ListAllResearchDesigns"]["ResearchDesigns"]["ResearchDesign"]:
+            record["@RootResearchDesignId"] = "101"
+        records = researches(("a", "107", "Completed"), ("b", "108", "Completed"))
+        self.assertEqual(self.level(records, designs, "Night Classes"), 0)
+        self.assertEqual(self.level(records, designs, "Education"), 202)
 
     def test_designs_missing_a_name_or_id_contribute_nothing(self):
         designs = {"ResearchService": {"ListAllResearchDesigns": {"ResearchDesigns": {"ResearchDesign": [
@@ -502,21 +544,22 @@ class TestCompletedResearchNames(unittest.TestCase):
             {"@ResearchDesignId": "4", "@ResearchName": "Education 101"},
         ]}}}}
         records = researches(("a", "1", "Completed"), ("b", "2", "Completed"), ("c", "4", "Completed"))
-        self.assertEqual(completed(records, designs), ["Education 101"])
+        self.assertEqual(self.level(records, designs, "Fitness"), 0)
+        self.assertEqual(self.level(records, designs, "Education"), 101)
 
     def test_records_missing_a_design_id_contribute_nothing(self):
         records = {"ResearchService": {"ListAllResearches": {"Researches": {"Research": [
             {"@ResearchId": "1", "@ResearchState": "Completed"}]}}}}
-        self.assertEqual(completed(records, research_designs(("900", "Fitness 201"))), [])
+        self.assertEqual(self.level(records, research_designs(("900", "Fitness 201")), "Fitness"), 0)
 
     def test_a_single_record_and_a_single_design_as_plain_mappings(self):
         records = {"ResearchService": {"ListAllResearches": {"Researches": {"Research": {
             "@ResearchId": "1", "@ResearchDesignId": "900", "@ResearchState": "Completed"}}}}}
         designs = {"ResearchService": {"ListAllResearchDesigns": {"ResearchDesigns": {"ResearchDesign": {
             "@ResearchDesignId": "900", "@ResearchName": "Fitness 201"}}}}}
-        self.assertEqual(completed(records, designs), ["Fitness 201"])
+        self.assertEqual(self.level(records, designs, "Fitness"), 201)
 
-    def test_missing_or_error_payloads_are_empty(self):
+    def test_missing_or_error_payloads_are_zero(self):
         records, designs = researches(("1", "900", "Completed")), research_designs(("900", "Fitness 201"))
         cases = {
             "nothing loaded": (None, None),
@@ -527,40 +570,36 @@ class TestCompletedResearchNames(unittest.TestCase):
         }
         for name, (given_records, given_designs) in cases.items():
             with self.subTest(name):
-                self.assertEqual(completed(given_records, given_designs), [])
+                self.assertEqual(self.level(given_records, given_designs, "Fitness"), 0)
 
 
-class TestResearchLevelOfNames(unittest.TestCase):
-    """The highest completed course of a research line, from completed research names."""
+LIVE_RESEARCH_DESIGNS = Path(__file__).parent / "fixtures" / "training" / "live_research_designs.xml"
 
-    def level(self, names, line):
-        return client_module._research_level(names, line)
 
-    def test_highest_course_of_the_line_wins(self):
-        self.assertEqual(self.level(["Fitness 203", "Fitness 101", "Fitness 201"], "Fitness"), 203)
+class TestClientAndTrainingParserAgreeOnLiveData(unittest.TestCase):
+    """getResearchLevel and sdk.training.parse.parse_research_levels on the live reply (design version 717)."""
 
-    def test_no_course_of_the_line_is_zero(self):
-        self.assertEqual(self.level([], "Fitness"), 0)
-        self.assertEqual(self.level(["Education 203"], "Fitness"), 0)
+    LINES = ("Fitness", "Education", "Advanced Training")
 
-    def test_other_lines_sharing_a_prefix_do_not_count(self):
-        names = ["Education 203", "Fitness Center 301"]
-        self.assertEqual(self.level(names, "Fitness"), 0)
-        self.assertEqual(self.level(names, "Education"), 203)
-        self.assertEqual(self.level(names, "Fitness Center"), 301)
-
-    def test_a_course_number_in_the_line_is_ignored(self):
-        """Documented behaviour: callers pass the line; a course in it does not cap or filter the result."""
-        self.assertEqual(self.level(["Fitness 201"], "Fitness 101"), 201)
-        self.assertEqual(self.level(["Fitness 201"], "Fitness 999"), 201)
-
-    def test_surrounding_whitespace_is_stripped(self):
-        self.assertEqual(self.level([" Fitness 201 "], "  Fitness\t"), 201)
-        self.assertEqual(self.level(["Fitness 201"], " Fitness 101 "), 201)
-
-    def test_names_without_an_ascii_course_number_do_not_count(self):
-        self.assertEqual(self.level(["Fitness", "Fitness two", "Fitness ٢٠١"], "Fitness"), 0)
-        self.assertEqual(self.level(["Fitness 201"], "Fitness"), 0)
+    def test_every_completion_prefix_of_every_line_agrees(self):
+        designs = xmltodict.parse(LIVE_RESEARCH_DESIGNS.read_text(encoding="utf-8"), xml_attribs=True)
+        chains = {"Fitness": ["74", "75", "76", "77", "78", "79"],
+                  "Education": ["101", "102", "103", "104", "105", "106"],
+                  "Advanced Training": ["38", "39", "40", "41", "42", "43", "48"]}
+        expected_top = {"Fitness": 203, "Education": 203, "Advanced Training": 7}
+        for line, chain in chains.items():
+            for count in range(len(chain) + 1):
+                records = researches(*((f"r{i}", design_id, "Completed") for i, design_id in enumerate(chain[:count])))
+                with self.subTest(line=line, completed=count):
+                    client = Client.__new__(Client)
+                    client.allResearches, client.allResearchDesigns = records, designs
+                    parsed = parse_research_levels(records, designs)
+                    for name in self.LINES:
+                        self.assertEqual(client.getResearchLevel(name), parsed.get(name, 0))
+                    if count == len(chain):
+                        self.assertEqual(client.getResearchLevel(line), expected_top[line])
+                    if count == 0:
+                        self.assertEqual(client.getResearchLevel(line), 0)
 
 
 RESEARCH_DESIGNS_XML = (
@@ -691,25 +730,29 @@ class TestManageTrainingAgainstFakePss(unittest.TestCase):
         return [(path.rsplit("/", 1)[1], params.get("characterId"))
                 for _, path, params in fake.mutations() if path.startswith("/TrainingService/")]
 
-    def test_returns_true_and_finishes_pending_sessions(self):
+    def test_returns_true_finishes_pending_sessions_and_starts_gated_tiers(self):
+        # The default world has completed Fitness 101-201 (live names), so the research-gated tiers start too.
         fake = FakePss(default_world())
         result, log, _ = self.manage_training(fake)
         self.assertIs(result, True)
-        self.assertEqual(self.training_posts(fake), [("FinishTraining", "1001"), ("FinishTraining", "1003"),
-                                                     ("FinishTraining", "1016")])
+        self.assertEqual(self.training_posts(fake), [
+            ("FinishTraining", "1001"), ("AddTraining", "1001"), ("FinishTraining", "1003"), ("AddTraining", "1003"),
+            ("AddTraining", "1004"), ("AddTraining", "1005"), ("AddTraining", "1008"), ("FinishTraining", "1016"),
+            ("AddTraining", "1016")])
         crew = fake.state.character("1001")
-        self.assertEqual((crew.stats["HpImprovement"], crew.fatigue, crew.last_session.applied), (18, 10, True))
+        self.assertEqual((crew.stats["HpImprovement"], crew.fatigue), (18, 10))  # the finished Bench Press
+        self.assertEqual((crew.last_session.design_id, crew.last_session.applied), ("4", False))  # S-T2 started
         self.assertIn("INFO:sdk.execution.training:[SyntheticCaptain] Completed training for Galactic Succubus in "
                       "Galaxy Gym with Hp +2", log)
-        self.assertIn("INFO:sdk.execution.training:[SyntheticCaptain] training: started=0 finished=3 consumables=0 "
-                      "skipped=17 failed=0", log)
+        self.assertIn("INFO:sdk.execution.training:[SyntheticCaptain] training: started=6 finished=3 consumables=0 "
+                      "skipped=11 failed=0", log)
         self.assertEqual((fake.violations, fake.unknown), ([], []))
 
     def test_without_account_info_the_log_lines_carry_no_label(self):
         fake = FakePss(default_world())
         result, log, _ = self.manage_training(fake, lambda client: setattr(client, "info", None))
         self.assertIs(result, True)
-        self.assertIn("INFO:sdk.execution.training:training: started=0 finished=3 consumables=0 skipped=17 failed=0",
+        self.assertIn("INFO:sdk.execution.training:training: started=6 finished=3 consumables=0 skipped=11 failed=0",
                       log)
         self.assertNotIn("INFO:sdk.execution.training:[", log)
 
@@ -759,8 +802,9 @@ class TestManageTrainingAgainstFakePss(unittest.TestCase):
         decisions = [e for e in events if e.action_id == "training_decision"]
         self.assertEqual([e.evidence["character_id"] for e in decisions], [str(cid) for cid in range(1001, 1018)])
         self.assertEqual({e.account_alias for e in events}, {"primary"})
+        finish, add = ("finish_training", "verified"), ("add_training", "verified")
         self.assertEqual([(e.action_id, e.outcome) for e in events if e.action_id != "training_decision"],
-                         [("finish_training", "verified")] * 3)
+                         [finish, add, finish, add, add, add, add, finish, add])
 
 
 class TestDeadWrappersAndInventory(unittest.TestCase):

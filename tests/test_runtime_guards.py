@@ -900,9 +900,9 @@ def _characters_reply(characters):
     return _reply("CharacterService", "ListAllCharactersOfUser", "Characters", "Character", characters)
 
 
-# Research design id -> name. The strategy gates name the "Fitness" family (sdk/training/parse.py's assumed
-# "<Family> LvN"); completed research is listed on the ship by design id only.
-FITNESS_DESIGNS = {"7": "Fitness", "8": "Fitness Lv2", "9": "Fitness Lv3"}
+# Research design id -> live-shaped course name (tests/fixtures/training/live_research_designs.xml): the strategy
+# gates need Fitness or Education course 101 (primary T1), 201 (T2) and 203 (T3).
+FITNESS_DESIGNS = {"7": "Fitness 101", "8": "Fitness 201", "9": "Fitness 203"}
 
 
 def _training_ship_reply(*completed):
@@ -939,7 +939,7 @@ class TestTrainingShapeGuards(unittest.TestCase):
     """
 
     ROSTER = (
-        # Weapons role in its primary room (Academy) at 40%: primary T1, gated on Fitness 1.
+        # Weapons role in its primary room (Academy) at 40%: primary T1, gated on Fitness 101.
         _crew("101", "Delish", "500", Weapon=40),
         # Engines role in its secondary room (Academy) at 72% with an idle placeholder end: S-T1, ungated.
         _crew("102", "Galactic Sprite", "500", end="2020-01-01T00:00:00", Engine=72),
@@ -1031,7 +1031,7 @@ class TestTrainingShapeGuards(unittest.TestCase):
             self.assertRegex(start_date, r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d$")
 
     def test_ended_session_gets_finish_then_replan(self):
-        # The finished crew is replanned from the FinishTraining reply (74%: S-T2, needs Fitness Lv2), never from the
+        # The finished crew is replanned from the FinishTraining reply (74%: S-T2, needs Fitness 201), never from the
         # advisory decision planned on the old stats (S-T1).
         ended = _crew("102", "Galactic Sprite", "500", end="2020-01-01T00:00:00", design="21", Engine=72)
         collected = _crew("102", "Galactic Sprite", "500", end="2020-01-01T00:00:00", fatigue="20", Engine=74)

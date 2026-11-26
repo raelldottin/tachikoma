@@ -60,7 +60,7 @@ from sdk.training.strategy import (
 
 T0 = datetime(2027, 7, 5, tzinfo=timezone.utc)
 AT0 = "2027-07-05T00:00:00"
-ALL_RESEARCH = ["Fitness", "Fitness Lv2", "Fitness Lv3", "Education", "Education Lv2", "Education Lv3"]
+ALL_RESEARCH = [f"{line} {course}" for line in ("Fitness", "Education") for course in (101, 102, 103, 201, 202, 203)]
 
 
 def hours(value: float) -> datetime:
@@ -72,7 +72,7 @@ def stamp(value: float) -> str:
 
 
 def mini(**overrides) -> dict:
-    """A valid 1-day scenario: GYM 7001, research Fitness, one captain Admiral Serena at 0 TP."""
+    """A valid 1-day scenario: GYM 7001, research Fitness 101, one captain Admiral Serena at 0 TP."""
     data = {
         "schema_version": 1,
         "name": "mini",
@@ -83,7 +83,7 @@ def mini(**overrides) -> dict:
         "days": 1,
         "tick_minutes": 60,
         "rooms": [{"id": 7001, "design": "GYM"}],
-        "research": ["Fitness"],
+        "research": ["Fitness 101"],
         "inventory": {},
         "crew": [{"id": 101, "name": "Admiral Serena", "design": "captain", "room": 7001}],
         "faults": [],
@@ -232,19 +232,22 @@ class PureHelperTests(unittest.TestCase):
                 self.assertIs(bench.consumable_allowed(tier, pct, fatigue), expected)
 
     def test_research_levels_and_gates(self):
-        self.assertEqual(bench.research_levels([2010, 2011, 2022, 9999]), {"Fitness": 2, "Education": 3})
-        self.assertEqual(bench.research_levels([2011, 2010]), {"Fitness": 2})
+        self.assertEqual(bench.research_levels([74, 77, 106, 9999]), {"Fitness": 201, "Education": 203})
+        self.assertEqual(bench.research_levels([77, 74]), {"Fitness": 201})
         self.assertEqual(bench.research_levels([]), {})
-        self.assertTrue(bench.gate_met(("primary", 1), {"Fitness": 1}))
-        self.assertFalse(bench.gate_met(("primary", 2), {"Fitness": 1}))
-        self.assertTrue(bench.gate_met(("primary", 2), {"Education": 2}))
+        self.assertTrue(bench.gate_met(("primary", 1), {"Fitness": 101}))
+        self.assertFalse(bench.gate_met(("primary", 1), {"Fitness": 100}))
+        self.assertFalse(bench.gate_met(("primary", 2), {"Fitness": 200}))
+        self.assertTrue(bench.gate_met(("primary", 2), {"Education": 201}))
+        self.assertFalse(bench.gate_met(("primary", 3), {"Education": 202}))
+        self.assertTrue(bench.gate_met(("primary", 3), {"Fitness": 203}))
         self.assertFalse(bench.gate_met(("primary", 1), {}))
         self.assertTrue(bench.gate_met(("secondary", 1), {}))
-        self.assertFalse(bench.gate_met(("secondary", 2), {"Fitness": 1}))
+        self.assertFalse(bench.gate_met(("secondary", 2), {"Fitness": 103}))
 
     def test_design_research_and_role_training(self):
         self.assertEqual([bench.design_research(design) for design in (3011, 3112, 3023, 3133, 9999)],
-                         [None, 2011, 2022, 2012, None])
+                         [None, 77, 106, 79, None])
         self.assertEqual(bench.role_training("weapons", ("primary", 2)), ("academy", 3012))
         self.assertEqual(bench.role_training("engines", ("secondary", 3)), ("academy", 3033))
         self.assertEqual(bench.role_training("defenders", ("secondary", 1)), ("gym", 3131))
@@ -339,7 +342,7 @@ def kinds(data, *calls):
     return [found.kind for found in bench.journal_violations(world, calls)]
 
 
-def oracle_world(research=("Fitness",)):
+def oracle_world(research=("Fitness 101",)):
     return mini(rooms=ROOMS, crew=ORACLE_CREW, research=list(research))
 
 
@@ -353,17 +356,17 @@ class OracleTests(unittest.TestCase):
         cases = {
             "cap": (ALL_RESEARCH, ("3113", "102"), 102, before(total=70), ["cap"]),
             "complete": (ALL_RESEARCH, ("3111", "101"), 101, before(total=179), ["complete"]),
-            "fatigue": (["Fitness"], ("3111", "101"), 101, before(fatigue=100), ["fatigue"]),
-            "fatigue 99": (["Fitness"], ("3111", "101"), 101, before(fatigue=99), []),
+            "fatigue": (["Fitness 101"], ("3111", "101"), 101, before(fatigue=100), ["fatigue"]),
+            "fatigue 99": (["Fitness 101"], ("3111", "101"), 101, before(fatigue=99), []),
             "gate": ([], ("3111", "101"), 101, before(), ["research-gate"]),
-            "room": (["Fitness"], ("3011", "103"), 103, before(), ["room"]),
-            "no training room": (["Fitness"], ("3011", "105"), 105, before(room=7005), ["room"]),
-            "design": (["Fitness"], ("3011", "101"), 101, before(), ["design"]),
-            "unknown design": (["Fitness"], ("9999", "101"), 101, before(), ["design"]),
-            "no role": (["Fitness"], ("3111", "104"), 104, before(), ["design"]),
-            "design research": (["Education", "Education Lv2"], ("3112", "101"), 101, before(total=110),
+            "room": (["Fitness 101"], ("3011", "103"), 103, before(), ["room"]),
+            "no training room": (["Fitness 101"], ("3011", "105"), 105, before(room=7005), ["room"]),
+            "design": (["Fitness 101"], ("3011", "101"), 101, before(), ["design"]),
+            "unknown design": (["Fitness 101"], ("9999", "101"), 101, before(), ["design"]),
+            "no role": (["Fitness 101"], ("3111", "104"), 104, before(), ["design"]),
+            "design research": (["Education 101", "Education 201"], ("3112", "101"), 101, before(total=110),
                                 ["design-research"]),
-            "design research met": (["Fitness", "Fitness Lv2"], ("3112", "101"), 101, before(total=110), []),
+            "design research met": (["Fitness 101", "Fitness 201"], ("3112", "101"), 101, before(total=110), []),
         }
         for name, (research, args, cid, prior, expected) in cases.items():
             with self.subTest(case=name):
@@ -372,20 +375,20 @@ class OracleTests(unittest.TestCase):
     def test_each_consumable_rule(self):
         running = {"design": 3111, "end": stamp(1)}
         cases = {
-            "allowed in progress": (["Fitness"], "5001", 101, before(**running), []),
-            "hero too early": (["Fitness"], "5011", 101, before(**running), ["consumable"]),
-            "not an item": (["Fitness"], "4242", 101, before(**running), ["consumable"]),
-            "no role": (["Fitness"], "5001", 104, before(), ["consumable"]),
-            "bridge": (["Fitness"], "5002", 105, before(room=7005), ["consumable"]),
-            "at cap": (["Fitness"], "5001", 102, before(total=70, **running), ["cap", "consumable"]),
-            "startable": (["Fitness"], "5001", 101, before(), ["consumable-precedence"]),
-            "should move": (["Fitness"], "5002", 103, before(), ["consumable-precedence"]),
-            "finished, not collected": (["Fitness"], "5001", 101, before(design=3111, end=AT0),
+            "allowed in progress": (["Fitness 101"], "5001", 101, before(**running), []),
+            "hero too early": (["Fitness 101"], "5011", 101, before(**running), ["consumable"]),
+            "not an item": (["Fitness 101"], "4242", 101, before(**running), ["consumable"]),
+            "no role": (["Fitness 101"], "5001", 104, before(), ["consumable"]),
+            "bridge": (["Fitness 101"], "5002", 105, before(room=7005), ["consumable"]),
+            "at cap": (["Fitness 101"], "5001", 102, before(total=70, **running), ["cap", "consumable"]),
+            "startable": (["Fitness 101"], "5001", 101, before(), ["consumable-precedence"]),
+            "should move": (["Fitness 101"], "5002", 103, before(), ["consumable-precedence"]),
+            "finished, not collected": (["Fitness 101"], "5001", 101, before(design=3111, end=AT0),
                                         ["consumable-precedence"]),
             "gate unmet": ([], "5001", 101, before(), []),
-            "complete": (["Fitness"], "5011", 101, before(total=180, fatigue=100), []),
+            "complete": (["Fitness 101"], "5011", 101, before(total=180, fatigue=100), []),
             # design research missing is a fallback branch: only the Common rule (<= 29%) is broken, not precedence
-            "design research missing": (["Education", "Education Lv2"], "5001", 101, before(total=110),
+            "design research missing": (["Education 101", "Education 201"], "5001", 101, before(total=110),
                                         ["consumable"]),
         }
         for name, (research, item, cid, prior, expected) in cases.items():
@@ -422,9 +425,9 @@ class OracleTests(unittest.TestCase):
         _, gated = world_for(oracle_world([]))
         gate = bench.journal_violations(gated, [call("addTraining", ("3111", "101"), 101, before())])
         self.assertEqual(gate[0].detail, "primary T1 gate unmet at 0%")
-        _, split = world_for(oracle_world(["Education", "Education Lv2"]))
+        _, split = world_for(oracle_world(["Education 101", "Education 201"]))
         research = bench.journal_violations(split, [call("addTraining", ("3112", "101"), 101, before(total=110))])
-        self.assertEqual(research[0].detail, "design 3112 needs research 2011")
+        self.assertEqual(research[0].detail, "design 3112 needs research 77")
 
     def test_finishes_and_unknown_crew_are_never_judged(self):
         ignored = [
@@ -435,7 +438,7 @@ class OracleTests(unittest.TestCase):
         self.assertEqual(kinds(oracle_world(), *ignored), [])
 
     def test_policy_view_branches(self):
-        _, world = world_for(oracle_world(["Education", "Education Lv2"]))
+        _, world = world_for(oracle_world(["Education 101", "Education 201"]))
         view = bench.policy_view(world, world.crew[101], before(total=110), AT0)
         self.assertEqual((view.pct, view.band, view.slot_room, view.expected_design), (55, ("primary", 2), "gym", 3112))
         self.assertEqual((view.gate_ok, view.design_research_ok, view.startable, view.consumable_branch),
@@ -517,7 +520,7 @@ class RecordingClientTests(unittest.TestCase):
 
     def test_reads_build_a_context(self):
         rooms = ROOMS + [{"id": 7003, "design": "Galaxy Gym"}, {"id": 7004, "design": "Lunar College"}]
-        _, _, client, journal = client_for(mini(rooms=rooms, research=["Fitness", "Fitness Lv2"],
+        _, _, client, journal = client_for(mini(rooms=rooms, research=["Fitness 101", "Fitness 201"],
                                                 inventory={"Common ATK Consumable": 2, "Hero HP Consumable": 1}))
         payloads = bench.read_payloads(client)
         self.assertEqual(sorted(payloads), sorted(keyword for _, _, keyword in bench.CLIENT_READS))
@@ -525,7 +528,7 @@ class RecordingClientTests(unittest.TestCase):
         self.assertEqual(len(ctx.designs), 21)
         self.assertEqual(dict(ctx.rooms), {7001: "GYM", 7002: "Academy", 7005: "Bridge", 7003: "Galaxy Gym",
                                            7004: "Lunar College"})
-        self.assertEqual((ctx.research_levels["Fitness"], ctx.research_levels["Fitness Lv2"]), (2, 2))
+        self.assertEqual((ctx.research_levels["Fitness"], ctx.research_levels["Fitness 201"]), (201, 201))
         self.assertNotIn("Education", ctx.research_levels)
         self.assertEqual(dict(ctx.items), {5001: 2, 5016: 1})
         (crew,) = ctx.crew
@@ -538,11 +541,11 @@ class RecordingClientTests(unittest.TestCase):
         by_id = {design.id: design for design in ctx.designs}
         self.assertEqual((by_id[3011].tier, by_id[3011].stat, by_id[3011].required_room_type),
                          (1, "WeaponImprovement", "academy"))
-        self.assertEqual((by_id[3011].required_research, by_id[3112].required_research), (None, "Fitness Lv2"))
+        self.assertEqual((by_id[3011].required_research, by_id[3112].required_research), (None, "Fitness 201"))
         self.assertEqual(journal, [])  # reads are never journaled
 
     def test_synthesized_reads_use_the_clients_envelopes(self):
-        _, _, client, _ = client_for(mini(research=["Fitness"]))
+        _, _, client, _ = client_for(mini(research=["Fitness 101"]))
         for method in ("listRoomsViaAccessToken", "listRoomDesigns2", "listAllResearches", "listAllResearchDesigns2"):
             self.assertIs(getattr(client, method)(), True)
         self.assertEqual(client.roomsViaAccessToken, {"RoomService": {"ListRoomsViaAccessToken": {"Rooms": {"Room": [
@@ -550,7 +553,7 @@ class RecordingClientTests(unittest.TestCase):
         designs = client.roomDesigns["RoomService"]["ListRoomDesigns"]["RoomDesigns"]["RoomDesign"]
         self.assertEqual(designs, list(bench.room_design_records()))
         self.assertEqual(client.allResearches, {"ResearchService": {"ListAllResearches": {"Researches": {"Research": [
-            {"@ResearchDesignId": "2010", "@ResearchState": "Completed"}]}}}})
+            {"@ResearchDesignId": "74", "@ResearchState": "Completed"}]}}}})
         research = client.allResearchDesigns["ResearchService"]["ListAllResearchDesigns"]["ResearchDesigns"]
         self.assertEqual(research["ResearchDesign"], list(bench.research_design_records()))
 
@@ -1128,7 +1131,7 @@ def hand_written_tick(client, now):
 
 SWAP_WORLD = mini(
     days=2,
-    research=["Fitness", "Fitness Lv2"],
+    research=["Fitness 101", "Fitness 201"],
     inventory={"Common ATK Consumable": 2},
     crew=[captain(), member(2, "King Dong", "legendary", stats={"Attack": 60}), member(3, "Huntress", "unique")],
     faults=[{"kind": "raise", "method": "finishTraining", "day": 0, "call": 2, "effect": False},
@@ -1474,7 +1477,7 @@ class ScenarioWorldTests(unittest.TestCase):
                 member(3, "Visiting Trader", "common"), member(4, "Delish", "epic", room=0),
                 member(5, "Galactic Sprite", "hero", fatigue=4, training={"design": "Bench Press",
                                                                           "ends_after_minutes": 30})]
-        _, world = world_for(mini(rooms=ROOMS, research=["Fitness", "Education Lv2"], crew=crew))
+        _, world = world_for(mini(rooms=ROOMS, research=["Fitness 101", "Education 201"], crew=crew))
         meta = world.crew
         self.assertEqual((meta[101].cap, meta[101].target, meta[101].headroom, meta[101].eligible), (200, 179, 29, True))
         self.assertEqual((meta[2].cap, meta[2].target, meta[2].headroom, meta[2].room_type), (80, 72, 62, "academy"))
@@ -1482,8 +1485,8 @@ class ScenarioWorldTests(unittest.TestCase):
         self.assertEqual((meta[4].room_type, meta[4].eligible, meta[4].headroom), (None, False, 0))
         self.assertEqual((meta[5].loaded_until, meta[5].loaded_can_gain, meta[5].target), (hours(0.5), True, 86))
         self.assertEqual(dict(world.rooms), {7001: "GYM", 7002: "Academy", 7005: "Bridge"})
-        self.assertEqual(world.research, frozenset({2010, 2021}))
-        self.assertEqual(dict(world.levels), {"Fitness": 1, "Education": 2})
+        self.assertEqual(world.research, frozenset({74, 104}))
+        self.assertEqual(dict(world.levels), {"Fitness": 101, "Education": 201})
         self.assertEqual((world.start, world.horizon_end), (T0, hours(24)))
         records = world.sim_scenario["accounts"]["bench"]["crew"]
         self.assertEqual((records[4]["@TrainingDesignId"], records[4]["@TrainingEndDate"]), ("3111", stamp(0.5)))
@@ -1498,7 +1501,7 @@ class ScenarioWorldTests(unittest.TestCase):
         ])
         self.assertEqual(account["inventory"], [{"@ItemId": "6001", "@ItemDesignId": "5001", "@Quantity": "1"},
                                                 {"@ItemId": "6016", "@ItemDesignId": "5016", "@Quantity": "2"}])
-        self.assertEqual(account["research"], [{"@ResearchDesignId": "2010", "@ResearchState": "Completed"}])
+        self.assertEqual(account["research"], [{"@ResearchDesignId": "74", "@ResearchState": "Completed"}])
         training = world.sim_scenario["training"]
         self.assertEqual(training["character_designs"][0], {"@CharacterDesignId": "4001", "@CharacterDesignName":
                                                             "Common", "@Rarity": "Common", "@TrainingCapacity": "60"})
@@ -1506,8 +1509,8 @@ class ScenarioWorldTests(unittest.TestCase):
             "@ItemDesignId": "5001", "@ItemName": "Common ATK Consumable", "@ItemSubType": "Consumable",
             "@Rarity": "Common", "@ConsumableStat": "Attack", "@ConsumableGain": "2", "@ConsumableFatigue": "0",
             "@FatigueRecovery": "0"})
-        self.assertEqual(world.research_designs[1], {"@ResearchDesignId": "2011", "@ResearchName": "Fitness Lv2",
-                                                     "@RootResearchDesignId": "2010"})
+        self.assertEqual(world.research_designs[1], {"@ResearchDesignId": "75", "@ResearchName": "Fitness 102",
+                                                     "@RootResearchDesignId": "74"})
         self.assertEqual((training["fatigue_max"], training["fatigue_recovery_seconds"]), (100, 360))
 
     def test_world_consumable_mapping_self_check(self):
@@ -1562,7 +1565,7 @@ class ScenarioWorldTests(unittest.TestCase):
             "room extra key": (mini(rooms=[{"id": 7001, "design": "GYM", "x": 1}]), "rooms[0]"),
             "no rooms": (mini(rooms=[]), "rooms"),
             "crew room undeclared": (mini(crew=[captain(room=7999)]), "room"),
-            "unknown research": (mini(research=["Fitness Lv9"]), "research"),
+            "unknown research": (mini(research=["Fitness 301"]), "research"),
             "unknown item": (mini(inventory={"Mystery Box": 1}), "inventory"),
             "negative quantity": (mini(inventory={"Common ATK Consumable": -1}), "inventory"),
             "inventory list": (mini(inventory=[]), "inventory"),
@@ -1634,7 +1637,7 @@ class ScenarioWorldTests(unittest.TestCase):
             "fault design list": (mini(faults=[{"kind": "contradicted-effect", "method": "addTraining",
                                                 "training_design": []}]), "training_design"),
             "fault kind list": (mini(faults=[{"kind": ["reject"], "method": "addTraining"}]), "kind"),
-            "research nested list": (mini(research=[["Fitness"]]), "research"),
+            "research nested list": (mini(research=[["Fitness 101"]]), "research"),
         }
         for name, (data, needle) in cases.items():
             with self.subTest(case=name):
@@ -1662,8 +1665,8 @@ class ScenarioWorldTests(unittest.TestCase):
                                   ["crew[0].training: needs a catalog training design and ends_after_minutes >= 1"]),
             "session list": (mini(crew=[captain(training=["BBJ", 5])]),
                              ["crew[0].training: needs a catalog training design and ends_after_minutes >= 1"]),
-            "research text": (mini(research="Fitness"), [research]),
-            "research duplicate": (mini(research=["Fitness", "Fitness"]), [research]),
+            "research text": (mini(research="Fitness 101"), [research]),
+            "research duplicate": (mini(research=["Fitness 101", "Fitness 101"]), [research]),
             "inventory text": (mini(inventory="x"), ["inventory: must map catalog item names to non-negative "
                                                      "quantities"]),
             "crew unknown and missing": (mini(crew=[{"id": 1, "mood": 2}]),
@@ -2636,7 +2639,7 @@ def academy_context(crew: CrewState, research=None, items=None) -> TrainingConte
         crew=(crew,),
         designs=(WEAPON_T1,),
         rooms={},
-        research_levels={"Fitness": 1} if research is None else research,
+        research_levels={"Fitness": 101} if research is None else research,
         items={} if items is None else items,
     )
 

@@ -38,8 +38,6 @@ class ResearchDesign:
     name: str = ""
     gas_cost: Optional[int] = None  # None when @GasCost is missing or unparseable
     starbux_cost: Optional[int] = 0  # a missing @StarbuxCost is 0; None when unparseable
-    # The raw @Level text (None when missing), kept for sdk.training's parser, which owns its meaning (training-v1).
-    level: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -142,7 +140,6 @@ class DesignData:
                 # Gas-priced research carries no starbux price, so a missing @StarbuxCost is 0,
                 # as Client.upgradeResearches reads it. A present but unparseable one is unknown.
                 starbux_cost=_cost(record.get("@StarbuxCost", 0)),
-                level=str(record["@Level"]) if record.get("@Level") not in (None, "") else None,
             )
             for record in research_designs
         ]
