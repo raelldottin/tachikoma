@@ -73,14 +73,21 @@ CATALOG_ROOMS = {
     "Lunar College": (1101, "academy", 1100),
     "Bridge": (1200, None, None),
 }
-# research design name -> (design id, root design id)
+# research design name -> (design id, root design id): the live training lines, ids, names and roots included
+# (ListAllResearchDesigns2, design version 717; tests/fixtures/training/live_research_designs.xml)
 CATALOG_RESEARCH = {
-    "Fitness": (2010, 2010),
-    "Fitness Lv2": (2011, 2010),
-    "Fitness Lv3": (2012, 2010),
-    "Education": (2020, 2020),
-    "Education Lv2": (2021, 2020),
-    "Education Lv3": (2022, 2020),
+    "Fitness 101": (74, 74),
+    "Fitness 102": (75, 74),
+    "Fitness 103": (76, 74),
+    "Fitness 201": (77, 74),
+    "Fitness 202": (78, 74),
+    "Fitness 203": (79, 74),
+    "Education 101": (101, 101),
+    "Education 102": (102, 101),
+    "Education 103": (103, 101),
+    "Education 201": (104, 101),
+    "Education 202": (105, 101),
+    "Education 203": (106, 101),
 }
 # training name -> (design id, simulator stat, room design name, tier)
 CATALOG_TRAININGS = {
@@ -108,8 +115,13 @@ CATALOG_TRAININGS = {
 }
 # tier -> (duration seconds, fatigue added, min gain, max gain)
 TIER_PARAMS = {1: (3600, 10, 1, 3), 2: (10800, 20, 5, 9), 3: (21600, 30, 12, 18)}
-# (room design name, tier) -> required research design id; tier 1 needs none
-TIER_RESEARCH = {("GYM", 2): 2011, ("GYM", 3): 2012, ("Academy", 2): 2021, ("Academy", 3): 2022}
+# (room design name, tier) -> required research design id (Fitness/Education 201 and 203); tier 1 needs none
+TIER_RESEARCH = {
+    ("GYM", 2): CATALOG_RESEARCH["Fitness 201"][0],
+    ("GYM", 3): CATALOG_RESEARCH["Fitness 203"][0],
+    ("Academy", 2): CATALOG_RESEARCH["Education 201"][0],
+    ("Academy", 3): CATALOG_RESEARCH["Education 203"][0],
+}
 # design key -> (design id, rarity, training capacity)
 CATALOG_CHARACTERS = {
     "common": (4001, "Common", 60),
@@ -152,14 +164,20 @@ CATALOG_CONSUMABLES = {
     ("STA", "Hero"): 5015,
     ("HP", "Hero"): 5016,
 }
-# research design id -> (family, level)
+# research design id -> (family, level = course number)
 CATALOG_RESEARCH_LEVELS = {
-    2010: ("Fitness", 1),
-    2011: ("Fitness", 2),
-    2012: ("Fitness", 3),
-    2020: ("Education", 1),
-    2021: ("Education", 2),
-    2022: ("Education", 3),
+    74: ("Fitness", 101),
+    75: ("Fitness", 102),
+    76: ("Fitness", 103),
+    77: ("Fitness", 201),
+    78: ("Fitness", 202),
+    79: ("Fitness", 203),
+    101: ("Education", 101),
+    102: ("Education", 102),
+    103: ("Education", 103),
+    104: ("Education", 201),
+    105: ("Education", 202),
+    106: ("Education", 203),
 }
 SIM_STATS = ("Hp", "Pilot", "Repair", "Weapon", "Science", "Engine", "Attack", "Ability", "Stamina")
 ROOM_TYPE_WORDS = {"gym": "Gym", "academy": "Academy"}
@@ -271,12 +289,12 @@ ORACLE_BANDS = (
 ORACLE_COMPLETE_PERCENT = 90
 ORACLE_MAX_TRAINING_FATIGUE = 100
 ORACLE_GATES = {
-    ("primary", 1): (("Fitness", 1), ("Education", 1)),
-    ("primary", 2): (("Fitness", 2), ("Education", 2)),
-    ("primary", 3): (("Fitness", 3), ("Education", 3)),
+    ("primary", 1): (("Fitness", 101), ("Education", 101)),
+    ("primary", 2): (("Fitness", 201), ("Education", 201)),
+    ("primary", 3): (("Fitness", 203), ("Education", 203)),
     ("secondary", 1): (),
-    ("secondary", 2): (("Fitness", 2), ("Education", 2)),
-    ("secondary", 3): (("Fitness", 3), ("Education", 3)),
+    ("secondary", 2): (("Fitness", 201), ("Education", 201)),
+    ("secondary", 3): (("Fitness", 203), ("Education", 203)),
 }
 # tier -> (min percent, max percent or None, min fatigue, max fatigue or None)
 ORACLE_CONSUMABLE_RULES = {"Common": (0, 29, 0, 0), "Hero": (90, None, 100, None)}

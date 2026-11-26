@@ -9,7 +9,7 @@
   "tick_minutes": 60,
   "fatigue_recovery_seconds": 360,
   "rooms": [{"id": 7001, "design": "GYM"}, {"id": 7005, "design": "Bridge"}],
-  "research": ["Fitness"],
+  "research": ["Fitness 101"],
   "inventory": {"Common ATK Consumable": 3, "Common WPN Consumable": 3, "Common SCI Consumable": 3},
   "crew": [
     {"id": 601, "name": "Delish", "design": "epic", "room": 7005},

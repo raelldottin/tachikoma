@@ -34,7 +34,7 @@ ITEM_DESIGNS = [{"@ItemDesignId": "902", "@ItemName": "Common SCI Consumable", "
                  "@Rarity": "Common", "@ConsumableStat": "Science", "@ConsumableGain": "1"}]
 ROOM_DESIGNS = [{"@RoomDesignId": "300", "@RoomName": "GYM"}, {"@RoomDesignId": "400", "@RoomName": "Academy"},
                 {"@RoomDesignId": "500", "@RoomName": "Bridge"}]
-RESEARCH_DESIGNS = [{"@ResearchDesignId": "610", "@RootResearchDesignId": "610", "@ResearchName": "Fitness Lv1",
+RESEARCH_DESIGNS = [{"@ResearchDesignId": "610", "@RootResearchDesignId": "610", "@ResearchName": "Fitness 101",
                      "@GasCost": "10"}]
 ROOMS = [{"@RoomId": "11", "@RoomDesignId": "300", "@RoomStatus": "Normal"},
          {"@RoomId": "12", "@RoomDesignId": "400", "@RoomStatus": "Normal"},

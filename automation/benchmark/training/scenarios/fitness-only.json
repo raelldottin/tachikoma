@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "name": "fitness-only",
-  "description": "Only Fitness and Fitness Lv2 researched: the band gate accepts either family while each design needs its own family's research.",
+  "description": "Only Fitness 101 to 201 researched: the band gate accepts either family while each design needs its own family's research.",
   "tags": ["research-split"],
   "seed": 1115,
   "start": "2027-07-05T00:00:00+00:00",
@@ -9,7 +9,7 @@
   "tick_minutes": 60,
   "fatigue_recovery_seconds": 360,
   "rooms": [{"id": 7001, "design": "GYM"}, {"id": 7002, "design": "Academy"}],
-  "research": ["Fitness", "Fitness Lv2"],
+  "research": ["Fitness 101", "Fitness 102", "Fitness 103", "Fitness 201"],
   "inventory": {},
   "crew": [
     {"id": 1501, "name": "Galactic Succubus", "design": "epic", "room": 7002, "stats": {"Weapon": 55}},

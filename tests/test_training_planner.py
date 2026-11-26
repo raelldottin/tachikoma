@@ -530,20 +530,71 @@ class TestResearch(unittest.TestCase):
         self.assertTrue(research_ok(band("secondary", 1), {}, DEFAULT_STRATEGY))
 
     def test_research_gate_table(self) -> None:
-        required = {("primary", 1): 1, ("primary", 2): 2, ("primary", 3): 3, ("secondary", 2): 2, ("secondary", 3): 3}
-        for (slot, tier), level in required.items():
-            with self.subTest(slot=slot, tier=tier):
-                self.assertFalse(research_ok(band(slot, tier), {"Fitness": level - 1}, DEFAULT_STRATEGY))
-                both_short = {"Fitness": level - 1, "Education": level - 1}
+        # The approved gates are the original manageTraining courses: Fitness or Education 101 / 201 / 203, read as
+        # the highest completed course of the line (the live "Fitness 203" naming).
+        required = {
+            ("primary", 1): 101,
+            ("primary", 2): 201,
+            ("primary", 3): 203,
+            ("secondary", 2): 201,
+            ("secondary", 3): 203,
+        }
+        self.assertEqual(
+            {key: gate for key, gate in DEFAULT_STRATEGY.research_gates.items() if gate},
+            {key: (("Fitness", course), ("Education", course)) for key, course in required.items()},
+        )
+        for (slot, tier), course in required.items():
+            for line in ("Fitness", "Education"):
+                with self.subTest(slot=slot, tier=tier, line=line):
+                    self.assertFalse(research_ok(band(slot, tier), {line: course - 1}, DEFAULT_STRATEGY))
+                    self.assertTrue(research_ok(band(slot, tier), {line: course}, DEFAULT_STRATEGY))
+                    self.assertTrue(research_ok(band(slot, tier), {line: course + 1}, DEFAULT_STRATEGY))
+            with self.subTest(slot=slot, tier=tier, line="both short"):
+                both_short = {"Fitness": course - 1, "Education": course - 1}
                 self.assertFalse(research_ok(band(slot, tier), both_short, DEFAULT_STRATEGY))
-                self.assertTrue(research_ok(band(slot, tier), {"Fitness": level}, DEFAULT_STRATEGY))
-                self.assertTrue(research_ok(band(slot, tier), {"Education": level}, DEFAULT_STRATEGY))
+
+    def test_research_gates_open_exactly_at_their_course(self) -> None:
+        # Regression: on live data every gated tier stayed shut. Each gate opens at its course and not one below,
+        # for each line on its own: 100 shut / 101 open, 200 / 201, 202 / 203.
+        for line in ("Fitness", "Education"):
+            for course, opened in ((0, ()), (100, ()), (101, (("primary", 1),)), (102, (("primary", 1),))):
+                with self.subTest(line=line, course=course):
+                    self.assertEqual(self.gated_open({line: course}), list(opened))
+            for course in (103, 200):
+                with self.subTest(line=line, course=course):
+                    self.assertEqual(self.gated_open({line: course}), [("primary", 1)])
+            for course in (201, 202):
+                with self.subTest(line=line, course=course):
+                    t2_open = [("primary", 1), ("primary", 2), ("secondary", 2)]
+                    self.assertEqual(self.gated_open({line: course}), t2_open)
+            with self.subTest(line=line, course=203):
+                self.assertEqual(len(self.gated_open({line: 203})), 5)
+
+    def test_missing_research_counts_as_level_zero(self) -> None:
+        # A research the account has not completed is level 0: it never meets a gate of 1 or more, and always a
+        # gate of 0. The default gates start at course 101, so a strategy with a level-1 gate pins the default.
+        gates = {**DEFAULT_STRATEGY.research_gates, ("primary", 1): (("Fitness", 1),)}
+        strategy = dataclasses.replace(DEFAULT_STRATEGY, research_gates=gates)
+        self.assertFalse(research_ok(band("primary", 1), {}, strategy))
+        self.assertFalse(research_ok(band("primary", 1), {"Education": 203}, strategy))
+        self.assertTrue(research_ok(band("primary", 1), {"Fitness": 1}, strategy))
+        zero = dataclasses.replace(DEFAULT_STRATEGY, research_gates={**gates, ("primary", 1): (("Fitness", 0),)})
+        self.assertTrue(research_ok(band("primary", 1), {}, zero))
+
+    @staticmethod
+    def gated_open(levels: dict) -> list[tuple[str, int]]:
+        """The research-gated bands (slot, tier) that ``levels`` opens, in band order."""
+        return [
+            (b.slot, b.tier)
+            for b in DEFAULT_STRATEGY.bands
+            if DEFAULT_STRATEGY.research_gates[(b.slot, b.tier)] and research_ok(b, levels, DEFAULT_STRATEGY)
+        ]
 
     def test_research_exact_key_regression(self) -> None:
         # Regression: the original matched research by name prefix (startswith of the first word).
-        near_misses = {"Fitness Lv3": 3, "fitness": 3, "FitnessX": 3, "Fit": 3}
+        near_misses = {"Fitness 203": 203, "fitness": 203, "FitnessX": 203, "Fit": 203}
         self.assertFalse(research_ok(band("primary", 1), near_misses, DEFAULT_STRATEGY))
-        self.assertTrue(research_ok(band("primary", 1), {"Education": 1}, DEFAULT_STRATEGY))
+        self.assertTrue(research_ok(band("primary", 1), {"Education": 101}, DEFAULT_STRATEGY))
 
 
 def mk_design(
@@ -682,7 +733,7 @@ TRAINING_NAMES = tuple(
 DESIGN_IDS = {name: 100 + index for index, name in enumerate(TRAINING_NAMES)}
 DESIGN_NAMES = {design_id: name for name, design_id in DESIGN_IDS.items()}
 ALL_DESIGNS = tuple(mk_design(design_id, name) for name, design_id in DESIGN_IDS.items())
-FULL_RESEARCH = {"Fitness": 3}
+FULL_RESEARCH = {"Fitness": 203}
 
 
 def summary(decisions) -> list[tuple]:
@@ -710,7 +761,7 @@ class TestPlannerBasics(unittest.TestCase):
 
     def test_single_weapons_crew_starts_primary_t1(self) -> None:
         crew = mk_crew(name="Delish", room_name="Academy", total=0)
-        decisions = plan_one(crew, research={"Fitness": 1})
+        decisions = plan_one(crew, research={"Fitness": 101})
         self.assertEqual(len(decisions), 1)
         self.assertEqual(decisions[0].__class__, StartTraining)
         self.assertEqual(summary(decisions), [("start", 1, "Read Expert Weapon Theory")])
@@ -766,7 +817,7 @@ class TestSkipCodes(unittest.TestCase):
 
     def test_skip_research_missing(self) -> None:
         self.assertSkip(plan_one(mk_crew(total=0), research={}), "research_missing")
-        self.assertSkip(plan_one(mk_crew(total=60), research={"Fitness": 1}), "research_missing")
+        self.assertSkip(plan_one(mk_crew(total=60), research={"Fitness": 101}), "research_missing")
 
     def test_skip_fatigued(self) -> None:
         for fatigue in (100, 150):
@@ -872,7 +923,7 @@ class TestBoundaries(unittest.TestCase):
                 self.assertEqual(summary(plan_one(crew)), [("start", 1, expected)])
 
     def test_research_gate_boundaries_per_band(self) -> None:
-        cases = ((0, 1), (51, 2), (65, 3), (74, 2), (85, 3))
+        cases = ((0, 101), (51, 201), (65, 203), (74, 201), (85, 203))
         for pct, level in cases:
             for research in ("Fitness", "Education"):
                 with self.subTest(pct=pct, research=research):
@@ -1024,9 +1075,9 @@ class TestDesignRoomLeakage(unittest.TestCase):
 
     def test_design_required_research_missing(self) -> None:
         designs = (mk_design(5, "Read Expert Weapon Theory", required_research="Advanced Training"),)
-        decisions = plan_one(mk_crew(), designs=designs, research={"Fitness": 3})
+        decisions = plan_one(mk_crew(), designs=designs, research={"Fitness": 203})
         self.assertEqual(summary(decisions), [("skip", 1, "research_missing")])
-        decisions = plan_one(mk_crew(), designs=designs, research={"Fitness": 3, "Advanced Training": 1})
+        decisions = plan_one(mk_crew(), designs=designs, research={"Fitness": 203, "Advanced Training": 1})
         self.assertEqual(decisions[0].training_design_id, 5)
 
     def test_no_cross_crew_room_leakage(self) -> None:
@@ -1529,14 +1580,14 @@ ORACLE_BANDS = (
 )
 ORACLE_COMPLETE_PERCENT = 90
 ORACLE_ROOM_TYPES = {"Academy": "academy", "Lunar College": "academy", "GYM": "gym", "Galaxy Gym": "gym"}
-# (slot, tier) -> Fitness or Education level the band needs; 0 = ungated.
+# (slot, tier) -> Fitness or Education course the band needs; 0 = ungated.
 ORACLE_RESEARCH_GATES = {
-    ("primary", 1): 1,
-    ("primary", 2): 2,
-    ("primary", 3): 3,
+    ("primary", 1): 101,
+    ("primary", 2): 201,
+    ("primary", 3): 203,
     ("secondary", 1): 0,
-    ("secondary", 2): 2,
-    ("secondary", 3): 3,
+    ("secondary", 2): 201,
+    ("secondary", 3): 203,
 }
 ORACLE_FATIGUE_LIMIT = 100
 ORACLE_STAT_ORDER = (
@@ -1973,7 +2024,9 @@ def make_context(rng: random.Random, strategy=PROPERTY_STRATEGY) -> TrainingCont
         crew[0] = ready
         twin_end = now + timedelta(hours=1)
         crew.append(dataclasses.replace(ready, character_id=ready.character_id + 10000, training_end=twin_end))
-    research = {name: rng.randint(0, 3) for name in ("Fitness", "Education", "Advanced Training")}
+    courses = (0, 100, 101, 102, 200, 201, 202, 203, 203, 204)  # each gate on both sides, the top course twice
+    research = {name: rng.choice(courses) for name in ("Fitness", "Education")}
+    research["Advanced Training"] = rng.randint(0, 3)
     if rng.random() < 0.25:
         research = {}  # a new ship: every research gate is unmet
     items = {item_id: rng.choice((0, 1, 1, 3)) for item_id in sorted(strategy.consumables.values())}
@@ -2132,7 +2185,8 @@ class TestCapacityOne(unittest.TestCase):
 
     def test_capacity_one_crew_is_planned(self) -> None:
         crew = mk_crew(name="Delish", room_name="Academy", capacity=1)
-        self.assertEqual(summary(plan_one(crew, research={"Fitness": 1})), [("start", 1, "Read Expert Weapon Theory")])
+        decisions = plan_one(crew, research={"Fitness": 101})
+        self.assertEqual(summary(decisions), [("start", 1, "Read Expert Weapon Theory")])
 
     def test_capacity_one_crew_targets_its_band_design_stat(self) -> None:
         weapon_t1 = TrainingDesign(
