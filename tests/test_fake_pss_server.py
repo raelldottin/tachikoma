@@ -279,6 +279,17 @@ class StateTransitionTests(FakeTestCase):
         crew = self.fake.state.character("1005")
         self.assertEqual((crew.stats["HpImprovement"], crew.fatigue, crew.last_session.applied), (32, 10, True))
 
+    def test_training_design_id_is_reported_only_while_a_session_is_unapplied(self):
+        # The session's design while it is not yet applied (running or ended), "0" before any session and after the
+        # finish; TrainingEndDate keeps the last session's end after the finish.
+        self.assertEqual(self.character_row("1001")["@TrainingDesignId"], "3")  # ended 2 h ago, not finished
+        self.assertEqual(self.character_row("1005")["@TrainingDesignId"], "0")  # never trained
+        self.add_training("4", "1005")
+        self.assertEqual(self.character_row("1005")["@TrainingDesignId"], "4")  # running
+        self.assertIsNone(self.error_of(self.finish("1001")))
+        row = self.character_row("1001")
+        self.assertEqual((row["@TrainingDesignId"], row["@TrainingEndDate"]), ("0", fmt(FAKE_EPOCH - datetime.timedelta(hours=2))))
+
     def test_finish_training_without_session_is_rejected(self):
         self.assertEqual(self.error_of(self.finish("1004")), "No training to finish")
         self.assertEqual(self.fake.state.character("1004").stats, stats(Hp=10, Science=20))
@@ -954,7 +965,7 @@ def walk(node, path: str):
 
 
 CHARACTER_KEYS = ("@CharacterId", "@CharacterName", "@CharacterDesignId", "@RoomId", "@Level", "@Xp", "@Fatigue",
-                  "@TrainingEndDate", "@AvailableDate", *(f"@{stat}" for stat in STATS))
+                  "@TrainingDesignId", "@TrainingEndDate", "@AvailableDate", *(f"@{stat}" for stat in STATS))
 # (method, path, params without accessToken, item key for _extract_collection or None, keys each item must carry).
 READ_CONTRACTS = (
     ("GET", "/TaskService/ListTasksOfAUser", {"clientDateTime": NOW}, "Task",

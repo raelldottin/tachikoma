@@ -982,7 +982,12 @@ class FakePss:
         attrs = {"CharacterId": c.id, "CharacterDesignId": c.design_id, "CharacterName": c.name,
                  "RoomId": c.room_id, "Level": c.level, "Xp": c.xp, "Fatigue": c.fatigue}
         attrs.update(c.stats)
-        attrs.update({"TrainingEndDate": fmt(c.training_end), "AvailableDate": fmt(c.available_date)})
+        # The session's design while it is not yet applied (running, or ended and not collected), "0" otherwise: the
+        # shape sdk/training/parse.py, the snapshot and the simulator assume (unverified live). TrainingEndDate keeps
+        # the last session's end after a finish.
+        unapplied = c.session is not None and not c.session.applied
+        attrs.update({"TrainingDesignId": c.session.design_id if unapplied else "0",
+                      "TrainingEndDate": fmt(c.training_end), "AvailableDate": fmt(c.available_date)})
         return attrs
 
     def _h_characters(self, p: dict) -> str:
