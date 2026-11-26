@@ -928,8 +928,8 @@ class FakePss:
         return envelope("RoomService", "ListRoomsViaAccessToken", el("Rooms", None, *rows))
 
     def _h_markers(self, p: dict) -> str:
-        # Standard envelope: UserMarkers sits under the action element, where collectAvailableMarkers does not look
-        # (defect M1); findMiningDrones reads StarSystemMarkers from the same element.
+        # Standard envelope: UserMarkers and StarSystemMarkers sit under the action element, where both
+        # collectAvailableMarkers (since the M1 fix in #276) and findMiningDrones read them.
         star = [el("StarSystemMarker", self._marker_attrs(m)) for m in self.state.markers if not m.user_marker]
         user = [el("UserMarker", self._marker_attrs(m)) for m in self.state.markers if m.user_marker]
         return envelope("GalaxyService", "ListStarSystemMarkersAndUserMarkers",

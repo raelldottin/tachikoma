@@ -1119,18 +1119,26 @@ class TestTrainingShapeGuards(unittest.TestCase):
 
         self.assertEqual(self.recorder.posts(), [])
 
-    def test_character_design_or_room_list_error_raises_before_any_post(self):
-        # KNOWN DEFECT: these errorMessage replies are accepted as data, then reading the missing records raises
+    def test_character_design_list_error_returns_false_before_any_post(self):
+        # Regression (fixed in #276): listAllCharacterDesigns2 goes through _fetchDesignList, so an errorMessage reply
+        # is refused instead of being read as data and raising on the missing records.
+        self.recorder.replies[CHARACTER_DESIGNS] = _error_reply(CHARACTER_DESIGNS)
+
+        with self.assertLogs(level="ERROR") as logs:
+            self.assertIs(self.client.manageTraining(), False)
+
+        self.assertEqual(logs.output, ["ERROR:root:AllCharacterDesigns data not avaialble."])
+        self.assertEqual(self.recorder.posts(), [])
+
+    def test_room_list_error_raises_before_any_post(self):
+        # KNOWN DEFECT: the errorMessage reply is accepted as data, then reading the missing records raises
         # (run.main() logs "manageTraining failed" and exits 1). Wave 2 may return False here instead.
-        for path in (CHARACTER_DESIGNS, ROOMS):
-            with self.subTest(error_at=path):
-                self.setUp()
-                self.recorder.replies[path] = _error_reply(path)
+        self.recorder.replies[ROOMS] = _error_reply(ROOMS)
 
-                with self.assertRaises((KeyError, AttributeError)):
-                    self.client.manageTraining()
+        with self.assertRaises((KeyError, AttributeError)):
+            self.client.manageTraining()
 
-                self.assertEqual(self.recorder.posts(), [])
+        self.assertEqual(self.recorder.posts(), [])
 
     def test_failed_finish_training_still_adds_training(self):
         self.recorder.replies[CHARACTERS] = _characters_reply([self.ROSTER[0]])
