@@ -18,7 +18,7 @@ import os
 import subprocess
 import tempfile
 import unittest
-from dataclasses import replace
+from dataclasses import FrozenInstanceError, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
@@ -27,10 +27,34 @@ from scripts import mutation
 from scripts import training_benchmark as bench
 from sdk.simulation.game import SimulatedFaultError
 from sdk.training import build_context
-from sdk.training.model import FinishTraining, Skip, StartTraining, UseConsumable
+from sdk.training.model import (
+    SKIP_FATIGUED,
+    CrewState,
+    FinishTraining,
+    Skip,
+    StartTraining,
+    TrainingContext,
+    TrainingDesign,
+    UseConsumable,
+)
 from sdk.training.parse import parse_consumable_designs, parse_crew
-from sdk.training.planner import pick_design, plan_training, remaining_stock, replan_after_finish
-from sdk.training.strategy import DEFAULT_ROLES, DEFAULT_STRATEGY
+from sdk.training.planner import (
+    percent,
+    pick_design,
+    plan_training,
+    remaining_stock,
+    replan_after_finish,
+    target_stat,
+    training_state,
+)
+from sdk.training.strategy import (
+    DEFAULT_ROLES,
+    DEFAULT_STRATEGY,
+    RARITY_STARS,
+    ConsumableRule,
+    TierBand,
+    with_consumables,
+)
 
 T0 = datetime(2027, 7, 5, tzinfo=timezone.utc)
 AT0 = "2027-07-05T00:00:00"
@@ -2260,6 +2284,173 @@ class QaEvalTests(unittest.TestCase):
         self.assertLessEqual(set(config.copy), set(bench.QA_COPY_PATHS))
         mutation.validate_run("scripts/training_benchmark.py", ("tests.test_training_benchmark",),
                               Path(bench.ROOT), config.copy)
+
+
+# -- planner and strategy contracts found by --qa-eval -----------------------------------------------------------
+
+WEAPON_T1 = TrainingDesign(
+    id=9101,
+    name="Read Expert Weapon Theory",
+    tier=1,
+    stat="WeaponImprovement",
+    duration=timedelta(hours=1),
+    required_research=None,
+    required_room_type="academy",
+)
+WPN_COMMON_ITEM = 9501
+
+
+def academy_crew(**changes) -> CrewState:
+    """Delish (a weapons role) at 0 TP in the Academy with an ordinary capacity, idle and rested."""
+    fields = dict(
+        character_id=301,
+        name="Delish",
+        design_id=1,
+        rarity="Common",
+        level=1,
+        room_id=None,
+        room_name="Academy",
+        stats={},
+        training_capacity=100,
+        fatigue=0,
+        training_design_id=None,
+        training_end=None,
+    )
+    fields.update(changes)
+    return CrewState(**fields)
+
+
+def academy_context(crew: CrewState, research=None, items=None) -> TrainingContext:
+    return TrainingContext(
+        now=T0,
+        crew=(crew,),
+        designs=(WEAPON_T1,),
+        rooms={},
+        research_levels={"Fitness": 1} if research is None else research,
+        items={} if items is None else items,
+    )
+
+
+def strategy_with(**changes):
+    return replace(DEFAULT_STRATEGY, **changes)
+
+
+class PlannerContractTests(unittest.TestCase):
+    """Public planner and strategy contracts that no other test pinned.
+
+    Found by `scripts/training_benchmark.py --qa-eval` (round 1 "neither" mutants of sdk/training/planner.py and
+    sdk/training/strategy.py). They assert return values, decisions, raised errors with their diagnostic messages
+    and immutability, not strategy literals (tests/test_training_benchmark_policy.py owns those). Candidates to move
+    into tests/test_training_planner.py.
+    """
+
+    def test_training_state_names_every_state(self):
+        self.assertEqual(training_state(academy_crew(), T0), "idle")
+        self.assertEqual(training_state(academy_crew(training_design_id=WEAPON_T1.id), T0), "unknown")
+        running = academy_crew(training_design_id=WEAPON_T1.id, training_end=hours(1))
+        self.assertEqual(training_state(running, T0), "in_progress")
+        self.assertEqual(training_state(running, hours(1)), "finished")
+
+    def test_percent_accepts_a_capacity_of_one(self):
+        self.assertEqual(percent(0, 1), 0)
+        self.assertEqual(percent(1, 1), 100)
+        with self.assertRaisesRegex(ValueError, "training capacity must be positive, got 0"):
+            percent(1, 0)
+
+    def test_capacity_one_crew_starts_its_first_training(self):
+        crew = academy_crew(training_capacity=1)
+        self.assertEqual(
+            plan_training(academy_context(crew)),
+            (StartTraining(301, WEAPON_T1.id, "primary T1 Read Expert Weapon Theory at 0% in academy"),),
+        )
+
+    def test_capacity_one_crew_boosts_its_band_design_stat(self):
+        crew = academy_crew(training_capacity=1)
+        self.assertEqual(target_stat(crew, (WEAPON_T1,), DEFAULT_STRATEGY), "WeaponImprovement")
+        strategy = with_consumables(DEFAULT_STRATEGY, {("WPN", "Common"): WPN_COMMON_ITEM})
+        ctx = academy_context(crew, research={}, items={WPN_COMMON_ITEM: 1})
+        self.assertEqual(
+            plan_training(ctx, strategy),
+            (UseConsumable(301, WPN_COMMON_ITEM, "Common WPN consumable at 0% with fatigue 0"),),
+        )
+
+    def test_fatigue_limit_of_one_is_valid_and_enforced(self):
+        strategy = strategy_with(max_training_fatigue=1)
+        (rested,) = plan_training(academy_context(academy_crew(fatigue=0)), strategy)
+        self.assertIsInstance(rested, StartTraining)
+        self.assertEqual(
+            plan_training(academy_context(academy_crew(fatigue=1)), strategy),
+            (Skip(301, SKIP_FATIGUED, "fatigue 1 >= 1"),),
+        )
+        with self.assertRaisesRegex(ValueError, "^max_training_fatigue must be positive$"):
+            strategy_with(max_training_fatigue=0)
+
+    def test_strategy_parts_are_frozen_and_hashable(self):
+        band = DEFAULT_STRATEGY.bands[0]
+        rule = DEFAULT_STRATEGY.consumable_rules[0]
+        for instance, field in ((band, "high"), (rule, "max_percent"), (DEFAULT_STRATEGY, "complete_percent")):
+            with self.subTest(type(instance).__name__), self.assertRaises(FrozenInstanceError):
+                setattr(instance, field, 50)
+        self.assertEqual({band: 1}[TierBand(band.slot, band.tier, band.low, band.high)], 1)
+        self.assertEqual(len({rule, replace(rule)}), 1)
+
+    def test_strategy_copies_mutable_inputs(self):
+        roles = list(DEFAULT_ROLES)
+        rules = list(DEFAULT_STRATEGY.consumable_rules)
+        stars = dict(RARITY_STARS)
+        strategy = strategy_with(roles=roles, consumable_rules=rules, rarity_stars=stars)
+        self.assertEqual(type(strategy.roles), tuple)
+        self.assertEqual(type(strategy.consumable_rules), tuple)
+        roles.clear()
+        rules.clear()
+        stars["Common"] = 99
+        self.assertEqual(strategy.roles, DEFAULT_ROLES)
+        self.assertEqual(strategy.consumable_rules, DEFAULT_STRATEGY.consumable_rules)
+        self.assertEqual(strategy.rarity_stars["Common"], RARITY_STARS["Common"])
+        with self.assertRaises(TypeError):
+            strategy.rarity_stars["Common"] = 99  # type: ignore[index]
+        (decision,) = plan_training(academy_context(academy_crew()), strategy)
+        self.assertIsInstance(decision, StartTraining)
+
+    def test_role_slot_rejects_an_unknown_slot(self):
+        with self.assertRaisesRegex(ValueError, r"^unknown slot: 'tertiary'$"):
+            DEFAULT_ROLES[0].slot("tertiary")
+
+    def test_band_with_an_unknown_slot_is_rejected(self):
+        bands = tuple(
+            replace(band, slot="tertiary") if (band.slot, band.tier) == ("secondary", 3) else band
+            for band in DEFAULT_STRATEGY.bands
+        )
+        gates = {**DEFAULT_STRATEGY.research_gates, ("tertiary", 3): ()}
+        for roles in (DEFAULT_ROLES, ()):
+            with self.subTest(roles=len(roles)), self.assertRaisesRegex(
+                ValueError, r"^band names unknown slot 'tertiary'$"
+            ):
+                strategy_with(roles=roles, bands=bands, research_gates=gates)
+
+    def test_exceptional_cap_keys_must_be_positive_stars_and_a_name(self):
+        for key in ((0, "Mistycball"), (4, 7), (4,), ("4", "Mistycball"), (4, "Mistycball", "extra")):
+            with self.subTest(key=key), self.assertRaisesRegex(
+                ValueError, r"^exceptional_tp_caps needs \(stars, name\) -> positive int cap"
+            ):
+                strategy_with(exceptional_tp_caps={key: 100})
+
+    def test_cap_table_errors_name_the_table(self):
+        with self.assertRaisesRegex(ValueError, r"^tp_caps needs positive int stars -> cap, got 0: 5$"):
+            strategy_with(tp_caps={0: 5})
+        with self.assertRaisesRegex(ValueError, r"^captain_tp_caps needs positive int stars -> cap, got 6: 0$"):
+            strategy_with(captain_tp_caps={6: 0})
+
+    def test_consumable_window_errors_name_the_window(self):
+        cases = (
+            (r"percent window: 30\.\.29", ConsumableRule("Common", 30, 29, 0, 0)),
+            (r"fatigue window: 5\.\.4", ConsumableRule("Common", 0, 29, 5, 4)),
+        )
+        for window, rule in cases:
+            with self.subTest(window), self.assertRaisesRegex(
+                ValueError, rf"^consumable rule 'Common' has an empty {window}$"
+            ):
+                strategy_with(consumable_rules=(rule,))
 
 
 if __name__ == "__main__":

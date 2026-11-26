@@ -352,6 +352,8 @@ Drift is never counted in a headline rate. It flags every behaviour change, incl
 
 Equivalent mutants are listed in `baseline.json` under `qa_eval.equivalent`, each as `{id, original, replacement, reason}`. An entry whose id no longer exists, or whose text changed (ids are line:column based), is reported as stale and ignored.
 
+The first full run left 25 mutants caught by neither channel. They sit in code the scenarios cannot reach: a training capacity of 1, the `training_state` return values, the frozen and normalised strategy fields, and validation messages. Each one now fails a test in `PlannerContractTests` (`tests/test_training_benchmark.py`). Those tests check public return values, decisions, error messages and immutability. They do not pin strategy literals. None of the 25 was listed as equivalent, so `qa_eval.equivalent` is still empty. A capacity-1 crew is unrealistic, so these mutants have no benchmark scenario. The tests are candidates to move into `tests/test_training_planner.py`.
+
 A smoke run of six mutants (`--only` the ids below, `--jobs 4`) took 55 s. It found a benchmark rate of 0.800 and a tests rate of 1.000 over the 5 importable mutants, and a gated detection rate of 1.000.
 
 | Mutant | Change | Class | Benchmark reasons |
