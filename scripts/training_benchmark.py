@@ -1,11 +1,14 @@
 """Crew-training simulator benchmark: a scored, deterministic, offline gate for the crew-training planner.
 
 Every scenario under automation/benchmark/training/scenarios is a small world (rooms, research, inventory, crew,
-optional injected faults) that runs for several simulated days in the offline simulator (sdk.simulation.game). The
-executor loop below follows the documented executor contract only: observe, plan_training, carry every decision out
-through the action catalog, replan a finished crew with replan_after_finish and the remaining stock. Metrics come
-from the simulator's training log; independent oracles (literal policy tables, cross-checked against the
-owner-approved strategy by the tests) flag hard violations. The composite score must never fall below baseline.json.
+optional injected faults) that runs for several simulated days in the offline simulator (sdk.simulation.game), once
+per seed. The executor under test is a *tick*: ``tick(client, now) -> TickReport | None``. It drives a
+RecordingClient, the simulator's Client surface, which journals every training call together with the simulator's
+own crew record from just before the call, the outcome and the faults the call fired. Every metric and every
+hard-violation oracle is a pure function of the world, that call journal and the simulator's training log, so no
+executor can skip a check. The default tick is ``make_contract_executor``, which follows the documented executor
+contract; Unit 9's executor (sdk/execution/training.py) plugs in as another tick. The composite score must never fall
+below baseline.json.
 
 No network, no credentials: the simulator is in-process. See docs/baseline/training-benchmark.md.
 """
@@ -21,13 +24,13 @@ import subprocess
 import sys
 import threading
 import time
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Mapping, Sequence
+from typing import Callable, Mapping, Sequence
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if ROOT not in sys.path:
+if ROOT not in sys.path:  # run as a script: python scripts/training_benchmark.py
     sys.path.insert(0, ROOT)
 
 from sdk.actions.catalog import get_spec  # noqa: E402
@@ -36,16 +39,7 @@ from sdk.policy import DesignData  # noqa: E402
 from sdk.simulation.game import Fault, SimulatedClock, SimulatedFaultError, build_games  # noqa: E402
 from sdk.training import build_context  # noqa: E402
 from sdk.training.actions import action_for  # noqa: E402
-from sdk.training.model import (  # noqa: E402
-    SKIP_NOT_IN_TRAINING_ROOM,
-    CrewState,
-    Decision,
-    FinishTraining,
-    Skip,
-    StartTraining,
-    TrainingContext,
-    UseConsumable,
-)
+from sdk.training.model import SKIP_NOT_IN_TRAINING_ROOM, CrewState, FinishTraining, Skip  # noqa: E402
 from sdk.training.parse import parse_consumable_designs, parse_crew  # noqa: E402
 from sdk.training.planner import plan_training, remaining_stock, replan_after_finish  # noqa: E402
 from sdk.training.strategy import DEFAULT_STRATEGY, TrainingStrategy, with_consumables  # noqa: E402
@@ -146,8 +140,19 @@ CATALOG_CONSUMABLES = {
     ("STA", "Hero"): 5015,
     ("HP", "Hero"): 5016,
 }
+# research design id -> (family, level)
+CATALOG_RESEARCH_LEVELS = {
+    2010: ("Fitness", 1),
+    2011: ("Fitness", 2),
+    2012: ("Fitness", 3),
+    2020: ("Education", 1),
+    2021: ("Education", 2),
+    2022: ("Education", 3),
+}
 SIM_STATS = ("Hp", "Pilot", "Repair", "Weapon", "Science", "Engine", "Attack", "Ability", "Stamina")
 ROOM_TYPE_WORDS = {"gym": "Gym", "academy": "Academy"}
+TRAININGS_BY_ID = {design_id: (name, room, tier) for name, (design_id, _, room, tier) in CATALOG_TRAININGS.items()}
+CONSUMABLE_TIERS = {item_id: tier for (_, tier), item_id in CATALOG_CONSUMABLES.items()}
 
 # -- scenario schema ---------------------------------------------------------------------------------------------
 
@@ -163,6 +168,7 @@ REQUIRED_TAGS = frozenset(
         "no-training-room",
         "fatigued",
         "consumables",
+        "in-training",
         "fault-reject",
         "fault-contradicted",
         "fault-raise",
@@ -170,7 +176,8 @@ REQUIRED_TAGS = frozenset(
         "fault-snapshot",
     }
 )
-MIN_SUITE_DAYS = 7
+MIN_SUITE_DAYS = 7  # owner requirement: every checked-in scenario runs at least a week
+SEED_COUNT = 3  # each scenario runs at seed, seed + 1 and seed + 2; its score is the mean
 SCENARIO_REQUIRED = (
     "schema_version",
     "name",
@@ -190,7 +197,9 @@ CREW_KEYS = ("id", "name", "design", "room", "fatigue", "level", "stats", "train
 FAULT_KEYS = ("kind", "method", "day", "call", "probability", "effect", "training_design")
 NAME_RE = re.compile(r"^[a-z0-9-]+$")
 
-# -- oracle tables: independent literal copies of the owner-approved policy (tests cross-check them) -------------
+# -- oracle tables: independent literal copies of the owner-approved policy ---------------------------------------
+# They are never imported from sdk/training, so a mutant of the planner or the strategy cannot move them.
+# tests/test_training_benchmark_policy.py pins them to the policy sources; a deliberate policy change updates both.
 
 ORACLE_ROLES = {
     "Galactic Succubus": "weapons",
@@ -211,7 +220,30 @@ ORACLE_ROLES = {
     "1st engineer Tully": "defenders",
     "King Dong": "defenders",
 }
-
+ORACLE_GYM_STRENGTH = ("Bench Press", "Muscle Beach", "Olympic Weightlifting")
+# role -> slot -> (room type, training names by tier)
+ORACLE_ROLE_SLOTS = {
+    "weapons": {
+        "primary": ("academy", ("Read Expert Weapon Theory", "Weapons Summit", "Weapons PHD")),
+        "secondary": ("gym", ORACLE_GYM_STRENGTH),
+    },
+    "shields": {
+        "primary": ("academy", ("Big Book of Science", "Scientific Summit", "Science PHD")),
+        "secondary": ("gym", ORACLE_GYM_STRENGTH),
+    },
+    "engines": {
+        "primary": ("gym", ORACLE_GYM_STRENGTH),
+        "secondary": ("academy", ("Study Expert Engineering Manual", "Engineering Summit", "Engineering PHD")),
+    },
+    "rushers": {
+        "primary": ("gym", ("Steam Yoga", "Crew vs Wild", "Space Marine")),
+        "secondary": ("gym", ORACLE_GYM_STRENGTH),
+    },
+    "defenders": {
+        "primary": ("gym", ORACLE_GYM_STRENGTH),
+        "secondary": ("gym", ("Kickbox", "BBJ", "Shaolin Tradition")),
+    },
+}
 ORACLE_RARITY_STARS = {"Common": 1, "Elite": 2, "Unique": 3, "Epic": 4, "Hero": 5, "Special": 6, "Legendary": 7}
 ORACLE_TP_CAPS = {3: 70, 4: 80, 5: 90, 6: 100, 7: 110}
 ORACLE_EXCEPTIONAL_CAPS = {(4, "Mistycball"): 100, (4, "Huge Hellaluya"): 100}
@@ -225,6 +257,7 @@ ORACLE_BANDS = (
     (85, 89, "secondary", 3),
 )
 ORACLE_COMPLETE_PERCENT = 90
+ORACLE_MAX_TRAINING_FATIGUE = 100
 ORACLE_GATES = {
     ("primary", 1): (("Fitness", 1), ("Education", 1)),
     ("primary", 2): (("Fitness", 2), ("Education", 2)),
@@ -235,24 +268,28 @@ ORACLE_GATES = {
 }
 # tier -> (min percent, max percent or None, min fatigue, max fatigue or None)
 ORACLE_CONSUMABLE_RULES = {"Common": (0, 29, 0, 0), "Hero": (90, None, 100, None)}
-ORACLE_FOCUS = {
-    "weapons": ("Weapon", "Attack"),
-    "shields": ("Science", "Attack"),
-    "engines": ("Attack", "Engine"),
-    "rushers": ("Stamina", "Attack"),
-    "defenders": ("Attack", "Hp"),
-}
-SCORE_WEIGHTS = {"progress": 0.65, "utilisation": 0.25, "focus": 0.10}
 
-# research design id -> (family, level)
-CATALOG_RESEARCH_LEVELS = {
-    2010: ("Fitness", 1),
-    2011: ("Fitness", 2),
-    2012: ("Fitness", 3),
-    2020: ("Education", 1),
-    2021: ("Education", 2),
-    2022: ("Education", 3),
-}
+# -- score -------------------------------------------------------------------------------------------------------
+
+# score = 100 * R * (0.75 P + 0.25 U); U is left out (weights renormalised to P alone) when nothing had a window.
+SCORE_WEIGHTS = {"progress": 0.75, "utilisation": 0.25}
+SCORE_FORMULA = "100 * R * (0.75 * P + 0.25 * U); 100 * R * P without a utilisation window; 0 on a hard violation"
+# Hard-violation oracles: any one zeroes the scenario and fails the gate. REPORT_ONLY oracles are reported only,
+# because the unmodified planner trips them (see docs/baseline/training-benchmark.md, planner findings).
+GATED_VIOLATIONS = (
+    "cap",
+    "complete",
+    "fatigue",
+    "research-gate",
+    "room",
+    "design",
+    "design-research",
+    "consumable",
+    "consumable-precedence",
+)
+REPORT_ONLY_VIOLATIONS: tuple[str, ...] = ()
+VIOLATION_KINDS = GATED_VIOLATIONS + REPORT_ONLY_VIOLATIONS
+MAX_VIOLATION_SAMPLES = 20
 
 
 # -- pure oracle helpers -----------------------------------------------------------------------------------------
@@ -263,6 +300,25 @@ def percent(total: int, capacity: int) -> int:
     return -(-total * 100 // capacity)
 
 
+def first_total(pct: int, capacity: int) -> int:
+    """The smallest total whose percent of ``capacity`` reaches ``pct``."""
+    return 0 if pct <= 0 else (pct - 1) * capacity // 100 + 1
+
+
+def policy_target(role: str | None, room_type: str | None, total: int, capacity: int, cap: int) -> int:
+    """The most the policy can train a crew to in its room: the TP cap, the complete percent, and the first band
+    from ``total`` on whose slot needs another room type (nothing in the game or the simulator moves crew)."""
+    target = min(cap, first_total(ORACLE_COMPLETE_PERCENT, capacity))
+    slots = ORACLE_ROLE_SLOTS.get(role or "")
+    if slots is None or room_type is None:
+        return target
+    start = percent(total, capacity)
+    for low, high, slot, _ in ORACLE_BANDS:
+        if high >= start and slots[slot][0] != room_type:
+            return min(target, first_total(low, capacity))
+    return target
+
+
 def oracle_band(pct: int) -> tuple[str, int] | None:
     """(slot, tier) for a training percent; None once training is complete."""
     if pct >= ORACLE_COMPLETE_PERCENT:
@@ -271,6 +327,11 @@ def oracle_band(pct: int) -> tuple[str, int] | None:
         if pct <= high:
             return slot, tier
     return None  # pragma: no cover - the bands tile 0..complete-1
+
+
+def band_label(pct: int) -> str:
+    band = oracle_band(pct)
+    return "complete" if band is None else f"{band[0]}-{band[1]}"
 
 
 def oracle_cap(rarity: str, name: str, capacity: int) -> int:
@@ -295,13 +356,11 @@ def consumable_allowed(tier: str, pct: int, fatigue: int) -> bool:
     return pct_ok and fatigue_ok
 
 
-def research_levels(researches: Sequence[Mapping]) -> dict[str, int]:
-    """Research family -> highest completed level, from the catalog's research design ids (independent of parse)."""
+def research_levels(research_ids: Sequence[int]) -> dict[str, int]:
+    """Research family -> highest completed level, from catalog research design ids (independent of parse)."""
     levels: dict[str, int] = {}
-    for record in researches:
-        if record.get("@ResearchState") != "Completed":
-            continue
-        entry = CATALOG_RESEARCH_LEVELS.get(int(record.get("@ResearchDesignId") or 0))
+    for research_id in research_ids:
+        entry = CATALOG_RESEARCH_LEVELS.get(research_id)
         if entry is None:
             continue
         family, level = entry
@@ -315,6 +374,28 @@ def gate_met(band: tuple[str, int], levels: Mapping[str, int]) -> bool:
     if not alternatives:
         return True
     return any(levels.get(name, 0) >= level for name, level in alternatives)
+
+
+def design_research(design_id: int) -> int | None:
+    """The research design id a catalog training needs (None: ungated or not a catalog training)."""
+    entry = TRAININGS_BY_ID.get(design_id)
+    return None if entry is None else TIER_RESEARCH.get((entry[1], entry[2]))
+
+
+def role_training(role: str | None, band: tuple[str, int] | None) -> tuple[str | None, int | None]:
+    """(room type, catalog design id) of the training ``role`` does in ``band``; (None, None) without one."""
+    slots = ORACLE_ROLE_SLOTS.get(role or "")
+    if slots is None or band is None:
+        return None, None
+    room_type, trainings = slots[band[0]]
+    return room_type, CATALOG_TRAININGS[trainings[band[1] - 1]][0]
+
+
+def _to_int(value: object) -> int:
+    """A decimal id as an int, or 0 for anything else (an executor under test may pass garbage)."""
+    if _is_int(value):
+        return value
+    return int(value) if isinstance(value, str) and value.isdigit() else 0
 
 
 # -- errors ------------------------------------------------------------------------------------------------------
@@ -332,11 +413,7 @@ class ScenarioError(BenchmarkError):
 
 
 class WorldError(BenchmarkError):
-    """A scenario that validates but cannot make a meaningful world (no headroom, catalog drift)."""
-
-
-class ObservationError(BenchmarkError):
-    """A read failed during one tick; the tick is skipped."""
+    """A scenario that validates but cannot make a meaningful world (no reachable headroom, catalog drift)."""
 
 
 class BaselineError(BenchmarkError):
@@ -458,6 +535,37 @@ def _validate_session(value: object, where: str, problems: list[str]) -> tuple[s
     return value["design"], value["ends_after_minutes"]
 
 
+def _validate_crew_entry(entry: Mapping, where: str, room_ids: set[int], seen: set[int], problems: list[str]):
+    unknown = sorted(str(key) for key in entry if key not in CREW_KEYS)
+    if unknown:
+        problems.append(f"{where}: unknown keys {', '.join(unknown)}")
+    missing = [key for key in ("id", "name", "design", "room") if key not in entry]
+    if missing:
+        problems.append(f"{where}: missing {', '.join(missing)}")
+        return None
+    if not _int_in(entry["id"], 1):
+        problems.append(f"{where}.id: must be a positive integer")
+    elif entry["id"] in seen:
+        problems.append(f"{where}.id: duplicate crew id {entry['id']}")
+    else:
+        seen.add(entry["id"])
+    if not isinstance(entry["name"], str) or not entry["name"].strip():
+        problems.append(f"{where}.name: must be a non-empty string")
+    design = CATALOG_CHARACTERS.get(entry["design"]) if isinstance(entry["design"], str) else None
+    if design is None:
+        problems.append(f"{where}.design: unknown character design {entry['design']!r}")
+    if not (_is_int(entry["room"]) and (entry["room"] == 0 or entry["room"] in room_ids)):
+        problems.append(f"{where}.room: {entry['room']!r} is neither 0 nor a declared room id")
+    fatigue, level = entry.get("fatigue", 0), entry.get("level", 1)
+    if not _int_in(fatigue, 0, 100):
+        problems.append(f"{where}.fatigue: must be an integer 0..100")
+    if not _int_in(level, 1):
+        problems.append(f"{where}.level: must be a positive integer")
+    stats = _validate_stats(entry.get("stats", {}), design[2] if design else None, where, problems)
+    session = _validate_session(entry["training"], where, problems) if "training" in entry else None
+    return CrewSpec(entry["id"], entry["name"], entry["design"], entry["room"], fatigue, level, stats, session)
+
+
 def _validate_crew(value: object, room_ids: set[int], problems: list[str]) -> tuple[CrewSpec, ...]:
     if not isinstance(value, list) or not value:
         problems.append("crew: must be a non-empty list")
@@ -470,35 +578,8 @@ def _validate_crew(value: object, room_ids: set[int], problems: list[str]) -> tu
             problems.append(f"{where}: must be an object")
             continue
         before = len(problems)
-        unknown = sorted(str(key) for key in entry if key not in CREW_KEYS)
-        if unknown:
-            problems.append(f"{where}: unknown keys {', '.join(unknown)}")
-        missing = [key for key in ("id", "name", "design", "room") if key not in entry]
-        if missing:
-            problems.append(f"{where}: missing {', '.join(missing)}")
-            continue
-        if not _int_in(entry["id"], 1):
-            problems.append(f"{where}.id: must be a positive integer")
-        elif entry["id"] in seen:
-            problems.append(f"{where}.id: duplicate crew id {entry['id']}")
-        else:
-            seen.add(entry["id"])
-        if not isinstance(entry["name"], str) or not entry["name"].strip():
-            problems.append(f"{where}.name: must be a non-empty string")
-        design = CATALOG_CHARACTERS.get(entry["design"]) if isinstance(entry["design"], str) else None
-        if design is None:
-            problems.append(f"{where}.design: unknown character design {entry['design']!r}")
-        if not (_is_int(entry["room"]) and (entry["room"] == 0 or entry["room"] in room_ids)):
-            problems.append(f"{where}.room: {entry['room']!r} is neither 0 nor a declared room id")
-        fatigue, level = entry.get("fatigue", 0), entry.get("level", 1)
-        if not _int_in(fatigue, 0, 100):
-            problems.append(f"{where}.fatigue: must be an integer 0..100")
-        if not _int_in(level, 1):
-            problems.append(f"{where}.level: must be a positive integer")
-        stats = _validate_stats(entry.get("stats", {}), design[2] if design else None, where, problems)
-        session = _validate_session(entry["training"], where, problems) if "training" in entry else None
+        spec = _validate_crew_entry(entry, where, room_ids, seen, problems)
         if len(problems) == before:
-            spec = CrewSpec(entry["id"], entry["name"], entry["design"], entry["room"], fatigue, level, stats, session)
             crew.append(spec)
     return tuple(crew)
 
@@ -533,17 +614,7 @@ def _validate_fault(entry: object, where: str, problems: list[str]) -> Mapping[s
     return dict(entry)
 
 
-def validate_scenario(data: Mapping, *, source: str = "<scenario>") -> Scenario:
-    """A checked Scenario; every problem is collected and raised as one ScenarioError."""
-    problems: list[str] = []
-    if not isinstance(data, Mapping):
-        raise ScenarioError(["scenario: must be a JSON object"], source)
-    unknown = sorted(str(key) for key in data if key not in SCENARIO_REQUIRED + SCENARIO_OPTIONAL)
-    if unknown:
-        problems.append(f"unknown keys: {', '.join(unknown)}")
-    missing = [key for key in SCENARIO_REQUIRED if key not in data]
-    for key in missing:
-        problems.append(f"{key}: missing")
+def _validate_header(data: Mapping, missing: list[str], problems: list[str]) -> None:
     get = data.get
     if "schema_version" not in missing and not (_is_int(get("schema_version")) and get("schema_version") == 1):
         problems.append(f"schema_version: must be 1, not {get('schema_version')!r}")
@@ -556,8 +627,7 @@ def validate_scenario(data: Mapping, *, source: str = "<scenario>") -> Scenario:
         problems.append("tags: must be a list of unique strings")
     if "seed" not in missing and not _int_in(get("seed"), 0):
         problems.append(f"seed: must be a non-negative integer, not {get('seed')!r}")
-    start = _parse_start(get("start"))
-    if "start" not in missing and start is None:
+    if "start" not in missing and _parse_start(get("start")) is None:
         problems.append(f"start: {get('start')!r} must be an ISO 8601 time with a UTC offset")
     if "days" not in missing and not _int_in(get("days"), 1, 30):
         problems.append(f"days: must be an integer 1..30, not {get('days')!r}")
@@ -567,43 +637,63 @@ def validate_scenario(data: Mapping, *, source: str = "<scenario>") -> Scenario:
     recovery = get("fatigue_recovery_seconds", 360)
     if not _int_in(recovery, 1):
         problems.append(f"fatigue_recovery_seconds: must be a positive integer, not {recovery!r}")
-    rooms = _validate_rooms(get("rooms"), problems) if "rooms" in data else ()
-    research = get("research", [])
+
+
+def _validate_faults(data: Mapping, problems: list[str]) -> list[Mapping[str, object]]:
+    faults_raw = data.get("faults", [])
+    faults: list[Mapping[str, object]] = []
+    if not isinstance(faults_raw, list):
+        problems.append("faults: must be a list")
+        return faults
+    days = data.get("days")
+    for index, entry in enumerate(faults_raw):
+        fault = _validate_fault(entry, f"faults[{index}]", problems)
+        if fault is not None and "day" in fault and _int_in(days, 1, 30) and fault["day"] >= days:
+            problems.append(f"faults[{index}].day: {fault['day']} is past the last day ({days - 1}); "
+                            "it would never fire")
+        elif fault is not None:
+            faults.append(fault)
+    return faults
+
+
+def validate_scenario(data: Mapping, *, source: str = "<scenario>") -> Scenario:
+    """A checked Scenario; every problem is collected and raised as one ScenarioError."""
+    problems: list[str] = []
+    if not isinstance(data, Mapping):
+        raise ScenarioError(["scenario: must be a JSON object"], source)
+    unknown = sorted(str(key) for key in data if key not in SCENARIO_REQUIRED + SCENARIO_OPTIONAL)
+    if unknown:
+        problems.append(f"unknown keys: {', '.join(unknown)}")
+    missing = [key for key in SCENARIO_REQUIRED if key not in data]
+    for key in missing:
+        problems.append(f"{key}: missing")
+    _validate_header(data, missing, problems)
+    rooms = _validate_rooms(data.get("rooms"), problems) if "rooms" in data else ()
+    research = data.get("research", [])
     if not (isinstance(research, list) and len(set(map(str, research))) == len(research)) or any(
         not _known(name, CATALOG_RESEARCH) for name in research
     ):
         problems.append(f"research: must be unique names among {', '.join(CATALOG_RESEARCH)}")
         research = []
-    inventory = get("inventory", {})
+    inventory = data.get("inventory", {})
     if not isinstance(inventory, Mapping) or any(
         name not in CATALOG_ITEMS or not _int_in(quantity, 0) for name, quantity in inventory.items()
     ):
         problems.append("inventory: must map catalog item names to non-negative quantities")
         inventory = {}
-    crew = _validate_crew(get("crew"), {room.id for room in rooms}, problems) if "crew" in data else ()
-    faults_raw = get("faults", [])
-    faults: list[Mapping[str, object]] = []
-    if not isinstance(faults_raw, list):
-        problems.append("faults: must be a list")
-        faults_raw = []
-    for index, entry in enumerate(faults_raw):
-        fault = _validate_fault(entry, f"faults[{index}]", problems)
-        if fault is not None and "day" in fault and _int_in(get("days"), 1, 30) and fault["day"] >= get("days"):
-            problems.append(f"faults[{index}].day: {fault['day']} is past the last day ({get('days') - 1}); "
-                            "it would never fire")
-        elif fault is not None:
-            faults.append(fault)
+    crew = _validate_crew(data.get("crew"), {room.id for room in rooms}, problems) if "crew" in data else ()
+    faults = _validate_faults(data, problems)
     if problems:
         raise ScenarioError(problems, source)
     return Scenario(
         name=data["name"],
         description=data["description"],
-        tags=tuple(tags),
+        tags=tuple(data["tags"]),
         seed=data["seed"],
-        start=start,
+        start=_parse_start(data["start"]),
         days=data["days"],
-        tick_minutes=tick,
-        fatigue_recovery_seconds=recovery,
+        tick_minutes=data.get("tick_minutes", 60),
+        fatigue_recovery_seconds=data.get("fatigue_recovery_seconds", 360),
         rooms=rooms,
         research=tuple(research),
         inventory=tuple(sorted(inventory.items())),
@@ -668,10 +758,13 @@ class CrewMeta:
     rarity: str
     capacity: int
     cap: int
+    target: int  # policy_target: the most the policy can train this crew to in its room
     room_type: str | None
-    eligible: bool
+    eligible: bool  # a role and a training room
     initial_total: int
-    headroom: int
+    headroom: int  # policy-reachable: max(0, target - initial_total) for eligible crew, else 0
+    loaded_until: datetime | None = None  # the end of a session already running at the start
+    loaded_can_gain: bool = False  # that session can gain something (see can_gain)
 
 
 @dataclass(frozen=True)
@@ -680,8 +773,11 @@ class World:
     room_designs: tuple[Mapping[str, str], ...]
     research_designs: tuple[Mapping[str, str], ...]
     crew: Mapping[int, CrewMeta]
+    rooms: Mapping[int, str]  # room id -> catalog room design name
+    research: frozenset[int]  # completed research design ids (research never changes during a run)
+    levels: Mapping[str, int]  # research family -> highest completed level
+    start: datetime
     horizon_end: datetime
-    read_faults: bool
 
 
 def format_time(moment: datetime) -> str:
@@ -690,6 +786,10 @@ def format_time(moment: datetime) -> str:
 
 def parse_time(text: str) -> datetime:
     return datetime.strptime(text, TIME_FORMAT).replace(tzinfo=timezone.utc)
+
+
+def _seconds(delta: timedelta) -> int:
+    return delta // timedelta(seconds=1)
 
 
 def _sim_fault(entry: Mapping[str, object]) -> dict:
@@ -789,29 +889,24 @@ def _crew_record(spec: CrewSpec, start: datetime) -> dict:
     return record
 
 
-def _crew_meta(spec: CrewSpec, rooms: Mapping[int, str]) -> CrewMeta:
+def _crew_meta(spec: CrewSpec, rooms: Mapping[int, str], start: datetime) -> CrewMeta:
     _, rarity, capacity = CATALOG_CHARACTERS[spec.design]
     role = ORACLE_ROLES.get(spec.name)
     room_type = CATALOG_ROOMS[rooms[spec.room]][1] if spec.room in rooms else None
     cap = oracle_cap(rarity, spec.name, capacity)
     eligible = role is not None and room_type is not None
     total = sum(spec.stats.values())
-    headroom = max(0, cap - total) if eligible else 0
-    return CrewMeta(spec.id, spec.name, role, rarity, capacity, cap, room_type, eligible, total, headroom)
+    target = policy_target(role, room_type, total, capacity, cap)
+    headroom = max(0, target - total) if eligible else 0
+    loaded = None if spec.training is None else start + timedelta(minutes=spec.training[1])
+    possible = spec.training is not None and can_gain(CATALOG_TRAININGS[spec.training[0]][0], spec.fatigue, total,
+                                                      capacity)
+    return CrewMeta(spec.id, spec.name, role, rarity, capacity, cap, target, room_type, eligible, total, headroom,
+                    loaded, possible)
 
 
-def build_world(scenario: Scenario) -> World:
-    """The simulator scenario and the per-crew oracle facts; WorldError when nothing can be gained."""
-    item_designs = item_design_records()
-    found = dict(parse_consumable_designs({"ItemDesign": item_designs}))
-    if found != CATALOG_CONSUMABLES:
-        raise WorldError(f"consumable item designs parse to {sorted(found.items())}, not CATALOG_CONSUMABLES")
-    rooms = {room.id: room.design for room in scenario.rooms}
-    crew = {spec.id: _crew_meta(spec, rooms) for spec in scenario.crew}
-    if sum(meta.headroom for meta in crew.values()) <= 0:
-        raise WorldError(f"{scenario.name}: no eligible crew has headroom below its TP cap")
-    room_designs, research_designs = room_design_records(), research_design_records()
-    account = {
+def _account(scenario: Scenario) -> dict:
+    return {
         "rooms": [
             {"@RoomId": str(room.id), "@RoomDesignId": str(CATALOG_ROOMS[room.design][0]), "@RoomStatus": "Normal"}
             for room in scenario.rooms
@@ -828,6 +923,19 @@ def build_world(scenario: Scenario) -> World:
         "crew": [_crew_record(spec, scenario.start) for spec in scenario.crew],
         "faults": [_sim_fault(fault) for fault in scenario.faults],
     }
+
+
+def build_world(scenario: Scenario) -> World:
+    """The simulator scenario and the per-crew oracle facts; WorldError when the policy can gain nothing."""
+    item_designs = item_design_records()
+    found = dict(parse_consumable_designs({"ItemDesign": item_designs}))
+    if found != CATALOG_CONSUMABLES:
+        raise WorldError(f"consumable item designs parse to {sorted(found.items())}, not CATALOG_CONSUMABLES")
+    rooms = {room.id: room.design for room in scenario.rooms}
+    crew = {spec.id: _crew_meta(spec, rooms, scenario.start) for spec in scenario.crew}
+    if sum(meta.headroom for meta in crew.values()) <= 0:
+        raise WorldError(f"{scenario.name}: no eligible crew has policy-reachable headroom")
+    room_designs, research_designs = room_design_records(), research_design_records()
     sim_scenario = {
         "design": {"room_designs": list(room_designs), "research_designs": list(research_designs)},
         "training": {
@@ -837,39 +945,35 @@ def build_world(scenario: Scenario) -> World:
             "training_designs": training_design_records(),
             "item_designs": item_designs,
         },
-        "accounts": {ACCOUNT: account},
+        "accounts": {ACCOUNT: _account(scenario)},
     }
+    research = frozenset(CATALOG_RESEARCH[name][0] for name in scenario.research)
     return World(
         sim_scenario=sim_scenario,
         room_designs=room_designs,
         research_designs=research_designs,
         crew=crew,
+        rooms=rooms,
+        research=research,
+        levels=research_levels(sorted(research)),
+        start=scenario.start,
         horizon_end=scenario.start + timedelta(days=scenario.days),
-        read_faults=any(fault["kind"] == "snapshot-failure" for fault in scenario.faults),
     )
 
 
-# -- environment -------------------------------------------------------------------------------------------------
-
-TRAINING_METHODS = ("addTraining", "finishTraining", "useConsumable")
+# -- the simulator, its probe and the recording client ------------------------------------------------------------
 
 
-@dataclass(frozen=True)
-class CallOutcome:
-    status: str  # "ok" | "refused" | "ambiguous" | "raised"
-    detail: str = ""
-    faults: tuple[str, ...] = ()
+class Simulation:
+    """One seeded simulator account and its clock, and the probe the metrics read (training log, fired faults)."""
 
-
-class SimEnvironment:
-    """The offline simulator behind the Environment protocol: one account, a simulated clock, catalog designs."""
-
-    def __init__(self, world: World, scenario: Scenario, seed: int) -> None:
+    def __init__(self, world: World, seed: int) -> None:
         self.world = world
-        self.clock = SimulatedClock(scenario.start)
+        self.clock = SimulatedClock(world.start)
         design = DesignData.from_records(**world.sim_scenario["design"])
         self.game = build_games(world.sim_scenario, seed, design, self.clock)[ACCOUNT]
 
+    @property
     def now(self) -> datetime:
         return self.clock.now
 
@@ -880,388 +984,268 @@ class SimEnvironment:
     def advance(self, delta: timedelta) -> None:
         self.clock.advance(delta)
 
-    def observe(self) -> dict:
-        """build_context's payload keyword arguments (without now); ObservationError when a read fails."""
-        game = self.game
-        if self.world.read_faults:
-            # snapshot() reads the simulated clock, which ticks one second per reading; put it back so a read-fault
-            # scenario keeps the same tick times as a fault-free one.
-            now = self.clock.now
-            try:
-                game.snapshot()
-            except SimulatedFaultError as error:
-                raise ObservationError(str(error)) from None
-            finally:
-                self.clock.now = now
-        game.listAllCharactersOfUser()
-        game.listAllTrainingDesigns2()
-        game.listAllCharacterDesigns2()
-        game.listItemsOfAShip()
-        world = self.world
-        return {
-            "characters_raw": game.allCharactersOfUser,
-            "character_designs_raw": game.allCharacterDesigns,
-            "training_designs_raw": game.trainingDesigns,
-            "items_raw": game.itemsOfAShip,
-            "rooms_raw": {"Rooms": {"Room": [dict(room) for room in game.rooms]}},
-            "room_designs_raw": {"RoomDesigns": {"RoomDesign": [dict(r) for r in world.room_designs]}},
-            "researches_raw": {"Researches": {"Research": [dict(entry) for entry in game.research]}},
-            "research_designs_raw": {"ResearchDesigns": {"ResearchDesign": [dict(r) for r in world.research_designs]}},
-        }
+    def log(self) -> tuple[dict, ...]:
+        return tuple(dict(entry) for entry in self.game.training.log)
 
-    def call(self, method: str, args: tuple) -> CallOutcome:
-        if method not in TRAINING_METHODS:
-            raise BenchmarkError(f"not a training call: {method}")
-        fired = len(self.game.fired)
+    def fired(self) -> tuple[str, ...]:
+        return tuple(self.game.fired)
+
+    def crew_record(self, character_id: str) -> Mapping[str, str] | None:
+        """The simulator's own record of a crew member now; None for an id it does not know."""
+        if character_id not in self.game.training.members:
+            return None
+        return self.game.training.record(character_id, self.clock.now)
+
+    def read_fails(self) -> bool:
+        """Whether an account read now hits an injected snapshot-failure. The clock is put back (a snapshot ticks
+        it), so a read-fault scenario keeps the tick times of a fault-free one."""
+        now = self.clock.now
         try:
-            result = getattr(self.game, method)(*args)
-        except SimulatedFaultError as error:
-            return CallOutcome("raised", str(error), tuple(self.game.fired[fired:]))
-        faults = tuple(self.game.fired[fired:])
-        # useConsumable reports True for an activateItem3 with no reply, so a fired call fault decides "ambiguous".
-        if result is None or any(fault.endswith(": ambiguous-response") for fault in faults):
-            return CallOutcome("ambiguous", "", faults)
-        return CallOutcome("ok" if result is True else "refused", "", faults)
-
-    def finish_response(self) -> object:
-        return getattr(self.game, "trainingFinish", None)
-
-    def training_log(self) -> Sequence[Mapping]:
-        return self.game.training.log
-
-    def crew_records(self) -> list[Mapping]:
-        return self.game.training.records(self.clock.now)
-
-    def day_records(self) -> Sequence[Mapping]:
-        return self.game.days
-
-    def fired(self) -> Sequence[str]:
-        return self.game.fired
+            self.game.snapshot()
+        except SimulatedFaultError:
+            return True
+        finally:
+            self.clock.now = now
+        return False
 
 
-# -- recorder and oracles ----------------------------------------------------------------------------------------
+@dataclass(frozen=True)
+class Before:
+    """The simulator's crew record just before a training call: the ground truth every oracle judges."""
 
-ROOM_TYPES = {name: kind for name, (_, kind, _) in CATALOG_ROOMS.items()}
-CONSUMABLE_TIERS = {item_id: tier for (_, tier), item_id in CATALOG_CONSUMABLES.items()}
-MAX_VIOLATIONS = 20
-DECISION_KINDS = ((FinishTraining, "finish"), (StartTraining, "start"), (UseConsumable, "consume"), (Skip, "skip"))
-
-
-def decision_kind(decision: Decision) -> str:
-    for kind, label in DECISION_KINDS:
-        if isinstance(decision, kind):
-            return label
-    raise BenchmarkError(f"not a training decision: {decision!r}")
+    total: int
+    fatigue: int
+    room_id: int
+    training_design_id: int  # 0 when idle
+    training_end: str  # "" when idle
 
 
-def crew_total(crew: CrewState) -> int:
-    return sum(crew.stats.values())
+def before_from_record(record: Mapping[str, str]) -> Before:
+    return Before(
+        total=sum(int(record[f"@{stat}Improvement"]) for stat in SIM_STATS),
+        fatigue=int(record["@Fatigue"]),
+        room_id=int(record["@RoomId"]),
+        training_design_id=int(record["@TrainingDesignId"]),
+        training_end=record["@TrainingEndDate"],
+    )
 
 
-class Recorder:
-    """Counts what the executor loop did and runs the hard-violation oracles on every executed decision.
+@dataclass(frozen=True)
+class Call:
+    """One journaled training call."""
 
-    The oracles judge the crew state the decision was made from (the rebuilt crew for a replan) and the research
-    observed in the same tick, with the benchmark's own policy tables, never the planner's helpers.
+    seq: int
+    tick: int
+    at: str
+    method: str  # addTraining | finishTraining | useConsumable
+    args: tuple[str, ...]
+    character_id: str
+    before: Before | None  # None: the simulator does not know the character
+    outcome: str  # ok | refused | ambiguous | raised
+    faults: tuple[str, ...]  # the faults the call fired
+    log_seqs: tuple[int, ...]  # the simulator log entries the call appended
+
+    def to_dict(self) -> dict:
+        data = asdict(self)
+        data["args"], data["faults"], data["log_seqs"] = list(self.args), list(self.faults), list(self.log_seqs)
+        return data
+
+
+def call_outcome(result: object, faults: Sequence[str]) -> str:
+    """The ground truth of a call: no reply (or a fired ambiguous-response fault behind useConsumable, which still
+    answers True) is ambiguous; True is ok; anything else is a refusal."""
+    if result is None or any(fault.endswith(": ambiguous-response") for fault in faults):
+        return "ambiguous"
+    return "ok" if result is True else "refused"
+
+
+CLIENT_RESPONSES = frozenset(
+    {"allCharactersOfUser", "allCharacterDesigns", "trainingDesigns", "itemsOfAShip", "trainingFinish"}
+)
+
+
+class RecordingClient:
+    """The Client surface a tick drives: the simulator's reads and training calls, every training call journaled.
+
+    Reads are delegated unchanged. The simulator has no room or research reads, so the four the real Client uses
+    (listRoomsViaAccessToken, listRoomDesigns2, listAllResearches, listAllResearchDesigns2) are built here from the
+    simulator's rooms and research and the catalog designs; Unit 9's executor makes the same calls on the real
+    Client. listAllCharactersOfUser fails (returns False) when an injected snapshot-failure hits the account read.
+    Any other attribute is an AttributeError, so a tick cannot reach the simulator behind the journal's back.
     """
 
-    def __init__(self) -> None:
-        self.now: datetime | None = None
-        self.ticks = 0
-        self.observe_failures = 0
-        self.levels: dict[str, int] = {}
-        self.skip_reasons: dict[str, int] = {}
-        self.skip_moves = 0
-        self.dropped = 0
-        self.replans = 0
-        self.actions = {method: 0 for method in TRAINING_METHODS}
-        self.outcomes = {"ok": 0, "refused": 0, "ambiguous": 0, "raised": 0}
-        self.accepted = 0
-        self.refused = 0
-        self.consumables_used = 0
-        self.cap_violations = 0
-        self.consumable_violations = 0
-        self.research_gate_violations = 0
-        self.violations: list[dict] = []
-        self.trace: list[dict] = []
+    def __init__(self, simulation: Simulation, record: Callable[[Call], None]) -> None:
+        self._simulation = simulation
+        self._game = simulation.game
+        self._record = record
+        self._seq = 0
+        self.tick = 0
 
-    def begin_tick(self, now: datetime) -> None:
-        self.now = now
-        self.ticks += 1
+    def __getattr__(self, name: str):
+        if name in CLIENT_RESPONSES:
+            return getattr(self.__dict__["_game"], name)
+        raise AttributeError(f"RecordingClient has no {name!r}: not a training call or read")
 
-    def observe_failure(self) -> None:
-        self.observe_failures += 1
-        self.trace.append({"at": format_time(self.now), "decision": "observe-failure"})
+    # -- reads -------------------------------------------------------------------------------------------------
 
-    def planned(self, ctx: TrainingContext, plan: Sequence[Decision], payloads: Mapping[str, object]) -> None:
-        researches = payloads.get("researches_raw") or {}
-        self.levels = research_levels(researches.get("Researches", {}).get("Research", []))
+    def listAllCharactersOfUser(self) -> bool:
+        if self._simulation.read_fails():
+            return False
+        return self._game.listAllCharactersOfUser()
 
-    def _trace(self, decision: Decision, **extra: object) -> None:
-        entry = {
-            "at": format_time(self.now),
-            "decision": decision_kind(decision),
-            "character_id": decision.character_id,
+    def listAllCharacterDesigns2(self) -> bool:
+        return self._game.listAllCharacterDesigns2()
+
+    def listAllTrainingDesigns2(self) -> bool:
+        return self._game.listAllTrainingDesigns2()
+
+    def listItemsOfAShip(self) -> bool:
+        return self._game.listItemsOfAShip()
+
+    def listRoomsViaAccessToken(self) -> bool:
+        rooms = [dict(room) for room in self._game.rooms]
+        self.roomsViaAccessToken = {"RoomService": {"ListRoomsViaAccessToken": {"Rooms": {"Room": rooms}}}}
+        return True
+
+    def listRoomDesigns2(self) -> bool:
+        designs = [dict(record) for record in self._simulation.world.room_designs]
+        self.roomDesigns = {"RoomService": {"ListRoomDesigns": {"RoomDesigns": {"RoomDesign": designs}}}}
+        return True
+
+    def listAllResearches(self) -> bool:
+        research = [dict(entry) for entry in self._game.research]
+        self.allResearches = {"ResearchService": {"ListAllResearches": {"Researches": {"Research": research}}}}
+        return True
+
+    def listAllResearchDesigns2(self) -> bool:
+        designs = [dict(record) for record in self._simulation.world.research_designs]
+        self.allResearchDesigns = {
+            "ResearchService": {"ListAllResearchDesigns": {"ResearchDesigns": {"ResearchDesign": designs}}}
         }
-        if isinstance(decision, StartTraining):
-            entry["design"] = decision.training_design_id
-        elif isinstance(decision, UseConsumable):
-            entry["item"] = decision.item_design_id
-        elif isinstance(decision, Skip):
-            entry["reason"] = decision.reason_code
-            entry["detail"] = decision.detail
-        entry.update(extra)
-        self.trace.append(entry)
+        return True
 
-    def skipped(self, decision: Skip) -> None:
-        self.skip_reasons[decision.reason_code] = self.skip_reasons.get(decision.reason_code, 0) + 1
-        if decision.reason_code == SKIP_NOT_IN_TRAINING_ROOM and decision.detail.startswith("move to"):
-            self.skip_moves += 1
-        self._trace(decision)
+    # -- training calls ------------------------------------------------------------------------------------------
 
-    def drop(self, decision: Decision) -> None:
-        self.dropped += 1
-        self._trace(decision, status="dropped")
+    def addTraining(self, training_design_id, character_id) -> object:
+        return self._call("addTraining", (training_design_id, character_id), character_id)
 
-    def replanned(self, decision: Decision) -> None:
-        self.replans += 1
+    def finishTraining(self, character_id) -> object:
+        return self._call("finishTraining", (character_id,), character_id)
 
-    def executed(self, decision: Decision, crew: CrewState, outcome: CallOutcome) -> None:
-        method = {"finish": "finishTraining", "start": "addTraining", "consume": "useConsumable"}[
-            decision_kind(decision)
-        ]
-        self.actions[method] += 1
-        self.outcomes[outcome.status] += 1
-        if outcome.status == "ok":
-            self.accepted += 1
-            if isinstance(decision, UseConsumable):
-                self.consumables_used += 1
-        elif outcome.status == "refused" and not any(fault.endswith(": reject") for fault in outcome.faults):
-            self.refused += 1
-        self._check(decision, crew)
-        self._trace(decision, status=outcome.status)
+    def useConsumable(self, consumable_item_design_id, character_id) -> object:
+        return self._call("useConsumable", (consumable_item_design_id, character_id), character_id)
 
-    def _violation(self, kind: str, crew: CrewState, detail: str) -> None:
-        if kind == "cap":
-            self.cap_violations += 1
-        elif kind == "consumable":
-            self.consumable_violations += 1
-        else:
-            self.research_gate_violations += 1
-        if len(self.violations) < MAX_VIOLATIONS:
-            entry = {"kind": kind, "at": format_time(self.now), "character_id": crew.character_id, "detail": detail}
-            self.violations.append(entry)
-
-    def _check(self, decision: Decision, crew: CrewState) -> None:
-        if isinstance(decision, FinishTraining):
-            return
-        total, capacity = crew_total(crew), crew.training_capacity
-        cap = oracle_cap(crew.rarity, crew.name, capacity)
-        if total >= cap:
-            self._violation("cap", crew, f"{decision_kind(decision)} at {total} TP >= cap {cap} TP")
-        pct = percent(total, capacity) if capacity > 0 else ORACLE_COMPLETE_PERCENT
-        if isinstance(decision, UseConsumable):
-            tier = CONSUMABLE_TIERS.get(decision.item_design_id)
-            problems = []
-            if tier is None:
-                problems.append(f"item {decision.item_design_id} is not a catalog consumable")
-            elif not consumable_allowed(tier, pct, crew.fatigue):
-                problems.append(f"{tier} rule does not allow {pct}% with fatigue {crew.fatigue}")
-            if crew.name not in ORACLE_ROLES:
-                problems.append(f"{crew.name!r} has no role")
-            if ROOM_TYPES.get(crew.room_name or "") is None:
-                problems.append(f"room {crew.room_name!r} is not a training room")
-            if problems:
-                self._violation("consumable", crew, "; ".join(problems))
-        if isinstance(decision, StartTraining):
-            band = oracle_band(pct)
-            if band is not None and not gate_met(band, self.levels):
-                self._violation("research-gate", crew, f"{band[0]} T{band[1]} gate unmet at {pct}% ({self.levels})")
+    def _call(self, method: str, args: tuple, character_id: object) -> object:
+        game, simulation = self._game, self._simulation
+        record = simulation.crew_record(str(character_id))
+        before = None if record is None else before_from_record(record)
+        fired, logged = len(game.fired), len(game.training.log)
+        outcome = "raised"  # unless the call returns: an exception (an injected raise) propagates to the tick
+        try:
+            result = getattr(game, method)(*args)
+            outcome = call_outcome(result, game.fired[fired:])
+            return result
+        finally:
+            self._seq += 1
+            log_seqs = tuple(entry["seq"] for entry in game.training.log[logged:])
+            self._record(Call(self._seq, self.tick, format_time(simulation.now), method,
+                              tuple(str(arg) for arg in args), str(character_id), before, outcome,
+                              tuple(game.fired[fired:]), log_seqs))
 
 
-# -- the executor loop -------------------------------------------------------------------------------------------
+# -- the contract executor (the default tick) ---------------------------------------------------------------------
 
 
-def execute(env, decision: Decision) -> CallOutcome:
-    """Carry a decision out through its catalog action: action_for, the spec's client method, its positional args."""
+@dataclass(frozen=True)
+class TickReport:
+    """What a tick says about itself: diagnostics only, never scored and never trusted for an oracle."""
+
+    skips: tuple[tuple[str, str], ...] = ()  # (reason code, detail) per skipped crew
+    dropped: int = 0  # advisory decisions dropped after a finish that did not succeed
+    replans: int = 0
+    observe_failed: bool = False
+
+    def to_dict(self) -> dict:
+        return {"skips": [list(skip) for skip in self.skips], "dropped": self.dropped, "replans": self.replans,
+                "observe_failed": self.observe_failed}
+
+
+Tick = Callable[[object, datetime], "TickReport | None"]
+# (client read method, response attribute, build_context keyword)
+CLIENT_READS = (
+    ("listAllCharactersOfUser", "allCharactersOfUser", "characters_raw"),
+    ("listAllCharacterDesigns2", "allCharacterDesigns", "character_designs_raw"),
+    ("listAllTrainingDesigns2", "trainingDesigns", "training_designs_raw"),
+    ("listItemsOfAShip", "itemsOfAShip", "items_raw"),
+    ("listRoomsViaAccessToken", "roomsViaAccessToken", "rooms_raw"),
+    ("listRoomDesigns2", "roomDesigns", "room_designs_raw"),
+    ("listAllResearches", "allResearches", "researches_raw"),
+    ("listAllResearchDesigns2", "allResearchDesigns", "research_designs_raw"),
+)
+
+
+def read_payloads(client) -> dict | None:
+    """build_context's payload keywords, read through the client; None when a read fails."""
+    payloads = {}
+    try:
+        for method, attribute, keyword in CLIENT_READS:
+            if getattr(client, method)() is not True:
+                return None
+            payloads[keyword] = getattr(client, attribute)
+    except ConnectionError:
+        return None
+    return payloads
+
+
+def execute(client, decision) -> str:
+    """Carry a decision out through its catalog action and say how it went, as the executor sees it."""
     request = action_for(decision)
     if request is None:
         raise BenchmarkError(f"a Skip is never executed: {decision!r}")
     action_id, params = request
     spec = get_spec(action_id)
-    return env.call(spec.client_method, call_arguments(spec, params))
-
-
-def run_tick(env, *, planner, replanner, strategy: TrainingStrategy, recorder: Recorder) -> None:
-    """One executor pass: observe, plan, finish, replan each collected crew with the remaining stock, execute."""
-    recorder.begin_tick(env.now())
     try:
-        payloads = env.observe()
-    except ObservationError:
-        recorder.observe_failure()
-        return
-    ctx = build_context(now=env.now(), **payloads)
-    plan = planner(ctx, strategy)
-    recorder.planned(ctx, plan, payloads)
+        result = getattr(client, spec.client_method)(*call_arguments(spec, params))
+    except ConnectionError:
+        return "raised"
+    if result is None:
+        return "ambiguous"
+    return "ok" if result is True else "refused"
+
+
+def rebuilt_crew(client, character_id: int, payloads: Mapping[str, object]) -> CrewState | None:
+    """The crew rebuilt from the last FinishTraining response; None unless it is exactly that crew."""
+    rebuilt = parse_crew(client.trainingFinish, payloads["character_designs_raw"], payloads["rooms_raw"],
+                         payloads["room_designs_raw"])
+    return rebuilt[0] if len(rebuilt) == 1 and rebuilt[0].character_id == character_id else None
+
+
+def carry_out(client, ctx, plan, replanner, strategy: TrainingStrategy, payloads: Mapping) -> TickReport:
+    """Execute a plan: finish, replan each collected crew with the remaining stock, run every other decision."""
     finished = {decision.character_id for decision in plan if isinstance(decision, FinishTraining)}
     stock = remaining_stock(ctx.items, plan, exclude_character_ids=finished)
-    by_id = {crew.character_id: crew for crew in ctx.crew}
     collected: set[int] = set()
+    skips: list[tuple[str, str]] = []
+    dropped = replans = 0
     for decision in plan:
         cid = decision.character_id
         if isinstance(decision, FinishTraining):
-            outcome = execute(env, decision)
-            recorder.executed(decision, by_id[cid], outcome)
-            if outcome.status == "ok":
+            if execute(client, decision) == "ok":
                 collected.add(cid)
             continue
-        crew = by_id[cid]
         if cid in finished:  # the advisory primary after a FinishTraining is never run as-is
-            if cid not in collected:
-                recorder.drop(decision)
+            crew = rebuilt_crew(client, cid, payloads) if cid in collected else None
+            if crew is None:
+                dropped += 1
                 continue
-            rebuilt = parse_crew(
-                env.finish_response(),
-                payloads["character_designs_raw"],
-                payloads["rooms_raw"],
-                payloads["room_designs_raw"],
-            )
-            if len(rebuilt) != 1:
-                recorder.drop(decision)
-                continue
-            crew = rebuilt[0]
             (decision,) = replanner(ctx, crew, strategy, stock)
             stock = remaining_stock(stock, (decision,))
-            recorder.replanned(decision)
+            replans += 1
         if isinstance(decision, Skip):
-            recorder.skipped(decision)
+            skips.append((decision.reason_code, decision.detail))
             continue
-        recorder.executed(decision, crew, execute(env, decision))
-
-
-# -- metrics -----------------------------------------------------------------------------------------------------
-
-
-def _seconds(delta: timedelta) -> int:
-    return delta // timedelta(seconds=1)
-
-
-def idle_seconds(window: tuple[datetime, datetime], sessions: Sequence[tuple[datetime, datetime]]) -> int:
-    """Seconds of ``window`` that no session covers (sessions are clipped to the window and never double-counted)."""
-    start, end = window
-    if end <= start:
-        return 0
-    covered = 0
-    cursor = start
-    for low, high in sorted(sessions):
-        low, high = max(low, cursor), min(high, end)
-        if high > low:
-            covered += _seconds(high - low)
-            cursor = high
-    return _seconds(end - start) - covered
-
-
-def progress_auc(
-    headroom: Mapping[int, int], initial: Mapping[int, int], totals_by_day: Sequence[Mapping[int, int]]
-) -> float:
-    """Mean over days of the headroom gained by each day's end, as a fraction of the total headroom."""
-    total_headroom = sum(headroom.values())
-    if total_headroom <= 0 or not totals_by_day:
-        return 0.0
-    gained = 0
-    for totals in totals_by_day:
-        for crew, room in sorted(headroom.items()):
-            gained += min(room, max(0, totals.get(crew, initial[crew]) - initial[crew]))
-    return gained / (len(totals_by_day) * total_headroom)
-
-
-def focus_ratio(role_by_crew: Mapping[int, str | None], gains_by_crew: Mapping[int, Mapping[str, int]]) -> float:
-    """TP the role-known crew gained in their role's focus stats, as a fraction of all TP they gained."""
-    focused = gained = 0
-    for crew, role in sorted(role_by_crew.items()):
-        if role is None:
-            continue
-        gains = gains_by_crew.get(crew, {})
-        focus = ORACLE_FOCUS.get(role, ())
-        for stat, amount in sorted(gains.items()):
-            gained += amount
-            if stat in focus:
-                focused += amount
-    return focused / gained if gained else 0.0
-
-
-@dataclass(frozen=True)
-class Metrics:
-    progress: float = 0.0  # P: progress AUC over days, a fraction of the eligible headroom
-    utilisation: float = 0.0  # U: 1 - idle / eligible training-room crew time
-    focus: float = 0.0  # F: share of gained TP in the role's focus stats
-    accepted_actions: int = 0
-    refused_actions: int = 0  # server refusals not caused by an injected reject fault
-    cap_violations: int = 0
-    consumable_violations: int = 0
-    research_gate_violations: int = 0
-    eligible_crew: int = 0
-    headroom: int = 0
-    tp_gained: int = 0
-    tp_gained_eligible: int = 0
-    tp_per_crew_day: float = 0.0
-    eligible_crew_hours: float = 0.0
-    idle_crew_hours: float = 0.0
-    actions: Mapping[str, int] = field(default_factory=dict)
-    refusal_codes: Mapping[str, int] = field(default_factory=dict)
-    zero_gain_sessions: int = 0
-    wasted_actions: int = 0
-    fault_rejected: int = 0
-    raised: int = 0
-    ambiguous: int = 0
-    contradicted: int = 0
-    observe_failures: int = 0
-    dropped: int = 0
-    replans: int = 0
-    violations: tuple[Mapping[str, object], ...] = ()
-    cap_overshoot_tp: int = 0
-    skip_reasons: Mapping[str, int] = field(default_factory=dict)
-    skip_moves: int = 0
-    consumables_used: int = 0
-
-    @property
-    def reliability(self) -> float:
-        attempted = self.accepted_actions + self.refused_actions
-        return self.accepted_actions / attempted if attempted else 1.0
-
-    def to_dict(self) -> dict:
-        data = {name: getattr(self, name) for name in self.__dataclass_fields__}
-        for name in ("actions", "refusal_codes", "skip_reasons"):
-            data[name] = dict(sorted(data[name].items()))
-        data["violations"] = [dict(entry) for entry in self.violations]
-        data["reliability"] = round(self.reliability, 6)
-        for name in ("progress", "utilisation", "focus"):
-            data[name] = round(data[name], 6)
-        return data
-
-
-def score_scenario(metrics: Metrics | None) -> float:
-    """100 x R x (0.65 P + 0.25 U + 0.10 F), rounded to 6 places; 0.0 for an error or any hard violation."""
-    if metrics is None:
-        return 0.0
-    if metrics.cap_violations or metrics.consumable_violations or metrics.research_gate_violations:
-        return 0.0
-    weighted = (
-        SCORE_WEIGHTS["progress"] * metrics.progress
-        + SCORE_WEIGHTS["utilisation"] * metrics.utilisation
-        + SCORE_WEIGHTS["focus"] * metrics.focus
-    )
-    return round(100 * metrics.reliability * weighted, 6)
-
-
-def composite(scores: Sequence[float]) -> float:
-    """The mean scenario score, rounded to 6 places (0.0 for no scenarios)."""
-    if not scores:
-        return 0.0
-    return round(sum(scores) / len(scores), 6)
-
-
-# -- episodes ----------------------------------------------------------------------------------------------------
+        execute(client, decision)
+    return TickReport(tuple(skips), dropped, replans)
 
 
 def default_strategy() -> TrainingStrategy:
@@ -1269,174 +1253,562 @@ def default_strategy() -> TrainingStrategy:
     return with_consumables(DEFAULT_STRATEGY, CATALOG_CONSUMABLES)
 
 
-@dataclass(frozen=True)
-class Episode:
-    world: World
-    scenario: Scenario
-    seed: int
-    recorder: Recorder
-    log: tuple[Mapping[str, object], ...]
-    day_totals: tuple[Mapping[int, int], ...]  # crew totals at the start of days 1..D-1
-    final: Mapping[int, int]  # crew totals at the horizon
-    fired: tuple[str, ...]
-
-
-def record_totals(records: Sequence[Mapping[str, str]]) -> dict[int, int]:
-    return {
-        int(record["@CharacterId"]): sum(int(record[f"@{stat}Improvement"]) for stat in SIM_STATS)
-        for record in records
-    }
-
-
-def run_episode(
-    scenario: Scenario,
-    *,
-    seed: int | None = None,
-    planner=None,
-    replanner=None,
-    strategy: TrainingStrategy | None = None,
-    environment_factory=None,
-    tick=None,
-    days: int | None = None,
-) -> Episode:
-    """Run one scenario for its days (or ``days``) at its tick cadence and collect what the metrics need.
-
-    Everything is injectable: the planner and replanner, the strategy, the environment factory and the tick
-    function. The swap point for Unit 9's executor (sdk/execution/training.py) is ``tick``: any callable taking
-    ``run_tick``'s keywords, driving ``env.game`` (which implements the Client surface) and reporting to the
-    recorder.
-    """
-    if days is not None:
-        scenario = replace(scenario, days=days)
-    seed = scenario.seed if seed is None else seed
+def make_contract_executor(planner=None, replanner=None, strategy: TrainingStrategy | None = None) -> Tick:
+    """The documented executor contract as a tick: read through the client, build_context, plan_training, carry
+    every decision out through the action catalog, and replan each finished crew with replan_after_finish and the
+    remaining stock. Unit 9's executor (sdk/execution/training.py) replaces this tick, nothing else."""
     planner = plan_training if planner is None else planner
     replanner = replan_after_finish if replanner is None else replanner
     strategy = default_strategy() if strategy is None else strategy
-    tick = run_tick if tick is None else tick
+
+    def tick(client, now: datetime) -> TickReport:
+        payloads = read_payloads(client)
+        if payloads is None:
+            return TickReport(observe_failed=True)
+        ctx = build_context(now=now, **payloads)
+        return carry_out(client, ctx, planner(ctx, strategy), replanner, strategy, payloads)
+
+    return tick
+
+
+# -- episodes ----------------------------------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Episode:
+    scenario: Scenario
+    world: World
+    seed: int
+    journal: tuple[Call, ...]
+    log: tuple[Mapping[str, object], ...]
+    fired: tuple[str, ...]
+    reports: tuple[TickReport, ...]
+
+
+def run_episode(scenario: Scenario, *, seed: int | None = None, tick: Tick | None = None,
+                days: int | None = None) -> Episode:
+    """Run one scenario for its days (or ``days``) at its tick cadence: ``tick(client, now)`` once per tick."""
+    if days is not None:
+        scenario = replace(scenario, days=days)
+    seed = scenario.seed if seed is None else seed
+    tick = make_contract_executor() if tick is None else tick
     world = build_world(scenario)
-    env = (environment_factory or SimEnvironment)(world, scenario, seed)
-    recorder = Recorder()
+    simulation = Simulation(world, seed)
+    journal: list[Call] = []
+    client = RecordingClient(simulation, journal.append)
+    reports: list[TickReport] = []
     step = timedelta(minutes=scenario.tick_minutes)
     for day in range(scenario.days):
-        env.start_day(day)
+        simulation.start_day(day)
         for _ in range(1440 // scenario.tick_minutes):
-            tick(env, planner=planner, replanner=replanner, strategy=strategy, recorder=recorder)
-            env.advance(step)
-    return Episode(
-        world=world,
-        scenario=scenario,
-        seed=seed,
-        recorder=recorder,
-        log=tuple(dict(entry) for entry in env.training_log()),
-        day_totals=tuple(record_totals(day["crew"]) for day in env.day_records()[1:]),
-        final=record_totals(env.crew_records()),
-        fired=tuple(env.fired()),
+            client.tick += 1
+            report = tick(client, simulation.now)
+            reports.append(TickReport() if report is None else report)
+            simulation.advance(step)
+    return Episode(scenario, world, seed, tuple(journal), simulation.log(), simulation.fired(), tuple(reports))
+
+
+# -- oracles: pure functions of the world and the call journal ----------------------------------------------------
+
+
+@dataclass(frozen=True)
+class PolicyView:
+    """What the owner-approved policy sees for one crew just before a call (the benchmark's own reading)."""
+
+    role: str | None
+    room_type: str | None
+    total: int
+    pct: int
+    cap: int
+    fatigue: int
+    in_progress: bool
+    band: tuple[str, int] | None
+    slot_room: str | None  # the room type of the role's slot for the band
+    expected_design: int | None  # the role's training for the band's slot and tier
+    gate_ok: bool
+    design_research_ok: bool  # the expected design's own research is completed
+
+    @property
+    def placed(self) -> bool:
+        """A role, a training room and room under the cap: the policy considers the crew at all."""
+        return self.role is not None and self.room_type is not None and self.total < self.cap
+
+    @property
+    def startable(self) -> bool:
+        return (
+            self.placed
+            and not self.in_progress
+            and self.band is not None
+            and self.room_type == self.slot_room
+            and self.gate_ok
+            and self.fatigue < ORACLE_MAX_TRAINING_FATIGUE
+            and self.design_research_ok
+        )
+
+    @property
+    def consumable_branch(self) -> bool:
+        """The precedence reaches a consumable fallback: in progress, complete, or nothing startable in the right
+        room type (gate, fatigue, design or design research). Never while a start is possible or on a move."""
+        if not self.placed:
+            return False
+        if self.in_progress or self.band is None:
+            return True
+        return self.room_type == self.slot_room and not self.startable
+
+
+def policy_view(world: World, meta: CrewMeta, before: Before, at: str) -> PolicyView:
+    room_name = world.rooms.get(before.room_id)
+    room_type = CATALOG_ROOMS[room_name][1] if room_name is not None else None
+    pct = percent(before.total, meta.capacity)
+    band = oracle_band(pct)
+    slot_room, expected = role_training(meta.role, band)
+    required = None if expected is None else design_research(expected)
+    in_progress = before.training_design_id != 0 and parse_time(before.training_end) > parse_time(at)
+    return PolicyView(
+        role=meta.role,
+        room_type=room_type,
+        total=before.total,
+        pct=pct,
+        cap=meta.cap,
+        fatigue=before.fatigue,
+        in_progress=in_progress,
+        band=band,
+        slot_room=slot_room,
+        expected_design=expected,
+        gate_ok=band is None or gate_met(band, world.levels),
+        design_research_ok=required is None or required in world.research,
     )
 
 
-def _done_at(meta: CrewMeta, log: Sequence[Mapping[str, object]], horizon: datetime) -> datetime:
-    """When the crew stopped needing training: its first accepted finish or item use that reached its cap or the
-    complete percent; the horizon when it never did."""
-    for entry in log:
-        if entry["character_id"] != str(meta.character_id) or not entry["accepted"] or entry["op"] == "start":
+def start_violations(world: World, view: PolicyView, design_id: int) -> list[tuple[str, str]]:
+    """Each policy rule a StartTraining of ``design_id`` breaks, judged on the crew before the call."""
+    found = []
+    if view.total >= view.cap:
+        found.append(("cap", f"start at {view.total} TP >= cap {view.cap} TP"))
+    if view.band is None:
+        found.append(("complete", f"start at {view.pct}% >= {ORACLE_COMPLETE_PERCENT}%"))
+    if view.fatigue >= ORACLE_MAX_TRAINING_FATIGUE:
+        found.append(("fatigue", f"start at fatigue {view.fatigue} >= {ORACLE_MAX_TRAINING_FATIGUE}"))
+    if view.band is not None and not view.gate_ok:
+        found.append(("research-gate", f"{view.band[0]} T{view.band[1]} gate unmet at {view.pct}%"))
+    if view.room_type is None or view.slot_room not in (None, view.room_type):
+        found.append(("room", f"start in room type {view.room_type} for a {view.slot_room} slot"))
+    if view.role is None or (view.band is not None and design_id != view.expected_design):
+        found.append(("design", f"design {design_id} is not the role's training {view.expected_design}"))
+    required = design_research(design_id)
+    if required is not None and required not in world.research:
+        found.append(("design-research", f"design {design_id} needs research {required}"))
+    return found
+
+
+def consumable_violations(view: PolicyView, item_id: int) -> list[tuple[str, str]]:
+    """Each policy rule a UseConsumable of ``item_id`` breaks, judged on the crew before the call."""
+    found = []
+    if view.total >= view.cap:
+        found.append(("cap", f"consumable at {view.total} TP >= cap {view.cap} TP"))
+    tier = CONSUMABLE_TIERS.get(item_id)
+    problems = []
+    if tier is None:
+        problems.append(f"item {item_id} is not a catalog consumable")
+    elif not consumable_allowed(tier, view.pct, view.fatigue):
+        problems.append(f"{tier} rule does not allow {view.pct}% with fatigue {view.fatigue}")
+    if view.role is None:
+        problems.append("no role")
+    if view.room_type is None:
+        problems.append("not in a training room")
+    if problems:
+        found.append(("consumable", "; ".join(problems)))
+    if view.placed and not view.consumable_branch:
+        reason = "a start was possible" if view.startable else f"the crew should move to {view.slot_room}"
+        found.append(("consumable-precedence", reason))
+    return found
+
+
+@dataclass(frozen=True)
+class Violation:
+    kind: str
+    seq: int
+    at: str
+    character_id: int
+    detail: str
+
+
+def journal_violations(world: World, journal: Sequence[Call]) -> tuple[Violation, ...]:
+    """Every hard-violation finding over the journal; a finish, or a call for an unknown crew, is never judged."""
+    found = []
+    for call in journal:
+        meta = world.crew.get(_to_int(call.character_id))
+        if call.method == "finishTraining" or call.before is None or meta is None:
             continue
-        total = entry["total"]
-        if total >= meta.cap or percent(total, meta.capacity) >= ORACLE_COMPLETE_PERCENT:
+        view = policy_view(world, meta, call.before, call.at)
+        target = _to_int(call.args[0])
+        if call.method == "addTraining":
+            rules = start_violations(world, view, target)
+        else:
+            rules = consumable_violations(view, target)
+        found += [Violation(kind, call.seq, call.at, meta.character_id, detail) for kind, detail in rules]
+    return tuple(found)
+
+
+# -- metrics: pure functions of the world, the journal and the simulator log ---------------------------------------
+
+
+@dataclass(frozen=True)
+class Session:
+    character_id: int
+    start: datetime
+    end: datetime
+    gain: int | None  # None: not collected by the horizon
+    can_gain: bool  # the best draw at its starting fatigue, under the capacity, gains something (and, when
+    # uncollected, it was still running at the horizon)
+    loaded: bool = False  # already running at the start
+
+
+def can_gain(design_id: int, fatigue: int, total: int, capacity: int) -> bool:
+    """Whether a session can gain anything: the simulator scales the draw by (100 - fatigue at start) / 100."""
+    entry = TRAININGS_BY_ID.get(design_id)
+    best = 0 if entry is None else TIER_PARAMS[entry[2]][3] * (100 - fatigue) // 100
+    return best > 0 and total < capacity
+
+
+def episode_sessions(world: World, log: Sequence[Mapping[str, object]],
+                     journal: Sequence[Call]) -> tuple[Session, ...]:
+    """Every training session, from accepted starts (and the sessions loaded at the start) to their finishes. The
+    fatigue a session started with is the journaled record from just before its start."""
+    before = {seq: call.before for call in journal for seq in call.log_seqs}
+    open_sessions = {
+        cid: (world.start, meta.loaded_until, True, meta.loaded_can_gain)
+        for cid, meta in world.crew.items() if meta.loaded_until
+    }
+    sessions = []
+    for entry in log:
+        if not entry["accepted"] or entry["op"] == "consume":
+            continue
+        cid = int(entry["character_id"])
+        if entry["op"] == "start":
+            record = before.get(entry["seq"])
+            possible = record is not None and can_gain(_to_int(entry["design_id"]), record.fatigue, record.total,
+                                                       world.crew[cid].capacity)
+            open_sessions[cid] = (parse_time(entry["at"]), parse_time(entry["end"]), False, possible)
+        elif cid in open_sessions:
+            start, end, loaded, possible = open_sessions.pop(cid)
+            sessions.append(Session(cid, start, end, sum(entry["gain"].values()), possible, loaded))
+    # An uncollected session that ended before the horizon gained nothing: nobody collected it.
+    sessions += [Session(cid, start, end, None, possible and end >= world.horizon_end, loaded)
+                 for cid, (start, end, loaded, possible) in open_sessions.items()]
+    return tuple(sorted(sessions, key=lambda session: (session.character_id, session.start)))
+
+
+def productive(session: Session) -> bool:
+    """A session that gained something; one still running at the horizon counts when it can gain something."""
+    return session.can_gain if session.gain is None else session.gain > 0
+
+
+def covered_seconds(window: tuple[datetime, datetime], intervals: Sequence[tuple[datetime, datetime]]) -> int:
+    """Seconds of ``window`` the intervals cover (clipped to the window, never double-counted)."""
+    start, end = window
+    covered = 0
+    cursor = start
+    for low, high in sorted(intervals):
+        low, high = max(low, cursor), min(high, end)
+        if high > low:
+            covered += _seconds(high - low)
+            cursor = high
+    return covered
+
+
+def done_at(meta: CrewMeta, log: Sequence[Mapping[str, object]], horizon: datetime) -> datetime:
+    """When the crew reached its policy target (an accepted finish or item use); the horizon if it never did."""
+    for entry in log:
+        if entry["character_id"] == str(meta.character_id) and entry["accepted"] and entry["op"] != "start" \
+                and entry["total"] >= meta.target:
             return parse_time(entry["at"])
     return horizon
 
 
-def _sessions(spec: CrewSpec, log: Sequence[Mapping[str, object]], start: datetime) -> list[tuple[datetime, datetime]]:
-    sessions = []
-    if spec.training is not None:
-        sessions.append((start, start + timedelta(minutes=spec.training[1])))
+def utilisation_seconds(world: World, log: Sequence[Mapping[str, object]],
+                        sessions: Sequence[Session]) -> tuple[int, int]:
+    """(window, productive) crew-seconds over the eligible crew with headroom: from the start until each reaches its
+    target, the time covered by sessions that gained something. Zero-gain sessions are wasted, not busy."""
+    window_s = busy_s = 0
+    for cid, meta in sorted(world.crew.items()):
+        if meta.headroom <= 0:
+            continue
+        window = (world.start, done_at(meta, log, world.horizon_end))
+        window_s += _seconds(window[1] - window[0])
+        busy = [(s.start, s.end) for s in sessions if s.character_id == cid and productive(s)]
+        busy_s += covered_seconds(window, busy)
+    return window_s, busy_s
+
+
+def progress_area(world: World, log: Sequence[Mapping[str, object]]) -> float:
+    """P: the area under the reachable-progress curve, per log event, as a fraction of headroom x horizon.
+
+    Each crew's progress is min(headroom, total - initial total); it changes only at accepted finishes and item
+    uses, so the area is exact: every gain counts for the time left until the horizon.
+    """
+    headroom = sum(meta.headroom for meta in world.crew.values())
+    span = _seconds(world.horizon_end - world.start)
+    if headroom <= 0:
+        return 0.0
+    reached: dict[int, int] = {}
+    area = 0
     for entry in log:
-        if entry["op"] == "start" and entry["accepted"] and entry["character_id"] == str(spec.id):
-            sessions.append((parse_time(entry["at"]), parse_time(entry["end"])))
-    return sessions
+        if not entry["accepted"] or entry["op"] == "start":
+            continue
+        meta = world.crew[int(entry["character_id"])]
+        now = min(meta.headroom, max(0, entry["total"] - meta.initial_total))
+        area += (now - reached.get(meta.character_id, 0)) * _seconds(world.horizon_end - parse_time(entry["at"]))
+        reached[meta.character_id] = now
+    return area / (headroom * span)
+
+
+def gains_by_crew(log: Sequence[Mapping[str, object]]) -> dict[int, int]:
+    gains: dict[int, int] = {}
+    for entry in log:
+        if entry["accepted"]:
+            cid = int(entry["character_id"])
+            gains[cid] = gains.get(cid, 0) + sum(entry["gain"].values())
+    return gains
+
+
+def _count(keys) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for key in keys:
+        counts[key] = counts.get(key, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def tick_diagnostics(reports: Sequence[TickReport]) -> dict:
+    skips = [skip for report in reports for skip in report.skips]
+    return {
+        "skip_reasons": _count(reason for reason, _ in skips),
+        "skip_moves": sum(1 for reason, detail in skips
+                          if reason == SKIP_NOT_IN_TRAINING_ROOM and detail.startswith("move to")),
+        "dropped": sum(report.dropped for report in reports),
+        "replans": sum(report.replans for report in reports),
+        "observe_failures": sum(1 for report in reports if report.observe_failed),
+    }
+
+
+def journal_counts(world: World, journal: Sequence[Call]) -> dict:
+    ok = [call for call in journal if call.outcome == "ok"]
+    refused = [call for call in journal
+               if call.outcome == "refused" and not any(fault.endswith(": reject") for fault in call.faults)]
+    starts = [call for call in ok if call.method == "addTraining" and call.before is not None]
+    items = [_to_int(call.args[0]) for call in ok if call.method == "useConsumable"]
+    return {
+        "accepted_actions": len(ok),
+        "refused_actions": len(refused),
+        "actions": {method: sum(1 for call in journal if call.method == method)
+                    for method in ("addTraining", "finishTraining", "useConsumable")},
+        "outcomes": _count(call.outcome for call in journal),
+        "raised": sum(1 for call in journal if call.outcome == "raised"),
+        "ambiguous": sum(1 for call in journal if call.outcome == "ambiguous"),
+        "starts_by_band": _count(band_label(percent(call.before.total, world.crew[_to_int(call.character_id)].capacity))
+                                 for call in starts),
+        "consumables_by_tier": _count(CONSUMABLE_TIERS.get(item, "other") for item in items),
+        "consumables_used": len(items),
+    }
+
+
+def log_counts(world: World, log: Sequence[Mapping[str, object]], fired: Sequence[str]) -> dict:
+    accepted = [entry for entry in log if entry["accepted"]]
+    return {
+        "refusal_codes": _count(entry["code"] for entry in log if not entry["accepted"]),
+        "contradicted": sum(1 for entry in accepted
+                            if entry["op"] == "start" and entry["design_id"] != entry["requested_design_id"]),
+        "sessions_by_room": _count(world.rooms.get(int(entry["room_id"]), "none") for entry in accepted
+                                   if entry["op"] == "start"),
+        "fault_rejected": sum(1 for fault in fired if fault.endswith(": reject")),
+        "read_faults": sum(1 for fault in fired if fault.endswith(": snapshot-failure")),
+    }
+
+
+@dataclass(frozen=True)
+class Metrics:
+    progress: float = 0.0  # P: reachable-progress area, per log event
+    utilisation: float | None = None  # U: productive / window crew time; None when no crew had a window
+    accepted_actions: int = 0
+    refused_actions: int = 0  # refusals not caused by an injected reject fault
+    violations: Mapping[str, int] = field(default_factory=dict)  # oracle kind -> findings
+    violation_samples: tuple[Mapping[str, object], ...] = ()
+    eligible_crew: int = 0
+    headroom: int = 0
+    tp_gained: int = 0
+    tp_gained_eligible: int = 0
+    tp_per_crew_day: float = 0.0
+    crew_completed: int = 0
+    eligible_crew_hours: float = 0.0
+    productive_crew_hours: float = 0.0
+    idle_crew_hours: float = 0.0
+    actions: Mapping[str, int] = field(default_factory=dict)
+    outcomes: Mapping[str, int] = field(default_factory=dict)
+    refusal_codes: Mapping[str, int] = field(default_factory=dict)
+    zero_gain_sessions: int = 0
+    wasted_actions: int = 0
+    fault_rejected: int = 0
+    contradicted: int = 0
+    raised: int = 0
+    ambiguous: int = 0
+    read_faults: int = 0
+    observe_failures: int = 0
+    dropped: int = 0
+    replans: int = 0
+    cap_overshoot_tp: int = 0
+    skip_reasons: Mapping[str, int] = field(default_factory=dict)
+    skip_moves: int = 0
+    starts_by_band: Mapping[str, int] = field(default_factory=dict)
+    sessions_by_room: Mapping[str, int] = field(default_factory=dict)
+    consumables_by_tier: Mapping[str, int] = field(default_factory=dict)
+    consumables_used: int = 0
+    loaded_sessions_collected: int = 0
+
+    @property
+    def reliability(self) -> float:
+        attempted = self.accepted_actions + self.refused_actions
+        return self.accepted_actions / attempted if attempted else 1.0
+
+    @property
+    def hard_violations(self) -> int:
+        return sum(self.violations.get(kind, 0) for kind in GATED_VIOLATIONS)
+
+    def to_dict(self) -> dict:
+        data = {name: getattr(self, name) for name in self.__dataclass_fields__}
+        for name, value in data.items():
+            if isinstance(value, Mapping):
+                data[name] = dict(sorted(value.items()))
+        data["violation_samples"] = [dict(entry) for entry in self.violation_samples]
+        data["reliability"] = round(self.reliability, 6)
+        data["progress"] = round(self.progress, 6)
+        data["utilisation"] = None if self.utilisation is None else round(self.utilisation, 6)
+        return data
 
 
 def compute_metrics(episode: Episode) -> Metrics:
-    """Every metric of one episode (integer arithmetic until the final ratios)."""
-    world, scenario, recorder, log = episode.world, episode.scenario, episode.recorder, episode.log
-    eligible = {cid: meta for cid, meta in sorted(world.crew.items()) if meta.eligible}
-    initial = {cid: meta.initial_total for cid, meta in world.crew.items()}
-    headroom = {cid: meta.headroom for cid, meta in eligible.items()}
-    window_s = idle_s = 0
-    for spec in scenario.crew:
-        meta = eligible.get(spec.id)
-        if meta is None:
-            continue
-        if meta.initial_total >= meta.cap or percent(meta.initial_total, meta.capacity) >= ORACLE_COMPLETE_PERCENT:
-            continue  # nothing left to train: no window
-        window = (scenario.start, _done_at(meta, log, world.horizon_end))
-        window_s += _seconds(window[1] - window[0])
-        idle_s += idle_seconds(window, _sessions(spec, log, scenario.start))
-    gains: dict[int, dict[str, int]] = {}
-    zero_gain = contradicted = 0
-    refusal_codes: dict[str, int] = {}
-    for entry in log:
-        if not entry["accepted"]:
-            refusal_codes[entry["code"]] = refusal_codes.get(entry["code"], 0) + 1
-            continue
-        if entry["op"] == "start" and entry["design_id"] != entry["requested_design_id"]:
-            contradicted += 1
-        per_stat = gains.setdefault(int(entry["character_id"]), {})
-        for stat, amount in entry["gain"].items():
-            per_stat[stat] = per_stat.get(stat, 0) + amount
-        if entry["op"] == "finish" and sum(entry["gain"].values()) == 0 and not entry["capped"]:
-            zero_gain += 1
-    final = episode.final
-    tp_eligible = sum(final[cid] - initial[cid] for cid in eligible)
-    crew_days = len(eligible) * scenario.days
+    """Every metric of one episode, from the journal, the simulator log and the fired faults (the tick reports add
+    diagnostics only)."""
+    world, log = episode.world, episode.log
+    sessions = episode_sessions(world, log, episode.journal)
+    window_s, busy_s = utilisation_seconds(world, log, sessions)
+    gains = gains_by_crew(log)
+    final = {cid: meta.initial_total + gains.get(cid, 0) for cid, meta in world.crew.items()}
+    eligible = [meta for meta in world.crew.values() if meta.eligible]
+    tp_eligible = sum(final[meta.character_id] - meta.initial_total for meta in eligible)
+    crew_days = len(eligible) * (_seconds(world.horizon_end - world.start) // 86400)
+    violations = journal_violations(world, episode.journal)
+    zero_gain = sum(1 for session in sessions if session.gain == 0)
+    counts = journal_counts(world, episode.journal)
     return Metrics(
-        progress=progress_auc(headroom, initial, [*episode.day_totals, final]),
-        utilisation=1 - idle_s / window_s if window_s else 1.0,
-        focus=focus_ratio({cid: meta.role for cid, meta in eligible.items()}, gains),
-        accepted_actions=recorder.accepted,
-        refused_actions=recorder.refused,
-        cap_violations=recorder.cap_violations,
-        consumable_violations=recorder.consumable_violations,
-        research_gate_violations=recorder.research_gate_violations,
+        progress=progress_area(world, log),
+        utilisation=busy_s / window_s if window_s else None,
+        violations={kind: sum(1 for found in violations if found.kind == kind) for kind in VIOLATION_KINDS},
+        violation_samples=tuple(asdict(found) for found in violations[:MAX_VIOLATION_SAMPLES]),
         eligible_crew=len(eligible),
-        headroom=sum(headroom.values()),
-        tp_gained=sum(final[cid] - initial[cid] for cid in initial),
+        headroom=sum(meta.headroom for meta in world.crew.values()),
+        tp_gained=sum(gains.values()),
         tp_gained_eligible=tp_eligible,
         tp_per_crew_day=round(tp_eligible / crew_days, 6) if crew_days else 0.0,
+        crew_completed=sum(1 for meta in eligible if meta.headroom > 0
+                           and done_at(meta, log, world.horizon_end) < world.horizon_end),
         eligible_crew_hours=round(window_s / 3600, 6),
-        idle_crew_hours=round(idle_s / 3600, 6),
-        actions=dict(recorder.actions),
-        refusal_codes=refusal_codes,
+        productive_crew_hours=round(busy_s / 3600, 6),
+        idle_crew_hours=round((window_s - busy_s) / 3600, 6),
         zero_gain_sessions=zero_gain,
-        wasted_actions=recorder.refused + zero_gain,
-        fault_rejected=sum(1 for fired in episode.fired if fired.endswith(": reject")),
-        raised=recorder.outcomes["raised"],
-        ambiguous=recorder.outcomes["ambiguous"],
-        contradicted=contradicted,
-        observe_failures=recorder.observe_failures,
-        dropped=recorder.dropped,
-        replans=recorder.replans,
-        violations=tuple(recorder.violations),
-        # TP pushed past the cap during the run; a crew that started above its cap only counts what it gained.
+        wasted_actions=counts["refused_actions"] + zero_gain,
         cap_overshoot_tp=sum(max(0, final[cid] - max(meta.cap, meta.initial_total)) for cid, meta in world.crew.items()),
-        skip_reasons=dict(recorder.skip_reasons),
-        skip_moves=recorder.skip_moves,
-        consumables_used=recorder.consumables_used,
+        loaded_sessions_collected=sum(1 for session in sessions if session.loaded and session.gain is not None),
+        **counts,
+        **log_counts(world, log, episode.fired),
+        **tick_diagnostics(episode.reports),
     )
 
 
+def score_scenario(metrics: Metrics | None) -> float:
+    """SCORE_FORMULA, rounded to 6 places: 0.0 for an error or any gated violation."""
+    if metrics is None or metrics.hard_violations:
+        return 0.0
+    if metrics.utilisation is None:
+        weighted = metrics.progress
+    else:
+        weighted = SCORE_WEIGHTS["progress"] * metrics.progress + SCORE_WEIGHTS["utilisation"] * metrics.utilisation
+    return round(100 * metrics.reliability * weighted, 6)
+
+
+def composite(scores: Sequence[float]) -> float:
+    """The mean, rounded to 6 places (0.0 for nothing)."""
+    if not scores:
+        return 0.0
+    return round(sum(scores) / len(scores), 6)
+
+
 def trace_digest(episode: Episode) -> str:
-    """sha256 of the decision trace and the simulator log: any behaviour change moves it."""
-    payload = json.dumps({"trace": episode.recorder.trace, "log": list(episode.log)}, sort_keys=True)
+    """sha256 of the call journal, the simulator log and the tick reports: any behaviour change moves it."""
+    payload = json.dumps({"journal": [call.to_dict() for call in episode.journal], "log": list(episode.log),
+                          "reports": [report.to_dict() for report in episode.reports]}, sort_keys=True)
     return "sha256:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+# -- scenario tags against evidence -------------------------------------------------------------------------------
+
+# tag -> (metric path, minimum) claims the default planner's run must show (tests/test_training_benchmark.py)
+TAG_EVIDENCE: Mapping[str, tuple[tuple[str, int], ...]] = {
+    "fresh": (("starts_by_band.primary-1", 1), ("starts_by_band.primary-2", 1), ("starts_by_band.primary-3", 1),
+              ("skip_moves", 1)),
+    "mid-level": (("starts_by_band.primary-2", 1), ("starts_by_band.primary-3", 1),
+                  ("starts_by_band.secondary-1", 1), ("starts_by_band.secondary-2", 1)),
+    "near-cap": (("skip_reasons.tp_cap_reached", 24), ("cap_overshoot_tp", 1), ("crew_completed", 1)),
+    "missing-research": (("skip_reasons.research_missing", 24), ("consumables_by_tier.Common", 1),
+                         ("starts_by_band.secondary-1", 1)),
+    "mixed-rooms": (("skip_moves", 1), ("sessions_by_room.Galaxy Gym", 1), ("sessions_by_room.Lunar College", 1)),
+    "no-training-room": (("skip_reasons.not_in_training_room", 24), ("skip_reasons.unknown_role", 24)),
+    "fatigued": (("skip_reasons.fatigued", 24), ("zero_gain_sessions", 1), ("consumables_by_tier.Hero", 1)),
+    "consumables": (("consumables_by_tier.Common", 1), ("consumables_by_tier.Hero", 1)),
+    "in-training": (("loaded_sessions_collected", 1),),
+    "research-split": (("skip_reasons.research_missing", 24), ("starts_by_band.primary-2", 1)),
+    "multi-day": (("eligible_crew", 12), ("crew_completed", 1), ("sessions_by_room.GYM", 1),
+                  ("sessions_by_room.Academy", 1), ("sessions_by_room.Galaxy Gym", 1),
+                  ("sessions_by_room.Lunar College", 1)),
+}
+# fault tag -> (fault kind, metric that must equal the number of scenario faults of that kind)
+FAULT_TAG_COUNTERS = {
+    "fault-reject": ("reject", "fault_rejected"),
+    "fault-contradicted": ("contradicted-effect", "contradicted"),
+    "fault-raise": ("raise", "raised"),
+    "fault-ambiguous": ("ambiguous-response", "ambiguous"),
+    "fault-snapshot": ("snapshot-failure", "read_faults"),
+}
+
+
+def metric_value(metrics: Metrics, path: str) -> int:
+    """A metric by dotted path ("skip_reasons.fatigued"); a missing mapping key is 0."""
+    name, _, key = path.partition(".")
+    value = getattr(metrics, name)
+    return value.get(key, 0) if key else value
+
+
+def tag_evidence(scenario: Scenario, metrics: Metrics) -> list[str]:
+    """Every claim of the scenario's tags that the metrics do not show (an unknown tag is itself a problem)."""
+    problems = []
+    for tag in scenario.tags:
+        if tag in FAULT_TAG_COUNTERS:
+            kind, counter = FAULT_TAG_COUNTERS[tag]
+            expected = sum(1 for fault in scenario.faults if fault["kind"] == kind)
+            if metric_value(metrics, counter) != expected:
+                problems.append(f"{tag}: {counter} is {metric_value(metrics, counter)}, not {expected}")
+        elif tag not in TAG_EVIDENCE:
+            problems.append(f"{tag}: no evidence rule")
+        else:
+            problems += [f"{tag}: {path} is {metric_value(metrics, path)} < {minimum}"
+                         for path, minimum in TAG_EVIDENCE[tag] if metric_value(metrics, path) < minimum]
+    return problems
 
 
 # -- suite, report, determinism, gate ----------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
-class ScenarioResult:
-    name: str
+class SeedRun:
     seed: int
     metrics: Metrics | None
     score: float
@@ -1445,9 +1817,40 @@ class ScenarioResult:
 
 
 @dataclass(frozen=True)
+class ScenarioResult:
+    name: str
+    runs: tuple[SeedRun, ...]
+
+    @property
+    def score(self) -> float:
+        return composite([run.score for run in self.runs])
+
+    @property
+    def spread(self) -> float:
+        scores = [run.score for run in self.runs]
+        return round(max(scores) - min(scores), 6) if scores else 0.0
+
+    @property
+    def error(self) -> str | None:
+        return next((f"seed {run.seed}: {run.error}" for run in self.runs if run.error is not None), None)
+
+    @property
+    def trace_digest(self) -> str:
+        joined = ",".join(run.trace_digest for run in self.runs)
+        return "sha256:" + hashlib.sha256(joined.encode("utf-8")).hexdigest()
+
+    def violations(self, kinds: Sequence[str] = GATED_VIOLATIONS) -> dict[str, int]:
+        return {kind: sum(run.metrics.violations.get(kind, 0) for run in self.runs if run.metrics is not None)
+                for kind in kinds}
+
+
+@dataclass(frozen=True)
 class SuiteResult:
     scenarios: tuple[ScenarioResult, ...]
-    composite: float
+
+    @property
+    def composite(self) -> float:
+        return composite([result.score for result in self.scenarios])
 
 
 @dataclass(frozen=True)
@@ -1457,37 +1860,51 @@ class GateResult:
     drift: tuple[str, ...] = ()
 
 
-def run_suite(scenarios: Sequence[Scenario], **episode_kwargs) -> SuiteResult:
-    """Run and score every scenario; a crash inside an episode is that scenario's error (score 0)."""
+def seeds_for(scenario: Scenario, base_seed: int | None = None) -> tuple[int, ...]:
+    base = scenario.seed if base_seed is None else base_seed
+    return tuple(base + offset for offset in range(SEED_COUNT))
+
+
+def run_seed(scenario: Scenario, seed: int, *, tick: Tick | None, days: int | None) -> SeedRun:
+    """One seeded episode, scored; a crash inside it (the planner's, the tick's) is that run's error."""
+    try:
+        episode = run_episode(scenario, seed=seed, tick=tick, days=days)
+    except BenchmarkError:
+        raise
+    except Exception as error:  # a planner crash is a result, not a benchmark failure
+        return SeedRun(seed, None, 0.0, "", f"{type(error).__name__}: {error}")
+    metrics = compute_metrics(episode)
+    return SeedRun(seed, metrics, score_scenario(metrics), trace_digest(episode))
+
+
+def run_suite(scenarios: Sequence[Scenario], *, tick: Tick | None = None, days: int | None = None,
+              base_seed: int | None = None, seeds: int | None = None) -> SuiteResult:
+    """Run every scenario over its seeds (``seeds`` limits how many); the scenario score is the mean."""
     results = []
     for scenario in scenarios:
-        try:
-            episode = run_episode(scenario, **episode_kwargs)
-        except BenchmarkError:
-            raise
-        except Exception as error:  # a planner crash is a result, not a benchmark failure
-            seed = episode_kwargs.get("seed")
-            seed = scenario.seed if seed is None else seed
-            results.append(ScenarioResult(scenario.name, seed, None, 0.0, "", f"{type(error).__name__}: {error}"))
-            continue
-        metrics = compute_metrics(episode)
-        digest = trace_digest(episode)
-        results.append(ScenarioResult(scenario.name, episode.seed, metrics, score_scenario(metrics), digest))
-    return SuiteResult(tuple(results), composite([result.score for result in results]))
+        chosen = seeds_for(scenario, base_seed)[: seeds or SEED_COUNT]
+        results.append(ScenarioResult(scenario.name, tuple(run_seed(scenario, seed, tick=tick, days=days)
+                                                           for seed in chosen)))
+    return SuiteResult(tuple(results))
 
 
 def report_dict(suite: SuiteResult) -> dict:
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "benchmark": "crew-training",
+        "formula": SCORE_FORMULA,
         "composite": suite.composite,
         "scenarios": {
             result.name: {
                 "score": result.score,
-                "seed": result.seed,
+                "spread": result.spread,
                 "trace_digest": result.trace_digest,
                 "error": result.error,
-                "metrics": None if result.metrics is None else result.metrics.to_dict(),
+                "seeds": [
+                    {"seed": run.seed, "score": run.score, "trace_digest": run.trace_digest, "error": run.error,
+                     "metrics": None if run.metrics is None else run.metrics.to_dict()}
+                    for run in result.runs
+                ],
             }
             for result in suite.scenarios
         },
@@ -1498,26 +1915,23 @@ def to_json(report: Mapping) -> str:
     return json.dumps(report, sort_keys=True, indent=2) + "\n"
 
 
-def check_determinism(scenarios: Sequence[Scenario], runs: int = 2, **episode_kwargs) -> tuple[bool, SuiteResult]:
+def check_determinism(scenarios: Sequence[Scenario], runs: int = 2, **suite_kwargs) -> tuple[bool, SuiteResult]:
     """Run the suite ``runs`` times in this process; deterministic when every report is byte-identical."""
-    first = run_suite(scenarios, **episode_kwargs)
+    first = run_suite(scenarios, **suite_kwargs)
     expected = to_json(report_dict(first))
     same = True
     for _ in range(runs - 1):
-        if to_json(report_dict(run_suite(scenarios, **episode_kwargs))) != expected:
+        if to_json(report_dict(run_suite(scenarios, **suite_kwargs))) != expected:
             same = False
     return same, first
 
 
-VIOLATION_REASONS = (
-    ("cap_violations", "cap_violation"),
-    ("consumable_violations", "consumable_violation"),
-    ("research_gate_violations", "research_gate_violation"),
-)
+def violation_reason(kind: str) -> str:
+    return kind.replace("-", "_") + "_violation"
 
 
 def gate(suite: SuiteResult, baseline: Mapping | None, *, deterministic: bool, subset: bool = False) -> GateResult:
-    """Pass only when deterministic, violation- and error-free, and at or above the baseline scores."""
+    """Pass only when deterministic, violation- and error-free, and at or above the baseline scores (exactly)."""
     reasons: list[str] = []
     if not deterministic:
         reasons.append("nondeterministic")
@@ -1539,15 +1953,13 @@ def gate(suite: SuiteResult, baseline: Mapping | None, *, deterministic: bool, s
             reasons.append(f"scenario_below_baseline:{result.name}")
         if entry is not None and result.error is None and result.trace_digest != entry["trace_digest"]:
             drift.append(result.name)  # an errored scenario has no trace: it is a scenario_error, not drift
-        if result.metrics is not None:
-            for name, label in VIOLATION_REASONS:
-                if getattr(result.metrics, name):
-                    reasons.append(f"{label}:{result.name}")
+        reasons += [f"{violation_reason(kind)}:{result.name}" for kind, count in result.violations().items() if count]
     return GateResult(not reasons, tuple(reasons), tuple(drift))
 
 
 # -- baseline ----------------------------------------------------------------------------------------------------
 
+BASELINE_SCHEMA = 2  # 2: score formula v2 (design review); a v1 baseline is not comparable
 BASELINE_KEYS = ("schema_version", "benchmark", "composite", "scenarios", "lowered", "qa_eval")
 DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 EQUIVALENT_ID_RE = re.compile(r"^[\w./-]+\.py:\d+:\d+:[a-z]+:\d+$")
@@ -1585,23 +1997,10 @@ def _validate_qa_eval(qa: object, problems: list[str]) -> None:
             problems.append(f"{where}.reason: must be a non-empty string")
 
 
-def validate_baseline(data: object) -> dict:
-    """The baseline itself when its schema is right; BaselineError listing every problem otherwise."""
-    if not isinstance(data, Mapping):
-        raise BaselineError("baseline must be a JSON object")
-    problems: list[str] = []
-    if set(data) != set(BASELINE_KEYS):
-        problems.append(f"keys must be exactly {', '.join(BASELINE_KEYS)}")
-    if data.get("schema_version") != 1 or isinstance(data.get("schema_version"), bool):
-        problems.append("schema_version: must be 1")
-    if data.get("benchmark") != "crew-training":
-        problems.append("benchmark: must be 'crew-training'")
-    if not _score_ok(data.get("composite")):
-        problems.append("composite: must be a number in [0, 100]")
-    scenarios = data.get("scenarios")
+def _validate_baseline_scenarios(scenarios: object, problems: list[str]) -> None:
     if not isinstance(scenarios, Mapping):
         problems.append("scenarios: must be an object")
-        scenarios = {}
+        return
     for name, entry in scenarios.items():
         if not isinstance(entry, Mapping) or set(entry) != {"score", "trace_digest"}:
             problems.append(f"scenarios.{name}: needs exactly score and trace_digest")
@@ -1610,6 +2009,22 @@ def validate_baseline(data: object) -> dict:
             problems.append(f"scenarios.{name}.score: must be a number in [0, 100]")
         if not (isinstance(entry["trace_digest"], str) and DIGEST_RE.match(entry["trace_digest"])):
             problems.append(f"scenarios.{name}.trace_digest: must match {DIGEST_RE.pattern}")
+
+
+def validate_baseline(data: object) -> dict:
+    """The baseline itself when its schema is right; BaselineError listing every problem otherwise."""
+    if not isinstance(data, Mapping):
+        raise BaselineError("baseline must be a JSON object")
+    problems: list[str] = []
+    if set(data) != set(BASELINE_KEYS):
+        problems.append(f"keys must be exactly {', '.join(BASELINE_KEYS)}")
+    if data.get("schema_version") != BASELINE_SCHEMA or isinstance(data.get("schema_version"), bool):
+        problems.append(f"schema_version: must be {BASELINE_SCHEMA}")
+    if data.get("benchmark") != "crew-training":
+        problems.append("benchmark: must be 'crew-training'")
+    if not _score_ok(data.get("composite")):
+        problems.append("composite: must be a number in [0, 100]")
+    _validate_baseline_scenarios(data.get("scenarios"), problems)
     lowered = data.get("lowered")
     if not isinstance(lowered, list):
         problems.append("lowered: must be a list")
@@ -1649,15 +2064,11 @@ def update_baseline(suite: SuiteResult, baseline: Mapping | None, *, determinist
     errors = [result.name for result in suite.scenarios if result.error is not None]
     if errors:
         raise BaselineRefused(f"scenario error in {', '.join(errors)}")
-    violating = [
-        result.name
-        for result in suite.scenarios
-        if any(getattr(result.metrics, name) for name, _ in VIOLATION_REASONS)
-    ]
+    violating = [result.name for result in suite.scenarios if any(result.violations().values())]
     if violating:
         raise BaselineRefused(f"hard violation in {', '.join(violating)}")
     new = {
-        "schema_version": 1,
+        "schema_version": BASELINE_SCHEMA,
         "benchmark": "crew-training",
         "composite": suite.composite,
         "scenarios": {
@@ -1692,12 +2103,45 @@ def update_baseline(suite: SuiteResult, baseline: Mapping | None, *, determinist
 # -- report ------------------------------------------------------------------------------------------------------
 
 
+def _mean(values: Sequence[float]) -> float | None:
+    return sum(values) / len(values) if values else None
+
+
+def _fmt(value: float | None) -> str:
+    return "n/a" if value is None else f"{value:.3f}"
+
+
+def _scenario_rows(name: str, entry: Mapping) -> tuple[str, str]:
+    metrics = [run["metrics"] for run in entry["seeds"] if run["metrics"] is not None]
+    if entry["error"] is not None or not metrics:
+        return f"| {name} | {entry['score']:.2f} | error: {entry['error']} |", f"| {name} | error |"
+    utilisation = [m["utilisation"] for m in metrics if m["utilisation"] is not None]
+    seeds = " / ".join(f"{run['score']:.2f}" for run in entry["seeds"])
+    gated = sum(m["violations"].get(kind, 0) for m in metrics for kind in GATED_VIOLATIONS)
+    reported = sum(m["violations"].get(kind, 0) for m in metrics for kind in REPORT_ONLY_VIOLATIONS)
+    progress = _mean([m["progress"] for m in metrics])
+    main = (
+        f"| {name} | {entry['score']:.2f} | {entry['spread']:.2f} | {seeds} | {_fmt(progress)} "
+        f"| {_fmt(_mean(utilisation))} | {_fmt(_mean([m['reliability'] for m in metrics]))} "
+        f"| {sum(m['tp_gained'] for m in metrics)} | {sum(m['zero_gain_sessions'] for m in metrics)} "
+        f"| {sum(m['consumables_used'] for m in metrics)} | {gated} | {reported} |"
+    )
+    skips: dict[str, int] = {}
+    for m in metrics:
+        for code, count in m["skip_reasons"].items():
+            skips[code] = skips.get(code, 0) + count
+    reasons = ", ".join(f"{code} {count}" for code, count in sorted(skips.items())) or "none"
+    detail = f"| {name} | {reasons} | {sum(m['skip_moves'] for m in metrics)} | {sum(m['dropped'] for m in metrics)} |"
+    return main, detail
+
+
 def render_markdown(report: Mapping, verdict: GateResult | None) -> str:
     scenarios = report["scenarios"]
     lines = [
         "# Crew-training benchmark",
         "",
-        f"Composite: **{report['composite']:.2f}** over {len(scenarios)} scenarios",
+        f"Composite: **{report['composite']:.2f}** over {len(scenarios)} scenarios x {SEED_COUNT} seeds "
+        f"(score = {report['formula']})",
     ]
     if verdict is None:
         lines.append("Gate: not run (report only)")
@@ -1706,32 +2150,21 @@ def render_markdown(report: Mapping, verdict: GateResult | None) -> str:
     else:
         lines.append(f"Gate: **FAIL** ({', '.join(verdict.reasons)})")
     if verdict is not None and verdict.drift:
-        lines += ["", f"> Warning: Trace drift (behaviour changed, scores held): {', '.join(verdict.drift)}"]
+        lines += ["", "> Warning: trace drift (behaviour changed, scores held; never a failure). Refresh the digests "
+                      f"with --update-baseline when the change is intended: {', '.join(verdict.drift)}"]
     lines += [
         "",
-        "| Scenario | Score | P | U | F | R | TP gained | Idle h / eligible h | Overshoot TP | Consumables "
-        "| Violations |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "| Scenario | Score | Spread | Per seed | P | U | R | TP gained | Zero-gain sessions | Consumables "
+        "| Violations | Report-only |",
+        "|---|---:|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
-    skips = []
+    details = ["", "| Scenario | Skips (reason count, all seeds) | Move skips | Dropped advisories |",
+               "|---|---|---:|---:|"]
     for name, entry in sorted(scenarios.items()):
-        metrics = entry["metrics"]
-        if metrics is None:
-            lines.append(f"| {name} | {entry['score']:.2f} | error: {entry['error']} |")
-            continue
-        violations = (
-            metrics["cap_violations"] + metrics["consumable_violations"] + metrics["research_gate_violations"]
-        )
-        lines.append(
-            f"| {name} | {entry['score']:.2f} | {metrics['progress']:.3f} | {metrics['utilisation']:.3f} | "
-            f"{metrics['focus']:.3f} | {metrics['reliability']:.3f} | {metrics['tp_gained']} | "
-            f"{metrics['idle_crew_hours']:g} / {metrics['eligible_crew_hours']:g} | {metrics['cap_overshoot_tp']} | "
-            f"{metrics['consumables_used']} | {violations} |"
-        )
-        reasons = ", ".join(f"{code} {count}" for code, count in sorted(metrics["skip_reasons"].items())) or "none"
-        skips.append(f"| {name} | {reasons} | {metrics['skip_moves']} | {metrics['zero_gain_sessions']} |")
-    lines += ["", "| Scenario | Skips (reason count) | Move skips | Zero-gain sessions |", "|---|---|---:|---:|"]
-    return "\n".join(lines + skips) + "\n"
+        main, detail = _scenario_rows(name, entry)
+        lines.append(main)
+        details.append(detail)
+    return "\n".join(lines + details) + "\n"
 
 
 # -- qa-eval: does the benchmark catch mutants of the planner and strategy? --------------------------------------
@@ -1749,8 +2182,11 @@ QA_COPY_PATHS = (
 QA_CHANNELS = ("tests", "benchmark")
 BENCH_DETECTED = ("detected", "crash", "timeout")
 TESTS_KILLED = ("failed", "timeout")
-QA_CLASSES = ("both", "tests-only", "benchmark-only", "drift-only", "neither", "equivalent", "incompetent")
+QA_CLASSES = (
+    "both", "tests-only", "benchmark-only", "invalid-strategy", "drift-only", "neither", "equivalent", "incompetent"
+)
 UNEXPLAINED = "unexplained - investigate"
+IMPORT_PROBE = "import sdk.training"
 
 
 @dataclass(frozen=True)
@@ -1760,8 +2196,29 @@ class BenchOutcome:
     drift: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True)
+class QaOutcome:
+    tests: str | None = None
+    bench: BenchOutcome | None = None
+    invalid: bool = False  # import sdk.training failed in the mutant workspace
+
+
 def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+def import_probe(workspace, timeout: float) -> bool:
+    """Whether ``import sdk.training`` works in the workspace (a strategy that fails validation crashes it)."""
+    from scripts import mutation
+
+    os.makedirs(os.path.join(str(workspace), mutation.CHILD_TMP), exist_ok=True)
+    try:
+        result = subprocess.run([sys.executable, "-c", IMPORT_PROBE], cwd=str(workspace),
+                                env=mutation.child_environment(workspace), stdin=subprocess.DEVNULL,
+                                capture_output=True, timeout=timeout)
+    except subprocess.TimeoutExpired:  # pragma: no cover - an import that hangs is left to the channels
+        return True
+    return result.returncode == 0
 
 
 class BenchSubprocessRunner:
@@ -1836,18 +2293,19 @@ class BenchSubprocessRunner:
 
 
 class QaRunner:
-    """mutation.run_mutants' test runner: the tests channel, then the benchmark channel, per mutant workspace.
+    """mutation.run_mutants' test runner: the import probe, then the tests channel and the benchmark channel.
 
-    Each mutant's outcome per channel is kept under the sha256 of the mutated target, so the report can say which
-    channel caught it; the run_mutants status is "failed" when either channel did.
+    Each mutant's outcome is kept under the sha256 of the mutated target, so the report can say which channel caught
+    it; the run_mutants status is "failed" when the import probe or either channel did.
     """
 
-    def __init__(self, rel: str, channels: Sequence[str], tests_runner, bench_runner) -> None:
+    def __init__(self, rel: str, channels: Sequence[str], tests_runner, bench_runner, probe=import_probe) -> None:
         self.rel = rel
         self.channels = tuple(channels)
         self.tests_runner = tests_runner
         self.bench_runner = bench_runner
-        self.outcomes: dict[str, tuple[str | None, BenchOutcome | None]] = {}
+        self.probe = probe
+        self.outcomes: dict[str, QaOutcome] = {}
         self._lock = threading.Lock()
 
     def __call__(self, workspace, tests: tuple[str, ...], timeout: float):
@@ -1856,12 +2314,16 @@ class QaRunner:
         workspace = str(workspace)
         with open(os.path.join(workspace, self.rel), "rb") as handle:
             digest = _sha256(handle.read())
-        share = timeout / len(self.channels)
         started = time.monotonic()
+        if not self.probe(workspace, timeout):
+            with self._lock:
+                self.outcomes[digest] = QaOutcome(invalid=True)
+            return mutation.RunResult("failed", time.monotonic() - started, f"{IMPORT_PROBE} failed", 1)
+        share = timeout / len(self.channels)
         result = self.tests_runner(workspace, tests, share) if "tests" in self.channels else None
         outcome = self.bench_runner(workspace, share) if "benchmark" in self.channels else None
         with self._lock:
-            self.outcomes[digest] = (None if result is None else result.status, outcome)
+            self.outcomes[digest] = QaOutcome(None if result is None else result.status, outcome)
         tests_failed = result is not None and result.status != "passed"
         failed = tests_failed or (outcome is not None and outcome.status != "pass")
         if result is not None:
@@ -1881,19 +2343,21 @@ class QaRunner:
                 kill_all()
 
 
-def classify_mutant(status: str, tests_status: str | None, outcome: BenchOutcome | None) -> str:
-    """Which channel caught a mutant: both, tests-only, benchmark-only, drift-only, neither (or its skip class)."""
+def classify_mutant(status: str, outcome: QaOutcome) -> str:
+    """Which channel caught a mutant: both, tests-only, benchmark-only, invalid-strategy, drift-only or neither."""
     if status in ("equivalent", "incompetent"):
         return status
-    tests = tests_status in TESTS_KILLED
-    detected = outcome is not None and outcome.status in BENCH_DETECTED
+    if outcome.invalid:
+        return "invalid-strategy"
+    tests = outcome.tests in TESTS_KILLED
+    detected = outcome.bench is not None and outcome.bench.status in BENCH_DETECTED
     if tests and detected:
         return "both"
     if tests:
         return "tests-only"
     if detected:
         return "benchmark-only"
-    if outcome is not None and outcome.drift:
+    if outcome.bench is not None and outcome.bench.drift:
         return "drift-only"
     return "neither"
 
@@ -1903,12 +2367,15 @@ def _rate(count: int, eligible: int) -> float:
 
 
 def summarize(rows: Sequence[Mapping], equivalent_reasons: Mapping[str, str]) -> dict:
-    """Class counts and rates; the detection rate counts tests or benchmark, never drift, over non-skipped mutants."""
+    """Class counts and rates. Drift never counts as detected. Rates over importable mutants leave the
+    invalid-strategy class out; the gated detection_rate counts it as detected (an import crash breaks the bot
+    at once, so CI catches it)."""
     counts = {klass: 0 for klass in QA_CLASSES}
     for row in rows:
         counts[row["class"]] += 1
     eligible = len(rows) - counts["equivalent"] - counts["incompetent"]
-    detected = counts["both"] + counts["tests-only"] + counts["benchmark-only"]
+    importable = eligible - counts["invalid-strategy"]
+    caught = counts["both"] + counts["tests-only"] + counts["benchmark-only"]
 
     def change(row: Mapping) -> str:
         return f"{row['original']} -> {row['replacement']}"
@@ -1917,10 +2384,12 @@ def summarize(rows: Sequence[Mapping], equivalent_reasons: Mapping[str, str]) ->
         "counts": counts,
         "total": len(rows),
         "eligible": eligible,
-        "detection_rate": _rate(detected, eligible),
-        "observable_rate": _rate(detected + counts["drift-only"], eligible),
-        "tests_rate": _rate(counts["both"] + counts["tests-only"], eligible),
-        "benchmark_rate": _rate(counts["both"] + counts["benchmark-only"], eligible),
+        "importable": importable,
+        "benchmark_rate": _rate(counts["both"] + counts["benchmark-only"], importable),
+        "tests_rate": _rate(counts["both"] + counts["tests-only"], importable),
+        "detection_rate": _rate(caught + counts["invalid-strategy"], eligible),
+        "detection_rate_importable": _rate(caught, importable),
+        "observable_rate": _rate(caught + counts["invalid-strategy"] + counts["drift-only"], eligible),
         "benchmark_only": [
             {"id": row["id"], "change": change(row), "reasons": list(row["reasons"])}
             for row in rows
@@ -1936,6 +2405,7 @@ def summarize(rows: Sequence[Mapping], equivalent_reasons: Mapping[str, str]) ->
             for row in rows
             if row["class"] == "drift-only"
         ],
+        "invalid_strategy": [row["id"] for row in rows if row["class"] == "invalid-strategy"],
     }
 
 
@@ -1950,6 +2420,32 @@ def stale_equivalents(entries: Sequence[Mapping], generated: Sequence) -> list[s
     return stale
 
 
+def _qa_rows(report, runner: QaRunner, source: str) -> list[dict]:
+    from scripts import mutation
+
+    rows = []
+    for result in report.results:
+        mutant = result.mutant
+        outcome = QaOutcome()
+        if result.status not in ("equivalent", "incompetent"):
+            key = _sha256(mutation.apply_mutant(source, mutant).encode("utf-8"))
+            outcome = runner.outcomes.get(key, QaOutcome())
+        rows.append(
+            {
+                "id": mutant.id,
+                "original": mutant.original,
+                "replacement": mutant.replacement,
+                "status": result.status,
+                "tests": outcome.tests,
+                "benchmark": None if outcome.bench is None else outcome.bench.status,
+                "reasons": [] if outcome.bench is None else list(outcome.bench.reasons),
+                "drift": [] if outcome.bench is None else list(outcome.bench.drift),
+                "class": classify_mutant(result.status, outcome),
+            }
+        )
+    return rows
+
+
 def qa_eval(
     *,
     targets: Sequence[str] = QA_TARGETS,
@@ -1961,9 +2457,10 @@ def qa_eval(
     baseline_path: str = BASELINE_PATH,
     tests_runner=None,
     bench_runner=None,
+    probe=import_probe,
     progress=None,
 ) -> dict:
-    """Mutate each target, run both channels against every mutant and report who caught what."""
+    """Mutate each target, run the import probe and both channels against every mutant, report who caught what."""
     from scripts import mutation
 
     baseline = load_baseline(baseline_path)
@@ -1987,6 +2484,7 @@ def qa_eval(
             channels,
             tests_runner if tests_runner is not None else mutation.SubprocessTestRunner(),
             bench_runner if bench_runner is not None else BenchSubprocessRunner(),
+            probe,
         )
         report = mutation.run_mutants(
             rel,
@@ -2001,26 +2499,7 @@ def qa_eval(
             only=target_only,
             progress=progress,
         )
-        rows = []
-        for result in report.results:
-            mutant = result.mutant
-            tests_status, outcome = None, None
-            if result.status not in ("equivalent", "incompetent"):
-                key = _sha256(mutation.apply_mutant(source, mutant).encode("utf-8"))
-                tests_status, outcome = runner.outcomes.get(key, (None, None))
-            rows.append(
-                {
-                    "id": mutant.id,
-                    "original": mutant.original,
-                    "replacement": mutant.replacement,
-                    "status": result.status,
-                    "tests": tests_status,
-                    "benchmark": None if outcome is None else outcome.status,
-                    "reasons": [] if outcome is None else list(outcome.reasons),
-                    "drift": [] if outcome is None else list(outcome.drift),
-                    "class": classify_mutant(result.status, tests_status, outcome),
-                }
-            )
+        rows = _qa_rows(report, runner, source)
         per_target[rel] = summarize(rows, reasons)
         all_rows += rows
     overall = summarize(all_rows, reasons)
@@ -2036,24 +2515,28 @@ def qa_eval(
 
 
 def render_qa_markdown(qa: Mapping) -> str:
+    overall = qa["overall"]
     lines = [
         "# Crew-training qa-eval",
         "",
-        f"Detection rate: **{qa['overall']['detection_rate']:.3f}** (minimum {qa['min_detection_rate']}); "
-        f"observable (with drift): {qa['overall']['observable_rate']:.3f}; channels: {', '.join(qa['channels'])}",
+        f"Benchmark channel: **{overall['benchmark_rate']:.3f}**; tests channel: **{overall['tests_rate']:.3f}** "
+        f"(of {overall['importable']} importable mutants; channels run: {', '.join(qa['channels'])})",
+        f"Detection: **{overall['detection_rate']:.3f}** with invalid-strategy counted as detected (gated, minimum "
+        f"{qa['min_detection_rate']}); {overall['detection_rate_importable']:.3f} over importable mutants only; "
+        f"observable (with drift, never gated): {overall['observable_rate']:.3f}",
         "",
-        "| Target | Mutants | Incompetent | Equivalent | Tests | Benchmark | Benchmark-only | Drift-only | Neither "
-        "| Detection | Observable |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "| Target | Mutants | Incompetent | Equivalent | Invalid strategy | Tests | Benchmark | Benchmark-only "
+        "| Drift-only | Neither | Detection | Importable only |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     sections = {"Caught only by the benchmark": [], "Caught by neither": [], "Drift only": []}
     for rel, summary in sorted(qa["targets"].items()):
         counts = summary["counts"]
         lines.append(
             f"| {rel} | {summary['total']} | {counts['incompetent']} | {counts['equivalent']} | "
-            f"{counts['both'] + counts['tests-only']} | {counts['both'] + counts['benchmark-only']} | "
-            f"{counts['benchmark-only']} | {counts['drift-only']} | {counts['neither']} | "
-            f"{summary['detection_rate']:.3f} | {summary['observable_rate']:.3f} |"
+            f"{counts['invalid-strategy']} | {counts['both'] + counts['tests-only']} | "
+            f"{counts['both'] + counts['benchmark-only']} | {counts['benchmark-only']} | {counts['drift-only']} | "
+            f"{counts['neither']} | {summary['detection_rate']:.3f} | {summary['detection_rate_importable']:.3f} |"
         )
         sections["Caught only by the benchmark"] += [
             f"| `{entry['id']}` | `{entry['change']}` | {', '.join(entry['reasons'])} |"
@@ -2112,7 +2595,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--allow-lower", metavar="REASON", help="with --update-baseline: allow a lower baseline")
     parser.add_argument("--scenario", action="append", metavar="NAME", help="run only this scenario (repeatable)")
     parser.add_argument("--quick", action="store_true", help="2-day runs, report only (no gate)")
-    parser.add_argument("--seed", type=int, help="override every scenario's seed, report only (no gate)")
+    parser.add_argument("--seed", type=int, help="seeds N, N+1, N+2 for every scenario, report only (no gate)")
     parser.add_argument("--scenarios-dir", default=SCENARIO_DIR)
     parser.add_argument("--baseline", default=BASELINE_PATH)
     parser.add_argument("--json", metavar="PATH", help="write the JSON report ('-' prints it instead of markdown)")
@@ -2168,12 +2651,8 @@ def main(argv: list[str] | None = None) -> int:
         return qa_main(args)
     try:
         scenarios = load_suite(args.scenarios_dir, args.scenario)
-        kwargs: dict = {}
-        if args.quick:
-            kwargs["days"] = 2
-        if args.seed is not None:
-            kwargs["seed"] = args.seed
-        deterministic, suite = check_determinism(scenarios, **kwargs)
+        days = 2 if args.quick else None
+        deterministic, suite = check_determinism(scenarios, days=days, base_seed=args.seed)
         report = report_dict(suite)
         verdict = None
         code = EXIT_OK

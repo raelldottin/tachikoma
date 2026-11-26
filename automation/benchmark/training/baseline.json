@@ -1,6 +1,6 @@
 {
   "benchmark": "crew-training",
-  "composite": 65.184847,
+  "composite": 67.261087,
   "lowered": [],
   "qa_eval": {
     "equivalent": [],
@@ -8,65 +8,65 @@
   },
   "scenarios": {
     "consumable-windows": {
-      "score": 12.963526,
-      "trace_digest": "sha256:7a8d313f43f2969fe3f4f67c1749ccdf0030608ad0222b0e08c8b5bc5246dc03"
+      "score": 41.153274,
+      "trace_digest": "sha256:e4177dc66d30e0c91fcb40be0cb8c69a4a8f99eff1f9ad0ffd493de0f2e78370"
     },
     "fatigued-crew": {
-      "score": 35.950397,
-      "trace_digest": "sha256:342bd0983213003dbd8a08b7692eaa169d590a6c2512b86ddaab024767af4549"
+      "score": 8.944731,
+      "trace_digest": "sha256:bf1cadb9012e7184f14ee66408b77606cb488ce508a8843d41d5272e5ec2a684"
     },
     "fault-ambiguous": {
-      "score": 88.535491,
-      "trace_digest": "sha256:8f3e5451993f15e80dea967b92d078408ccff8fb8bf7b244d83bed268dcd06ea"
+      "score": 84.704006,
+      "trace_digest": "sha256:1afd246a00bd0dc6c55ed35913ffc0cbec15197ce40c04ae30233933c3e9415c"
     },
     "fault-contradicted": {
-      "score": 81.124174,
-      "trace_digest": "sha256:6e98ae928731bc2397de65051d7313b3a00e57689947719fa2b3160e218820e5"
+      "score": 91.252056,
+      "trace_digest": "sha256:0076427bcefbf3e49e8962707685a5660da6aaa5ec236d1f988db34d553d39eb"
     },
     "fault-raise": {
-      "score": 88.334199,
-      "trace_digest": "sha256:6f096186e9f7b1d52f6a178bcf91ba3d3a61cb4cad63d10aa7a57d35264f117c"
+      "score": 84.626497,
+      "trace_digest": "sha256:3e4e39ad5709bdc9194145eec5af48b10a7cd39fac0908190f44d5a8f499b1e9"
     },
     "fault-reject": {
-      "score": 90.537546,
-      "trace_digest": "sha256:8108748d1a61b108975cc9edc14bdf329dd633d2254a6548d827a6c3e0c5f200"
+      "score": 88.59283,
+      "trace_digest": "sha256:cbbf529a5645d7f34ec54d742fdfddc3858cd9e1e8df119c88dcb07bf10ecfc7"
     },
     "fault-snapshot": {
-      "score": 95.216306,
-      "trace_digest": "sha256:d56dfa83673c2fb84bc212fccb4bf1f05bf5074dc7ca3064505ab09af0b9bdb1"
+      "score": 89.099699,
+      "trace_digest": "sha256:0c014b0ab1a2950326a7783f373d65974c4a5365e2527e0b6157f48924ac10f0"
     },
     "fitness-only": {
-      "score": 37.738796,
-      "trace_digest": "sha256:0a3cf3b69051304174992a6f25922f7aca491183b4b716f539094501c40e29b4"
+      "score": 40.203946,
+      "trace_digest": "sha256:bc31fefe41439c4519aee625824138d014033c28d0821f3ab397ab81809f3635"
     },
     "fresh-crew": {
-      "score": 83.666527,
-      "trace_digest": "sha256:c64cbb6bbe5447ccd66bc162589dbcedef7d4e1bf0f9e9e90c9eb833e01a2fae"
+      "score": 90.093743,
+      "trace_digest": "sha256:fdb47e7ee22d3fe5786a7486d3801e8f796618b877730982e76b3ff2fbf111d1"
     },
     "long-run": {
-      "score": 70.07185,
-      "trace_digest": "sha256:e57ce20d290bfc14a495ad3e4d3276e4121895a69b40394747b47435239d569c"
+      "score": 70.962044,
+      "trace_digest": "sha256:bc233909b366d5e561ae9a5b3e47548aa8db1606294554cb99bf6a8b786aa6d2"
     },
     "mid-level-crew": {
-      "score": 81.582512,
-      "trace_digest": "sha256:0fd48fbd01580e61dedcf1f20636bcc02279ae88202aa9c14f0c927bf5d8b4e7"
+      "score": 97.030142,
+      "trace_digest": "sha256:e43add93c80f278a16721155f665d423f43e9356c9a1dc4b639f168805cc3603"
     },
     "missing-research": {
-      "score": 13.347786,
-      "trace_digest": "sha256:a6afaa04599e44ed26ae3f8f6c6ee9e0d1d9b35b0ed5441d8d35ac9a30f11f53"
+      "score": 4.29658,
+      "trace_digest": "sha256:16bb3359119154810e92a31ef038c5b8c030c5ac5fef89ce85cc5953076b3deb"
     },
     "mixed-rooms": {
-      "score": 42.932331,
-      "trace_digest": "sha256:c91f408eca5d20255ab5a0c227cd019defaf3382f703de5c4c4aac079040d968"
+      "score": 65.743764,
+      "trace_digest": "sha256:c6bea7429bc6e12f46feb8c7140b0fc6f47ec206564e023b298de6b2d9e454a2"
     },
     "near-cap-crew": {
-      "score": 94.428571,
-      "trace_digest": "sha256:f8aac48672f0b15012f1ca54aa07d24b3d6c905e2cef994e4ddea1e9a3339070"
+      "score": 96.965681,
+      "trace_digest": "sha256:41054285130b8b0e14616011d45ee071858b35c684aca182e0958bacac6dd8b0"
     },
     "no-training-room": {
-      "score": 61.342687,
-      "trace_digest": "sha256:59fddd8eb536b484b09628924bfaa3cdd671e494d925e7874045e75d5f6aea7e"
+      "score": 55.247307,
+      "trace_digest": "sha256:abb39453e3f8e6d1c97d1d170b9c8a8b1f8a52e9f7f186d071bc112ec2892140"
     }
   },
-  "schema_version": 1
+  "schema_version": 2
 }

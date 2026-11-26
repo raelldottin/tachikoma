@@ -113,8 +113,9 @@ jobs:
             requirements.txt
             .github/requirements-ci.txt
       - run: python -m pip install -r .github/requirements-ci.txt
-      # Blocking: composite and per-scenario scores at or above baseline.json, zero cap, consumable and research-gate
-      # violations, byte-identical output on an in-process rerun. Double quotes: the shell expands the summary path.
+      # Blocking: composite and per-scenario (three-seed mean) scores at or above baseline.json exactly, zero findings
+      # from the nine policy oracles, no scenario errors, byte-identical output on an in-process rerun (about 6 s).
+      # Double quotes: the shell expands the summary path.
       - name: Benchmark gate
         run: make training-benchmark ARGS="--gate --json training-benchmark.json --summary $GITHUB_STEP_SUMMARY"
       - name: Upload benchmark report
