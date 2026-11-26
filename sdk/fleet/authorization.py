@@ -18,7 +18,13 @@ before and hashes the same):
 - ``legacy_run_skipped`` (SPEC-06, S06-R2): the ``PSS_ACCOUNT_N`` numbers the
   owner confirms are listed in the legacy daily run's ``LEGACY_RUN_SKIP``.
   ``check_authorization`` refuses an account whose registry profile declares
-  ``legacy_run_account: N`` unless N is listed here.
+  ``legacy_run_account: N`` unless N is listed here or in ``legacy_run_serialized``.
+- ``legacy_run_serialized`` (SPEC-06, S06-R6): the ``PSS_ACCOUNT_N`` numbers the
+  legacy daily run still acts on, where the owner confirms it never runs at the
+  same time as this file's runs: ``daily-run.yml`` and the pss5 trial workflows
+  share one workflow-level concurrency group (``scripts/ci.py repository``
+  checks that whenever a file under ``docs/experiments/live/`` declares this).
+  A number may not be in both lists.
 - ``battles`` (SPEC-08, S08-R2): ``{"max_per_window", "window_hours"}``,
   required exactly when ``run_pvp_battle`` is in ``actions``.
   ``battle_cap_refusal`` and ``battle_fits_cap`` decide from journal events
@@ -69,7 +75,7 @@ AUTHORIZATION_FIELDS = frozenset({
     "version", "owner", "purpose", "accounts", "actions", "not_before", "expires", "caps", "modes",
 })
 OPTIONAL_AUTHORIZATION_FIELDS = frozenset({
-    "legacy_run_skipped", "battles", "market", "placements", "hull_upgrades",
+    "legacy_run_skipped", "legacy_run_serialized", "battles", "market", "placements", "hull_upgrades",
 })
 BATTLE_ACTION_ID = "run_pvp_battle"
 # SPEC-09 market actions the catalog does not hold yet; valid only next to a market section.
@@ -320,13 +326,14 @@ def _parse_hull_upgrades(value: Any, accounts: tuple[str, ...]) -> dict[str, tup
     return upgrades
 
 
-def _parse_legacy_run_skipped(value: Any) -> tuple[int, ...]:
+def _parse_legacy_run_numbers(value: Any, name: str) -> tuple[int, ...]:
+    """``legacy_run_skipped`` or ``legacy_run_serialized``: distinct positive ``PSS_ACCOUNT_N`` numbers."""
     if not isinstance(value, list):
-        raise AuthorizationError("legacy_run_skipped must be a list of PSS_ACCOUNT_N numbers")
+        raise AuthorizationError(f"{name} must be a list of PSS_ACCOUNT_N numbers")
     for number in value:
-        _positive_int(number, "each legacy_run_skipped entry")
+        _positive_int(number, f"each {name} entry")
     if len(set(value)) != len(value):
-        raise AuthorizationError("legacy_run_skipped has duplicate entries")
+        raise AuthorizationError(f"{name} has duplicate entries")
     return tuple(value)
 
 
@@ -345,6 +352,7 @@ class Authorization:
     market: Optional[MarketLimits] = None
     placements: Mapping[str, tuple[Placement, ...]] = field(default_factory=dict)
     hull_upgrades: Mapping[str, tuple[HullUpgrade, ...]] = field(default_factory=dict)
+    legacy_run_serialized: tuple[int, ...] = ()
 
     def cap(self, alias: str, currency: str) -> int:
         """The per-period cap for ``alias``; starbux is always 0, whatever the file says."""
@@ -370,6 +378,8 @@ class Authorization:
         # Optional sections appear only when set, so a file without them hashes as before.
         if self.legacy_run_skipped:
             payload["legacy_run_skipped"] = list(self.legacy_run_skipped)
+        if self.legacy_run_serialized:
+            payload["legacy_run_serialized"] = list(self.legacy_run_serialized)
         if self.battles is not None:
             payload["battles"] = self.battles.to_dict()
         if self.market is not None:
@@ -454,8 +464,15 @@ def authorization_from_dict(payload: Mapping[str, Any]) -> Authorization:
     battles = _parse_battles(payload["battles"]) if "battles" in payload else None
     market = _parse_market(payload["market"]) if has_market else None
     legacy_run_skipped = (
-        _parse_legacy_run_skipped(payload["legacy_run_skipped"]) if "legacy_run_skipped" in payload else ()
+        _parse_legacy_run_numbers(payload["legacy_run_skipped"], "legacy_run_skipped")
+        if "legacy_run_skipped" in payload else ()
     )
+    legacy_run_serialized = (
+        _parse_legacy_run_numbers(payload["legacy_run_serialized"], "legacy_run_serialized")
+        if "legacy_run_serialized" in payload else ()
+    )
+    if set(legacy_run_skipped) & set(legacy_run_serialized):
+        raise AuthorizationError("an account cannot be in both legacy_run_skipped and legacy_run_serialized")
 
     modes = _unique_strings(payload["modes"], "modes")
     if not set(modes) <= set(RUN_MODES):
@@ -476,7 +493,7 @@ def authorization_from_dict(payload: Mapping[str, Any]) -> Authorization:
         owner=owner, purpose=purpose, accounts=accounts, actions=actions,
         not_before=not_before, expires=expires, caps=caps, modes=modes,
         legacy_run_skipped=legacy_run_skipped, battles=battles, market=market, placements=placements,
-        hull_upgrades=hull_upgrades,
+        hull_upgrades=hull_upgrades, legacy_run_serialized=legacy_run_serialized,
     )
 
 
@@ -517,8 +534,9 @@ def check_authorization(auth: Authorization, registry: AccountRegistry, now: dat
     Refused: a naive ``now`` or one outside ``[not_before, expires)``; a mode
     the file does not allow; no requested account; an account the file does
     not name, that the registry does not hold, or that the registry disables;
-    an account whose profile declares ``legacy_run_account`` N when N is not
-    in ``legacy_run_skipped`` (S06-R2); and an action the file does not allow.
+    an account whose profile declares ``legacy_run_account`` N when N is in
+    neither ``legacy_run_skipped`` (S06-R2) nor ``legacy_run_serialized``
+    (S06-R6); and an action the file does not allow.
 
     With ``battle_events`` (journal events) and ``run_pvp_battle`` requested
     and authorized, an account whose battle cap is already full is refused
@@ -546,10 +564,11 @@ def check_authorization(auth: Authorization, registry: AccountRegistry, now: dat
             reasons.append(f"account {name} is disabled in the registry")
         else:
             legacy = registry.get(alias).legacy_run_account
-            if legacy is not None and legacy not in auth.legacy_run_skipped:
+            if legacy is not None and legacy not in auth.legacy_run_skipped + auth.legacy_run_serialized:
                 reasons.append(
                     f"account {name} is legacy daily run account {legacy}, and the authorization does not "
-                    f"confirm it is skipped there (legacy_run_skipped)")
+                    f"confirm it is skipped there (legacy_run_skipped) or never runs at the same time "
+                    f"(legacy_run_serialized)")
     requested_actions = list(action_ids)
     for action_id in requested_actions:
         if action_id not in auth.actions:

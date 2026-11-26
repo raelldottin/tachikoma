@@ -147,5 +147,63 @@ class DailyChangesTests(unittest.TestCase):
             self.assertIn(f"{block.start.isoformat()} to {block.end.isoformat()}", plan)
 
 
+def at(day, hour, minute=0):
+    return datetime(day.year, day.month, day.day, hour, minute, tzinfo=timezone.utc)
+
+
+class TrialDayTests(unittest.TestCase):
+    """A snapshot closes the trial day it ends: the evening one (23:30 UTC, the old schedule) or the next morning's
+    (04:30 UTC, live-trial-schedule.yml now), even when GitHub starts the run hours late."""
+
+    def test_the_evening_and_the_next_morning_close_the_same_day(self):
+        day = date(2026, 11, 30)
+        for moment in (at(day, 23, 30), at(day, 12, 0), at(day + timedelta(days=1), 0, 40),
+                       at(day + timedelta(days=1), 4, 30), at(day + timedelta(days=1), 11, 59)):
+            with self.subTest(moment=moment):
+                self.assertEqual(daily_changes.trial_day(moment), day)
+        self.assertEqual(daily_changes.trial_day(at(day, 11, 59)), day - timedelta(days=1))
+        # A local time is read in UTC.
+        eastern = timezone(timedelta(hours=-5))
+        self.assertEqual(daily_changes.trial_day(datetime(2026, 11, 30, 23, 30, tzinfo=eastern)), day)
+
+    def test_morning_snapshots_are_labelled_with_the_day_they_close(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        before = snapshot(at(date(2026, 11, 30), 4, 30))
+        after = snapshot(at(date(2026, 12, 1), 6, 10), research=[{"@ResearchDesignId": "510",
+                                                                   "@ResearchState": "Completed"}])
+        for item in (before, after):
+            write_baseline(item, Path(tmp.name), "1.0")
+        out = io.StringIO()
+        schedule = str(REPO_ROOT / "docs/experiments/r2-progression-trial/schedule.json")
+        with redirect_stdout(out), redirect_stderr(io.StringIO()):
+            self.assertEqual(daily_changes.main([tmp.name, "--schedule", schedule]), 0)
+        self.assertIn("## 2026-11-30: baseline-v1 (block 2)", out.getvalue())
+        self.assertIn("(25.7 h)", out.getvalue())
+        with redirect_stdout(io.StringIO()) as ranged, redirect_stderr(io.StringIO()):
+            daily_changes.main([tmp.name, "--from", "2026-11-30", "--to", "2026-11-30"])
+        self.assertIn("## 2026-11-30", ranged.getvalue())
+        # The exit report labels the same pair with the same day.
+        self.assertEqual(growth_days_label(before, after), "2026-11-30")
+
+    def test_the_switch_from_evening_to_morning_snapshots(self):
+        # The last 23:30 snapshot, then the first 04:30 one: the pair closes the day in between, and is 29 h long.
+        lines = daily_changes.summarize([snapshot(at(date(2026, 11, 26), 23, 30)),
+                                         snapshot(at(date(2026, 11, 28), 4, 30))])
+        self.assertIn("## 2026-11-27: no schedule given", lines)
+        self.assertTrue(any("(29.0 h); not a one-day pair" in line for line in lines), lines)
+
+
+def growth_days_label(before, after):
+    from scripts.trial_report import plan_from_dict, growth_days
+
+    plan = plan_from_dict({
+        "trial_id": "t", "hypothesis": "h", "account_alias": "pss5", "arms": ["a", "b"], "metric": "growth-per-day",
+        "higher_is_better": True, "min_sample": 2, "window_start": "2026-11-16T00:00:00Z",
+        "window_end": "2026-12-22T00:00:00Z",
+    })
+    return growth_days(plan, "a", [before, after])[0].day
+
+
 if __name__ == "__main__":
     unittest.main()

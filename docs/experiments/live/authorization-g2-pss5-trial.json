@@ -22,7 +22,7 @@
   "modes": [
     "full"
   ],
-  "legacy_run_skipped": [
+  "legacy_run_serialized": [
     5
   ]
 }

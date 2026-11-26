@@ -10,11 +10,26 @@ on:
 permissions:
   contents: read
 
+# SPEC-06 S06-R6: the group named live-trial now covers every workflow that touches pss5 (this one,
+# live-trial.yml and live-trial-schedule.yml), so GitHub never runs two of them at the same time. The pss5
+# authorization files claim this with legacy_run_serialized, and scripts/ci.py checks it. A group holds one
+# running and one pending run; a third run queuing cancels the pending one.
+concurrency:
+  group: live-trial
+  cancel-in-progress: false
+
 jobs:
-  daily-run:
-    name: 'Runs daily'
+  # One leg per account, each on its own runner, all at the same time. fail-fast: false and the account step's
+  # continue-on-error keep one account's failure from cancelling or failing the others. Secrets are looked up by
+  # matrix.account, so each leg can read only its own account's PSS_ACCOUNT_<N>_* secrets.
+  accounts:
+    name: 'Account ${{ matrix.account }}'
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        account: [1, 2, 3, 4, 5]
     steps:
       - name: Checkout
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -28,12 +43,13 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-      - name: Process account 1
-        if: ${{ !contains(format(',{0},', vars.LEGACY_RUN_SKIP), ',1,') }}
+      - name: Process account ${{ matrix.account }}
+        if: ${{ !contains(format(',{0},', vars.LEGACY_RUN_SKIP), format(',{0},', matrix.account)) }}
         continue-on-error: true
         env:
-          PSS_EMAIL: ${{ secrets.PSS_ACCOUNT_1_EMAIL }}
-          PSS_PASSWORD: ${{ secrets.PSS_ACCOUNT_1_PASSWORD }}
+          ACCOUNT_NUMBER: ${{ matrix.account }}
+          PSS_EMAIL: ${{ secrets[format('PSS_ACCOUNT_{0}_EMAIL', matrix.account)] }}
+          PSS_PASSWORD: ${{ secrets[format('PSS_ACCOUNT_{0}_PASSWORD', matrix.account)] }}
           SMTP_EMAIL: ${{ secrets.email_username }}
           SMTP_PASSWORD: ${{ secrets.email_password }}
           RECIPIENT: ${{ secrets.email_recipient }}
@@ -52,119 +68,53 @@ jobs:
             --smtp-password-file <(printf '%s' "$SMTP_PASSWORD") \
             --recipient "$RECIPIENT" \
             --run-battle \
-            --account-alias account-1 \
+            --account-alias "account-$ACCOUNT_NUMBER" \
             --training-journal-dir "$RUNNER_TEMP/tachikoma-training/journals"
 
-      - name: Process account 2
-        if: ${{ !contains(format(',{0},', vars.LEGACY_RUN_SKIP), ',2,') }}
+      # Hands this leg's journal to the training-report job, which runs on another runner. overwrite: true lets a
+      # re-run of a failed leg replace its journal, so the report reads each account once. A skipped account writes
+      # no journal, and an artifact service failure cannot fail the leg.
+      - name: Upload account journal
+        if: always()
         continue-on-error: true
-        env:
-          PSS_EMAIL: ${{ secrets.PSS_ACCOUNT_2_EMAIL }}
-          PSS_PASSWORD: ${{ secrets.PSS_ACCOUNT_2_PASSWORD }}
-          SMTP_EMAIL: ${{ secrets.email_username }}
-          SMTP_PASSWORD: ${{ secrets.email_password }}
-          RECIPIENT: ${{ secrets.email_recipient }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: training-journal-account-${{ matrix.account }}
+          path: ${{ runner.temp }}/tachikoma-training/journals
+          retention-days: 1
+          if-no-files-found: ignore
+          overwrite: true
+
+  # Runs once every leg has finished, also when one failed or LEGACY_RUN_SKIP skipped it. It is given no secrets.
+  training-report:
+    name: 'Training report'
+    needs: accounts
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Setup Python version 3.13
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - name: Install dependencies
         run: |
-          set -euo pipefail
-          umask 077
-
-          pw_file="$(mktemp)"
-          trap 'rm -f "$pw_file"' EXIT
-          printf '%s' "$PSS_PASSWORD" > "$pw_file"
-
-          python run.py \
-            --login-email "$PSS_EMAIL" \
-            --password-file "$pw_file" \
-            --smtp-email "$SMTP_EMAIL" \
-            --smtp-password-file <(printf '%s' "$SMTP_PASSWORD") \
-            --recipient "$RECIPIENT" \
-            --run-battle \
-            --account-alias account-2 \
-            --training-journal-dir "$RUNNER_TEMP/tachikoma-training/journals"
-
-      - name: Process account 3
-        if: ${{ !contains(format(',{0},', vars.LEGACY_RUN_SKIP), ',3,') }}
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      # continue-on-error: when no leg uploaded a journal, the report below still runs and says so.
+      - name: Download account journals
         continue-on-error: true
-        env:
-          PSS_EMAIL: ${{ secrets.PSS_ACCOUNT_3_EMAIL }}
-          PSS_PASSWORD: ${{ secrets.PSS_ACCOUNT_3_PASSWORD }}
-          SMTP_EMAIL: ${{ secrets.email_username }}
-          SMTP_PASSWORD: ${{ secrets.email_password }}
-          RECIPIENT: ${{ secrets.email_recipient }}
-        run: |
-          set -euo pipefail
-          umask 077
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: training-journal-account-*
+          path: ${{ runner.temp }}/tachikoma-training/journals
+          merge-multiple: true
 
-          pw_file="$(mktemp)"
-          trap 'rm -f "$pw_file"' EXIT
-          printf '%s' "$PSS_PASSWORD" > "$pw_file"
-
-          python run.py \
-            --login-email "$PSS_EMAIL" \
-            --password-file "$pw_file" \
-            --smtp-email "$SMTP_EMAIL" \
-            --smtp-password-file <(printf '%s' "$SMTP_PASSWORD") \
-            --recipient "$RECIPIENT" \
-            --run-battle \
-            --account-alias account-3 \
-            --training-journal-dir "$RUNNER_TEMP/tachikoma-training/journals"
-
-      - name: Process account 4
-        if: ${{ !contains(format(',{0},', vars.LEGACY_RUN_SKIP), ',4,') }}
-        continue-on-error: true
-        env:
-          PSS_EMAIL: ${{ secrets.PSS_ACCOUNT_4_EMAIL }}
-          PSS_PASSWORD: ${{ secrets.PSS_ACCOUNT_4_PASSWORD }}
-          SMTP_EMAIL: ${{ secrets.email_username }}
-          SMTP_PASSWORD: ${{ secrets.email_password }}
-          RECIPIENT: ${{ secrets.email_recipient }}
-        run: |
-          set -euo pipefail
-          umask 077
-
-          pw_file="$(mktemp)"
-          trap 'rm -f "$pw_file"' EXIT
-          printf '%s' "$PSS_PASSWORD" > "$pw_file"
-
-          python run.py \
-            --login-email "$PSS_EMAIL" \
-            --password-file "$pw_file" \
-            --smtp-email "$SMTP_EMAIL" \
-            --smtp-password-file <(printf '%s' "$SMTP_PASSWORD") \
-            --recipient "$RECIPIENT" \
-            --run-battle \
-            --account-alias account-4 \
-            --training-journal-dir "$RUNNER_TEMP/tachikoma-training/journals"
-
-      - name: Process account 5
-        if: ${{ !contains(format(',{0},', vars.LEGACY_RUN_SKIP), ',5,') }}
-        continue-on-error: true
-        env:
-          PSS_EMAIL: ${{ secrets.PSS_ACCOUNT_5_EMAIL }}
-          PSS_PASSWORD: ${{ secrets.PSS_ACCOUNT_5_PASSWORD }}
-          SMTP_EMAIL: ${{ secrets.email_username }}
-          SMTP_PASSWORD: ${{ secrets.email_password }}
-          RECIPIENT: ${{ secrets.email_recipient }}
-        run: |
-          set -euo pipefail
-          umask 077
-
-          pw_file="$(mktemp)"
-          trap 'rm -f "$pw_file"' EXIT
-          printf '%s' "$PSS_PASSWORD" > "$pw_file"
-
-          python run.py \
-            --login-email "$PSS_EMAIL" \
-            --password-file "$pw_file" \
-            --smtp-email "$SMTP_EMAIL" \
-            --smtp-password-file <(printf '%s' "$SMTP_PASSWORD") \
-            --recipient "$RECIPIENT" \
-            --run-battle \
-            --account-alias account-5 \
-            --training-journal-dir "$RUNNER_TEMP/tachikoma-training/journals"
-
-      # Runs after every account step, also when one failed or LEGACY_RUN_SKIP skipped it. It reads only the
-      # journals written above (run.py --report never logs in or opens a connection) and is given no credentials.
+      # Reads only the journals the legs uploaded (run.py --report never logs in or opens a connection).
       # run.py creates each account's journal before login, so an account that failed at login is listed with an
       # empty journal; only an account LEGACY_RUN_SKIP skipped (or that stopped before run.py ran) is not listed.
       # The list of journals reaches the job summary first, so it survives a failing report run (which fails the step).
@@ -198,8 +148,8 @@ jobs:
           python run.py --report training "$@" --report-format json > "$root/report/training-report.json"
           cat "$root/report/training-report.md" >> "$GITHUB_STEP_SUMMARY"
 
-      # Uploads only the training journals and reports. Password files are mktemp files outside this directory,
-      # removed when each account step exits. continue-on-error: an artifact service failure cannot fail the run.
+      # Uploads only the training journals and reports; this job's runner never held a password file.
+      # continue-on-error: an artifact service failure cannot fail the run.
       - name: Upload training journals and report
         if: always()
         continue-on-error: true

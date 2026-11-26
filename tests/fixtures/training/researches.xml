@@ -1,11 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Synthetic, sanitized fixture: fake research ids. -->
+<!-- Synthetic, sanitized fixture: fake research ids; the design ids are research_designs.xml's (live shape). Fitness is
+     done up to course 201 and Education up to 203; Advanced Training (38) is still being researched. -->
 <ResearchService>
   <ListAllResearches>
     <Researches>
-      <Research ResearchId="7001" ResearchDesignId="11" ResearchState="Completed" />
-      <Research ResearchId="7002" ResearchDesignId="22" ResearchState="Completed" />
-      <Research ResearchId="7003" ResearchDesignId="40" ResearchState="Researching" />
+      <Research ResearchId="7001" ResearchDesignId="74" ResearchState="Completed" />
+      <Research ResearchId="7002" ResearchDesignId="75" ResearchState="Completed" />
+      <Research ResearchId="7003" ResearchDesignId="76" ResearchState="Completed" />
+      <Research ResearchId="7004" ResearchDesignId="77" ResearchState="Completed" />
+      <Research ResearchId="7005" ResearchDesignId="101" ResearchState="Completed" />
+      <Research ResearchId="7006" ResearchDesignId="102" ResearchState="Completed" />
+      <Research ResearchId="7007" ResearchDesignId="103" ResearchState="Completed" />
+      <Research ResearchId="7008" ResearchDesignId="104" ResearchState="Completed" />
+      <Research ResearchId="7009" ResearchDesignId="105" ResearchState="Completed" />
+      <Research ResearchId="7010" ResearchDesignId="106" ResearchState="Completed" />
+      <Research ResearchId="7011" ResearchDesignId="38" ResearchState="Researching" />
     </Researches>
   </ListAllResearches>
 </ResearchService>

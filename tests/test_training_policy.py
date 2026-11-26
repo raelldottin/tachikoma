@@ -353,16 +353,16 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(dict(context.items), {902: 3, 903: 1})
         self.assertEqual(context, expected)
 
-    def test_research_design_level_reaches_the_parser(self):
-        # A completed research whose level is only in the design's @Level (no "Lv N" in its name).
-        levelled = [{"@ResearchDesignId": "611", "@RootResearchDesignId": "611", "@ResearchName": "Fitness",
+    def test_research_course_reaches_the_parser(self):
+        # The level is the live name's course ("Fitness 201" -> 201); an unverified @Level is neither kept nor read.
+        levelled = [{"@ResearchDesignId": "611", "@RootResearchDesignId": "611", "@ResearchName": "Fitness 201",
                      "@Level": "2", "@GasCost": "10"}]
         research = [{"@ResearchDesignId": "611", "@ResearchState": "Completed"}]
         expected = build_context(
             now=T0, characters_raw={"Character": [crew()]}, character_designs_raw={"CharacterDesign": CHARACTER_DESIGNS},
             training_designs_raw={"TrainingDesign": TRAINING_DESIGNS}, researches_raw={"Research": research},
             research_designs_raw={"ResearchDesign": levelled})
-        self.assertEqual(dict(expected.research_levels), {"Fitness": 2})
+        self.assertEqual(dict(expected.research_levels), {"Fitness": 201, "Fitness 201": 201})
         context, _ = training_context(snap(research=research), design(research_designs=levelled))
         self.assertEqual(dict(context.research_levels), dict(expected.research_levels))
 
@@ -376,11 +376,11 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(payloads["characters_raw"], {"Character": records})
 
     def test_research_family_can_come_only_from_the_root_design(self):
-        # A level-2 design whose own name names no family: "Fitness" comes only through @RootResearchDesignId.
-        levelled = [{"@ResearchDesignId": "610", "@RootResearchDesignId": "610", "@ResearchName": "Fitness Lv1",
+        # A course whose own name names another family: "Fitness" comes only through @RootResearchDesignId.
+        levelled = [{"@ResearchDesignId": "610", "@RootResearchDesignId": "610", "@ResearchName": "Fitness 101",
                      "@GasCost": "10"},
-                    {"@ResearchDesignId": "620", "@RootResearchDesignId": "610", "@ResearchName": "Advanced Conditioning",
-                     "@Level": "2", "@GasCost": "20"}]
+                    {"@ResearchDesignId": "620", "@RootResearchDesignId": "610", "@ResearchName": "Conditioning 201",
+                     "@GasCost": "20"}]
         research = [{"@ResearchDesignId": "620", "@ResearchState": "Completed"}]
 
         def raw_context(research_designs):
@@ -392,14 +392,14 @@ class ContractTests(unittest.TestCase):
                 research_designs_raw={"ResearchDesign": research_designs})
 
         expected = raw_context(levelled)
-        self.assertEqual(dict(expected.research_levels), {"Fitness": 2, "Advanced Conditioning": 2})
+        self.assertEqual(dict(expected.research_levels), {"Fitness": 201, "Conditioning 201": 201})
         context, _ = training_context(snap(research=research), design(research_designs=levelled))
         assert context is not None
         self.assertEqual(dict(context.research_levels), dict(expected.research_levels))
         self.assertEqual(training_ids(plan(snap(research=research), design(research_designs=levelled))), [start()])
         # Paired control: without the root, the family is the design's own name and the Fitness gate is not met.
         rootless = [dict(record, **{"@RootResearchDesignId": ""}) for record in levelled]
-        self.assertEqual(dict(raw_context(rootless).research_levels), {"Advanced Conditioning": 2})
+        self.assertEqual(dict(raw_context(rootless).research_levels), {"Conditioning": 201, "Conditioning 201": 201})
         result = plan(snap(research=research), design(research_designs=rootless))
         self.assertEqual(training_requests(result), [])
         self.assertTrue(reasons(result)["training 101"].startswith("research_missing: "))
