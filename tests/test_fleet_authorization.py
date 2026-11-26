@@ -9,7 +9,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from sdk.fleet import registry_from_dict
+from sdk.fleet import load_registry, registry_from_dict
 from sdk.fleet.authorization import (
     Authorization,
     AuthorizationError,
@@ -332,6 +332,93 @@ class LegacyRunTests(unittest.TestCase):
         confirmed = authorization_from_dict(payload(legacy_run_skipped=[2]))
         self.assertEqual(check_authorization(confirmed, reg, INSIDE, ["alpha", "bravo"],
                                              ["collect_all_resources"], "canary"), [])
+
+    # Verifies: S06-R6
+    def test_legacy_run_serialized_is_optional_and_validated(self):
+        self.assertEqual(authorization_from_dict(payload()).legacy_run_serialized, ())
+        self.assertEqual(authorization_from_dict(payload(legacy_run_serialized=[5, 3])).legacy_run_serialized, (5, 3))
+        for value in ([0], [-1], ["2"], [True], [2, 2], 2, "2", None, [1.5]):
+            with self.subTest(value=value), self.assertRaises(AuthorizationError):
+                authorization_from_dict(payload(legacy_run_serialized=value))
+
+    # Verifies: S06-R6
+    def test_an_account_is_either_skipped_or_serialized_never_both(self):
+        with self.assertRaisesRegex(AuthorizationError, "both legacy_run_skipped and legacy_run_serialized"):
+            authorization_from_dict(payload(legacy_run_skipped=[2, 4], legacy_run_serialized=[3, 4]))
+        both = authorization_from_dict(payload(legacy_run_skipped=[2], legacy_run_serialized=[3]))
+        self.assertEqual((both.legacy_run_skipped, both.legacy_run_serialized), ((2,), (3,)))
+
+    # Verifies: S06-R6
+    def test_serialized_files_hash_apart_and_old_files_hash_as_before(self):
+        auth = authorization_from_dict(payload())
+        self.assertNotIn("legacy_run_serialized", auth.to_dict())
+        self.assertEqual(authorization_hash(auth), authorization_hash(authorization_from_dict(payload(
+            legacy_run_serialized=[]))))
+        serialized = authorization_from_dict(payload(legacy_run_serialized=[2]))
+        self.assertEqual(serialized.to_dict()["legacy_run_serialized"], [2])
+        self.assertEqual(authorization_from_dict(serialized.to_dict()), serialized)
+        # Skipped and serialized are different claims, so the same number under each hashes differently.
+        self.assertNotEqual(authorization_hash(serialized), authorization_hash(authorization_from_dict(payload(
+            legacy_run_skipped=[2]))))
+        self.assertNotEqual(authorization_hash(serialized), authorization_hash(auth))
+
+    # Verifies: S06-R6
+    def test_execute_is_accepted_when_the_legacy_account_is_serialized(self):
+        reg = legacy_registry()
+        serialized = authorization_from_dict(payload(legacy_run_serialized=[2]))
+        self.assertEqual(check_authorization(serialized, reg, INSIDE, ["alpha", "bravo"],
+                                             ["collect_all_resources"], "canary"), [])
+        # Serializing or skipping other accounts does not cover legacy account 2.
+        for extra in ({"legacy_run_serialized": [1, 3]}, {"legacy_run_skipped": [1], "legacy_run_serialized": [3]}):
+            auth = authorization_from_dict(payload(**extra))
+            with self.subTest(extra=extra):
+                reasons = check_authorization(auth, reg, INSIDE, ["alpha"], ["collect_all_resources"], "canary")
+                self.assertEqual(len(reasons), 1)
+                self.assertIn("legacy daily run account 2", reasons[0])
+                # The refusal names both ways the owner can confirm it.
+                self.assertIn("legacy_run_skipped", reasons[0])
+                self.assertIn("legacy_run_serialized", reasons[0])
+
+
+LIVE_DIR = Path(os.path.abspath(__file__)).parents[1] / "docs" / "experiments" / "live"
+# Each pss5 authorization file and the registry the workflow pairs it with.
+PSS5_AUTHORIZATIONS = (
+    ("authorization-g2-pss5-trial.json", "registry-g2-pss5-trial.json"),
+    ("authorization-g2-pss5-canary.json", "registry-g2-pss5.json"),
+    ("authorization-g6-pss5-place.json", "registry-g6-pss5-place.json"),
+    ("authorization-g7-pss5-ship.json", "registry-g7-pss5-ship.json"),
+)
+
+
+class LivePss5AuthorizationTests(unittest.TestCase):
+    """The committed pss5 files: the legacy daily run acts on pss5 again, serialized with them (S06-R6)."""
+
+    def files(self):
+        for authorization_name, registry_name in PSS5_AUTHORIZATIONS:
+            raw = json.loads((LIVE_DIR / authorization_name).read_text(encoding="utf-8"))
+            yield authorization_name, raw, load_registry(LIVE_DIR / registry_name)
+
+    # Verifies: S06-R6
+    def test_every_pss5_file_claims_serialized_not_skipped(self):
+        for name, raw, reg in self.files():
+            with self.subTest(file=name):
+                self.assertEqual(reg.get("pss5").legacy_run_account, 5)
+                self.assertEqual(raw.get("legacy_run_serialized"), [5])
+                self.assertNotIn("legacy_run_skipped", raw)
+
+    # Verifies: S06-R2, S06-R6
+    def test_the_legacy_run_check_passes_with_the_claim_and_refuses_without_it(self):
+        for name, raw, reg in self.files():
+            auth = authorization_from_dict(raw)
+            now = auth.not_before
+            with self.subTest(file=name):
+                self.assertFalse([reason for reason in check_authorization(
+                    auth, reg, now, ["pss5"], auth.actions, auth.modes[0]) if "legacy daily run" in reason])
+                stripped = {key: value for key, value in raw.items() if key != "legacy_run_serialized"}
+                reasons = check_authorization(authorization_from_dict(stripped), reg, now, ["pss5"],
+                                              auth.actions, auth.modes[0])
+                self.assertEqual([reason for reason in reasons if "legacy daily run account 5" in reason], reasons)
+                self.assertEqual(len(reasons), 1)
 
 
 def battle_payload(**overrides):
@@ -667,9 +754,11 @@ class HullUpgradeTests(unittest.TestCase):
         # The hash main's code gave this file before placements existed (commit a089f0e).
         self.assertEqual(authorization_hash(auth),
                          "sha256:381f11eb7553c04cd2abffd0a958da204e59f434349ab80abce06f9831efb5db")
-        # The G6 placement file hashes as it did before hull_upgrades existed.
-        g6 = load_authorization(Path(os.path.abspath(__file__)).parents[1] / "docs" / "experiments" / "live"
-                                / "authorization-g6-pss5-place.json")
+        # The G6 placement file hashes as it did before hull_upgrades existed, once its legacy run claim is put
+        # back the way it was then (S06-R6 changed legacy_run_skipped to legacy_run_serialized in the file).
+        raw = json.loads((LIVE_DIR / "authorization-g6-pss5-place.json").read_text(encoding="utf-8"))
+        raw["legacy_run_skipped"] = raw.pop("legacy_run_serialized")
+        g6 = authorization_from_dict(raw)
         self.assertEqual(authorization_hash(g6),
                          "sha256:9749ac313ed65b38d1d370cf8a3c9b85fdf46f4ea782d8db76f86f1a46ae4fa0")
 

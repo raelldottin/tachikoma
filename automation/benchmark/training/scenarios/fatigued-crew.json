@@ -9,7 +9,7 @@
   "tick_minutes": 60,
   "fatigue_recovery_seconds": 7200,
   "rooms": [{"id": 7001, "design": "GYM"}, {"id": 7002, "design": "Academy"}],
-  "research": ["Fitness", "Fitness Lv2", "Fitness Lv3", "Education", "Education Lv2", "Education Lv3"],
+  "research": ["Fitness 101", "Fitness 102", "Fitness 103", "Fitness 201", "Fitness 202", "Fitness 203", "Education 101", "Education 102", "Education 103", "Education 201", "Education 202", "Education 203"],
   "inventory": {"Hero ATK Consumable": 2, "Hero WPN Consumable": 1},
   "crew": [
     {"id": 701, "name": "Cyber Duck", "design": "elite", "room": 7001, "stats": {"Attack": 90}, "fatigue": 100},

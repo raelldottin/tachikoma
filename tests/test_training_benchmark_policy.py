@@ -70,7 +70,7 @@ class OraclePolicyPinTests(unittest.TestCase):
             self.assertIn(code, codes)
             self.assertIn(tier, bench.ORACLE_CONSUMABLE_RULES)
             self.assertIn(item_id, item_ids)
-        levels = {(family, level) for family in ("Fitness", "Education") for level in (1, 2, 3)}
+        levels = {(family, course) for family in ("Fitness", "Education") for course in (101, 102, 103, 201, 202, 203)}
         self.assertEqual(set(bench.CATALOG_RESEARCH_LEVELS.values()), levels)
 
     def test_policy_pins_are_not_a_qa_channel(self):
