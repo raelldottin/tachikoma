@@ -136,8 +136,6 @@ KNOWN_DEFECTS = {
            "fails too", "sdk/client.py Client.request (~L239-245)"),
     "H1": ("heartbeat measures the age of the last heartbeat with timedelta.seconds, which ignores days: a heartbeat "
            "1 day + 30 s old is treated as 30 s old and skipped", "sdk/client.py heartbeat (~L3377)"),
-    "M1": ("collectAvailableMarkers reads GalaxyService/UserMarkers, but the reply nests UserMarkers under the action "
-           "element, so user markers are never collected", "sdk/client.py collectAvailableMarkers (~L685)"),
     "TASK1": ("collectTaskReward compares ProgressValue == ObjectiveAmount as strings, so an over-achieved task "
               "(4 of 2) is never collected", "sdk/client.py collectTaskReward (~L3355)"),
     "L1": ("authorize_email_password raises IndexError on a falsy reply, and run.py calls client.login bare, so the "
@@ -389,6 +387,8 @@ def training_slice(fake: FakePss, start: int = 0) -> list[tuple]:
 # change in production is a one-line edit here.
 START_LINE = re.compile(r"\] Starting training (?P<course>.+?) for (?P<crew>.+?) in (?P<room>.*?) with ")
 DRONE_LINE = re.compile(r"\] Collected mining drone (?P<marker>\S+)\n")
+# Every CollectMarker2 success line: drones (collectMiningDronesWithTravel) and user markers (collectAvailableMarkers).
+COLLECT_LINE = re.compile(r"\] Collected (?:mining drone|marker) (?P<marker>\S+)\n")
 
 
 def applied(daily: DailyRun, path: str, *keys: str) -> list[tuple]:
@@ -420,13 +420,14 @@ def reported_training_starts(daily: DailyRun) -> list[tuple]:
 
 def assert_reports_match_server(test: unittest.TestCase, daily: DailyRun) -> None:
     """The log's per-record success lines name exactly what the server applied: every "Starting training" is an
-    AddTraining the fake accepted (and vice versa), and every "Collected mining drone" a CollectMarker2 it accepted."""
+    AddTraining the fake accepted (and vice versa), and every "Collected mining drone" or "Collected marker" a
+    CollectMarker2 it accepted, in request order."""
     test.assertEqual(reported_training_starts(daily),
                      applied(daily, "/TrainingService/AddTraining", "characterId", "trainingDesignId"),
                      "'Starting training' log lines vs the AddTraining requests the server applied")
-    test.assertEqual([(m["marker"],) for m in DRONE_LINE.finditer(daily.log)],
+    test.assertEqual([(m["marker"],) for m in COLLECT_LINE.finditer(daily.log)],
                      applied(daily, "/GalaxyService/CollectMarker2", "starSystemMarkerId"),
-                     "'Collected mining drone' log lines vs the CollectMarker2 requests the server applied")
+                     "'Collected mining drone'/'Collected marker' log lines vs the CollectMarker2 requests applied")
 
 
 def economy_snapshot(state) -> dict:
@@ -485,7 +486,8 @@ EXPECTED_STEP_PATHS = {  # manageTraining is owned by EXPECTED_TRAINING_PATHS
                      "POST /RoomService/CollectAllResources",
                      "GET /ShipService/GetShipByUserId"),  # pass 2 requests nothing -> break
     "collectDailyReward": ("POST /UserService/CollectDailyReward2",),
-    "collectAvailableMarkers": ("GET /GalaxyService/ListStarSystemMarkersAndUserMarkers",),  # no UserMarkers: M1
+    "collectAvailableMarkers": ("GET /GalaxyService/ListStarSystemMarkersAndUserMarkers",
+                                "POST /GalaxyService/CollectMarker2"),  # user marker 9004 (M1 fixed in #276)
     "collectMiningDronesWithTravel": ("GET /GalaxyService/ListStarSystemMarkersAndUserMarkers",
                                       "GET /ShipService/GetShipByUserId",  # current star system
                                       "POST /GalaxyService/CollectMarker2"),  # drone 9001, same system: no GoTo
@@ -522,6 +524,9 @@ EXPECTED_STEP_MUTATIONS = {  # manageTraining is owned by EXPECTED_TRAINING
         COLLECT),
     "collectDailyReward": (
         ("POST", "/UserService/CollectDailyReward2", {"dailyRewardStatus": "Box", "argument": "3", "accessToken": T}),),
+    "collectAvailableMarkers": (
+        ("POST", "/GalaxyService/CollectMarker2", {"starSystemMarkerId": "9004", "clientDateTime": N, "checksum": C,
+                                                   "accessToken": T}),),
     "collectMiningDronesWithTravel": (
         ("POST", "/GalaxyService/CollectMarker2", {"starSystemMarkerId": "9001", "clientDateTime": N, "checksum": C,
                                                    "accessToken": T}),),
@@ -546,24 +551,25 @@ EXPECTED_CHECKSUMS = [
     ("/UserService/DeviceLogin17", "854c945565736ec6869ea7361e4cc5ac"),
     ("/UserService/HeartBeat4", "144"),
     ("/ShopService/PurchaseCatalog2", "e50ffedf21403100334f3077d51e7a35"),
-    ("/GalaxyService/CollectMarker2", "14c5560d328fe2a56702b41eb4addd2e"),
+    ("/GalaxyService/CollectMarker2", "a5facf18fc820b8bc296f9dd0fc9b3f3"),  # user marker 9004
+    ("/GalaxyService/CollectMarker2", "14c5560d328fe2a56702b41eb4addd2e"),  # drone 9001
     ("/MessageService/CollectReward2", "144"),
 ]
 # State after the default run. Trace: credits 1200 - 1000 pod + 10 task 7001 + 5 message 8001 = 215; mineral 60000
-# - 20000 room 104 + 1000 daily reward + 500 drone 9001 = 41500; gas 40000 - 2000 research 10 = 38000.
+# - 20000 room 104 + 1000 daily reward + 500 user marker 9004 + 500 drone 9001 = 42000; gas 40000 - 2000 research 10 = 38000.
 EXPECTED_ECONOMY = {
     "credits": 215,
     "daily_reward_status": "1",
     "tasks_collected": ["7001", "7003"],  # 7003 already collected; 7004 (4 of 2) never is: PINNED(TASK1)
     "messages": {"8001": (True, False), "8002": (False, False), "8003": (False, True)},  # (collected, actioned)
-    "markers_collected": ["9001", "9002"],  # 9002 already collected; user marker 9004 never is: PINNED(M1)
+    "markers_collected": ["9001", "9002", "9004"],  # 9002 already collected; 9004 is a user marker (M1 fixed)
 }
 EXPECTED_SHIP = {
     "rooms": {"101": ("1", "Normal", None), "102": ("30", "Normal", None), "103": ("31", "Normal", None),
               "104": ("50", "Upgrading", "51"), "105": ("60", "Upgrading", "61"), "106": ("40", "Normal", None),
               "107": ("41", "Normal", None)},
     "researches": [("1", "Completed"), ("10", "Researching")],
-    "mineral": 41500,
+    "mineral": 42000,
     "gas": 38000,
 }
 EXPECTED_CREW = {  # id: (level, HpImprovement, fatigue)
@@ -879,9 +885,12 @@ class DailyRunFailureContinuationTests(NeedsHealthyBaseline):
 
     def test_rejected_drone_collect_is_reported_as_a_failure_and_keeps_exit_zero(self):
         fake = FakePss(default_world())
-        fault = fake.fail("/GalaxyService/CollectMarker2", error="Marker already collected")
+        # Aimed at the drone: since the M1 fix, collectAvailableMarkers sends CollectMarker2 for user marker 9004 first.
+        fault = fake.fail("/GalaxyService/CollectMarker2", error="Marker already collected",
+                          when=lambda p: p.get("starSystemMarkerId") == "9001")
         daily = run_daily(fake)
         self.assertEqual((daily.code, fault.hits), (0, 1), daily.log[-2000:])  # a drone is not a fatal step
+        self.assertTrue(fake.state.marker("9004").collected)  # the user marker before it is unaffected
         self.assertIn("CollectMiningDrone(9001) returned False\n", daily.log)
         self.assertNotIn("Collected mining drone 9001", daily.log)
         self.assertFalse(fake.state.marker("9001").collected)

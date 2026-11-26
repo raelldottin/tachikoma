@@ -1050,7 +1050,7 @@ class ShapeContractTests(FakeTestCase):
 
     def test_user_markers_sit_under_the_action_element_not_directly_under_galaxy_service(self):
         parsed = self.read("GET", "/GalaxyService/ListStarSystemMarkersAndUserMarkers", {})
-        self.assertNotIn("UserMarkers", parsed["GalaxyService"])  # M1: collectAvailableMarkers reads it there
+        self.assertNotIn("UserMarkers", parsed["GalaxyService"])  # the old M1 defect read it there
         markers = _extract_collection(parsed, "StarSystemMarker")
         self.assertEqual([m["@StarSystemMarkerId"] for m in markers], ["9001", "9002", "9003"])
 
