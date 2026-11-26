@@ -91,10 +91,11 @@ class MemoryJournal:
 
 
 class CachingSnapshotProvider:
-    """Reuses the last snapshot until ``invalidate()``; one whose crew was not observed is never reused."""
+    """Reuses the last snapshot until ``invalidate()``; one missing any of ``sections`` is never reused."""
 
-    def __init__(self, provider: Callable[[], AccountSnapshot]) -> None:
+    def __init__(self, provider: Callable[[], AccountSnapshot], sections: tuple[str, ...] = ("crew",)) -> None:
         self._provider = provider
+        self._sections = sections
         self._cached: Optional[AccountSnapshot] = None
         self.last: Optional[AccountSnapshot] = None
 
@@ -102,7 +103,7 @@ class CachingSnapshotProvider:
         if self._cached is None:
             snapshot = self._provider()
             self.last = snapshot
-            if snapshot.section("crew") is not Completeness.MISSING:
+            if all(snapshot.section(name) is not Completeness.MISSING for name in self._sections):
                 self._cached = snapshot
         return self.last if self._cached is None else self._cached
 
@@ -233,16 +234,20 @@ def _finish_harmless(snapshot: Callable[[], Optional[AccountSnapshot]], characte
                      replied: Callable[[], bool]) -> Callable[[Any], bool]:
     """Whether a finish_training that was not verified is still no failure, judged from what the runner observed.
 
-    Refused by its preconditions while the crew member was observed: the training is not due yet, or there is nothing
-    to finish. Sent without a reply, and the crew member observed afterwards with no uncollected training: another
-    device collected it (the server answers "No training to finish").
+    Refused by its preconditions while the crew member's training was observed and readable: the training is not due
+    yet, or there is nothing to finish (a refusal over an unobserved or unreadable training is a failure: the
+    uncollected training may still be there). Sent without a reply, and the crew member observed afterwards with no
+    uncollected training: another device collected it (the server answers "No training to finish"). A contradicted
+    finish (stats or starbux fell) is never harmless.
     """
     def harmless(result) -> bool:
-        member = snapshot().crew_member(character_id) if snapshot() is not None else None
-        if member is None:
+        observed = snapshot()
+        member = observed.crew_member(character_id) if observed is not None else None
+        if member is None or verification_of(result.outcome) == CONTRADICTED:
             return False
         if not result.attempted:
-            return True
+            return bool(member.training_observed and (member.training_design_id is None or not member.training_active
+                                                       or member.training_end_utc is not None))
         return not replied() and member.training_design_id is None
 
     return harmless
@@ -304,7 +309,8 @@ def run_training(
         items_raw=items,
     )
     cache = CachingSnapshotProvider(ClientSnapshotProvider(
-        _CrewSnapshotClient(client, read_items), account_alias, clock=now, source=SNAPSHOT_SOURCE))
+        _CrewSnapshotClient(client, read_items), account_alias, clock=now, source=SNAPSHOT_SOURCE),
+        ("crew", "inventory") if read_items else ("crew",))
     proxy = TrainingClient(client, cache.invalidate)
     runner = ActionRunner(account_alias, proxy, cache, MemoryJournal() if journal is None else journal, clock=now)
     plan = plan_training(ctx, strategy)

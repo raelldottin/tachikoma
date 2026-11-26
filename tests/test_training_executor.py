@@ -591,6 +591,42 @@ class FinishTests(unittest.TestCase):
                                    "nothing)")
         self.assertEqual(result.counts, TrainingCounts(skipped=1))
 
+    def test_a_contradicted_finish_is_never_harmless(self):
+        # No reply and the design cleared, as for "No training to finish" -- but the stats fell: a real failure.
+        client = FakeTrainingClient([ended()])
+
+        def collected_with_a_loss():
+            client.record("1001").update({"@TrainingDesignId": "0", "@WeaponImprovement": "70"})
+
+        client.script("finishTraining", Act(apply=False, result=None, then=collected_with_a_loss))
+        result, lines = logged(self, client)
+        self.assertEqual(result.crew[0].finish.verification, "contradicted")
+        self.assertIs(result.crew[0].finish.harmless, False)
+        self.assertEqual(lines[0], "WARNING [Cap] training: Delish (1001) finish_training contradicted: stat "
+                                   "improvements of 1001 fell by 2")
+        self.assertEqual(result.counts, TrainingCounts(skipped=1, failed=1))
+
+    def test_a_finish_refused_for_unreadable_training_state_is_a_failure(self):
+        # Refused, but neither "not due" nor "nothing to finish": the uncollected training may still be there.
+        def drop_end(client):
+            return lambda: client.record("1001").pop("@TrainingEndDate")
+
+        def garble_end(client):
+            return lambda: client.record("1001").update({"@TrainingEndDate": "soon"})
+
+        cases = ((drop_end, "training state of 1001 was not observed before the action"),
+                 (garble_end, "training end of 1001 is not a readable server time"))
+        for change, reason in cases:
+            with self.subTest(reason=reason):
+                client = FakeTrainingClient([ended()])
+                client.script("listAllCharactersOfUser", Act(), Act(then=change(client)))
+                result, lines = logged(self, client)
+                self.assertEqual(client.mutations(), [])
+                self.assertEqual(lines[0], f"WARNING [Cap] training: Delish (1001) finish_training skipped: "
+                                           f"preconditions failed: {reason}")
+                self.assertIs(result.crew[0].finish.harmless, False)
+                self.assertEqual(result.counts, TrainingCounts(skipped=1, failed=1))
+
     def test_finish_reply_without_id_or_stats_is_not_replanned(self):
         broken = ({"@Fatigue": "0", "@HpImprovement": "n/a"},
                   dict(ended(), **{"@CharacterId": "1002"}),
@@ -708,6 +744,16 @@ class SnapshotTests(unittest.TestCase):
         self.assertEqual(result.crew[0].action.verification, "unknown")
         self.assertEqual(result.crew[1].action.verification, "verified")
         self.assertEqual(self.characters_reads(client), 5)
+
+    def test_a_snapshot_whose_inventory_read_failed_is_never_reused(self):
+        # The executor's own items read, then 1001's before-snapshot whose items read fails: 1001's consumable is
+        # refused, and 1002's before-snapshot reads the items again instead of reusing the inventory-less snapshot.
+        client = FakeTrainingClient([low(), low("1002", "Galactic Snow Maiden")], items={"101": 5})
+        client.script("listItemsOfAShip", Act(), Act(apply=False, result=False))
+        result = run(client, item_designs_raw=CONSUMABLE_DESIGNS)
+        self.assertEqual(client.mutations(), [("useConsumable", "101", "1002")])
+        self.assertEqual(result.crew[0].action.verification, "skipped")
+        self.assertEqual(result.counts, TrainingCounts(consumables=1, failed=1))
 
 
 def decision_records(journal) -> list[GameplayEvent]:

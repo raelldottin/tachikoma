@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 
 from tests.synthetic_fixtures import SYNTHETIC_EMAIL
 
-# Production order (sdk/client.py manageTraining ``stats``), without the "@".
+# Production order (sdk/training/model.py ``CANONICAL_STATS``), without the "@".
 STATS = ("HpImprovement", "PilotImprovement", "RepairImprovement", "WeaponImprovement", "ScienceImprovement",
          "EngineImprovement", "AttackImprovement", "AbilityImprovement", "StaminaImprovement")
 FAKE_EPOCH = datetime.datetime(2026, 11, 20, 12, 0, 0)  # naive UTC; test code never calls utcnow()
@@ -458,13 +458,13 @@ DEFAULT_RESEARCH_DESIGNS = (
     ("11", "10", "Education Lv2", 8000),
     ("20", "20", "Combat Lv1", 3000),
 )
-# Training tiers as manageTraining's log names them (Green T1, Blue T2, Yellow T3): (gain, fatigue, duration).
+# Training tiers T1-T3 (the tier bands of sdk/training/strategy.py): (gain, fatigue, duration).
 TIERS = {
     "T1": (2, 10, datetime.timedelta(hours=1)),
     "T2": (4, 20, datetime.timedelta(hours=3)),
     "T3": (8, 40, datetime.timedelta(hours=12)),
 }
-# (id, name, stat, tier); every name is unique, so manageTraining's last-match lookup is unambiguous.
+# (id, name, stat, tier); every name is unique, so the planner's exact-name lookup (pick_design) is unambiguous.
 DEFAULT_TRAINING_DESIGNS = (
     ("1", "Steam Yoga", "StaminaImprovement", "T1"),
     ("3", "Bench Press", "HpImprovement", "T1"),
@@ -536,7 +536,7 @@ DEFAULT_ROSTER = (
     RosterRow("1006", "The Conjoint Archon", "506", "Epic", "103", stats(Hp=34, Engine=101), 68, capacity=200,
               note="engines, primary room, 67.5 %: Epic TP cap 80 reached"),
     RosterRow("1007", "Cyber Duck", "507", "Common", "106", stats(Hp=40, Stamina=40), 80,
-              note="rushers, wrong room: 'Move' log, no request"),
+              note="rushers, wrong room: not_in_training_room skip ('move to gym'), no request"),
     RosterRow("1008", "Admiral Serena", "508", "Common", "103", stats(Hp=40, Attack=40), 80,
               note="defenders, secondary room: S-T2 research-gated"),
     RosterRow("1009", "Engineer Grunt", "509", "Common", "104", stats(Hp=10, Repair=10), 20, level=1, xp=120,

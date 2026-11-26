@@ -1051,7 +1051,7 @@ class ShapeContractTests(FakeTestCase):
     def test_character_designs_are_a_list_and_root_keys_match_production_checks(self):
         designs = walk(self.read("GET", "/CharacterService/ListAllCharacterDesigns2", {"designVersion": "15"}),
                        "CharacterService/ListAllCharacterDesigns/CharacterDesigns/CharacterDesign")
-        self.assertIsInstance(designs, list)  # D5: manageTraining iterates this node directly
+        self.assertIsInstance(designs, list)  # production's shape (sdk/training/parse.py also reads a lone dict: D5)
         for path, root in (("/CharacterService/ListAllCharactersOfUser", "CharacterService"),
                            ("/RoomService/ListRoomsViaAccessToken", "RoomService"),
                            ("/MessageService/ListSystemMessagesForUser3", "MessageService")):
