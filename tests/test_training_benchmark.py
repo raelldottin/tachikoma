@@ -16,6 +16,7 @@ import io
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from dataclasses import FrozenInstanceError, replace
@@ -25,6 +26,7 @@ from unittest import mock
 
 from scripts import mutation
 from scripts import training_benchmark as bench
+from sdk.simulation import game as simulated_game
 from sdk.simulation.game import SimulatedFaultError
 from sdk.training import build_context
 from sdk.training.model import (
@@ -252,10 +254,17 @@ class PureHelperTests(unittest.TestCase):
         self.assertEqual(bench.role_training("pilots", ("primary", 1)), (None, None))
 
     def test_to_int(self):
-        cases = [("12", 12), (7, 7), (True, 0), ("x", 0), ("-3", 0), (None, 0), (2.0, 0), ("", 0)]
+        # "²" and "٣" are str.isdigit() (and "٣" isdecimal()), but no simulator id: int("²") raised a ValueError.
+        cases = [("12", 12), (7, 7), (True, 0), ("x", 0), ("-3", 0), (None, 0), (2.0, 0), ("", 0), ("²", 0),
+                 ("٣", 0), (" 1", 0)]
         for value, expected in cases:
             with self.subTest(value=value):
                 self.assertEqual(bench._to_int(value), expected)
+
+    def test_server_times_use_the_simulators_format(self):
+        self.assertIs(bench.TIME_FORMAT, simulated_game.TIME_FORMAT)
+        self.assertEqual(bench.format_time(hours(1.5)), "2027-07-05T01:30:00")
+        self.assertEqual(bench.parse_time(bench.format_time(hours(1.5))), hours(1.5))
 
     def test_covered_seconds_exact(self):
         window = (hours(0), hours(10))
@@ -582,6 +591,29 @@ class RecordingClientTests(unittest.TestCase):
         self.assertIs(client.listItemsOfAShip(), True)
         self.assertIn("ItemService", client.itemsOfAShip)
 
+    def test_the_simulator_behind_the_client_is_unreachable(self):
+        # Regression: _game and _simulation were plain attributes, so a tick could call client._game.addTraining
+        # and change the simulator log with no journaled call, skipping every hard-violation oracle.
+        _, simulation, client, journal = client_for(mini())
+        for name in ("_game", "_simulation", "_record", "_seq", "_anything", "__wrapped__"):
+            with self.subTest(name=name):
+                with self.assertRaisesRegex(AttributeError, "not a training call or read"):
+                    getattr(client, name)
+        client.addTraining("3111", "101")
+        self.assertEqual((len(journal), len(simulation.log())), (1, 1))  # the surface itself still journals
+
+    def test_a_fault_free_account_read_builds_no_snapshot(self):
+        # Review: read_fails built (and threw away) a whole AccountSnapshot on every account read. Without a read
+        # fault in the account a snapshot can change nothing, so none is built; with one, the read still fails.
+        _, simulation, client, _ = client_for(mini(faults=[{"kind": "reject", "method": "addTraining", "call": 1}]))
+        with mock.patch.object(simulation.game, "snapshot", side_effect=AssertionError("snapshot built")):
+            self.assertIs(client.listAllCharactersOfUser(), True)
+            self.assertIsNotNone(bench.read_payloads(client))
+        faults = [{"kind": "snapshot-failure", "method": "snapshot", "day": 0, "call": 1}]
+        _, simulation, client, _ = client_for(mini(faults=faults))
+        self.assertIs(client.listAllCharactersOfUser(), False)
+        self.assertEqual((simulation.fired(), simulation.now), (("day 0 snapshot #1: snapshot-failure",), T0))
+
 
 # -- the contract executor ----------------------------------------------------------------------------------------
 
@@ -737,11 +769,12 @@ class ContractExecutorTests(unittest.TestCase):
                 self.assertEqual(report, bench.TickReport(observe_failed=True))
 
     def test_execute_reports_the_executors_view(self):
-        cases = [(True, "ok"), (False, "refused"), (None, "ambiguous"), (ConnectionError("x"), "raised"), (0, "refused")]
+        # Only an answer of True is accepted; the call journal (call_outcome), never this view, is the ground truth.
+        cases = [(True, True), (False, False), (None, False), (ConnectionError("x"), False), (0, False), (1, False)]
         for result, expected in cases:
             with self.subTest(result=result):
                 client = FakeClient(results={"addTraining": result})
-                self.assertEqual(bench.execute(client, StartTraining(2, 3112, "start")), expected)
+                self.assertIs(bench.execute(client, StartTraining(2, 3112, "start")), expected)
         with self.assertRaisesRegex(bench.BenchmarkError, "never executed"):
             bench.execute(FakeClient(), Skip(2, "complete", "done"))
         client = FakeClient(results={"addTraining": ValueError("bug")})
@@ -789,7 +822,7 @@ class EpisodeMetricsTests(unittest.TestCase):
         self.assertEqual(metrics.starts_by_band, {"primary-1": 24})
         self.assertEqual(metrics.sessions_by_room, {"GYM": 24})
         self.assertEqual((metrics.zero_gain_sessions, metrics.crew_completed, metrics.cap_overshoot_tp), (0, 0, 0))
-        self.assertEqual(metrics.violations, dict.fromkeys(bench.VIOLATION_KINDS, 0))
+        self.assertEqual(metrics.violations, dict.fromkeys(bench.GATED_VIOLATIONS, 0))
         self.assertEqual(len(episode.journal), 47)
         self.assertEqual(len(episode.reports), 24)
         self.assertEqual([call.tick for call in episode.journal[:3]], [1, 2, 2])
@@ -950,6 +983,26 @@ class PureMetricTests(unittest.TestCase):
         orphan = [self.entry(1, "start", 1, 0, end=1)]  # a start the journal never saw
         self.assertEqual(bench.episode_sessions(self.world, orphan, ())[0].can_gain, False)
 
+    def test_a_session_ending_after_the_last_tick_may_still_gain(self):
+        # Regression: an uncollected session counted only when it ended at or after the horizon. At tick_minutes=240
+        # the last tick is 20:00, so a T1 started then ends at 21:00 with no tick left to collect it: it was scored
+        # as wasted through no fault of the executor. One ending at 20:00 could still be collected then.
+        crew = [captain(), member(2, "King Dong", "legendary")]
+        _, world = world_for(mini(crew=crew, tick_minutes=240))
+        self.assertEqual((world.last_tick, world.horizon_end), (hours(20), hours(24)))
+        journal = [bench.Call(1, 5, stamp(16), "addTraining", ("3111", "101"), "101", before(), "ok", (), (1,)),
+                   bench.Call(2, 6, stamp(20), "addTraining", ("3111", "2"), "2", before(), "ok", (), (2,))]
+        log = [self.entry(1, "start", 101, 16, end=20), self.entry(2, "start", 2, 20, end=21)]
+        self.assertEqual(bench.episode_sessions(world, log, journal), (
+            bench.Session(2, hours(20), hours(21), None, True),
+            bench.Session(101, hours(16), hours(20), None, False),
+        ))
+        loaded = {"design": "Bench Press", "ends_after_minutes": 22 * 60}  # ends between the last tick and 24:00
+        _, world = world_for(mini(crew=[captain(training=loaded)], tick_minutes=240))
+        self.assertEqual(bench.episode_sessions(world, [], ()),
+                         (bench.Session(101, hours(0), hours(22), None, True, True),))
+        self.assertEqual(world_for(mini())[1].last_tick, hours(23))
+
     def test_loaded_sessions_open_at_the_start(self):
         loaded = {"design": "Bench Press", "ends_after_minutes": 90}
         crew = [captain(training=loaded), member(2, "King Dong", "legendary", fatigue=95,
@@ -970,15 +1023,18 @@ class PureMetricTests(unittest.TestCase):
             bench.Session(3, hours(0), hours(10), 5, True),  # no headroom: no window at all
         )
         log = [self.entry(1, "finish", 2, 20, total=110, gain=10)]  # crew 2 reaches its target at hour 20
-        window, busy = bench.utilisation_seconds(self.world, log, sessions)
+        # One pass over the log for every crew with headroom (crew 3 has none), shared by U and crew_completed.
+        done = bench.done_times(self.world, log)
+        self.assertEqual(done, {1: hours(48), 2: hours(20)})
+        window, busy = bench.utilisation_seconds(self.world, done, sessions)
         self.assertEqual((window, busy), ((48 + 20) * 3600, (6 + 20) * 3600))
-        fewer = bench.utilisation_seconds(self.world, log, sessions[:1] + sessions[2:])
+        fewer = bench.utilisation_seconds(self.world, done, sessions[:1] + sessions[2:])
         self.assertEqual(fewer, (window, busy))  # dropping a wasted session never lowers the score
-        self.assertEqual(bench.done_at(self.world.crew[2], log, hours(48)), hours(20))
-        self.assertEqual(bench.done_at(self.world.crew[1], log, hours(48)), hours(48))
         early = [self.entry(1, "start", 2, 1, total=110, end=2), self.entry(2, "finish", 2, 3, accepted=False,
                                                                            total=110)]
-        self.assertEqual(bench.done_at(self.world.crew[2], early, hours(48)), hours(48))
+        self.assertEqual(bench.done_times(self.world, early), {1: hours(48), 2: hours(48)})
+        later = [self.entry(1, "consume", 2, 5, total=112, gain=12), self.entry(2, "finish", 2, 9, total=120, gain=8)]
+        self.assertEqual(bench.done_times(self.world, later)[2], hours(5))  # the first time it got there
 
     def test_gains_and_counts(self):
         log = [self.entry(1, "finish", 1, 1, total=3, gain=3), self.entry(2, "consume", 1, 2, total=5, gain=2),
@@ -1209,6 +1265,22 @@ class MonotonicityTests(unittest.TestCase):
 # -- seeds, determinism and the suite -----------------------------------------------------------------------------
 
 
+class StaticChild:
+    """A determinism child (bench.ChildRun's surface) with a fixed report, or an error its report() raises."""
+
+    def __init__(self, report):
+        self.text = report
+        self.closed = False
+
+    def report(self):
+        if isinstance(self.text, Exception):
+            raise self.text
+        return self.text
+
+    def close(self):
+        self.closed = True
+
+
 class SuiteSeedTests(unittest.TestCase):
     def test_a_scenario_is_the_mean_of_its_seeds(self):
         suite = bench.run_suite([bench.validate_scenario(mini())])
@@ -1279,6 +1351,117 @@ class SuiteSeedTests(unittest.TestCase):
         verdict = bench.gate(suite, synthetic_baseline({"mini": 0.0}), deterministic=False)
         self.assertEqual(verdict.reasons, ("nondeterministic",))
 
+    def test_a_child_process_report_that_differs_is_nondeterministic(self):
+        # Regression: both determinism runs shared this process and its PYTHONHASHSEED, so hash-seed or set-order
+        # nondeterminism could never show. A report-only child under another hash seed must give the same bytes.
+        scenarios = [bench.validate_scenario(mini())]
+        expected = bench.to_json(bench.report_dict(bench.run_suite(scenarios, seeds=1)))
+        started = []
+
+        def start(text):
+            def spawn():
+                started.append(StaticChild(text))
+                return started[-1]
+            return spawn
+
+        same, _ = bench.check_determinism(scenarios, start_child=start(expected), seeds=1)
+        self.assertTrue(same)
+        differing, suite = bench.check_determinism(scenarios, start_child=start(expected.replace("34", "35", 1)),
+                                                   seeds=1)
+        self.assertFalse(differing)
+        verdict = bench.gate(suite, synthetic_baseline({"mini": 0.0}), deterministic=differing)
+        self.assertEqual(verdict.reasons, ("nondeterministic",))
+        self.assertEqual([child.closed for child in started], [True, True])
+        failing = StaticChild(bench.BenchmarkError("determinism child: exit 2: boom"))
+        with self.assertRaisesRegex(bench.BenchmarkError, "boom"):
+            bench.check_determinism(scenarios, start_child=lambda: failing, seeds=1)
+        self.assertTrue(failing.closed)  # never left running
+
+    def test_child_command_and_hash_seed(self):
+        args = bench.build_parser().parse_args(["--scenarios-dir", "here", "--scenario", "a", "--scenario", "b"])
+        self.assertEqual(bench.child_command(args), [
+            sys.executable, os.path.abspath(bench.__file__), "--report-only", "--json", "-", "--quiet",
+            "--scenarios-dir", os.path.abspath("here"), "--scenario", "a", "--scenario", "b"])
+        for parent, child in (("1", "2"), ("0", "1"), ("random", "1"), (None, "1")):
+            with self.subTest(parent=parent):
+                env = {key: value for key, value in os.environ.items() if key != "PYTHONHASHSEED"}
+                if parent is not None:
+                    env["PYTHONHASHSEED"] = parent
+                with mock.patch.dict(os.environ, env, clear=True):
+                    self.assertEqual(bench.child_hash_seed(), child)
+
+    def test_child_run_waits_for_the_report_and_fails_closed(self):
+        class Process:
+            def __init__(self, returncode=0, output="report\n", hang=False):
+                self.returncode, self.output, self.hang = returncode, output, hang
+                self.killed = False
+
+            def communicate(self, timeout=None):
+                if self.hang and not self.killed:
+                    raise subprocess.TimeoutExpired("child", timeout)
+                return self.output, "first line\nlast line\n"
+
+            def poll(self):
+                return self.returncode if not self.hang or self.killed else None
+
+            def kill(self):
+                self.killed = True
+
+        launched = []
+
+        def popen(process):
+            def start(command, **options):
+                launched.append((command, options))
+                return process
+            return start
+
+        with mock.patch.dict(os.environ, {"PYTHONHASHSEED": "1"}):
+            child = bench.ChildRun(["python", "bench"], popen=popen(Process()), timeout=7.0)
+        self.assertEqual(child.report(), "report\n")
+        child.close()  # already finished: nothing to stop
+        (command, options), = launched
+        self.assertEqual((command, options["cwd"]), (["python", "bench"], bench.ROOT))
+        self.assertEqual((options["env"]["PYTHONHASHSEED"], options["env"][bench.CHILD_ENV]), ("2", "1"))
+        self.assertEqual((options["stdin"], options["stdout"], options["stderr"]),
+                         (subprocess.DEVNULL, subprocess.PIPE, subprocess.PIPE))
+        with self.assertRaisesRegex(bench.BenchmarkError, "determinism child: exit 2: last line"):
+            bench.ChildRun(["x"], popen=popen(Process(returncode=2))).report()
+        hung = Process(hang=True)
+        with self.assertRaisesRegex(bench.BenchmarkError, "no report after 3 s"):
+            bench.ChildRun(["x"], popen=popen(hung), timeout=3.0).report()
+        self.assertTrue(hung.killed)
+        running = Process(hang=True)
+        bench.ChildRun(["x"], popen=popen(running)).close()
+        self.assertTrue(running.killed)
+
+    def test_a_metrics_crash_is_that_seeds_error(self):
+        # Regression: compute_metrics, trace_digest and score_scenario ran outside the per-seed capture, so a crash
+        # there ended the whole run with exit 1 (read as a gate failure) instead of becoming that seed's error.
+        scenario = bench.validate_scenario(mini())
+        with mock.patch.object(bench, "compute_metrics", side_effect=ValueError("bad metric")):
+            self.assertEqual(bench.run_seed(scenario, 7, tick=None, days=None),
+                             bench.SeedRun(7, None, 0.0, "", "ValueError: bad metric"))
+        with mock.patch.object(bench, "trace_digest", side_effect=KeyError("journal")):
+            self.assertEqual(bench.run_seed(scenario, 7, tick=None, days=None).error, "KeyError: 'journal'")
+        with mock.patch.object(bench, "score_scenario", side_effect=ZeroDivisionError("score")):
+            self.assertEqual(bench.run_seed(scenario, 7, tick=None, days=None).error, "ZeroDivisionError: score")
+        with mock.patch.object(bench, "compute_metrics", side_effect=bench.WorldError("input")):
+            with self.assertRaises(bench.WorldError):  # an input problem still propagates (exit 2)
+                bench.run_seed(scenario, 7, tick=None, days=None)
+
+    def test_a_garbage_character_id_is_unknown_crew(self):
+        # Regression: _to_int used str.isdigit, which accepts "²"; int("²") then raised inside journal_violations.
+        contract = bench.make_contract_executor()
+
+        def garbage(client, now):
+            client.addTraining("3111", "²")
+            return contract(client, now)
+
+        _, result = run_one(mini(), tick=garbage)
+        self.assertIsNone(result.error)
+        self.assertEqual(result.violations(), dict.fromkeys(bench.GATED_VIOLATIONS, 0))
+        self.assertGreater(result.runs[0].metrics.refused_actions, 0)
+
 
 def write_json(path: str, data) -> None:
     with open(path, "w", encoding="utf-8") as handle:
@@ -1341,9 +1524,17 @@ class ScenarioWorldTests(unittest.TestCase):
         for crew in ([captain(stats={"Attack": 179})], [member(101, "Visiting Trader", "common")],
                      [member(101, "Delish", "epic")]):  # Delish in a gym must move to the academy first
             with self.subTest(crew=crew[0]["name"]):
-                with self.assertRaisesRegex(bench.WorldError, "policy-reachable headroom"):
+                with self.assertRaisesRegex(bench.WorldError, r"no eligible crew has headroom under its policy "
+                                                              r"target \(research gates are not counted\)"):
                     bench.build_world(bench.validate_scenario(mini(crew=crew)))
         self.assertEqual(world_for(mini(crew=[captain(stats={"Attack": 178})]))[1].crew[101].headroom, 1)
+
+    def test_research_blocked_crew_keep_their_headroom(self):
+        # Owner decision (final review): policy_target leaves research gates out. A consumable can still move a
+        # research-blocked crew, and the blocked TP stays visible in P and U; so a world whose crew are all
+        # research-blocked is accepted, not rejected as one where the policy can gain nothing.
+        _, world = world_for(mini(research=[]))
+        self.assertEqual((dict(world.levels), world.crew[101].target, world.crew[101].headroom), ({}, 179, 179))
 
     def test_validate_scenario_rejects_each_bad_field(self):
         def without(key):
@@ -1510,6 +1701,18 @@ class ScenarioWorldTests(unittest.TestCase):
             bench.validate_scenario(mini(days=0, faults=[late]))
         self.assertEqual(len(raised.exception.problems), 1)  # only days: no fault-day noise from bad days
 
+    def test_a_fault_with_a_null_day_fires_on_any_day(self):
+        # Regression: "day": null (any day, as Fault.from_dict accepts it) crashed the day range check with a
+        # TypeError, so a run ended with a traceback and exit 1 (a gate failure) instead of a scenario.
+        anyday = {"kind": "snapshot-failure", "method": "snapshot", "day": None, "call": 30}
+        scenario = bench.validate_scenario(mini(days=2, faults=[anyday]))
+        self.assertEqual(scenario.faults, (anyday,))
+        episode = bench.run_episode(scenario)
+        self.assertEqual(episode.fired, ("day 1 snapshot #6: snapshot-failure",))  # the 30th read, on day 1
+        with self.assertRaises(bench.ScenarioError) as raised:
+            bench.validate_scenario(mini(days=2, faults=[dict(anyday, day="1")]))
+        self.assertIn("faults[0]: fault 'snapshot-failure': day must", str(raised.exception))
+
     def test_load_suite_rules(self):
         with tempfile.TemporaryDirectory() as directory:
             write_json(os.path.join(directory, "mini.json"), mini())
@@ -1582,7 +1785,7 @@ class CheckedInSuiteTests(unittest.TestCase):
     def test_the_unmodified_planner_trips_no_oracle(self):
         for result in default_run().scenarios:
             with self.subTest(scenario=result.name):
-                self.assertEqual(result.violations(bench.VIOLATION_KINDS), dict.fromkeys(bench.VIOLATION_KINDS, 0))
+                self.assertEqual(result.violations(), dict.fromkeys(bench.GATED_VIOLATIONS, 0))
                 self.assertIsNone(result.error)
 
     def test_every_checked_in_fault_fires(self):
@@ -1794,7 +1997,8 @@ class GateBaselineTests(unittest.TestCase):
         markdown = bench.render_markdown(report, verdict)
         self.assertIn("Composite: **34.26** over 1 scenarios x 3 seeds", markdown)
         self.assertIn("Gate: **FAIL** (scenario_below_baseline:mini)", markdown)
-        self.assertIn("| mini | 34.26 | 0.26 | 34.39 / 34.13 | 0.123 | 1.000 | 1.000 | 88 | 0 | 0 | 0 | 0 |", markdown)
+        self.assertIn("| mini | 34.26 | 0.26 | 34.39 / 34.13 | 0.123 | 1.000 | 1.000 | 88 | 0 | 0 | 0 |\n", markdown)
+        self.assertIn("| Consumables | Violations |\n", markdown)  # no report-only oracles, so no such column
         self.assertIn("| mini | none | 0 | 0 |", markdown)
         self.assertIn("trace drift (behaviour changed, scores held; never a failure)", markdown)
         self.assertIn(": mini", markdown)
@@ -1807,9 +2011,12 @@ class GateBaselineTests(unittest.TestCase):
         windowless = {"composite": 1.0, "formula": "f", "scenarios": {"w": {"score": 1.0, "spread": 0.0, "error": None,
                       "seeds": [{"score": 1.0, "metrics": bench.Metrics(skip_reasons={"complete": 2},
                                                                         violations={"cap": 1}).to_dict()}]}}}
-        self.assertIn("| w | 1.00 | 0.00 | 1.00 | 0.000 | n/a | 1.000 | 0 | 0 | 0 | 1 | 0 |",
+        self.assertIn("| w | 1.00 | 0.00 | 1.00 | 0.000 | n/a | 1.000 | 0 | 0 | 0 | 1 |\n",
                       bench.render_markdown(windowless, None))
         self.assertIn("| w | complete 2 | 0 | 0 |", bench.render_markdown(windowless, None))
+
+
+REAL_CHILD = object()  # MainTests.main: let bench.main start its real determinism child process
 
 
 class MainTests(unittest.TestCase):
@@ -1820,13 +2027,82 @@ class MainTests(unittest.TestCase):
         os.mkdir(self.scenarios)
         write_json(os.path.join(self.scenarios, "mini.json"), mini())
         self.baseline = os.path.join(self.directory.name, "baseline.json")
+        self.child_commands = []
 
-    def main(self, *argv):
+    def in_process_child(self, command):
+        """The determinism child's run, in this process: the same arguments, its report from stdout."""
+        self.child_commands.append(command)
+        self.assertEqual(command[:2], [sys.executable, os.path.abspath(bench.__file__)])
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = bench.main(command[2:])
+        return StaticChild(out.getvalue() if code == bench.EXIT_OK else bench.BenchmarkError(f"exit {code}"))
+
+    def main(self, *argv, child=None):
         out, err = io.StringIO(), io.StringIO()
+        options = {} if child is REAL_CHILD else {"child": child or self.in_process_child}
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            code = bench.main(["--scenarios-dir", self.scenarios, "--baseline", self.baseline, *argv])
+            code = bench.main(["--scenarios-dir", self.scenarios, "--baseline", self.baseline, *argv], **options)
         self.stderr = err.getvalue()
         return code, out.getvalue()
+
+    def test_gate_and_update_compare_a_child_run(self):
+        # Regression (with SuiteSeedTests): the gate and --update-baseline also compare a report-only child run
+        # under another PYTHONHASHSEED; a benchmark child (CHILD_ENV) never starts one of its own.
+        self.assertEqual(self.main("--update-baseline", "--quiet")[0], bench.EXIT_OK)
+        self.assertEqual(self.main("--quiet")[0], bench.EXIT_OK)
+        self.assertEqual(len(self.child_commands), 2)
+        self.assertEqual(self.child_commands[0][2:], ["--report-only", "--json", "-", "--quiet", "--scenarios-dir",
+                                                      os.path.abspath(self.scenarios)])
+        code, out = self.main("--json", "-", child=lambda command: StaticChild("{}\n"))
+        self.assertEqual((code, json.loads(out)["gate"]["reasons"]), (bench.EXIT_GATE, ["nondeterministic"]))
+        self.assertEqual(self.main("--update-baseline", child=lambda command: StaticChild("{}\n"))[0],
+                         bench.EXIT_GATE)
+        self.assertIn("refused: nondeterministic", self.stderr)
+        spawned = []
+        with mock.patch.dict(os.environ, {bench.CHILD_ENV: "1"}):
+            self.assertEqual(self.main("--quiet", child=spawned.append)[0], bench.EXIT_OK)
+        self.assertEqual(spawned, [])
+
+    def test_the_real_child_runs_under_another_hash_seed(self):
+        self.assertEqual(self.main("--update-baseline", "--quiet")[0], bench.EXIT_OK)
+        env = {key: value for key, value in os.environ.items() if key != bench.CHILD_ENV}
+        with mock.patch.dict(os.environ, env, clear=True):
+            code, out = self.main("--json", "-", child=REAL_CHILD)
+        self.assertEqual((code, json.loads(out)["gate"]), (bench.EXIT_OK, {"passed": True, "reasons": [],
+                                                                            "drift": []}))
+
+    def test_report_only_runs_run_the_suite_once(self):
+        # Regression: --quick and --seed ran the whole suite twice for a determinism verdict they never read.
+        for argv in (["--quick"], ["--seed", "3"], ["--report-only"]):
+            with self.subTest(argv=argv):
+                with mock.patch.object(bench, "run_suite", wraps=bench.run_suite) as run_suite:
+                    self.assertEqual(self.main(*argv, "--quiet")[0], bench.EXIT_OK)
+                self.assertEqual(run_suite.call_count, 1)
+                self.assertEqual(self.child_commands, [])
+        code, out = self.main("--report-only", "--json", "-")
+        self.assertEqual(out, bench.to_json(bench.report_dict(bench.run_suite(bench.load_suite(self.scenarios)))))
+        self.assertFalse(os.path.exists(self.baseline))  # never reads or writes a baseline
+
+    def test_update_baseline_never_writes_the_checked_in_baseline_from_another_suite(self):
+        # Regression: --update-baseline --scenarios-dir DIR wrote the checked-in baseline from a non-strict suite.
+        checked_in = os.path.join(self.directory.name, "checked-in-baseline.json")
+        with mock.patch.object(bench, "BASELINE_PATH", checked_in):
+            err = io.StringIO()
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+                code = bench.main(["--update-baseline", "--scenarios-dir", self.scenarios],
+                                  child=self.in_process_child)
+            self.assertEqual(code, bench.EXIT_ERROR)
+            self.assertIn("--update-baseline with another --scenarios-dir needs its own --baseline", err.getvalue())
+            self.assertFalse(os.path.exists(checked_in))
+            with mock.patch.object(bench, "SCENARIO_DIR", self.scenarios):  # the default pair: strict suite rules
+                err = io.StringIO()
+                with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+                    code = bench.main(["--update-baseline"], child=self.in_process_child)
+                self.assertEqual(code, bench.EXIT_ERROR)
+                self.assertIn(f"days < {bench.MIN_SUITE_DAYS}: mini", err.getvalue())
+                self.assertFalse(os.path.exists(checked_in))
+        self.assertEqual(self.main("--update-baseline", "--quiet")[0], bench.EXIT_OK)  # its own --baseline
 
     def test_main_exit_codes(self):
         self.assertEqual(self.main()[0], bench.EXIT_ERROR)  # gate mode, no baseline
@@ -1895,13 +2171,17 @@ class MainTests(unittest.TestCase):
         for argv in (["--gate", "--quick"], ["--gate", "--seed", "5"], ["--gate", "--update-baseline"],
                      ["--qa-eval", "--scenario", "mini"], ["--qa-eval", "--quick"], ["--qa-eval", "--seed", "1"],
                      ["--qa-eval", "--update-baseline"], ["--qa-eval", "--gate"], ["--update-baseline", "--seed", "1"],
-                     ["--update-baseline", "--scenario", "x"]):
+                     ["--update-baseline", "--scenario", "x"], ["--report-only", "--gate"],
+                     ["--report-only", "--update-baseline"], ["--qa-eval", "--report-only"],
+                     ["--update-baseline", "--scenarios-dir", "elsewhere"]):
             with self.subTest(argv=argv):
                 self.assertIsNotNone(bench._usage_error(parser.parse_args(argv)))
                 with contextlib.redirect_stderr(io.StringIO()):
                     self.assertEqual(bench.main(argv), bench.EXIT_ERROR)
         for argv in ([], ["--gate"], ["--quick"], ["--seed", "3"], ["--gate", "--scenario", "x"], ["--qa-eval"],
-                     ["--update-baseline", "--allow-lower", "r"]):
+                     ["--update-baseline", "--allow-lower", "r"], ["--report-only", "--quick", "--seed", "2"],
+                     ["--update-baseline", "--scenarios-dir", "elsewhere", "--baseline", "elsewhere.json"],
+                     ["--update-baseline", "--scenarios-dir", bench.SCENARIO_DIR]):
             with self.subTest(ok=argv):
                 self.assertIsNone(bench._usage_error(parser.parse_args(argv)))
         defaults = parser.parse_args([])
@@ -2088,6 +2368,7 @@ class QaEvalTests(unittest.TestCase):
                                                    "--gate", "--json", "-", "--quiet"])
                     self.assertEqual(options["cwd"], workspace)
                     self.assertEqual(options["env"]["PYTHONPATH"], workspace)
+                    self.assertEqual(options["env"][bench.CHILD_ENV], "1")  # its gate starts no determinism child
                     self.assertEqual((options["stdin"], options["stdout"]), (subprocess.DEVNULL, subprocess.PIPE))
                     self.assertTrue(options["start_new_session"])
                     self.assertEqual(process.timeouts, [12.5])
@@ -2193,7 +2474,8 @@ class QaEvalTests(unittest.TestCase):
             calls.append((target, kwargs["only"]))
             return mutation.Report(target, tuple(tests), (), 1.0, kwargs["timeout"])
 
-        planner_id = "sdk/training/planner.py:374:13:compare:0"
+        planner_source = mutation.read_source(Path(bench.ROOT) / "sdk" / "training" / "planner.py")
+        planner_id = mutation.generate_mutants("sdk/training/planner.py", planner_source)[0].id
         with mock.patch.object(mutation, "run_mutants", fake_run_mutants):
             bench.qa_eval(only=[planner_id], baseline_path=os.path.join(bench.ROOT, "missing.json"))
         self.assertEqual(calls, [("sdk/training/planner.py", [planner_id])])
@@ -2215,6 +2497,34 @@ class QaEvalTests(unittest.TestCase):
                 self.assertEqual(bench.main(["--qa-eval", "--channels", "benchmark", "--quiet"]), bench.EXIT_OK)
         self.assertEqual(fake.call_args.kwargs["channels"], ("benchmark",))
         self.assertIsNone(fake.call_args.kwargs["progress"])
+
+    def test_only_ids_that_match_no_mutant_are_an_input_error(self):
+        # Regression: an --only id matching no target (a typo) skipped every target, ran nothing and still passed
+        # with detection 1.0. Every id must name a generated mutant of some target.
+        calls = []
+
+        def fake_run_mutants(target, tests, **kwargs):
+            calls.append(target)
+            return mutation.Report(target, tuple(tests), (), 1.0, kwargs["timeout"])
+
+        planner_source = mutation.read_source(Path(bench.ROOT) / "sdk" / "training" / "planner.py")
+        real = mutation.generate_mutants("sdk/training/planner.py", planner_source)[0].id
+        typo = real.replace("planner.py", "planer.py")
+        moved = "sdk/training/planner.py:99999:0:compare:0"
+        missing = os.path.join(bench.ROOT, "missing.json")
+        with mock.patch.object(mutation, "run_mutants", fake_run_mutants):
+            for only in ([typo], [real, moved], [moved, typo]):
+                with self.subTest(only=only):
+                    with self.assertRaises(bench.BenchmarkError) as raised:
+                        bench.qa_eval(only=only, baseline_path=missing)
+                    unknown = sorted(set(only) - {real})
+                    self.assertEqual(str(raised.exception), f"--only: no mutant has id {', '.join(unknown)}")
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+                code = bench.main(["--qa-eval", "--baseline", missing, "--only", typo, "--quiet"])
+        self.assertEqual(code, bench.EXIT_ERROR)
+        self.assertEqual(err.getvalue(), f"training_benchmark: qa-eval: --only: no mutant has id {typo}\n")
+        self.assertEqual(calls, [])  # nothing ran
 
     def test_qa_rows_classify_by_mutated_source(self):
         source = TOY_SOURCE

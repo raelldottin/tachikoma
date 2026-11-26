@@ -20,24 +20,26 @@ make training-benchmark ARGS="--qa-eval --jobs 12"       # local only, about 5.5
 
 | Flag | Meaning |
 | --- | --- |
-| `--gate` | The default mode: run the suite twice in-process, compare the reports byte for byte, gate against `baseline.json`. |
+| `--gate` | The default mode: run the suite twice in-process and once in a child process under another `PYTHONHASHSEED`, compare the three reports byte for byte, gate against `baseline.json`. |
 | `--scenario NAME` | Run only this scenario (repeatable). Only the listed scenarios are gated (each must be in the baseline), and the composite is not compared. |
 | `--quick` | Override every scenario to 2 days. Report only, never gated (faults after day 1 do not fire). |
 | `--seed N` | Run every scenario at seeds N, N+1 and N+2 instead of its own. Report only, never gated. |
+| `--report-only` | Run the suite once and report: no gate, no baseline, no determinism check. `--quick` and `--seed` runs also run the suite once. It is the determinism child's mode. |
 | `--json PATH` | Write the JSON report, with a `gate` object in gate mode. `-` prints it instead of the markdown. |
 | `--markdown PATH`, `--summary PATH` | Write, or append (for `$GITHUB_STEP_SUMMARY`), the markdown report. |
 | `--quiet` | Print nothing. |
-| `--scenarios-dir`, `--baseline` | Other inputs (the tests use temporary ones). |
+| `--scenarios-dir`, `--baseline` | Other inputs (the tests use temporary ones). `--update-baseline` with another `--scenarios-dir` needs its own `--baseline`. |
 | `--update-baseline`, `--allow-lower REASON` | See [Gate and baseline](#gate-and-baseline). |
 | `--qa-eval`, `--jobs`, `--timeout`, `--only ID...`, `--qa-target PATH...`, `--channels tests,benchmark` | See [qa-eval](#qa-eval). |
 
 Flags a mode would ignore are a usage error (exit 2):
 
-- `--gate` with `--update-baseline`, `--quick` or `--seed`.
-- `--qa-eval` with `--gate`, `--update-baseline`, `--quick`, `--seed` or `--scenario`.
-- `--update-baseline` with `--quick`, `--seed` or `--scenario`.
+- `--gate` with `--update-baseline`, `--quick`, `--seed` or `--report-only`.
+- `--qa-eval` with `--gate`, `--update-baseline`, `--quick`, `--seed`, `--scenario` or `--report-only`.
+- `--update-baseline` with `--quick`, `--seed`, `--scenario` or `--report-only`.
+- `--update-baseline` with a `--scenarios-dir` other than the checked-in one, unless `--baseline` names a file other than the checked-in `baseline.json`. The checked-in baseline is only ever written from the checked-in suite, under its strict rules (7 days per scenario, every required tag).
 
-The CI job `training-benchmark` in `.github/workflows/python-tests.yml` runs `make training-benchmark ARGS="--gate --json training-benchmark.json --summary $GITHUB_STEP_SUMMARY"` and uploads the JSON report. It is blocking: `blocking-ci.yml` calls that workflow as its `tests` job, which `CI required` needs. Locally the gate takes about 5 seconds: 15 scenarios × 3 seeds, run twice.
+The CI job `training-benchmark` in `.github/workflows/python-tests.yml` runs `make training-benchmark ARGS="--gate --json training-benchmark.json --summary $GITHUB_STEP_SUMMARY"` and uploads the JSON report. It is blocking: `blocking-ci.yml` calls that workflow as its `tests` job, which `CI required` needs. Locally the gate takes about 4 seconds of wall time: 15 scenarios × 3 seeds, run twice in-process while the child process runs them once in parallel (a single run takes about 2 seconds).
 
 ## How a run works
 
@@ -53,7 +55,7 @@ A `TickReport` (skips with their reason and detail, dropped advisories, replans,
 
 The simulator has no room or research reads. The client therefore builds the four that the real Client uses from the simulator's rooms and research and the catalog designs: `listRoomsViaAccessToken` (`roomsViaAccessToken`), `listRoomDesigns2` (`roomDesigns`), `listAllResearches` (`allResearches`) and `listAllResearchDesigns2` (`allResearchDesigns`). Unit 9's executor makes the same calls on the real Client.
 
-`listAllCharactersOfUser` returns False when an injected `snapshot-failure` hits the account read. The simulator's snapshot ticks the clock, so the client puts the clock back and a read-fault scenario keeps the tick times of a fault-free one.
+`listAllCharactersOfUser` returns False when an injected `snapshot-failure` hits the account read. The client finds out by taking a simulator snapshot. The snapshot ticks the clock, so the client puts the clock back, and a read-fault scenario keeps the tick times of a fault-free one. An account with no snapshot fault and no read fault takes no snapshot at all: there it could only count itself, and no fault would ever read the count. That saves about half of each run's time and changes no report.
 
 Each training call (`addTraining`, `finishTraining`, `useConsumable`) becomes one `Call` in the journal, with these fields:
 
@@ -62,7 +64,7 @@ Each training call (`addTraining`, `finishTraining`, `useConsumable`) becomes on
 - The outcome, decided by the benchmark from the simulator's reply: `ok` (True), `refused` (anything else), `ambiguous` (no reply, or a fired `ambiguous-response` fault behind `useConsumable`, which still answers True) or `raised` (the exception propagates to the tick).
 - The faults the call fired, and the simulator log entries it appended.
 
-Any other attribute is an `AttributeError`, so a tick cannot reach the simulator behind the journal's back.
+Any other attribute is an `AttributeError`, including every underscore name such as `client._game` or `client._simulation`. The client holds the simulator in name-mangled attributes, so a tick using the client surface cannot bypass the journal. Python cannot hide them completely: a tick that spells out `_RecordingClient__game` is deliberately breaking the contract.
 
 `Simulation` holds the seeded simulator account and its clock, and is the probe the metrics read: the training log, the fired faults and the crew records the client journals.
 
@@ -172,16 +174,22 @@ E is the set of eligible crew: those with a role in the oracle table and a room 
 
 - `cap_i = oracle_cap(...)`.
 - `target_i = policy_target(...)` is the most the policy can train the crew to in its room. It is the smallest of three values: the cap, `first_total(90, capacity)` (the first total at which the policy calls training complete), and the first total of the first band from `T0_i` on whose slot needs another room type.
-- `headroom_i = max(0, target_i - T0_i)` for eligible crew, otherwise 0. H is the sum over E. `build_world` refuses a scenario with H = 0.
+- `headroom_i = max(0, target_i - T0_i)` for eligible crew, otherwise 0. H is the sum over E. `build_world` refuses a scenario with H = 0: no eligible crew has headroom under its cap, the complete percent and its room. That check does not look at research (see below), so a world whose crew are all research-blocked is accepted and simply scores low.
 
 The room limit is there because nothing in the game API or the simulator moves crew between rooms, so no planner can train past it. The limit is an extension of the review's M1. Before it, the 72% "move to" boundary alone gave mid-level-crew a seed spread of 18.8 points: whether a session happened to jump a crew past the boundary decided whether that crew had any idle time. With the limit, the spread is 0.31.
 
-Missing research is deliberately not clamped. Consumables can still move a crew whose research is missing, and the gap between the band gate and the design gate is a planner finding that the score should keep visible.
+Missing research is deliberately not clamped (owner decision, confirmed in the final review). Research never changes during a run, but consumables can still move a crew whose research is missing, and the gap between the band gate and the design gate is a planner finding that the score should keep visible. The effect on the score is direct:
+
+- P is a fraction of H, so the research-blocked TP stays in the denominator. In missing-research the headroom is 252 TP. The planner gains about 14 TP a seed (Common items and the ungated secondary T1 band), so P is 0.057.
+- U charges a research-blocked crew idle time from the start until it reaches its target, which is the whole horizon when it never does. Missing-research has U = 0.002.
+- `crew_completed` counts only crew that reach the unclamped target.
+
+A low score on a research scenario is therefore the research gap, not an executor fault. `test_research_blocked_crew_keep_their_headroom` pins the decision.
 
 | Metric | Definition |
 | --- | --- |
 | P, progress | The area under the reachable-progress curve, per simulator log event, as a fraction of `H × horizon`. Each crew's progress is `min(headroom_i, total_i - T0_i)`. It changes only at accepted finishes and item uses, so the area is exact: every gained point counts for the time left until the horizon. P rewards getting there sooner, at the resolution of single events instead of day samples. |
-| U, utilisation | Productive crew time as a fraction of the window crew time. A crew with headroom has a window from the start until its first accepted finish or item use that reaches `target_i`, or until the horizon. Busy time is the union of its productive sessions (sessions loaded at the start count too). A session is productive when it gained something. A session still running at the horizon is productive when its best draw, at the fatigue the journal recorded just before its start and under the capacity, gains something. A session that ended uncollected before the horizon gained nothing. Zero-gain sessions are wasted time, not busy time. |
+| U, utilisation | Productive crew time as a fraction of the window crew time. A crew with headroom has a window from the start until its first accepted finish or item use that reaches `target_i`, or until the horizon. Busy time is the union of its productive sessions (sessions loaded at the start count too). A session is productive when it gained something. A session that ends after the last tick (still running at the horizon, or ending between the last tick and the horizon, where no tick is left to collect it) is productive when its best draw, at the fatigue the journal recorded just before its start and under the capacity, gains something. A session that ended uncollected by the last tick gained nothing, because a tick could have collected it. The last tick is the horizon minus `tick_minutes`. Zero-gain sessions are wasted time, not busy time. |
 | R, reliability | `accepted / (accepted + genuine refusals)` journaled calls. A refusal that fired an injected `reject` fault is not genuine. Ambiguous and raised calls are neither. 1.0 when nothing ran. |
 
 ### Score
@@ -246,7 +254,7 @@ Each oracle judges one journaled `addTraining` or `useConsumable` call, of any o
 | `consumable` | An item use where the item is not a catalog consumable, its tier rule does not allow the crew's percent and fatigue, the crew has no role, or the crew is not in a training room. |
 | `consumable-precedence` | An item use while a start was possible, or while the crew should move rooms. The planner reaches its consumable fallback only when training is in progress, training is complete, or nothing is startable in the right room type (gate, fatigue, design or design research). |
 
-The unmodified planner trips none of the nine on any scenario at any seed (`test_the_unmodified_planner_trips_no_oracle`, and the gate itself). All nine are therefore gated, and `REPORT_ONLY_VIOLATIONS` is empty. If a later planner change trips an oracle, first check the oracle against the policy code. If the oracle is faithful and the planner is the problem, record the planner defect as a finding, move that oracle to `REPORT_ONLY_VIOLATIONS`, and note it here.
+The unmodified planner trips none of the nine on any scenario at any seed (`test_the_unmodified_planner_trips_no_oracle`, and the gate itself). All nine are therefore gated (`GATED_VIOLATIONS`), and there is no report-only oracle. If a later planner change trips an oracle, first check the oracle against the policy code. If the oracle is faithful and the planner is the problem, record the planner defect as a finding and decide with the owner whether to fix the planner or report that oracle without gating it.
 
 `test_each_policy_breach_is_caught_by_its_oracle` drives a policy breach for five of the oracles (fatigue, complete, design research, consumable precedence and room) through the default tick on a checked-in scenario, and checks that the scenario scores 0.
 
@@ -258,13 +266,15 @@ Each scenario runs at seed, seed + 1 and seed + 2, and its score is the mean. Th
 
 The gate fails with these reasons:
 
-- `nondeterministic`: two in-process reports differ by a byte.
+- `nondeterministic`: the in-process rerun, or the child process run, gave a report that differs by a byte.
 - `baseline_missing`: no baseline file (exit 2).
 - `baseline_mismatch`: the scenario set differs from the baseline (with `--scenario`: a listed scenario is not in it).
 - `composite_below_baseline`.
 - `scenario_below_baseline:<name>`.
 - `<oracle>_violation:<name>` for each gated oracle that fired, for example `cap_violation`, `consumable_precedence_violation` or `design_research_violation`.
-- `scenario_error:<name>`: an exception inside any seed's episode (the planner's or the tick's).
+- `scenario_error:<name>`: an exception inside any seed's episode or its scoring (the planner's, the tick's, or one that garbage from the tick causes while the metrics are computed).
+
+**The determinism check runs in two processes.** The gate and `--update-baseline` run the suite twice in this process, and once in a child process: this script with `--report-only --json -`, under a fixed `PYTHONHASHSEED` that differs from the parent's (1, or 2 when the parent runs under 1). The child starts first and runs in parallel. Two in-process runs share one hash seed, so they cannot see set-order or hash-seed nondeterminism; the child can. A benchmark child never starts a child of its own: the determinism child and every qa-eval benchmark-channel run have `TRAINING_BENCHMARK_CHILD` set in their environment, so a qa-eval mutant's gate runs the two in-process runs only. A child that fails, or gives no report within 300 s, is an input error (exit 2).
 
 **The comparison is exact, with no tolerance.** The benchmark is deterministic: the reports are byte-identical across reruns and across `PYTHONHASHSEED` values. Any score change is therefore caused by a code change, never by noise between runs. A tolerance would let small regressions and weak mutants through. The cost is that a beneficial change can lower one scenario through the shared simulator random stream (see the [known limitations](#known-limitations)). That change then needs `--update-baseline --allow-lower REASON`, which records the reason. Averaging three seeds makes that rarer.
 
@@ -283,7 +293,7 @@ The trace digest of a seed is a sha256 of its call journal, simulator log and ti
 
 Schema 2 is the score formula of the design review. A schema 1 baseline is refused as not comparable. The v1 composite was 65.184847; the v2 baseline was written fresh.
 
-`--update-baseline` always runs the determinism check first. It refuses (exit 1) a nondeterministic run, a scenario error or any gated violation. It writes the file when every score is at or above the old one; equal scores refresh the digests, and new scenarios are added. It refuses each of these unless `--allow-lower REASON` gives a non-empty reason, which is then appended to `lowered`:
+`--update-baseline` always runs the determinism check first, with the child process. It refuses (exit 1) a nondeterministic run, a scenario error or any gated violation. It writes the file when every score is at or above the old one; equal scores refresh the digests, and new scenarios are added. It refuses each of these unless `--allow-lower REASON` gives a non-empty reason, which is then appended to `lowered`:
 
 - any lower score;
 - a removed scenario;
@@ -320,7 +330,7 @@ qa-eval runs `scripts/mutation.py`'s `run_mutants` over `sdk/training/planner.py
 
 1. **Import probe**: `python -c "import sdk.training"`. A mutant that breaks the import is classified `invalid-strategy`, and its channels are skipped. In practice these are the strategy mutants that `TrainingStrategy` validation rejects at import, for example a band edge that no longer tiles.
 2. **tests channel**: `scripts/ci.py test --names tests.test_training_planner tests.test_training_parse tests.test_training_benchmark`.
-3. **benchmark channel**: the gate (`training_benchmark.py --gate --json - --quiet`) in a subprocess inside the workspace, because the mutated planner can only be imported there. The outcomes:
+3. **benchmark channel**: the gate (`training_benchmark.py --gate --json - --quiet`) in a subprocess inside the workspace, because the mutated planner can only be imported there. It runs with `TRAINING_BENCHMARK_CHILD` set, so it compares two in-process runs and starts no determinism child. The outcomes:
    - Exit 0 is a pass.
    - Exit 1 is "detected", with the gate's reasons.
    - Any other exit is a "crash", and running out of time is a "timeout". Both count as detected.
@@ -349,6 +359,8 @@ observable_rate            = |caught or invalid-strategy or drift| / eligible   
 The gated rate counts `invalid-strategy` as detected, because an import crash breaks the bot at once and CI catches it. The importable rate leaves those mutants out so that they cannot inflate the claim.
 
 Drift is never counted in a headline rate. It flags every behaviour change, including neutral ones. If the rate falls below 0.9, the fix is better scenarios or oracles, never counting drift.
+
+`--only ID...` must name generated mutants: an id that no target generates (a typo, or a line that moved) is an input error (exit 2) that names the unknown ids, and nothing runs. Before this, such an id ran zero mutants and reported a detection rate of 1.0.
 
 Equivalent mutants are listed in `baseline.json` under `qa_eval.equivalent`, each as `{id, original, replacement, reason}`. An entry whose id no longer exists, or whose text changed (ids are line:column based), is reported as stale and ignored.
 
@@ -407,6 +419,8 @@ Between the rounds, the QA loop killed all 25 neither mutants with `PlannerContr
 - **No room moves.** Neither the simulator nor the client can move crew between rooms. Weapons, shields and engines crew wait on `not_in_training_room` "move to ..." from 72%, or from the start when they sit in the other room type. The reachable headroom stops at that boundary, so the wait costs no score. `skip_moves` reports it.
 - **Research never arrives mid-run.** The simulator completes "Researching" entries at a day boundary, so scenarios list only completed research.
 - **Snapshot faults** are modelled only as a failed account read: the tick is skipped. The planner never sees a stale or foreign snapshot.
+- **The simulator has no room or research reads, and no read faults on its reads** (follow-up for the simulator owner). `RecordingClient` builds `listRoomsViaAccessToken`, `listRoomDesigns2`, `listAllResearches` and `listAllResearchDesigns2` itself, and emulates a failed `listAllCharactersOfUser` with `snapshot()` and a clock rewind. Other simulator users (Unit 9's executor tests, the `run.py` simulation) do not get these reads, and the emulation depends on `snapshot()` ticking the clock exactly once. Moving the reads and the read-fault handling into `SimulatedGame` (`sdk/simulation/game.py`) would fix it once for everyone. The simulator is outside this unit's files, so the benchmark keeps the emulation for now.
+- **`BenchSubprocessRunner` duplicates `mutation.SubprocessTestRunner`** (follow-up for the owner of `scripts/mutation.py`). Both carry the same process lifecycle: the lock, the live set, the closed flag, a new session, kill on timeout or interrupt, `drain_killed` and `kill_all`. `SubprocessTestRunner` builds its own command and parses test output inside `__call__`, so it cannot be reused by composition without editing it. The benchmark reuses the public helpers it can (`child_environment`, `kill_process_tree`, `drain_killed`, `CHILD_TMP`). A shared runner in `scripts/mutation.py` that takes the command and the result parser would remove about 50 duplicated lines.
 - **Cap overshoot** is reported, not gated (see [Oracles](#oracles)).
 - **A design-research boundary is invisible to the benchmark.** Every gated catalog design needs a research named "Lv2" or "Lv3", so a planner that demanded level 2 instead of 1 for a design's own research behaves identically here. The planner tests catch that mutant.
 - **The script's own mutation target** is not in `automation/mutation/config.json`, because `tests/test_mutation_harness.py` requires every target path to start with `sdk/`. Measure it with `make mutation TARGET=scripts/training_benchmark.py TESTS="tests.test_training_benchmark" JOBS=6`. The `copy` list already covers the script and the scenarios. The full run measured 90.4% (2426 mutants: 2188 killed, 4 timeouts, 234 survived). Re-running the 234 survivors against the final tests killed 49 more, which puts the score at 92.4%. The rest are mostly message strings, dataclass defaults and response envelope keys that `build_context` ignores.

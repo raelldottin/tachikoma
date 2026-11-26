@@ -11,7 +11,8 @@ TEST_PYTHON = $(if $(findstring /,$(PYTHON)),$(abspath $(PYTHON)),$(or $(shell c
 # `python -m unittest tests.<module>` there, but covers the other forms only partly.
 IN_TEMP_DIR = tmp=$$(mktemp -d) && [ -d "$$tmp" ] && trap 'rm -rf "$$tmp"' EXIT && cd "$$tmp" &&
 CI_TEST = PYTHONDONTWRITEBYTECODE=1 "$(TEST_PYTHON)" "$(CURDIR)/scripts/ci.py" test
-# Only test, test-security, lint and mutation need Python >= 3.11 (scripts/ci.py and the pinned CI tools).
+# Only test, test-security, lint, mutation and training-benchmark need Python >= 3.11 (scripts/ci.py, the pinned CI
+# tools and the benchmark's sdk imports).
 REQUIRE_311 = "$(TEST_PYTHON)" -c 'import sys; sys.exit(sys.version_info < (3, 11) and "make: this target needs Python >= 3.11 (found " + sys.version.split()[0] + "); create .venv")'
 # make lint mirrors the CI lint job, with the ruff version pinned there.
 CI_REQUIREMENTS = .github/requirements-ci.txt
@@ -45,7 +46,8 @@ mutation:
 	PYTHONDONTWRITEBYTECODE=1 "$(TEST_PYTHON)" "$(CURDIR)/scripts/mutation.py" $(if $(TARGET),--target "$(TARGET)") $(if $(TESTS),--tests $(TESTS)) $(if $(JOBS),--jobs $(JOBS))
 
 # make training-benchmark runs the crew-training simulator benchmark gate (docs/baseline/training-benchmark.md):
-# scores at or above automation/benchmark/training/baseline.json, no policy violations, byte-identical reruns.
+# scores at or above automation/benchmark/training/baseline.json, no policy violations, byte-identical reruns (two
+# in-process, one in a child process under another PYTHONHASHSEED).
 # ARGS passes options instead, e.g. ARGS="--update-baseline" or ARGS="--qa-eval --jobs 12" (local only; about 5.5 minutes at 12 jobs, longer with fewer).
 training-benchmark:
 	@$(REQUIRE_311)

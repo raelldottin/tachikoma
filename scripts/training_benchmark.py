@@ -24,6 +24,7 @@ import subprocess
 import sys
 import threading
 import time
+from collections import Counter
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -36,7 +37,15 @@ if ROOT not in sys.path:  # run as a script: python scripts/training_benchmark.p
 from sdk.actions.catalog import get_spec  # noqa: E402
 from sdk.execution.runner import call_arguments  # noqa: E402
 from sdk.policy import DesignData  # noqa: E402
-from sdk.simulation.game import Fault, SimulatedClock, SimulatedFaultError, build_games  # noqa: E402
+from sdk.simulation.game import (  # noqa: E402
+    READ_FAULTS,
+    SNAPSHOT,
+    TIME_FORMAT,  # @TrainingEndDate and the simulator log's times, UTC without an offset
+    Fault,
+    SimulatedClock,
+    SimulatedFaultError,
+    build_games,
+)
 from sdk.training import build_context  # noqa: E402
 from sdk.training.actions import action_for  # noqa: E402
 from sdk.training.model import SKIP_NOT_IN_TRAINING_ROOM, CrewState, FinishTraining, Skip  # noqa: E402
@@ -44,12 +53,15 @@ from sdk.training.parse import parse_consumable_designs, parse_crew  # noqa: E40
 from sdk.training.planner import plan_training, remaining_stock, replan_after_finish  # noqa: E402
 from sdk.training.strategy import DEFAULT_STRATEGY, TrainingStrategy, with_consumables  # noqa: E402
 
-TIME_FORMAT = "%Y-%m-%dT%H:%M:%S"  # @TrainingEndDate and the simulator log's times, UTC without an offset
 ACCOUNT = "bench"
 BENCHMARK_DIR = os.path.join(ROOT, "automation", "benchmark", "training")
 SCENARIO_DIR = os.path.join(BENCHMARK_DIR, "scenarios")
 BASELINE_PATH = os.path.join(BENCHMARK_DIR, "baseline.json")
 EXIT_OK, EXIT_GATE, EXIT_ERROR = 0, 1, 2
+# Set in the environment of a benchmark child (the determinism child, a qa-eval benchmark-channel run): such a run
+# starts no determinism child of its own, so children never recurse.
+CHILD_ENV = "TRAINING_BENCHMARK_CHILD"
+CHILD_TIMEOUT = 300.0  # seconds the determinism child may take (the whole suite runs in about 8 s)
 
 # -- world catalog: every record parses for both sdk.training.build_context and the simulator ---------------------
 
@@ -274,8 +286,7 @@ ORACLE_CONSUMABLE_RULES = {"Common": (0, 29, 0, 0), "Hero": (90, None, 100, None
 # score = 100 * R * (0.75 P + 0.25 U); U is left out (weights renormalised to P alone) when nothing had a window.
 SCORE_WEIGHTS = {"progress": 0.75, "utilisation": 0.25}
 SCORE_FORMULA = "100 * R * (0.75 * P + 0.25 * U); 100 * R * P without a utilisation window; 0 on a hard violation"
-# Hard-violation oracles: any one zeroes the scenario and fails the gate. REPORT_ONLY oracles are reported only,
-# because the unmodified planner trips them (see docs/baseline/training-benchmark.md, planner findings).
+# Hard-violation oracles: any one zeroes the scenario and fails the gate. Every oracle is gated.
 GATED_VIOLATIONS = (
     "cap",
     "complete",
@@ -287,8 +298,6 @@ GATED_VIOLATIONS = (
     "consumable",
     "consumable-precedence",
 )
-REPORT_ONLY_VIOLATIONS: tuple[str, ...] = ()
-VIOLATION_KINDS = GATED_VIOLATIONS + REPORT_ONLY_VIOLATIONS
 MAX_VIOLATION_SAMPLES = 20
 
 
@@ -307,7 +316,14 @@ def first_total(pct: int, capacity: int) -> int:
 
 def policy_target(role: str | None, room_type: str | None, total: int, capacity: int, cap: int) -> int:
     """The most the policy can train a crew to in its room: the TP cap, the complete percent, and the first band
-    from ``total`` on whose slot needs another room type (nothing in the game or the simulator moves crew)."""
+    from ``total`` on whose slot needs another room type (nothing in the game or the simulator moves crew).
+
+    Research gates are left out on purpose (owner decision, final review). Research never changes during a run, but
+    a consumable can still move a research-blocked crew, and counting the blocked TP as headroom keeps the research
+    gap visible: P is a fraction of this headroom, so a crew the gates hold back lowers P by its blocked TP, and U
+    charges it idle time until it reaches this target (the whole horizon when it never does). A scenario that tests
+    missing research scores low for that reason, not because the executor erred.
+    """
     target = min(cap, first_total(ORACLE_COMPLETE_PERCENT, capacity))
     slots = ORACLE_ROLE_SLOTS.get(role or "")
     if slots is None or room_type is None:
@@ -392,10 +408,11 @@ def role_training(role: str | None, band: tuple[str, int] | None) -> tuple[str |
 
 
 def _to_int(value: object) -> int:
-    """A decimal id as an int, or 0 for anything else (an executor under test may pass garbage)."""
+    """An ASCII-decimal id as an int, or 0 for anything else (an executor under test may pass garbage, and
+    str.isdigit accepts characters such as "²" that int() refuses)."""
     if _is_int(value):
         return value
-    return int(value) if isinstance(value, str) and value.isdigit() else 0
+    return int(value) if isinstance(value, str) and value.isascii() and value.isdigit() else 0
 
 
 # -- errors ------------------------------------------------------------------------------------------------------
@@ -648,7 +665,8 @@ def _validate_faults(data: Mapping, problems: list[str]) -> list[Mapping[str, ob
     days = data.get("days")
     for index, entry in enumerate(faults_raw):
         fault = _validate_fault(entry, f"faults[{index}]", problems)
-        if fault is not None and "day" in fault and _int_in(days, 1, 30) and fault["day"] >= days:
+        # A null day means any day (Fault.from_dict accepts it), so only a numbered day has a range.
+        if fault is not None and fault.get("day") is not None and _int_in(days, 1, 30) and fault["day"] >= days:
             problems.append(f"faults[{index}].day: {fault['day']} is past the last day ({days - 1}); "
                             "it would never fire")
         elif fault is not None:
@@ -762,7 +780,7 @@ class CrewMeta:
     room_type: str | None
     eligible: bool  # a role and a training room
     initial_total: int
-    headroom: int  # policy-reachable: max(0, target - initial_total) for eligible crew, else 0
+    headroom: int  # max(0, target - initial_total) for eligible crew, else 0 (research gates not counted)
     loaded_until: datetime | None = None  # the end of a session already running at the start
     loaded_can_gain: bool = False  # that session can gain something (see can_gain)
 
@@ -778,6 +796,7 @@ class World:
     levels: Mapping[str, int]  # research family -> highest completed level
     start: datetime
     horizon_end: datetime
+    last_tick: datetime  # horizon_end minus one tick: no tick runs after it, so nothing ending later is collected
 
 
 def format_time(moment: datetime) -> str:
@@ -926,7 +945,9 @@ def _account(scenario: Scenario) -> dict:
 
 
 def build_world(scenario: Scenario) -> World:
-    """The simulator scenario and the per-crew oracle facts; WorldError when the policy can gain nothing."""
+    """The simulator scenario and the per-crew oracle facts. WorldError when no eligible crew has headroom under
+    its policy target: the TP cap, the complete percent and the room. Research gates are not counted (see
+    policy_target), so a world whose crew are all research-blocked is accepted and simply scores low."""
     item_designs = item_design_records()
     found = dict(parse_consumable_designs({"ItemDesign": item_designs}))
     if found != CATALOG_CONSUMABLES:
@@ -934,7 +955,8 @@ def build_world(scenario: Scenario) -> World:
     rooms = {room.id: room.design for room in scenario.rooms}
     crew = {spec.id: _crew_meta(spec, rooms, scenario.start) for spec in scenario.crew}
     if sum(meta.headroom for meta in crew.values()) <= 0:
-        raise WorldError(f"{scenario.name}: no eligible crew has policy-reachable headroom")
+        raise WorldError(f"{scenario.name}: no eligible crew has headroom under its policy target "
+                         "(research gates are not counted)")
     room_designs, research_designs = room_design_records(), research_design_records()
     sim_scenario = {
         "design": {"room_designs": list(room_designs), "research_designs": list(research_designs)},
@@ -948,6 +970,7 @@ def build_world(scenario: Scenario) -> World:
         "accounts": {ACCOUNT: _account(scenario)},
     }
     research = frozenset(CATALOG_RESEARCH[name][0] for name in scenario.research)
+    horizon_end = scenario.start + timedelta(days=scenario.days)
     return World(
         sim_scenario=sim_scenario,
         room_designs=room_designs,
@@ -957,7 +980,8 @@ def build_world(scenario: Scenario) -> World:
         research=research,
         levels=research_levels(sorted(research)),
         start=scenario.start,
-        horizon_end=scenario.start + timedelta(days=scenario.days),
+        horizon_end=horizon_end,
+        last_tick=horizon_end - timedelta(minutes=scenario.tick_minutes),
     )
 
 
@@ -972,6 +996,9 @@ class Simulation:
         self.clock = SimulatedClock(world.start)
         design = DesignData.from_records(**world.sim_scenario["design"])
         self.game = build_games(world.sim_scenario, seed, design, self.clock)[ACCOUNT]
+        # Whether a snapshot can do anything beyond counting itself: only a fault on the snapshot itself, or a read
+        # fault a call leaves pending, changes or fails one (sdk.simulation.game.SimulatedGame.snapshot).
+        self.snapshot_faults = any(fault.method == SNAPSHOT or fault.kind in READ_FAULTS for fault in self.game.faults)
 
     @property
     def now(self) -> datetime:
@@ -998,7 +1025,10 @@ class Simulation:
 
     def read_fails(self) -> bool:
         """Whether an account read now hits an injected snapshot-failure. The clock is put back (a snapshot ticks
-        it), so a read-fault scenario keeps the tick times of a fault-free one."""
+        it), so a read-fault scenario keeps the tick times of a fault-free one. An account without snapshot faults
+        builds no snapshot: it could only count itself, which no fault would ever read."""
+        if not self.snapshot_faults:
+            return False
         now = self.clock.now
         try:
             self.game.snapshot()
@@ -1071,54 +1101,56 @@ class RecordingClient:
     (listRoomsViaAccessToken, listRoomDesigns2, listAllResearches, listAllResearchDesigns2) are built here from the
     simulator's rooms and research and the catalog designs; Unit 9's executor makes the same calls on the real
     Client. listAllCharactersOfUser fails (returns False) when an injected snapshot-failure hits the account read.
-    Any other attribute is an AttributeError, so a tick cannot reach the simulator behind the journal's back.
+    Any other attribute is an AttributeError, and the simulator is held in name-mangled attributes that no
+    underscore name reaches, so a tick using the client surface cannot bypass the journal. (Python cannot hide
+    them completely: code that spells out _RecordingClient__game is deliberately breaking the contract.)
     """
 
     def __init__(self, simulation: Simulation, record: Callable[[Call], None]) -> None:
-        self._simulation = simulation
-        self._game = simulation.game
-        self._record = record
-        self._seq = 0
+        self.__simulation = simulation
+        self.__game = simulation.game
+        self.__record = record
+        self.__seq = 0
         self.tick = 0
 
     def __getattr__(self, name: str):
         if name in CLIENT_RESPONSES:
-            return getattr(self.__dict__["_game"], name)
+            return getattr(self.__game, name)
         raise AttributeError(f"RecordingClient has no {name!r}: not a training call or read")
 
     # -- reads -------------------------------------------------------------------------------------------------
 
     def listAllCharactersOfUser(self) -> bool:
-        if self._simulation.read_fails():
+        if self.__simulation.read_fails():
             return False
-        return self._game.listAllCharactersOfUser()
+        return self.__game.listAllCharactersOfUser()
 
     def listAllCharacterDesigns2(self) -> bool:
-        return self._game.listAllCharacterDesigns2()
+        return self.__game.listAllCharacterDesigns2()
 
     def listAllTrainingDesigns2(self) -> bool:
-        return self._game.listAllTrainingDesigns2()
+        return self.__game.listAllTrainingDesigns2()
 
     def listItemsOfAShip(self) -> bool:
-        return self._game.listItemsOfAShip()
+        return self.__game.listItemsOfAShip()
 
     def listRoomsViaAccessToken(self) -> bool:
-        rooms = [dict(room) for room in self._game.rooms]
+        rooms = [dict(room) for room in self.__game.rooms]
         self.roomsViaAccessToken = {"RoomService": {"ListRoomsViaAccessToken": {"Rooms": {"Room": rooms}}}}
         return True
 
     def listRoomDesigns2(self) -> bool:
-        designs = [dict(record) for record in self._simulation.world.room_designs]
+        designs = [dict(record) for record in self.__simulation.world.room_designs]
         self.roomDesigns = {"RoomService": {"ListRoomDesigns": {"RoomDesigns": {"RoomDesign": designs}}}}
         return True
 
     def listAllResearches(self) -> bool:
-        research = [dict(entry) for entry in self._game.research]
+        research = [dict(entry) for entry in self.__game.research]
         self.allResearches = {"ResearchService": {"ListAllResearches": {"Researches": {"Research": research}}}}
         return True
 
     def listAllResearchDesigns2(self) -> bool:
-        designs = [dict(record) for record in self._simulation.world.research_designs]
+        designs = [dict(record) for record in self.__simulation.world.research_designs]
         self.allResearchDesigns = {
             "ResearchService": {"ListAllResearchDesigns": {"ResearchDesigns": {"ResearchDesign": designs}}}
         }
@@ -1136,7 +1168,7 @@ class RecordingClient:
         return self._call("useConsumable", (consumable_item_design_id, character_id), character_id)
 
     def _call(self, method: str, args: tuple, character_id: object) -> object:
-        game, simulation = self._game, self._simulation
+        game, simulation = self.__game, self.__simulation
         record = simulation.crew_record(str(character_id))
         before = None if record is None else before_from_record(record)
         fired, logged = len(game.fired), len(game.training.log)
@@ -1146,9 +1178,9 @@ class RecordingClient:
             outcome = call_outcome(result, game.fired[fired:])
             return result
         finally:
-            self._seq += 1
+            self.__seq += 1
             log_seqs = tuple(entry["seq"] for entry in game.training.log[logged:])
-            self._record(Call(self._seq, self.tick, format_time(simulation.now), method,
+            self.__record(Call(self.__seq, self.tick, format_time(simulation.now), method,
                               tuple(str(arg) for arg in args), str(character_id), before, outcome,
                               tuple(game.fired[fired:]), log_seqs))
 
@@ -1197,20 +1229,18 @@ def read_payloads(client) -> dict | None:
     return payloads
 
 
-def execute(client, decision) -> str:
-    """Carry a decision out through its catalog action and say how it went, as the executor sees it."""
+def execute(client, decision) -> bool:
+    """Carry a decision out through its catalog action; True when the client answered True (the executor's view
+    only: the call journal's outcome, never this, is what the oracles and metrics judge)."""
     request = action_for(decision)
     if request is None:
         raise BenchmarkError(f"a Skip is never executed: {decision!r}")
     action_id, params = request
     spec = get_spec(action_id)
     try:
-        result = getattr(client, spec.client_method)(*call_arguments(spec, params))
+        return getattr(client, spec.client_method)(*call_arguments(spec, params)) is True
     except ConnectionError:
-        return "raised"
-    if result is None:
-        return "ambiguous"
-    return "ok" if result is True else "refused"
+        return False
 
 
 def rebuilt_crew(client, character_id: int, payloads: Mapping[str, object]) -> CrewState | None:
@@ -1230,7 +1260,7 @@ def carry_out(client, ctx, plan, replanner, strategy: TrainingStrategy, payloads
     for decision in plan:
         cid = decision.character_id
         if isinstance(decision, FinishTraining):
-            if execute(client, decision) == "ok":
+            if execute(client, decision):
                 collected.add(cid)
             continue
         if cid in finished:  # the advisory primary after a FinishTraining is never run as-is
@@ -1460,7 +1490,7 @@ class Session:
     end: datetime
     gain: int | None  # None: not collected by the horizon
     can_gain: bool  # the best draw at its starting fatigue, under the capacity, gains something (and, when
-    # uncollected, it was still running at the horizon)
+    # uncollected, it ended after the last tick, so no tick could collect it)
     loaded: bool = False  # already running at the start
 
 
@@ -1493,8 +1523,10 @@ def episode_sessions(world: World, log: Sequence[Mapping[str, object]],
         elif cid in open_sessions:
             start, end, loaded, possible = open_sessions.pop(cid)
             sessions.append(Session(cid, start, end, sum(entry["gain"].values()), possible, loaded))
-    # An uncollected session that ended before the horizon gained nothing: nobody collected it.
-    sessions += [Session(cid, start, end, None, possible and end >= world.horizon_end, loaded)
+    # An uncollected session that ended by the last tick gained nothing: a tick could have collected it and none
+    # did. One that ended later (still running at the horizon, or ending between the last tick and the horizon)
+    # could not be collected, so it counts when it can gain something.
+    sessions += [Session(cid, start, end, None, possible and end > world.last_tick, loaded)
                  for cid, (start, end, loaded, possible) in open_sessions.items()]
     return tuple(sorted(sessions, key=lambda session: (session.character_id, session.start)))
 
@@ -1517,24 +1549,30 @@ def covered_seconds(window: tuple[datetime, datetime], intervals: Sequence[tuple
     return covered
 
 
-def done_at(meta: CrewMeta, log: Sequence[Mapping[str, object]], horizon: datetime) -> datetime:
-    """When the crew reached its policy target (an accepted finish or item use); the horizon if it never did."""
+def done_times(world: World, log: Sequence[Mapping[str, object]]) -> dict[int, datetime]:
+    """When each crew with headroom first reached its policy target (an accepted finish or item use); the horizon
+    for one that never did. One pass over the log, shared by U and crew_completed."""
+    done = {cid: world.horizon_end for cid, meta in world.crew.items() if meta.headroom > 0}
+    reached: set[int] = set()
     for entry in log:
-        if entry["character_id"] == str(meta.character_id) and entry["accepted"] and entry["op"] != "start" \
-                and entry["total"] >= meta.target:
-            return parse_time(entry["at"])
-    return horizon
+        cid = _to_int(entry["character_id"])  # a refusal logs whatever id the executor sent
+        if cid in done and cid not in reached and entry["accepted"] and entry["op"] != "start" \
+                and entry["total"] >= world.crew[cid].target:
+            done[cid] = parse_time(entry["at"])
+            reached.add(cid)
+    return done
 
 
-def utilisation_seconds(world: World, log: Sequence[Mapping[str, object]],
+def utilisation_seconds(world: World, done: Mapping[int, datetime],
                         sessions: Sequence[Session]) -> tuple[int, int]:
     """(window, productive) crew-seconds over the eligible crew with headroom: from the start until each reaches its
-    target, the time covered by sessions that gained something. Zero-gain sessions are wasted, not busy."""
+    target (``done``, from done_times), the time covered by sessions that gained something. Zero-gain sessions are
+    wasted, not busy."""
     window_s = busy_s = 0
     for cid, meta in sorted(world.crew.items()):
         if meta.headroom <= 0:
             continue
-        window = (world.start, done_at(meta, log, world.horizon_end))
+        window = (world.start, done[cid])
         window_s += _seconds(window[1] - window[0])
         busy = [(s.start, s.end) for s in sessions if s.character_id == cid and productive(s)]
         busy_s += covered_seconds(window, busy)
@@ -1573,10 +1611,8 @@ def gains_by_crew(log: Sequence[Mapping[str, object]]) -> dict[int, int]:
 
 
 def _count(keys) -> dict[str, int]:
-    counts: dict[str, int] = {}
-    for key in keys:
-        counts[key] = counts.get(key, 0) + 1
-    return dict(sorted(counts.items()))
+    """Key -> occurrences, sorted by key (a plain dict, so the report is stable)."""
+    return dict(sorted(Counter(keys).items()))
 
 
 def tick_diagnostics(reports: Sequence[TickReport]) -> dict:
@@ -1690,7 +1726,8 @@ def compute_metrics(episode: Episode) -> Metrics:
     diagnostics only)."""
     world, log = episode.world, episode.log
     sessions = episode_sessions(world, log, episode.journal)
-    window_s, busy_s = utilisation_seconds(world, log, sessions)
+    done = done_times(world, log)
+    window_s, busy_s = utilisation_seconds(world, done, sessions)
     gains = gains_by_crew(log)
     final = {cid: meta.initial_total + gains.get(cid, 0) for cid, meta in world.crew.items()}
     eligible = [meta for meta in world.crew.values() if meta.eligible]
@@ -1702,15 +1739,14 @@ def compute_metrics(episode: Episode) -> Metrics:
     return Metrics(
         progress=progress_area(world, log),
         utilisation=busy_s / window_s if window_s else None,
-        violations={kind: sum(1 for found in violations if found.kind == kind) for kind in VIOLATION_KINDS},
+        violations={kind: sum(1 for found in violations if found.kind == kind) for kind in GATED_VIOLATIONS},
         violation_samples=tuple(asdict(found) for found in violations[:MAX_VIOLATION_SAMPLES]),
         eligible_crew=len(eligible),
         headroom=sum(meta.headroom for meta in world.crew.values()),
         tp_gained=sum(gains.values()),
         tp_gained_eligible=tp_eligible,
         tp_per_crew_day=round(tp_eligible / crew_days, 6) if crew_days else 0.0,
-        crew_completed=sum(1 for meta in eligible if meta.headroom > 0
-                           and done_at(meta, log, world.horizon_end) < world.horizon_end),
+        crew_completed=sum(1 for time in done.values() if time < world.horizon_end),
         eligible_crew_hours=round(window_s / 3600, 6),
         productive_crew_hours=round(busy_s / 3600, 6),
         idle_crew_hours=round((window_s - busy_s) / 3600, 6),
@@ -1839,9 +1875,9 @@ class ScenarioResult:
         joined = ",".join(run.trace_digest for run in self.runs)
         return "sha256:" + hashlib.sha256(joined.encode("utf-8")).hexdigest()
 
-    def violations(self, kinds: Sequence[str] = GATED_VIOLATIONS) -> dict[str, int]:
+    def violations(self) -> dict[str, int]:
         return {kind: sum(run.metrics.violations.get(kind, 0) for run in self.runs if run.metrics is not None)
-                for kind in kinds}
+                for kind in GATED_VIOLATIONS}
 
 
 @dataclass(frozen=True)
@@ -1866,15 +1902,16 @@ def seeds_for(scenario: Scenario, base_seed: int | None = None) -> tuple[int, ..
 
 
 def run_seed(scenario: Scenario, seed: int, *, tick: Tick | None, days: int | None) -> SeedRun:
-    """One seeded episode, scored; a crash inside it (the planner's, the tick's) is that run's error."""
+    """One seeded episode, scored; a crash inside it (the planner's, the tick's, or one the tick's garbage causes
+    while scoring) is that run's error. A BenchmarkError is an input problem and propagates (exit 2)."""
     try:
         episode = run_episode(scenario, seed=seed, tick=tick, days=days)
+        metrics = compute_metrics(episode)
+        return SeedRun(seed, metrics, score_scenario(metrics), trace_digest(episode))
     except BenchmarkError:
         raise
     except Exception as error:  # a planner crash is a result, not a benchmark failure
         return SeedRun(seed, None, 0.0, "", f"{type(error).__name__}: {error}")
-    metrics = compute_metrics(episode)
-    return SeedRun(seed, metrics, score_scenario(metrics), trace_digest(episode))
 
 
 def run_suite(scenarios: Sequence[Scenario], *, tick: Tick | None = None, days: int | None = None,
@@ -1915,14 +1952,68 @@ def to_json(report: Mapping) -> str:
     return json.dumps(report, sort_keys=True, indent=2) + "\n"
 
 
-def check_determinism(scenarios: Sequence[Scenario], runs: int = 2, **suite_kwargs) -> tuple[bool, SuiteResult]:
-    """Run the suite ``runs`` times in this process; deterministic when every report is byte-identical."""
-    first = run_suite(scenarios, **suite_kwargs)
-    expected = to_json(report_dict(first))
-    same = True
-    for _ in range(runs - 1):
-        if to_json(report_dict(run_suite(scenarios, **suite_kwargs))) != expected:
+def child_hash_seed() -> str:
+    """A fixed PYTHONHASHSEED for the determinism child that differs from this process's: 1, or 2 under 1."""
+    return "2" if os.environ.get("PYTHONHASHSEED") == "1" else "1"
+
+
+def child_command(args: argparse.Namespace) -> list[str]:
+    """This script as a report-only run of the same scenarios, printing its JSON report."""
+    command = [sys.executable, os.path.abspath(__file__), "--report-only", "--json", "-", "--quiet",
+               "--scenarios-dir", os.path.abspath(args.scenarios_dir)]
+    for name in args.scenario or ():
+        command += ["--scenario", name]
+    return command
+
+
+class ChildRun:
+    """The determinism child: ``command`` in its own process under another fixed PYTHONHASHSEED, started at once
+    so it runs while this process runs the suite. A benchmark child (CHILD_ENV) starts no child of its own."""
+
+    def __init__(self, command: Sequence[str], popen=subprocess.Popen, timeout: float = CHILD_TIMEOUT) -> None:
+        self.timeout = timeout
+        env = dict(os.environ, PYTHONHASHSEED=child_hash_seed(), PYTHONDONTWRITEBYTECODE="1", **{CHILD_ENV: "1"})
+        self.process = popen(list(command), cwd=ROOT, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace")
+
+    def report(self) -> str:
+        """The child's JSON report; BenchmarkError when it fails or takes longer than the timeout."""
+        try:
+            output, errors = self.process.communicate(timeout=self.timeout)
+        except subprocess.TimeoutExpired:
+            self.process.kill()
+            self.process.communicate()
+            raise BenchmarkError(f"determinism child: no report after {self.timeout:g} s") from None
+        if self.process.returncode != 0:
+            tail = (errors or "").strip().splitlines()[-1:] or [""]
+            raise BenchmarkError(f"determinism child: exit {self.process.returncode}: {tail[0]}")
+        return output
+
+    def close(self) -> None:
+        """Never leave the child running (this run failed or was interrupted before reading its report)."""
+        if self.process.poll() is None:
+            self.process.kill()
+            self.process.communicate()
+
+
+def check_determinism(scenarios: Sequence[Scenario], runs: int = 2, start_child: Callable[[], ChildRun] | None = None,
+                      **suite_kwargs) -> tuple[bool, SuiteResult]:
+    """Run the suite ``runs`` times in this process, and once in the child ``start_child`` starts (another process
+    under another PYTHONHASHSEED, so set-order and hash-seed nondeterminism shows); deterministic when every report
+    is byte-identical. The child runs while this process does, so it adds little wall time."""
+    child = None if start_child is None else start_child()
+    try:
+        first = run_suite(scenarios, **suite_kwargs)
+        expected = to_json(report_dict(first))
+        same = True
+        for _ in range(runs - 1):
+            if to_json(report_dict(run_suite(scenarios, **suite_kwargs))) != expected:
+                same = False
+        if child is not None and child.report() != expected:
             same = False
+    finally:
+        if child is not None:
+            child.close()
     return same, first
 
 
@@ -2060,7 +2151,7 @@ def load_baseline(path: str) -> dict | None:
 def update_baseline(suite: SuiteResult, baseline: Mapping | None, *, deterministic: bool, allow_lower: str | None):
     """The new baseline: only ever up, unless allow_lower gives a reason; qa_eval is always kept."""
     if not deterministic:
-        raise BaselineRefused("nondeterministic: two in-process runs gave different reports")
+        raise BaselineRefused("nondeterministic: the in-process rerun or the child process gave another report")
     errors = [result.name for result in suite.scenarios if result.error is not None]
     if errors:
         raise BaselineRefused(f"scenario error in {', '.join(errors)}")
@@ -2118,13 +2209,12 @@ def _scenario_rows(name: str, entry: Mapping) -> tuple[str, str]:
     utilisation = [m["utilisation"] for m in metrics if m["utilisation"] is not None]
     seeds = " / ".join(f"{run['score']:.2f}" for run in entry["seeds"])
     gated = sum(m["violations"].get(kind, 0) for m in metrics for kind in GATED_VIOLATIONS)
-    reported = sum(m["violations"].get(kind, 0) for m in metrics for kind in REPORT_ONLY_VIOLATIONS)
     progress = _mean([m["progress"] for m in metrics])
     main = (
         f"| {name} | {entry['score']:.2f} | {entry['spread']:.2f} | {seeds} | {_fmt(progress)} "
         f"| {_fmt(_mean(utilisation))} | {_fmt(_mean([m['reliability'] for m in metrics]))} "
         f"| {sum(m['tp_gained'] for m in metrics)} | {sum(m['zero_gain_sessions'] for m in metrics)} "
-        f"| {sum(m['consumables_used'] for m in metrics)} | {gated} | {reported} |"
+        f"| {sum(m['consumables_used'] for m in metrics)} | {gated} |"
     )
     skips: dict[str, int] = {}
     for m in metrics:
@@ -2155,8 +2245,8 @@ def render_markdown(report: Mapping, verdict: GateResult | None) -> str:
     lines += [
         "",
         "| Scenario | Score | Spread | Per seed | P | U | R | TP gained | Zero-gain sessions | Consumables "
-        "| Violations | Report-only |",
-        "|---|---:|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "| Violations |",
+        "|---|---:|---:|---|---:|---:|---:|---:|---:|---:|---:|",
     ]
     details = ["", "| Scenario | Skips (reason count, all seeds) | Move skips | Dropped advisories |",
                "|---|---|---:|---:|"]
@@ -2250,7 +2340,8 @@ class BenchSubprocessRunner:
             options: dict = {"start_new_session": True}
         else:  # pragma: no cover - Windows process groups
             options = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
-        process = self.popen(command, cwd=workspace, env=mutation.child_environment(workspace),
+        env = dict(mutation.child_environment(workspace), **{CHILD_ENV: "1"})  # its gate starts no child
+        process = self.popen(command, cwd=workspace, env=env,
                              stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                              encoding="utf-8", errors="replace", **options)
         with self._lock:
@@ -2469,13 +2560,18 @@ def qa_eval(
     per_target: dict[str, dict] = {}
     all_rows: list[dict] = []
     stale_all: list[str] = []
+    # The bytes run_mutants writes (no newline translation), so the digests QaRunner records match.
+    sources = {rel: mutation.read_source(Path(repo_root) / rel) for rel in targets}
+    generated_by = {rel: mutation.generate_mutants(rel, source) for rel, source in sources.items()}
+    if only is not None:  # an id no target generates (a typo, a moved line) is an input error, never a pass
+        unknown = sorted(set(only) - {mutant.id for generated in generated_by.values() for mutant in generated})
+        if unknown:
+            raise BenchmarkError(f"--only: no mutant has id {', '.join(unknown)}")
     for rel in targets:
         target_only = None if only is None else [mutant_id for mutant_id in only if mutant_id.startswith(rel + ":")]
         if target_only == []:
             continue
-        # The bytes run_mutants writes (no newline translation), so the digests QaRunner records match.
-        source = mutation.read_source(Path(repo_root) / rel)
-        generated = mutation.generate_mutants(rel, source)
+        source, generated = sources[rel], generated_by[rel]
         entries = [entry for entry in qa["equivalent"] if entry["id"].startswith(rel + ":")]
         stale = stale_equivalents(entries, generated)
         stale_all += stale
@@ -2596,6 +2692,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--scenario", action="append", metavar="NAME", help="run only this scenario (repeatable)")
     parser.add_argument("--quick", action="store_true", help="2-day runs, report only (no gate)")
     parser.add_argument("--seed", type=int, help="seeds N, N+1, N+2 for every scenario, report only (no gate)")
+    parser.add_argument("--report-only", action="store_true",
+                        help="run the suite once and report (no gate, no baseline; the determinism child's mode)")
     parser.add_argument("--scenarios-dir", default=SCENARIO_DIR)
     parser.add_argument("--baseline", default=BASELINE_PATH)
     parser.add_argument("--json", metavar="PATH", help="write the JSON report ('-' prints it instead of markdown)")
@@ -2634,14 +2732,27 @@ def _usage_error(args: argparse.Namespace) -> str | None:
         return "--allow-lower needs --update-baseline"
     if args.update_baseline and (args.quick or args.seed is not None or args.scenario):
         return "--update-baseline runs the whole suite as checked in (no --quick, --seed or --scenario)"
-    if args.qa_eval and (args.gate or args.update_baseline or args.quick or args.seed is not None or args.scenario):
-        return "--qa-eval takes no --gate, --update-baseline, --quick, --seed or --scenario (it would ignore them)"
-    if args.gate and (args.update_baseline or args.quick or args.seed is not None):
-        return "--gate cannot run with --update-baseline, --quick or --seed (those runs are never gated)"
+    if args.update_baseline and _same_path(args.baseline, BASELINE_PATH) \
+            and not _same_path(args.scenarios_dir, SCENARIO_DIR):
+        return ("--update-baseline with another --scenarios-dir needs its own --baseline (it would overwrite the "
+                "checked-in baseline from that suite)")
+    if args.qa_eval and (args.gate or args.update_baseline or args.quick or args.seed is not None or args.scenario
+                         or args.report_only):
+        return ("--qa-eval takes no --gate, --update-baseline, --quick, --seed, --scenario or --report-only (it would "
+                "ignore them)")
+    if (args.gate or args.update_baseline) and (args.quick or args.seed is not None or args.report_only):
+        return "--gate and --update-baseline cannot run with --quick, --seed or --report-only (never gated)"
+    if args.gate and args.update_baseline:
+        return "--gate cannot run with --update-baseline"
     return None
 
 
-def main(argv: list[str] | None = None) -> int:
+def _same_path(first: str, second: str) -> bool:
+    return os.path.abspath(first) == os.path.abspath(second)
+
+
+def main(argv: list[str] | None = None, *, child: Callable[[list[str]], ChildRun] = ChildRun) -> int:
+    """The command line. ``child`` starts the determinism child from its command (tests pass a fake)."""
     args = build_parser().parse_args(argv)
     problem = _usage_error(args)
     if problem:
@@ -2650,17 +2761,23 @@ def main(argv: list[str] | None = None) -> int:
     if args.qa_eval:
         return qa_main(args)
     try:
-        scenarios = load_suite(args.scenarios_dir, args.scenario)
-        days = 2 if args.quick else None
-        deterministic, suite = check_determinism(scenarios, days=days, base_seed=args.seed)
-        report = report_dict(suite)
+        # The checked-in baseline is only ever written from the checked-in suite, under its strict rules.
+        strict = True if args.update_baseline and _same_path(args.baseline, BASELINE_PATH) else None
+        scenarios = load_suite(args.scenarios_dir, args.scenario, strict=strict)
         verdict = None
         code = EXIT_OK
+        if args.report_only or args.quick or args.seed is not None:  # never gated: one run, no determinism check
+            report = report_dict(run_suite(scenarios, days=2 if args.quick else None, base_seed=args.seed))
+            _emit(args, report, render_markdown(report, verdict))
+            return code
+        start_child = None if os.environ.get(CHILD_ENV) else lambda: child(child_command(args))
+        deterministic, suite = check_determinism(scenarios, start_child=start_child)
+        report = report_dict(suite)
         if args.update_baseline:
             new = update_baseline(suite, load_baseline(args.baseline), deterministic=deterministic,
                                   allow_lower=args.allow_lower)
             _write(args.baseline, to_json(new))
-        elif not (args.quick or args.seed is not None):
+        else:
             verdict = gate(suite, load_baseline(args.baseline), deterministic=deterministic, subset=bool(args.scenario))
             report["gate"] = {"passed": verdict.passed, "reasons": list(verdict.reasons), "drift": list(verdict.drift)}
             code = EXIT_OK if verdict.passed else EXIT_ERROR if "baseline_missing" in verdict.reasons else EXIT_GATE
