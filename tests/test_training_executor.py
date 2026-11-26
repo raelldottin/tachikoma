@@ -9,7 +9,6 @@ attributes the real Client uses) and applies AddTraining, FinishTraining and use
 from __future__ import annotations
 
 import datetime
-import logging
 import tempfile
 import unittest
 from dataclasses import dataclass, field

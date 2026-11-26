@@ -29,7 +29,7 @@ and ``fake.expire_token_once(at)``; both refuse a path that is not a route.
 Advancing by whole days hits defect H1: production's heartbeat check uses ``timedelta.seconds`` (ignores days).
 Only training sessions follow the clock: room upgrades and research never complete, and the daily counters
 (DailyRewardStatus, FreeStarbuxReceivedToday) never reset. A multi-day test must set those in ``fake.state`` itself.
-Defect IDs (D1, M1, H1, ...) are listed in KNOWN_DEFECTS in tests/test_daily_run_offline_e2e.py.
+Defect IDs (DR1, H1, TZ1, ...) are listed in KNOWN_DEFECTS in tests/test_daily_run_offline_e2e.py.
 """
 
 from __future__ import annotations

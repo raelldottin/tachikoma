@@ -9,7 +9,6 @@ import xmltodict
 import requests
 import random
 import logging
-import math
 import hashlib
 from itertools import accumulate
 from xml.parsers.expat import ExpatError

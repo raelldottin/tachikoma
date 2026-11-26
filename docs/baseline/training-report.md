@@ -59,7 +59,7 @@ Every breach of the record contract is counted per account and for the fleet, un
 
 A decision record with a bad field is still read for its other fields: for example a `Skip` record with valid state fields is an observation but not a skip.
 
-This is the contract for future producers. Today only `add_training` is a catalog action: nothing writes decision records, `finish_training` or `use_consumable` yet, and the snapshot `CrewMember` has no training points. Until a producer writes them, real journals give no decision skip codes, a verified `add_training` (never idle) is the only crew observation, idle crew-hours show `0.00` or `n/a`, and the `training-stalled` alert is evaluated but stays silent.
+The daily training step (`Client.manageTraining`, `sdk/execution/training.py`) is the producer. It runs `add_training`, `finish_training` and `use_consumable` through the action runner, and writes one decision record per crew member considered to `Client.training_journal`, under `Client.training_account_alias` (default `legacy`). A crew member that used a consumable is recorded as the skip the consumable stood in for. The daily run sets no journal yet, so its records stay in memory and real journals still give no decision skip codes. The snapshot `CrewMember` has no training points, so idle crew-hours show `0.00` or `n/a`, and the `training-stalled` alert is evaluated but stays silent until a journal is kept.
 
 ## Metrics
 
