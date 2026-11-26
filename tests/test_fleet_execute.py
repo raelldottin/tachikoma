@@ -1092,6 +1092,19 @@ class RunRecordTests(FleetExecuteTestCase):
         self.assertNotIn("refused before any login", err)
         self.assertNotIn("legacy daily run account", err)
 
+    # Verifies: S06-R6
+    def test_a_serialized_legacy_run_account_passes_the_execute_check(self):
+        self.write_registry(alpha={"legacy_run_account": 1})
+        self.dry_run()
+        self.write_authorization(legacy_run_serialized=[2])
+        code, _, err = self.execute()
+        self.assert_refused_before_login(code, err, "is legacy daily run account 1")
+        self.assertIn("legacy_run_serialized", err)
+        self.write_authorization(legacy_run_serialized=[1])
+        code, _, err = self.execute()
+        self.assertNotIn("refused before any login", err)
+        self.assertNotIn("legacy daily run account", err)
+
     # Verifies: S05-R8
     def test_the_salt_is_required_by_the_function_too(self):
         self.dry_run()

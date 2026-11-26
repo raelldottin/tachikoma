@@ -60,7 +60,7 @@ branch-protection setup.
 
 - `.dockerignore`, `.gitignore`: Ignore files.
 - `.githooks/`: Custom Git hooks for the repository.
-- `.github/`: GitHub Actions workflow `daily-run.yml` (runs 3×/day at 00:00, 08:00, 16:00 UTC). Each account step journals crew training to `account-N.jsonl` (see [Training journal](#training-journal)); a final step, which is given no credentials, lists the journals written and writes the training report to the job summary, and uploads the journals and the report as the `training-report-<run id>-<attempt>` artifact, kept 14 days. An account that failed at login still leaves its empty journal; one skipped through `LEGACY_RUN_SKIP` leaves none.
+- `.github/`: GitHub Actions workflow `daily-run.yml` (runs 3×/day at 00:00, 08:00, 16:00 UTC). Each account step journals crew training to `account-N.jsonl` (see [Training journal](#training-journal)); a final step, which is given no credentials, lists the journals written and writes the training report to the job summary, and uploads the journals and the report as the `training-report-<run id>-<attempt>` artifact, kept 14 days. An account that failed at login still leaves its empty journal; one skipped through `LEGACY_RUN_SKIP` leaves none. It shares the concurrency group `live-trial` with `live-trial.yml` and `live-trial-schedule.yml`, so it never runs at the same time as the pss5 trial workflows (SPEC-06 S06-R6).
 - `.python-version`: Version-specific configurations.
 - `LICENSE`: The license file.
 - `README.md`: This readme file.

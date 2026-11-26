@@ -52,6 +52,11 @@ RELEASE_PRIVATE_WORDS = frozenset(
 # LEGACY_RUN_SKIP repository variable, so a trial account can be fenced off without deleting its secrets.
 LEGACY_ACCOUNT_SECRET_RE = re.compile(r"\$\{\{\s*secrets\.PSS_ACCOUNT_([0-9]+)_")
 LEGACY_RUN_SKIP_CONDITION = "${{{{ !contains(format(',{{0}},', vars.LEGACY_RUN_SKIP), ',{account},') }}}}"
+# SPEC-06 S06-R6: while an authorization file under LIVE_AUTHORIZATION_DIR declares legacy_run_serialized, these
+# workflows share one fixed workflow-level concurrency group with cancel-in-progress false, so GitHub never runs two
+# of them at once.
+LIVE_AUTHORIZATION_DIR = "docs/experiments/live"
+SERIALIZED_WORKFLOWS = ("daily-run.yml", "live-trial.yml", "live-trial-schedule.yml")
 # Mutation testing: sdk/training/ targets block merges (python-tests.yml's mutation-gate job); every other target stays
 # advisory. Every sdk/training/ target needs a min_score of at least 0.90 and some tests; the four named ones must be
 # present and keep both training test modules.
@@ -1032,6 +1037,49 @@ def check_legacy_run(document: dict) -> None:
         raise ValueError("the legacy run must have one skippable step per account")
 
 
+def serialized_authorizations(repo: Path) -> list[str]:
+    """The JSON files under LIVE_AUTHORIZATION_DIR (any depth) that declare legacy_run_serialized, repo-relative."""
+    found = []
+    for path in sorted((repo / LIVE_AUTHORIZATION_DIR).rglob("*.json")):
+        relative = path.relative_to(repo).as_posix()
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except ValueError as error:
+            raise ValueError(f"{relative}: not valid JSON ({error})") from None
+        if isinstance(payload, dict) and "legacy_run_serialized" in payload:
+            found.append(relative)
+    return found
+
+
+def check_serialized_legacy_run(documents: dict, serialized: list[str]) -> None:
+    """S06-R6: a legacy_run_serialized claim holds only while the pss5 workflows can never run at the same time.
+
+    With any claim in ``serialized``, each of SERIALIZED_WORKFLOWS sets the same fixed concurrency group at the
+    workflow level (none at the job level) with ``cancel-in-progress: false``.
+    """
+    if not serialized:
+        return
+    claim = f"{serialized[0]} declares legacy_run_serialized"
+    groups = set()
+    for name in SERIALIZED_WORKFLOWS:
+        document = documents[name]
+        concurrency = document.get("concurrency")
+        if not isinstance(concurrency, dict) or not _text(concurrency.get("group")):
+            raise ValueError(
+                f"{name} must set a workflow-level concurrency group, written as a mapping with a group name and "
+                f"cancel-in-progress: false, because {claim}"
+            )
+        if "${{" in concurrency["group"]:
+            raise ValueError(f"{name}: the shared concurrency group must be a fixed name, not an expression")
+        if concurrency.get("cancel-in-progress") != "false":
+            raise ValueError(f"{name}: the shared concurrency group must keep cancel-in-progress: false")
+        if any("concurrency" in job for job in document.get("jobs", {}).values()):
+            raise ValueError(f"{name}: set the shared concurrency group only at the workflow level, not on a job")
+        groups.add(concurrency["group"])
+    if len(groups) != 1:
+        raise ValueError(f"{', '.join(SERIALIZED_WORKFLOWS)} must share one concurrency group, because {claim}")
+
+
 def _text(value: object) -> str:
     """A workflow scalar as text; a missing value or a mapping or list where a scalar belongs is the empty string."""
     return value if isinstance(value, str) else ""
@@ -1311,7 +1359,9 @@ def check_mutation_policy(repo: Path) -> None:
 
 
 def check_repository(repo: Path) -> None:
-    check_workflows(workflow_documents(repo))
+    documents = workflow_documents(repo)
+    check_workflows(documents)
+    check_serialized_legacy_run(documents, serialized_authorizations(repo))
     check_mutation_policy(repo)
     paths = tracked_files(repo)
     for relative in paths:
