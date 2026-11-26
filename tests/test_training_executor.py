@@ -1450,7 +1450,8 @@ class ClientContractTests(unittest.TestCase):
         for name, args in calls.items():
             for cls in (Client, FakeTrainingClient):
                 with self.subTest(name=name, cls=cls.__name__):
-                    inspect.signature(getattr(cls, name)).bind(None, *args)
+                    bound = inspect.signature(getattr(cls, name)).bind(None, *args)  # TypeError if they do not bind
+                    self.assertEqual(bound.args[1:], args)
 
     def test_the_fake_keeps_the_client_s_declared_return_conventions(self):
         from sdk.client import Client

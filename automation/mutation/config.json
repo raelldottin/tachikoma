@@ -4,6 +4,7 @@
   "copy": ["sdk", "tests", "scripts/ci.py", "run.py"],
   "targets": [
     {"path": "sdk/crew_leveling.py", "tests": ["tests.test_crew_leveling"], "min_score": 0.81, "equivalent": []},
-    {"path": "sdk/game_formulas.py", "tests": ["tests.test_game_formulas"], "min_score": 0.73, "equivalent": []}
+    {"path": "sdk/game_formulas.py", "tests": ["tests.test_game_formulas"], "min_score": 0.73, "equivalent": []},
+    {"path": "sdk/execution/training.py", "tests": ["tests.test_training_executor", "tests.test_daily_run_offline_e2e"], "min_score": 1.0, "equivalent": []}
   ]
 }
