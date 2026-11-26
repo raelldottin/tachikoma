@@ -1,14 +1,23 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Synthetic, sanitized fixture: fake research design ids; assumed "<Family> LvN" naming (see parse.py). -->
+<!-- Sanitized fixture in the live shape of ListAllResearchDesigns2 (see live_research_designs.xml): the live ids, names
+     and roots, other attributes trimmed. A course's family is its root's name and its level its course number. -->
 <ResearchService>
   <ListAllResearchDesigns>
     <ResearchDesigns>
-      <ResearchDesign ResearchDesignId="10" RootResearchDesignId="10" ResearchName="Fitness" GasCost="100" StarbuxCost="0" />
-      <ResearchDesign ResearchDesignId="11" RootResearchDesignId="10" ResearchName="Fitness Lv2" GasCost="200" StarbuxCost="0" />
-      <ResearchDesign ResearchDesignId="20" RootResearchDesignId="20" ResearchName="Education" GasCost="100" StarbuxCost="0" />
-      <ResearchDesign ResearchDesignId="21" RootResearchDesignId="20" ResearchName="Education Lv2" GasCost="200" StarbuxCost="0" />
-      <ResearchDesign ResearchDesignId="22" RootResearchDesignId="20" ResearchName="Education Lv3" GasCost="300" StarbuxCost="0" />
-      <ResearchDesign ResearchDesignId="40" RootResearchDesignId="40" ResearchName="Advanced Training" GasCost="500" StarbuxCost="0" />
+      <ResearchDesign ResearchDesignId="38" RootResearchDesignId="38" ResearchName="Advanced Training" RequiredResearchDesignId="0" GasCost="1500" StarbuxCost="0" />
+      <ResearchDesign ResearchDesignId="39" RootResearchDesignId="38" ResearchName="Advanced Training Lv2" RequiredResearchDesignId="38" GasCost="5000" StarbuxCost="0" />
+      <ResearchDesign ResearchDesignId="74" RootResearchDesignId="74" ResearchName="Fitness 101" RequiredResearchDesignId="0" GasCost="100" StarbuxCost="0" />
+      <ResearchDesign ResearchDesignId="75" RootResearchDesignId="74" ResearchName="Fitness 102" RequiredResearchDesignId="74" GasCost="200" StarbuxCost="0" />
+      <ResearchDesign ResearchDesignId="76" RootResearchDesignId="74" ResearchName="Fitness 103" RequiredResearchDesignId="75" GasCost="300" StarbuxCost="0" />
+      <ResearchDesign ResearchDesignId="77" RootResearchDesignId="74" ResearchName="Fitness 201" RequiredResearchDesignId="76" GasCost="400" StarbuxCost="0" />
+      <ResearchDesign ResearchDesignId="78" RootResearchDesignId="74" ResearchName="Fitness 202" RequiredResearchDesignId="77" GasCost="500" StarbuxCost="0" />
+      <ResearchDesign ResearchDesignId="79" RootResearchDesignId="74" ResearchName="Fitness 203" RequiredResearchDesignId="78" GasCost="600" StarbuxCost="0" />
+      <ResearchDesign ResearchDesignId="101" RootResearchDesignId="101" ResearchName="Education 101" RequiredResearchDesignId="0" GasCost="100" StarbuxCost="0" />
+      <ResearchDesign ResearchDesignId="102" RootResearchDesignId="101" ResearchName="Education 102" RequiredResearchDesignId="101" GasCost="200" StarbuxCost="0" />
+      <ResearchDesign ResearchDesignId="103" RootResearchDesignId="101" ResearchName="Education 103" RequiredResearchDesignId="102" GasCost="300" StarbuxCost="0" />
+      <ResearchDesign ResearchDesignId="104" RootResearchDesignId="101" ResearchName="Education 201" RequiredResearchDesignId="103" GasCost="400" StarbuxCost="0" />
+      <ResearchDesign ResearchDesignId="105" RootResearchDesignId="101" ResearchName="Education 202" RequiredResearchDesignId="104" GasCost="500" StarbuxCost="0" />
+      <ResearchDesign ResearchDesignId="106" RootResearchDesignId="101" ResearchName="Education 203" RequiredResearchDesignId="105" GasCost="600" StarbuxCost="0" />
     </ResearchDesigns>
   </ListAllResearchDesigns>
 </ResearchService>

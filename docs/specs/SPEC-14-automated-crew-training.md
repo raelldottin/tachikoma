@@ -1,7 +1,7 @@
 # SPEC-14: Automated crew training
 
 **Status:** Approved
-**Approval:** The owner's request to continue after the offline approval request authorizes test-first offline implementation with a maximum of one training start per account per run. G8 remains pending.
+**Approval:** The owner's request to continue after the offline approval request authorizes test-first offline implementation with a maximum of one training start per account per run. The owner separately approved live testing. The first live test is planned for Echo Rune, with the one-start limit. The exact authorization and recurring schedule remain to be recorded under G8.
 **Release:** R2 (automated growth engine)
 **Owner gate:** G8 (proposed, per-account authorization for a scheduled training start)
 **Depends on:** SPEC-05, SPEC-06
@@ -23,7 +23,7 @@
 - **S14-R3 (MUST)** Offer read-only `--crew-plan` and `--fleet-dry-run` previews for the same training policy. The crew plan shows roles, facility readiness, course or skip reason, and direct Prestige routes toward the original named targets. Resolve recipes by crew design ID, count duplicate ingredients accurately, and label research and eligibility as unknown when unobserved. Preview calls make no gameplay writes.
 - **S14-R4 (MUST)** Run the new policy only for an account explicitly configured with `policy_id: training-v2`, built on `training-v1`. Live execution uses `--fleet-execute --mode full`, a matching recent dry run, and authorization for `add_training` on that account. Submit at most one training start per account per run. Immediately before submitting, recheck eligibility and the selected course's authoritative game price and currency against fresh account balances, reserves, and remaining spend and action caps after earlier attempts. Accept zero only when explicitly observed for the selected course. Refuse unavailable, malformed, stale, or Starbux prices.
 - **S14-R5 (MUST)** Verify a start only when a fresh post-action roster read shows that the intended character changed from observed idle to the requested course ID with a running timer. Store the sanitized outcome, course, end time and observed spend in the account journal. An already active or ended-but-unclaimed course cannot trigger a new start. A verified finish can make the crew eligible on the next scheduled run. An ambiguous, unchanged or missing post-read pauses all training starts on that account across runs. An operator can resume only after recording a durable reconciliation of the prior attempt using authoritative evidence. Treat completion and stat gains as separate observations.
-- **S14-R6 (MUST)** Schedule the fleet dry-run and authorized execution entry points for the opted-in account under an owner-managed workflow. Preserve journals between runs and honor the existing stop control. Keep the account outside the legacy daily run where SPEC-06 applies. After verifying account identity, take its nonblocking dispatch lock before any account mutation and hold it through settlement. An overlapping dispatch for that identity skips the account even if it would select a different crew member. Separate accounts may run independently. Missing or unreadable established state, unavailable serialization or invalid authorization stops execution.
+- **S14-R6 (MUST)** Schedule the fleet dry-run and authorized execution entry points for the opted-in account under an owner-managed workflow. Preserve journals between runs and honor the existing stop control. Keep the account outside the legacy daily run where SPEC-06 applies. Serialized mode (S06-R6) is not enough: the legacy run also starts training through `Client.manageTraining()`, outside this policy's one-start limit, attempt store and lock, so the account must be listed in `LEGACY_RUN_SKIP` before its first `training-v2` start. After verifying account identity, take its nonblocking dispatch lock before any account mutation and hold it through settlement. An overlapping dispatch for that identity skips the account even if it would select a different crew member. Separate accounts may run independently. Missing or unreadable established state, unavailable serialization or invalid authorization stops execution.
 
 - **S14-R7 (MUST)** Run the offline workflow benchmark and semantic mutation checks in S14-AC6 and S14-AC7 on the same candidate revision. Preserve the existing benchmark floors and QA gate. Publish the exact revision, commands, seeds, scenario results, detection rates and remaining survivors.
 
@@ -92,7 +92,7 @@ During the red stage, run `python scripts/training_workflow_benchmark.py --gate`
 | Id | Question | Needed before | Safe default |
 | --- | --- | --- | --- |
 | S14-Q1 | Approve this policy and the proposed one-start limit? | Implementation | Approved for offline implementation, with one start per account per run. |
-| S14-Q2 | Which account, schedule, mineral and gas caps and reserves are authorized? | Scheduled live execution | No scheduled starts. |
+| S14-Q2 | Which account, schedule, mineral and gas caps and reserves are authorized? | Scheduled live execution | Live testing approved in principle for Echo Rune. Record the verified account identity, test window, caps and reserves in G8 before a live course start. A recurring schedule needs its own authorization. |
 
 ## Evidence
 

@@ -450,16 +450,24 @@ DEFAULT_ROOMS = (
     ("105", "60", "Upgrading", 3, 0),
     ("107", "41", "Normal", 3, 2),  # Lunar College: the engines secondary room (1016)
 )
-# (id, root_id, name, gas_cost). Two roots are affordable (10 and 20), and 20 comes after 10: upgradeResearches must
-# stop after its first successful AddResearch, so a second start would be visible (and rejected by the fake).
+# (id, root_id, name, gas_cost), named like the live ListAllResearchDesigns2 reply
+# (tests/fixtures/training/live_research_designs.xml): "<line> <course>" training courses and an unnumbered root.
+# The default world has completed Fitness 101-201 (DEFAULT_COMPLETED_RESEARCH), so the strategy's 101 and 201 gates
+# are open and its 203 gate is not. The next Fitness course (202) costs 50000, more than the world's gas. Two roots
+# are affordable (10 and 20), and 20 comes after 10: upgradeResearches must stop after its first successful
+# AddResearch, so a second start would be visible (and rejected by the fake).
 DEFAULT_RESEARCH_DESIGNS = (
-    ("1", "1", "Fitness Lab Lv1", 1000),
-    ("2", "1", "Fitness Lab Lv2", 50000),
-    ("3", "1", "Fitness Lab Lv3", 90000),
-    ("10", "10", "Education Lv1", 2000),
-    ("11", "10", "Education Lv2", 8000),
-    ("20", "20", "Combat Lv1", 3000),
+    ("1", "1", "Fitness 101", 1000),
+    ("2", "1", "Fitness 102", 4000),
+    ("3", "1", "Fitness 103", 12000),
+    ("4", "1", "Fitness 201", 25000),
+    ("5", "1", "Fitness 202", 50000),
+    ("6", "1", "Fitness 203", 90000),
+    ("10", "10", "Education 101", 2000),
+    ("11", "10", "Education 102", 8000),
+    ("20", "20", "Advanced Training", 3000),
 )
+DEFAULT_COMPLETED_RESEARCH = ("1", "2", "3", "4")
 # Training tiers T1-T3 (the tier bands of sdk/training/strategy.py): (gain, fatigue, duration).
 TIERS = {
     "T1": (2, 10, datetime.timedelta(hours=1)),
@@ -513,8 +521,8 @@ H = datetime.timedelta(hours=1)
 # the percent manageTraining computes is fractional: picking the wrong CharacterDesign, or rounding down instead of up,
 # changes a decision. These records sit on an edge on purpose:
 # - 1001: 57 / 80 = 71.25 %, which production rounds UP to 72, just inside the S-T1 window (71 < p < 74); rounded down
-#   it would be 71, outside. After its Bench Press (+2 Hp) it is 59 / 80 = 73.75 -> 74: S-T2, research-gated, yet
-#   the ended session is still finished (D14, fixed).
+#   it would be 71, outside. After its Bench Press (+2 Hp) it is 59 / 80 = 73.75 -> 74: S-T2, whose course-201 gate is
+#   open, and the ended session is finished first (D14, fixed).
 # - 1013: 89 xp at level 1, one short of production's 90-xp cost; 1009 (120 xp) is on the other side.
 # - 1014: AvailableDate 2 h ago. A UTC host upgrades it; a host behind UTC compares the UTC date with its local clock and
 #   waits (TZ1). 1012 (AvailableDate in 3 h) is upgraded early by a host ahead of UTC (TZ1). See NonUtcHostTests.
@@ -526,21 +534,21 @@ H = datetime.timedelta(hours=1)
 DEFAULT_ROSTER = (
     RosterRow("1001", "Galactic Succubus", "501", "Legendary", "103", stats(Hp=16, Weapon=32, Attack=9), 72,
               capacity=80, session_end_offset=-2 * H,
-              note="weapons, secondary room, 71.25 %: the ended Bench Press is finished; S-T2 is research-gated"),
+              note="weapons, secondary room, 71.25 %: the ended Bench Press is finished, then S-T2 starts"),
     RosterRow("1002", "Galactic Snow Maiden", "502", "Epic", "0", stats(Hp=20, Weapon=55, Attack=12), 73,
               capacity=120, note="weapons, unassigned, 72.5 %: no room, no request (D6, fixed)"),
     RosterRow("1003", "Delish", "503", "Common", "102", stats(Hp=20, Weapon=77, Attack=12), 73, capacity=150,
               session_end_offset=datetime.timedelta(minutes=-30), note="weapons, 72.67 %, ended 30 min ago: finished now (D2, fixed)"),
     RosterRow("1004", "Mistycball", "504", "Common", "106", stats(Hp=10, Science=20), 30,
-              note="shields, primary room: P-T1 research-gated (no Fitness 1)"),
+              note="shields, primary room: P-T1, gated on Fitness 101 (done)"),
     RosterRow("1005", "Galactic Sprite", "505", "Common", "102", stats(Hp=30, Engine=30), 60,
-              note="engines, primary room: P-T2 research-gated"),
+              note="engines, primary room: P-T2, gated on Fitness 201 (done)"),
     RosterRow("1006", "The Conjoint Archon", "506", "Epic", "103", stats(Hp=34, Engine=101), 68, capacity=200,
               note="engines, primary room, 67.5 %: Epic TP cap 80 reached"),
     RosterRow("1007", "Cyber Duck", "507", "Common", "106", stats(Hp=40, Stamina=40), 80,
               note="rushers, wrong room: not_in_training_room skip ('move to gym'), no request"),
     RosterRow("1008", "Admiral Serena", "508", "Common", "103", stats(Hp=40, Attack=40), 80,
-              note="defenders, secondary room: S-T2 research-gated"),
+              note="defenders, secondary room: S-T2, gated on Fitness 201 (done)"),
     RosterRow("1009", "Engineer Grunt", "509", "Common", "104", stats(Hp=10, Repair=10), 20, level=1, xp=120,
               note="not a training room; upgraded to level 2"),
     RosterRow("1010", "Rookie Pilot", "510", "Common", "102", stats(Hp=10), 10, level=5, xp=3000,
@@ -588,7 +596,7 @@ def default_world() -> World:
         rooms=[Room(i, d, s, r, c, pending_design_id="61" if s == "Upgrading" else None)
                for i, d, s, r, c in DEFAULT_ROOMS],
         research_designs=[ResearchDesign(i, r, n, g) for i, r, n, g in DEFAULT_RESEARCH_DESIGNS],
-        researches=[Research("1", "Completed")],
+        researches=[Research(design_id, "Completed") for design_id in DEFAULT_COMPLETED_RESEARCH],
         character_designs=[CharacterDesign(row.design_id, f"{row.name} Design", training_capacity=row.capacity,
                                            rarity=row.rarity, special_ability_type="DamageToCurrentEnemy")
                            for row in DEFAULT_ROSTER],

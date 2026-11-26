@@ -9,7 +9,7 @@
   "tick_minutes": 60,
   "fatigue_recovery_seconds": 360,
   "rooms": [{"id": 7001, "design": "GYM"}],
-  "research": ["Fitness", "Fitness Lv2", "Fitness Lv3", "Education", "Education Lv2", "Education Lv3"],
+  "research": ["Fitness 101", "Fitness 102", "Fitness 103", "Fitness 201", "Fitness 202", "Fitness 203", "Education 101", "Education 102", "Education 103", "Education 201", "Education 202", "Education 203"],
   "inventory": {"Common ATK Consumable": 2, "Hero ATK Consumable": 2},
   "crew": [
     {"id": 301, "name": "Ancestral Spirit", "design": "unique", "room": 7001, "stats": {"Attack": 40, "Hp": 27}},

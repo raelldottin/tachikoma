@@ -5,6 +5,7 @@ from __future__ import annotations
 import inspect
 import os
 import random
+import time
 import unittest
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
@@ -24,12 +25,14 @@ from sdk.training.parse import (
     parse_crew,
     parse_datetime,
     parse_items,
+    parse_research_family_levels,
     parse_research_levels,
     parse_rooms,
     parse_training_designs,
+    research_course,
     to_int,
 )
-from sdk.training.planner import plan_training
+from sdk.training.planner import plan_training, research_ok
 from sdk.training.strategy import DEFAULT_STRATEGY, with_consumables
 
 UTC = timezone.utc
@@ -672,26 +675,23 @@ class TestRoomsResearch(unittest.TestCase):
         self.assertEqual(dict(parse_consumable_designs(item_designs)), {("WPN", "Common"): 9})
 
     def test_research_levels(self) -> None:
+        # Live shape: each design's family is its root's name and its level its course number (or "LvN").
         designs = {
             "ResearchDesigns": {
                 "ResearchDesign": [
-                    {"@ResearchDesignId": "10", "@ResearchName": "Fitness", "@RootResearchDesignId": "10"},
-                    {"@ResearchDesignId": "11", "@ResearchName": "Fitness Lv2", "@RootResearchDesignId": "10"},
-                    {"@ResearchDesignId": "12", "@ResearchName": "Fitness Lv3", "@RootResearchDesignId": "10"},
-                    {"@ResearchDesignId": "20", "@ResearchName": "Education Level 1", "@RootResearchDesignId": "0"},
+                    {"@ResearchDesignId": "74", "@ResearchName": "Fitness 101", "@RootResearchDesignId": "74"},
+                    {"@ResearchDesignId": "77", "@ResearchName": "Fitness 201", "@RootResearchDesignId": "74"},
+                    {"@ResearchDesignId": "79", "@ResearchName": "Fitness 203", "@RootResearchDesignId": "74"},
+                    {"@ResearchDesignId": "104", "@ResearchName": "Education 201", "@RootResearchDesignId": "0"},
+                    {"@ResearchDesignId": "105", "@ResearchName": "Night Classes 202", "@RootResearchDesignId": "104"},
+                    {"@ResearchDesignId": "38", "@ResearchName": "Advanced Training"},
                     {
-                        "@ResearchDesignId": "21",
-                        "@ResearchName": "Education II",
-                        "@RootResearchDesignId": "20",
-                        "@Level": "2",
+                        "@ResearchDesignId": "39",
+                        "@ResearchName": "Advanced Training Lv2",
+                        "@RootResearchDesignId": "38",
                     },
-                    {"@ResearchDesignId": "30", "@ResearchName": "Advanced Training"},
-                    {
-                        "@ResearchDesignId": "13",
-                        "@ResearchName": "Fitness Lv2",
-                        "@RootResearchDesignId": "10",
-                        "@Level": "3",
-                    },
+                    {"@ResearchDesignId": "80", "@ResearchName": "Fitness 201", "@RootResearchDesignId": "74"},
+                    {"@ResearchDesignId": "81", "@RootResearchDesignId": "74"},
                 ]
             }
         }
@@ -702,47 +702,169 @@ class TestRoomsResearch(unittest.TestCase):
         def done(design_id: str, **extra: str) -> dict:
             return {"@ResearchDesignId": design_id, "@ResearchState": "Completed", **extra}
 
-        # Each completed design counts under its family (max level) and under its own exact name (review #2).
-        self.assertEqual(levels(done("11")), {"Fitness": 2, "Fitness Lv2": 2})
-        all_fitness = {"Fitness": 3, "Fitness Lv2": 2, "Fitness Lv3": 3}
-        self.assertEqual(levels(done("11"), done("12"), done("10")), all_fitness)  # max wins
-        self.assertEqual(levels({"@ResearchDesignId": "12", "@ResearchState": "Researching"}), {})
-        record_level = {"Fitness": 5, "Fitness Lv3": 5}
-        self.assertEqual(levels(done("12", **{"@ResearchLevel": "5"})), record_level)  # record level first
-        self.assertEqual(levels(done("21")), {"Education": 2, "Education II": 2})  # design @Level, root grouping
-        self.assertEqual(levels(done("20")), {"Education": 1, "Education Level 1": 1})  # name suffix
-        # design @Level beats a conflicting name suffix; a shared exact name keeps its highest level
-        self.assertEqual(levels(done("13")), {"Fitness": 3, "Fitness Lv2": 3})
-        self.assertEqual(levels(done("11"), done("13")), {"Fitness": 3, "Fitness Lv2": 3})
-        self.assertEqual(levels(done("30")), {"Advanced Training": 1})  # default 1
-        self.assertEqual(levels(done("12", **{"@ResearchLevel": "-2"})), {"Fitness": 3, "Fitness Lv3": 3})
+        # Each completed design counts under its family (max course) and under its own exact name (review #2).
+        self.assertEqual(levels(done("77")), {"Fitness": 201, "Fitness 201": 201})
+        all_fitness = {"Fitness": 203, "Fitness 101": 101, "Fitness 201": 201, "Fitness 203": 203}
+        self.assertEqual(levels(done("77"), done("79"), done("74")), all_fitness)  # max wins, in any order
+        self.assertEqual(levels({"@ResearchDesignId": "79", "@ResearchState": "Researching"}), {})
+        self.assertEqual(levels({"@ResearchDesignId": "79", "@ResearchState": "completed"}), {})
+        self.assertEqual(levels(done("104")), {"Education": 201, "Education 201": 201})  # no root: own name
+        self.assertEqual(levels(done("105")), {"Education": 202, "Night Classes 202": 202})  # family from the root
+        self.assertEqual(levels(done("38")), {"Advanced Training": 1})  # an unnumbered root is the line's level 1
+        self.assertEqual(levels(done("39")), {"Advanced Training": 2, "Advanced Training Lv2": 2})
+        self.assertEqual(levels(done("80"), done("77")), {"Fitness": 201, "Fitness 201": 201})  # shared exact name
+        self.assertEqual(levels(done("81")), {"Fitness": 1, "research_design:81": 1})  # nameless: level 1
+        # Only the design's name sets the level: an unverified @ResearchLevel or @Level is never read.
+        self.assertEqual(levels(done("74", **{"@ResearchLevel": "203"})), {"Fitness": 101, "Fitness 101": 101})
+        levelled = {"ResearchDesign": {"@ResearchDesignId": "74", "@ResearchName": "Fitness 101", "@Level": "3"}}
+        levelled_levels = dict(parse_research_levels({"Research": done("74")}, levelled))
+        self.assertEqual(levelled_levels, {"Fitness": 101, "Fitness 101": 101})
         self.assertEqual(levels(done("999"), done("x")), {})  # unknown ids ignored
         self.assertEqual(dict(parse_research_levels(None, designs)), {})
-        self.assertEqual(dict(parse_research_levels({"Research": done("11")}, None)), {})
+        self.assertEqual(dict(parse_research_levels({"Research": done("77")}, None)), {})
 
-    def test_level_suffix_needs_a_word_boundary(self) -> None:
-        # Regression (review #10): "Sublevel 2" split into family "Sub" at level 2 and "Wolv2" into "Wo" at 2.
+    def test_research_course_table(self) -> None:
+        # The one research-name contract, shared with Client.getResearchLevel: "<family> <course>" (the live training
+        # lines) or "<family> Lv<n>" (live lines such as "Advanced Training Lv2"); any other name is its own family
+        # at level 1. A course number is a positive ASCII integer without a leading zero.
+        cases = {
+            "Fitness 101": ("Fitness", 101),
+            "Fitness 203": ("Fitness", 203),
+            "Education 202": ("Education", 202),
+            "Fitness Center 301": ("Fitness Center", 301),
+            " Fitness\t201 ": ("Fitness", 201),
+            "Fitness  1": ("Fitness", 1),
+            "Advanced Training": ("Advanced Training", 1),
+            "Advanced Training Lv2": ("Advanced Training", 2),
+            "Advanced Training Lv7": ("Advanced Training", 7),
+            "Fitness": ("Fitness", 1),
+            "": ("", 1),
+            "   ": ("", 1),
+            "201": ("201", 1),
+            "Fitness201": ("Fitness201", 1),
+            "Wolv2": ("Wolv2", 1),
+            "Fitness 0": ("Fitness 0", 1),
+            "Fitness 007": ("Fitness 007", 1),
+            "Fitness 20a": ("Fitness 20a", 1),
+            "Fitness ٢٠١": ("Fitness ٢٠١", 1),
+            "Fitness Lv": ("Fitness Lv", 1),
+            "Fitness Lv0": ("Fitness Lv0", 1),
+            "Fitness lv2": ("Fitness lv2", 1),
+            "Fitness Lv.3": ("Fitness Lv.3", 1),
+            "Fitness Level 3": ("Fitness Level", 3),
+            "Fitness " + "9" * 5000: ("Fitness", 0),
+        }
+        for name, expected in cases.items():
+            with self.subTest(name=name[:40]):
+                self.assertEqual(research_course(name), expected)
+
+    def test_research_course_is_linear_in_the_name_length(self) -> None:
+        # Regression (review): a lazy "(.+?)\s+" family regex took seconds on a name with a long whitespace run.
+        started = time.perf_counter()
+        self.assertEqual(research_course("a" + " " * 200_000 + "x"), ("a" + " " * 200_000 + "x", 1))
+        self.assertEqual(research_course("Fitness" + " " * 200_000 + "203"), ("Fitness", 203))
+        self.assertEqual(research_course("1 " * 100_000 + "z"), ("1 " * 100_000 + "z", 1))
+        self.assertLess(time.perf_counter() - started, 2.0)
+
+    def test_family_levels_hold_only_family_keys(self) -> None:
+        # Review: a line query must not be answered by a design's exact name. "Night Classes" is a course of the
+        # Education line (its root), not a line of its own.
         designs = {
             "ResearchDesign": [
-                {"@ResearchDesignId": "1", "@ResearchName": "Sublevel 2"},
-                {"@ResearchDesignId": "2", "@ResearchName": "Wolv2"},
-                {"@ResearchDesignId": "3", "@ResearchName": "Fitness Lv.3"},
-                {"@ResearchDesignId": "4", "@ResearchName": "Fitness lv 4"},
-                {"@ResearchDesignId": "5", "@ResearchName": "Education LEVEL5"},
-                {"@ResearchDesignId": "6", "@ResearchName": "Shield Lv٣"},
+                {"@ResearchDesignId": "101", "@ResearchName": "Education 101", "@RootResearchDesignId": "101"},
+                {"@ResearchDesignId": "107", "@ResearchName": "Night Classes", "@RootResearchDesignId": "101"},
+                {"@ResearchDesignId": "77", "@ResearchName": "Fitness 201", "@RootResearchDesignId": "74"},
+                {"@ResearchDesignId": "74", "@ResearchName": "Fitness 101", "@RootResearchDesignId": "74"},
             ]
         }
 
-        def level_of(design_id: str) -> dict:
-            researches = {"Research": {"@ResearchDesignId": design_id, "@ResearchState": "Completed"}}
-            return dict(parse_research_levels(researches, designs))
+        def family(*design_ids: str) -> dict:
+            return dict(parse_research_family_levels(completed(*design_ids), designs))
 
-        self.assertEqual(level_of("1"), {"Sublevel 2": 1})
-        self.assertEqual(level_of("2"), {"Wolv2": 1})
-        self.assertEqual(level_of("3"), {"Fitness": 3, "Fitness Lv.3": 3})
-        self.assertEqual(level_of("4"), {"Fitness": 4, "Fitness lv 4": 4})
-        self.assertEqual(level_of("5"), {"Education": 5, "Education LEVEL5": 5})
-        self.assertEqual(level_of("6"), {"Shield Lv٣": 1})  # non-ASCII digits are not a level
+        self.assertEqual(family("107"), {"Education": 1})
+        self.assertEqual(family("107", "101"), {"Education": 101})
+        self.assertEqual(family("77", "74", "101"), {"Fitness": 201, "Education": 101})
+        self.assertEqual(family(), {})
+        researching = {"Research": {"@ResearchDesignId": "77", "@ResearchState": "Researching"}}
+        self.assertEqual(dict(parse_research_family_levels(researching, designs)), {})
+        self.assertEqual(dict(parse_research_family_levels(completed("999"), designs)), {})
+        self.assertEqual(dict(parse_research_family_levels(completed("77"), None)), {})
+        # The family keys agree with parse_research_levels' family keys.
+        everything = parse_research_levels(completed("107", "77", "74", "101"), designs)
+        self.assertEqual({k: everything[k] for k in ("Fitness", "Education")}, family("107", "77", "74", "101"))
+
+    def test_a_course_beyond_the_digit_limit_is_never_a_level(self) -> None:
+        # Its level reads as 0, so neither its family nor its exact name can pass any gate (each needs >= 1).
+        huge = "Fitness " + "9" * 5000
+        designs = {"ResearchDesign": {"@ResearchDesignId": "1", "@ResearchName": huge, "@RootResearchDesignId": "1"}}
+        researches = {"Research": {"@ResearchDesignId": "1", "@ResearchState": "Completed"}}
+        self.assertEqual(dict(parse_research_levels(researches, designs)), {"Fitness": 0, huge: 0})
+        self.assertEqual(dict(parse_research_family_levels(researches, designs)), {"Fitness": 0})
+
+
+LIVE_FITNESS = {"74": 101, "75": 102, "76": 103, "77": 201, "78": 202, "79": 203}
+LIVE_EDUCATION = {"101": 101, "102": 102, "103": 103, "104": 201, "105": 202, "106": 203}
+
+
+def completed(*design_ids: str) -> dict:
+    return {"Researches": {"Research": [{"@ResearchDesignId": i, "@ResearchState": "Completed"} for i in design_ids]}}
+
+
+class TestLiveResearchDesigns(unittest.TestCase):
+    """The live ListAllResearchDesigns2 reply (design version 717, fetched 2026-11-26), trimmed to the training lines.
+
+    Regression: the parser only knew a "Lv N"/"Level N" suffix, so "Fitness 201" was its own family at level 1 and
+    no research-gated training tier ever opened on live data.
+    """
+
+    def setUp(self) -> None:
+        self.designs = load("live_research_designs.xml")
+
+    def test_fixture_is_the_live_reply(self) -> None:
+        envelope = self.designs["ResearchService"]["ListAllResearchDesigns"]
+        self.assertEqual(envelope["@version"], "717")
+        records = extract_collection(self.designs, "ResearchDesign")
+        rows = {r["@ResearchDesignId"]: (r["@ResearchName"], r["@RootResearchDesignId"]) for r in records}
+        for design_id, course in LIVE_FITNESS.items():
+            self.assertEqual(rows[design_id], (f"Fitness {course}", "74"))
+        for design_id, course in LIVE_EDUCATION.items():
+            self.assertEqual(rows[design_id], (f"Education {course}", "101"))
+        self.assertEqual(rows["38"], ("Advanced Training", "38"))
+        self.assertEqual(len(records), 19)
+        self.assertFalse(any("@Level" in record for record in records))  # no level attribute live
+
+    def test_all_six_fitness_courses_give_fitness_203(self) -> None:
+        levels = parse_research_levels(completed(*LIVE_FITNESS), self.designs)
+        self.assertEqual(levels["Fitness"], 203)
+        self.assertEqual({design_id: levels[f"Fitness {c}"] for design_id, c in LIVE_FITNESS.items()}, LIVE_FITNESS)
+        self.assertNotIn("Education", levels)
+
+    def test_only_fitness_101_gives_101(self) -> None:
+        levels = dict(parse_research_levels(completed("74"), self.designs))
+        self.assertEqual(levels, {"Fitness": 101, "Fitness 101": 101})
+
+    def test_each_course_of_each_line_counts_at_its_number(self) -> None:
+        for family, courses in (("Fitness", LIVE_FITNESS), ("Education", LIVE_EDUCATION)):
+            ids = list(courses)
+            for index, design_id in enumerate(ids):
+                with self.subTest(family=family, course=courses[design_id]):
+                    levels = parse_research_levels(completed(*ids[: index + 1]), self.designs)
+                    self.assertEqual(levels[family], courses[design_id])
+
+    def test_advanced_training_lv_names_count_at_their_number(self) -> None:
+        levels = parse_research_levels(completed("38", "39", "40"), self.designs)
+        self.assertEqual((levels["Advanced Training"], levels["Advanced Training Lv3"]), (3, 3))
+
+    def test_every_gated_tier_opens_with_all_courses_of_one_line(self) -> None:
+        # The defect end to end: on live data every research-gated tier stayed shut with every Fitness course done.
+        for courses in (LIVE_FITNESS, LIVE_EDUCATION):
+            levels = parse_research_levels(completed(*courses), self.designs)
+            for band in DEFAULT_STRATEGY.bands:
+                with self.subTest(band=(band.slot, band.tier), line=next(iter(courses))):
+                    self.assertTrue(research_ok(band, levels, DEFAULT_STRATEGY))
+        nothing = parse_research_levels(completed(), self.designs)
+        shut = [(b.slot, b.tier) for b in DEFAULT_STRATEGY.bands if not research_ok(b, nothing, DEFAULT_STRATEGY)]
+        self.assertEqual(shut, [("primary", 1), ("primary", 2), ("primary", 3), ("secondary", 2), ("secondary", 3)])
 
 
 class TestItems(unittest.TestCase):
@@ -833,9 +955,9 @@ class TestFixtures(unittest.TestCase):
 
     def test_build_context_fixture_golden(self) -> None:
         ctx = fixture_context()
-        self.assertEqual(
-            dict(ctx.research_levels), {"Fitness": 2, "Fitness Lv2": 2, "Education": 3, "Education Lv3": 3}
-        )
+        fitness = {"Fitness": 201, "Fitness 101": 101, "Fitness 102": 102, "Fitness 103": 103, "Fitness 201": 201}
+        education = {f"Education {course}": course for course in (101, 102, 103, 201, 202, 203)}
+        self.assertEqual(dict(ctx.research_levels), {**fitness, "Education": 203, **education})
         self.assertEqual(dict(ctx.items), {9101: 2, 9102: 1, 9104: 7})
         self.assertEqual(ctx.rooms[13], "Galaxy Gym Annex")
         self.assertEqual(ctx.now, FIXTURE_NOW)
@@ -864,50 +986,43 @@ class TestFixtures(unittest.TestCase):
 
     def test_build_context_resolves_design_research_gates(self) -> None:
         # build_context must hand the research catalog to the design parser: the fixture's gated design (108,
-        # RequiredResearchDesignId 40) names the research family, not the unresolvable "research_design:40".
+        # RequiredResearchDesignId 38) names the research design, not the unresolvable "research_design:38".
         designs = {design.id: design for design in fixture_context().designs}
         self.assertEqual(designs[108].required_research, "Advanced Training")
         self.assertEqual({d.id for d in designs.values() if d.required_research is not None}, {108})
-        # End to end: once research 40 completes, crew 1009 starts the gated design instead of research_missing.
+        # End to end: once research 38 completes, crew 1009 starts the gated design instead of research_missing.
         researches = load("researches.xml")
         records = researches["ResearchService"]["ListAllResearches"]["Researches"]["Research"]
-        self.assertEqual(records[2]["@ResearchDesignId"], "40")
-        records[2]["@ResearchState"] = "Completed"
+        self.assertEqual(records[-1]["@ResearchDesignId"], "38")
+        records[-1]["@ResearchState"] = "Completed"
         ctx = fixture_context(researches_raw=researches)
         self.assertEqual(ctx.research_levels.get("Advanced Training"), 1)
         rows = summarize(plan_training(ctx))
         self.assertIn(("start", 1009, 108), rows)
         self.assertNotIn(("skip", 1009, "research_missing"), rows)
 
-    def test_design_research_gate_needs_the_exact_level(self) -> None:
-        # Regression (review #2): a design requiring "Fitness Lv3" was satisfied by Fitness Lv1 because only the
-        # family name was kept. Crew 1001 (weapons, 20%) trains design 101, gated here on research 12.
-        research_designs = {
-            "ResearchDesigns": {
-                "ResearchDesign": [
-                    {"@ResearchDesignId": "10", "@ResearchName": "Fitness", "@RootResearchDesignId": "10"},
-                    {"@ResearchDesignId": "11", "@ResearchName": "Fitness Lv2", "@RootResearchDesignId": "10"},
-                    {"@ResearchDesignId": "12", "@ResearchName": "Fitness Lv3", "@RootResearchDesignId": "10"},
-                ]
-            }
-        }
+    def test_design_research_gate_needs_the_exact_course(self) -> None:
+        # Regression (review #2): a design requiring a higher course was satisfied by a lower one because only the
+        # family name was kept. Crew 1001 (weapons, 20%) trains design 101, gated here on Fitness 203 (live id 79).
         training = load("training_designs_list.xml")
         records = training["TrainingService"]["ListAllTrainingDesigns2"]["TrainingDesigns"]["TrainingDesign"]
         self.assertEqual(records[0]["@TrainingDesignId"], "101")
-        records[0]["@RequiredResearchDesignId"] = "12"
+        records[0]["@RequiredResearchDesignId"] = "79"
 
         def plan_with(*completed: str) -> list[tuple]:
             researches = {"Research": [{"@ResearchDesignId": rid, "@ResearchState": "Completed"} for rid in completed]}
             ctx = fixture_context(
-                training_designs_raw=training, research_designs_raw=research_designs, researches_raw=researches
+                training_designs_raw=training,
+                research_designs_raw=load("live_research_designs.xml"),
+                researches_raw=researches,
             )
-            self.assertEqual({d.id: d.required_research for d in ctx.designs}[101], "Fitness Lv3")
+            self.assertEqual({d.id: d.required_research for d in ctx.designs}[101], "Fitness 203")
             return [row for row in summarize(plan_training(ctx)) if row[1] == 1001]
 
-        self.assertEqual(plan_with("10"), [("skip", 1001, "research_missing")])
-        self.assertEqual(plan_with("10", "11"), [("skip", 1001, "research_missing")])
-        self.assertEqual(plan_with("10", "11", "12"), [("start", 1001, 101)])
-        self.assertEqual(plan_with("12"), [("start", 1001, 101)])
+        self.assertEqual(plan_with("74"), [("skip", 1001, "research_missing")])
+        self.assertEqual(plan_with("74", "75", "76", "77", "78"), [("skip", 1001, "research_missing")])
+        self.assertEqual(plan_with("74", "75", "76", "77", "78", "79"), [("start", 1001, 101)])
+        self.assertEqual(plan_with("79"), [("start", 1001, 101)])
 
     def test_build_context_builds_the_research_catalog_once(self) -> None:
         # Regression (review #20): build_context derived the research catalog twice (designs and levels).
@@ -976,7 +1091,6 @@ FUZZ_KEYS = (
     "@RootResearchDesignId",
     "@ResearchName",
     "@ResearchState",
-    "@ResearchLevel",
     "@ItemDesignId",
     "@ItemName",
     "@ItemSubType",
@@ -999,7 +1113,8 @@ FUZZ_SCALARS = (
     "Gym",
     "WPN Hero Consumable",
     "Repair Common Consumable",
-    "Fitness Lv2",
+    "Fitness 201",
+    "Advanced Training Lv2",
     "2026-01-01T00:00:00",
     "2026-01-01T00:00:00.1234567+02:00",
     "0001-01-01T00:00:00+05:00",
@@ -1043,8 +1158,8 @@ FUZZ_TARGETS = {
     "TrainingDesign": tuple(BENCH) + ("@WeaponChance", "@RepairChance"),
     "Room": ("@RoomId", "@RoomDesignId"),
     "RoomDesign": ("@RoomDesignId", "@RoomName"),
-    "Research": ("@ResearchDesignId", "@ResearchState", "@ResearchLevel"),
-    "ResearchDesign": ("@ResearchDesignId", "@RootResearchDesignId", "@ResearchName", "@Level"),
+    "Research": ("@ResearchDesignId", "@ResearchState"),
+    "ResearchDesign": ("@ResearchDesignId", "@RootResearchDesignId", "@ResearchName"),
     "Item": ("@ItemDesignId", "@Quantity"),
     "ItemDesign": ("@ItemDesignId", "@ItemName", "@ItemSubType", "@Rarity"),
 }
@@ -1245,12 +1360,12 @@ class TestLowestValidIds(unittest.TestCase):
     """Id 1 and level 1 are ordinary values: every "positive" check must accept them."""
 
     def test_required_research_id_one_resolves(self) -> None:
-        research_designs = {"ResearchDesign": {"@ResearchDesignId": "1", "@ResearchName": "Fitness Lv1"}}
+        research_designs = {"ResearchDesign": {"@ResearchDesignId": "1", "@ResearchName": "Fitness 101"}}
         designs = designs_envelope(
             {"@TrainingDesignId": "1", "@TrainingName": "Bench Press", "@RequiredResearchDesignId": "1"}
         )
         (design,) = parse_training_designs(designs, research_designs)
-        self.assertEqual((design.id, design.required_research), (1, "Fitness Lv1"))
+        self.assertEqual((design.id, design.required_research), (1, "Fitness 101"))
         (unresolved,) = parse_training_designs(designs)
         self.assertEqual(unresolved.required_research, "research_design:1")
 
@@ -1272,19 +1387,11 @@ class TestLowestValidIds(unittest.TestCase):
         items = {"Item": [{"@ItemDesignId": "1", "@Quantity": "2"}, {"@ItemDesignId": "1", "@Quantity": "3"}]}
         self.assertEqual(dict(parse_items(items)), {1: 5})
 
-    def test_design_level_one_beats_the_name_suffix(self) -> None:
-        # @Level wins whenever it is positive, 1 included; the "Lv N" suffix only fills in for a missing @Level.
-        designs = {"ResearchDesign": {"@ResearchDesignId": "10", "@ResearchName": "Fitness Lv3", "@Level": "1"}}
-        researches = {"Research": {"@ResearchDesignId": "10", "@ResearchState": "Completed"}}
-        self.assertEqual(dict(parse_research_levels(researches, designs)), {"Fitness": 1, "Fitness Lv3": 1})
-
-    def test_research_level_one_beats_the_design_level(self) -> None:
-        # A positive @ResearchLevel, 1 included, wins over the design's level.
-        designs = {"ResearchDesign": {"@ResearchDesignId": "10", "@ResearchName": "Fitness", "@Level": "3"}}
-        researches = {
-            "Research": {"@ResearchDesignId": "10", "@ResearchState": "Completed", "@ResearchLevel": "1"}
-        }
-        self.assertEqual(dict(parse_research_levels(researches, designs)), {"Fitness": 1})
+    def test_course_one_is_a_level(self) -> None:
+        # A course number of 1 is an ordinary level, like the level 1 of an unnumbered name.
+        designs = {"ResearchDesign": [{"@ResearchDesignId": "1", "@ResearchName": "Fitness 1"}]}
+        researches = {"Research": {"@ResearchDesignId": "1", "@ResearchState": "Completed"}}
+        self.assertEqual(dict(parse_research_levels(researches, designs)), {"Fitness": 1, "Fitness 1": 1})
 
 
 class TestConsumableDesignFilter(unittest.TestCase):

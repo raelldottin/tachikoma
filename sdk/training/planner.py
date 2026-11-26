@@ -23,7 +23,8 @@ Decision precedence per crew:
  6. percent >= complete_percent -> consumable fallback, else Skip complete
  7. band's room type differs from the crew's room type -> Skip not_in_training_room ("move to <type>");
     no consumable here: the crew should move instead
- 8. band research gate unmet -> research_missing; fatigue >= limit -> fatigued (consumable fallback for both)
+ 8. band research gate unmet (default: Fitness or Education course 101 for primary T1, 201 for T2, 203 for T3;
+    secondary T1 ungated) -> research_missing; fatigue >= limit -> fatigued (consumable fallback for both)
  9. no eligible design (exact name, room type, lowest id) -> design_missing; design's own research missing ->
     research_missing (consumable fallback for both)
 10. StartTraining

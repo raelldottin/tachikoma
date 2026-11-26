@@ -54,8 +54,9 @@ COURSES = {
     "12": ("Weapons Summit", "Weapon", 4, 20, datetime.timedelta(hours=3)),
     "21": ("Restful Study", "Science", 2, 0, datetime.timedelta(hours=1)),  # no fatigue: grey consumables stay open
 }
-# The strategy's research gates name the "Fitness"/"Education" families (parse.py's assumed "<Family> LvN").
-RESEARCH_DESIGNS = (("1", "1", "Fitness"), ("2", "1", "Fitness Lv2"), ("3", "1", "Fitness Lv3"))
+# Live-named Fitness courses (tests/fixtures/training/live_research_designs.xml): the strategy's gates need course
+# 101 (primary T1), 201 (T2) and 203 (T3), so researches ("1", "2") open every T2 gate but no T3 one.
+RESEARCH_DESIGNS = (("1", "1", "Fitness 101"), ("2", "1", "Fitness 201"), ("3", "1", "Fitness 203"))
 CONSUMABLE_DESIGNS = {"ItemService": {"ListItemDesigns": {"ItemDesigns": {"ItemDesign": [
     {"@ItemDesignId": "101", "@ItemName": "Common Weapon Consumable", "@ItemSubType": "Consumable"},
 ]}}}}

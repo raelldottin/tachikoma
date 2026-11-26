@@ -14,7 +14,7 @@
     {"id": 7003, "design": "Galaxy Gym"},
     {"id": 7004, "design": "Lunar College"}
   ],
-  "research": ["Education", "Education Lv2", "Education Lv3"],
+  "research": ["Education 101", "Education 102", "Education 103", "Education 201", "Education 202", "Education 203"],
   "inventory": {},
   "crew": [
     {"id": 501, "name": "Galactic Succubus", "design": "epic", "room": 7004},
