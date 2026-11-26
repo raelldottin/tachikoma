@@ -30,6 +30,8 @@ from sdk.execution.training import (
     verification_of,
 )
 from sdk.training.model import Skip, StartTraining
+from sdk.training.parse import parse_consumable_designs
+from sdk.training.strategy import DEFAULT_STRATEGY, with_consumables
 
 UTC = datetime.timezone.utc
 NOW = datetime.datetime(2026, 11, 20, 12, 0, 0, tzinfo=UTC)
@@ -324,6 +326,23 @@ class ReadabilityTests(unittest.TestCase):
                 self.assertEqual([call[0] for call in client.calls].count("listItemsOfAShip"), expected)
                 if expected:
                     self.assertEqual(client.calls[6], ("listItemsOfAShip",))
+
+    def test_a_strategy_with_its_own_consumables_reads_items_without_item_designs(self):
+        strategy = with_consumables(DEFAULT_STRATEGY, parse_consumable_designs(CONSUMABLE_DESIGNS))
+        client = FakeTrainingClient([low()], items={"101": 5})
+        result = run(client, strategy=strategy)
+        self.assertEqual(client.calls[6], ("listItemsOfAShip",))
+        self.assertEqual(client.mutations(), [("useConsumable", "101", "1001")])
+        self.assertEqual(result.counts, TrainingCounts(consumables=1))
+
+    def test_an_error_envelope_for_the_items_plans_no_consumable(self):
+        client = FakeTrainingClient([low()], items={"101": 5})
+        client.script("listItemsOfAShip", Act(payload={"ItemService": {"ListItemsOfAShip": {
+            "@errorMessage": "Failed to authorize access token"}}}))
+        result = run(client, item_designs_raw=CONSUMABLE_DESIGNS)
+        self.assertEqual(client.mutations(), [])
+        self.assertEqual(result.crew[0].decision.reason_code, "research_missing")
+        self.assertEqual(result.counts, TrainingCounts(skipped=1))
 
     def test_empty_training_designs_is_readable(self):
         client = FakeTrainingClient([delish()], training_designs=[])
@@ -627,10 +646,33 @@ class FinishTests(unittest.TestCase):
                 self.assertIs(result.crew[0].finish.harmless, False)
                 self.assertEqual(result.counts, TrainingCounts(skipped=1, failed=1))
 
+    def test_a_finish_refused_over_a_readable_training_state_is_harmless(self):
+        # Refused, but the state was readable: no training running ("not training"), or no design left to collect
+        # (an unreadable end then does not matter: there is nothing to finish).
+        def clear_end(client):
+            return lambda: client.record("1001").update({"@TrainingEndDate": ""})
+
+        def collected_garbled_end(client):
+            return lambda: client.record("1001").update({"@TrainingDesignId": "0", "@TrainingEndDate": "soon"})
+
+        cases = ((clear_end, "1001 is not training"),
+                 (collected_garbled_end, "training end of 1001 is not a readable server time"))
+        for change, reason in cases:
+            with self.subTest(reason=reason):
+                client = FakeTrainingClient([ended()])
+                client.script("listAllCharactersOfUser", Act(), Act(then=change(client)))
+                result, lines = logged(self, client)
+                self.assertEqual(client.mutations(), [])
+                self.assertEqual(lines[0], f"INFO [Cap] training: Delish (1001) finish_training skipped: "
+                                           f"preconditions failed: {reason}")
+                self.assertIs(result.crew[0].finish.harmless, True)
+                self.assertEqual(result.counts, TrainingCounts(skipped=1))
+
     def test_finish_reply_without_id_or_stats_is_not_replanned(self):
         broken = ({"@Fatigue": "0", "@HpImprovement": "n/a"},
                   dict(ended(), **{"@CharacterId": "1002"}),
                   dict(ended(), **{"@HpImprovement": "n/a"}),
+                  dict(ended(), **{"@HpImprovement": ""}),
                   {key: value for key, value in ended().items() if key != "@StaminaImprovement"},
                   {key: value for key, value in ended().items() if key != "@Fatigue"})  # fatigue gates the replan
         for reply in broken:
@@ -773,6 +815,21 @@ class SnapshotTests(unittest.TestCase):
         self.assertEqual(result.counts, TrainingCounts(consumables=1, failed=1))
 
 
+    def test_with_consumables_the_before_snapshot_reuses_the_previous_after_snapshot(self):
+        client = FakeTrainingClient([low(), low("1002", "Galactic Snow Maiden")], items={"101": 5})
+        self.assertEqual(run(client, item_designs_raw=CONSUMABLE_DESIGNS).counts, TrainingCounts(consumables=2))
+        reads = [call[0] for call in client.calls]
+        # The executor's read, 1001 before and after, 1002 after only: crew and items alike.
+        self.assertEqual((reads.count("listAllCharactersOfUser"), reads.count("listItemsOfAShip")), (4, 4))
+
+    def test_with_consumables_a_snapshot_whose_crew_read_failed_is_never_reused(self):
+        client = FakeTrainingClient([low(), low("1002", "Galactic Snow Maiden")], items={"101": 5})
+        client.script("listAllCharactersOfUser", Act(), Act(apply=False, result=False))
+        result = run(client, item_designs_raw=CONSUMABLE_DESIGNS)
+        self.assertEqual(client.mutations(), [("useConsumable", "101", "1002")])
+        self.assertEqual(result.crew[0].action.verification, "skipped")
+        self.assertEqual(self.characters_reads(client), 4)
+
 def decision_records(journal) -> list[GameplayEvent]:
     return [event for event in journal.read() if event.action_id == "training_decision"]
 
@@ -906,6 +963,29 @@ class DecisionRecordTests(unittest.TestCase):
         self.assertEqual(result.counts, TrainingCounts(started=2))
         self.assertEqual([r.evidence["character_id"] for r in decision_records(journal)], ["1002"])
 
+
+    def test_a_decision_record_spans_the_crew_member_s_turn(self):
+        class AdvancingClock(Clock):
+            def __call__(self) -> datetime.datetime:
+                self.now += datetime.timedelta(seconds=1)
+                return self.now
+
+        journal = MemoryJournal()
+        client = FakeTrainingClient([crew_record("1010", "Rookie Pilot", Hp=10)], clock=AdvancingClock())
+        run(client, journal=journal)
+        record = decision_records(journal)[0]
+        self.assertLess(record.started_at, record.finished_at)
+
+    def test_a_decision_record_error_is_redacted(self):
+        class Refusing(MemoryJournal):
+            def append(self, event):
+                if event.action_id == "training_decision":
+                    raise JournalError("refused accessToken=00000002-1111-2222-3333-444444444444")
+                super().append(event)
+
+        _, lines = logged(self, FakeTrainingClient([delish()]), journal=Refusing())
+        self.assertIn("ERROR [Cap] training: Delish (1001) decision record not written: JournalError: refused "
+                      "accessToken=***REDACTED***", lines)
 
 class IsolationAndClockTests(unittest.TestCase):
     def test_no_state_carried_between_crew(self):
