@@ -9,7 +9,7 @@ from unittest.mock import MagicMock
 from sdk.actions import CATALOG, Idempotency, ReconciliationStatus, check_preconditions, get_spec
 from sdk.client import Client
 from sdk.device import Device
-from sdk.policy import PolicyConfig, get_policy
+from sdk.policy import DesignData, PolicyConfig, get_policy
 from tests.synthetic_fixtures import SYNTHETIC_ACCESS_TOKEN
 from tests.test_action_catalog import outcome, snap
 from tests.test_progression_policy import DESIGN, ids, reasons
@@ -126,6 +126,21 @@ class FleetV1PolicyTests(unittest.TestCase):
         )
         self.assertEqual(reasons(fleet)["add_training"], "crew training is not modelled by fleet-v1")
         self.assertEqual([item.candidate for item in fleet.rejected].count("add_training"), 1)
+
+    def test_fleet_v1_is_unchanged_by_training_design_data(self):
+        from tests.training_fixtures import design as training_design
+        from tests.training_fixtures import snap as training_snap
+
+        with_training = training_design()
+        without = DesignData(rooms=with_training.rooms, research=with_training.research)
+        self.assertTrue(with_training.training_designs and with_training.character_designs)
+        snapshot = training_snap()
+        fleet = get_policy("fleet-v1").plan(snapshot, with_training, PolicyConfig())
+        self.assertEqual(fleet, get_policy("fleet-v1").plan(snapshot, without, PolicyConfig()))
+        self.assertEqual(reasons(fleet)["add_training"], "crew training is not modelled by fleet-v1")
+        self.assertNotIn("add_training", [action_id for action_id, _ in ids(fleet)])
+        self.assertIn("add_training", [action_id for action_id, _ in ids(
+            get_policy("training-v1").plan(snapshot, with_training, PolicyConfig()))])  # paired control
 
     def test_max_requests_caps_the_whole_plan(self):
         fleet = get_policy("fleet-v1").plan(policy_snap(ship=SHIP), DESIGN, PolicyConfig(max_requests=3))

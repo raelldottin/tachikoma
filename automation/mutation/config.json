@@ -5,6 +5,7 @@
   "targets": [
     {"path": "sdk/crew_leveling.py", "tests": ["tests.test_crew_leveling"], "min_score": 0.81, "equivalent": []},
     {"path": "sdk/game_formulas.py", "tests": ["tests.test_game_formulas"], "min_score": 0.73, "equivalent": []},
+    {"path": "sdk/policy/training.py", "tests": ["tests.test_training_policy", "tests.test_training_policy_simulation"], "min_score": 1.00, "equivalent": []},
     {"path": "sdk/training/model.py", "tests": ["tests.test_training_planner", "tests.test_training_parse"], "min_score": 1.0, "equivalent": []},
     {"path": "sdk/training/parse.py", "tests": ["tests.test_training_planner", "tests.test_training_parse"], "min_score": 1.0, "equivalent": ["sdk/training/parse.py:91:29:constant:0", "sdk/training/parse.py:96:88:constant:0", "sdk/training/parse.py:270:21:constant:0", "sdk/training/parse.py:417:51:boundary:1", "sdk/training/parse.py:419:48:constant:0"]},
     {"path": "sdk/training/planner.py", "tests": ["tests.test_training_planner", "tests.test_training_parse"], "min_score": 1.0, "equivalent": []},
