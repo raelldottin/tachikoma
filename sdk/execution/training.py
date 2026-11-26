@@ -7,12 +7,14 @@ from __future__ import annotations
 
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Any, Callable, Iterable, Mapping, Optional
 
 from sdk.execution.runner import ActionRunner
+from sdk.journal import GameplayEvent
 from sdk.redaction import redact_secrets
+from sdk.reports.training import TRAINING_DECISION_ACTION, decision_evidence, validate_decision_evidence
 from sdk.state.client_provider import ClientSnapshotProvider
 from sdk.state.snapshot import AccountSnapshot, Completeness
 from sdk.training.actions import action_for
@@ -24,6 +26,8 @@ from sdk.training.model import (
     Skip,
     StartTraining,
     TrainingContext,
+    UseConsumable,
+    frozen_mapping,
 )
 from sdk.training.parse import PAYLOAD_ERROR, build_context, classify_payload, parse_consumable_designs, parse_crew
 from sdk.training.planner import (
@@ -32,6 +36,7 @@ from sdk.training.planner import (
     remaining_stock,
     replan_after_finish,
     resolve_room_name,
+    room_type_for,
     total_points,
 )
 from sdk.training.strategy import DEFAULT_STRATEGY, TrainingStrategy, with_consumables
@@ -56,8 +61,9 @@ _READS = (
     ("room designs", "listRoomDesigns2", "roomDesigns", "RoomDesign"),
     ("research designs", "listAllResearchDesigns2", "allResearchDesigns", "ResearchDesign"),
 )
-_VERIFICATION = {"verified": VERIFIED, "not-observed": NO_CHANGE, "contradicted": CONTRADICTED, "unknown": UNKNOWN,
-                 "skipped": SKIPPED}
+# Runner outcome -> verification (read-only: no module-level mutable state).
+_VERIFICATION = frozen_mapping({"verified": VERIFIED, "not-observed": NO_CHANGE, "contradicted": CONTRADICTED,
+                                "unknown": UNKNOWN, "skipped": SKIPPED})
 
 
 def _read(client: Any, method: str, attribute: str) -> Any:
@@ -211,6 +217,7 @@ class TrainingRun:
     readable: bool
     unreadable: tuple[str, ...]
     crew: tuple[CrewOutcome, ...]
+    journal: Any = None  # where the runner's events and the decision records went (None when nothing was read)
 
     @property
     def counts(self) -> TrainingCounts:
@@ -225,7 +232,8 @@ def _run_action(runner: ActionRunner, decision: Any, harmless: Callable[[Any], b
                         harmless(result))
 
 
-def _finish_harmless(snapshot: Optional[AccountSnapshot], character_id: str, replied: bool) -> Callable:
+def _finish_harmless(snapshot: Callable[[], Optional[AccountSnapshot]], character_id: str,
+                     replied: Callable[[], bool]) -> Callable[[Any], bool]:
     """Whether a finish_training that was not verified is still no failure, judged from what the runner observed.
 
     Refused by its preconditions while the crew member was observed: the training is not due yet, or there is nothing
@@ -286,7 +294,7 @@ def run_training(
     if unreadable:
         logger.error("%straining: cannot read %s; no training this run", prefix, ", ".join(unreadable))
         logger.info("%s%s", prefix, TrainingCounts().line())
-        return TrainingRun(False, unreadable, ())
+        return TrainingRun(False, unreadable, (), journal)
     ctx = build_context(
         now=now(),
         characters_raw=payloads["characters"],
@@ -306,7 +314,7 @@ def run_training(
     finished = [decision.character_id for decision in plan if isinstance(decision, FinishTraining)]
     # The stock a finished crew's replan may use: what every final (non-finished) decision left of the ship's items.
     stock = remaining_stock(ctx.items, plan, exclude_character_ids=finished)
-    session = _Session(ctx, payloads, strategy, runner, proxy, cache, prefix, stock)
+    session = _Session(ctx, payloads, strategy, runner, proxy, cache, prefix, stock, now)
     decisions = iter(plan)
     outcomes = []
     for crew in ctx.crew:
@@ -314,7 +322,7 @@ def run_training(
         finish = first if isinstance(first, FinishTraining) else None
         outcomes.append(session.train(crew, finish, next(decisions) if finish else first))
     logger.info("%s%s", prefix, count(outcomes).line())
-    return TrainingRun(True, (), tuple(outcomes))
+    return TrainingRun(True, (), tuple(outcomes), runner.journal)
 
 
 class _Session:
@@ -323,11 +331,12 @@ class _Session:
 
     def __init__(self, ctx: TrainingContext, payloads: Mapping[str, Any], strategy: TrainingStrategy,
                  runner: ActionRunner, proxy: TrainingClient, cache: CachingSnapshotProvider, prefix: str,
-                 stock: Mapping[int, int]) -> None:
+                 stock: Mapping[int, int], now: Callable[[], datetime]) -> None:
         self.ctx, self.payloads, self.strategy = ctx, payloads, strategy
         self.runner, self.proxy, self.cache, self.prefix = runner, proxy, cache, prefix
         self.designs = {design.id: design.name for design in ctx.designs}
         self.stock = stock  # reduced by each replan's UseConsumable, so no item is committed twice
+        self.now = now
 
     def train(self, crew: CrewState, finish_decision: Optional[FinishTraining], primary: Any) -> CrewOutcome:
         cid = crew.character_id
@@ -337,6 +346,7 @@ class _Session:
                                                                 "finish_training not run")
         planned = crew
         finish = action = error = None
+        started_at = self.now()
         try:
             if finish_decision is not None:
                 finish, rebuilt = self._finish(finish_decision, crew)
@@ -365,7 +375,36 @@ class _Session:
         except Exception as caught:  # one crew's failure never stops the rest of the roster
             error = f"{type(caught).__name__}: {redact_secrets(str(caught))}"
             logger.error("%straining: %s failed: %s", self.prefix, who, error)
+        try:
+            self.runner.journal.append(self._decision_record(crew, planned, decision, started_at))
+        except Exception as caught:  # a journal that refuses the record never stops the run either
+            logger.error("%straining: %s decision record not written: %s: %s", self.prefix, who,
+                         type(caught).__name__, redact_secrets(str(caught)))
         return CrewOutcome(cid, crew.name, decision, finish=finish, action=action, error=error)
+
+    def _decision_record(self, crew: CrewState, planned: CrewState, decision: Any,
+                         started_at: datetime) -> GameplayEvent:
+        """The ``training_decision`` record for one crew member (docs/baseline/training-report.md, contract v1)."""
+        if isinstance(decision, UseConsumable):  # a consumable stands in for the skip planned without one
+            decision = plan_training(replace(self.ctx, crew=(planned,), items={}), self.strategy)[-1]
+        finished_at = self.now()
+        member = self.cache.last.crew_member(str(crew.character_id)) if self.cache.last is not None else None
+        end = member.training_end_utc if member is not None and member.training_observed else crew.training_end
+        skip = isinstance(decision, Skip)
+        evidence = decision_evidence(
+            character_id=str(crew.character_id),
+            decision="skip" if skip else "start",
+            in_training_room=room_type_for(resolve_room_name(crew, self.ctx), self.strategy) is not None,
+            training_active=end is not None and end > finished_at,
+            reason_code=decision.reason_code if skip else None,
+        )
+        violations = validate_decision_evidence(evidence)
+        if violations:
+            raise ValueError(f"decision record breaks the contract: {', '.join(violations)}")
+        return GameplayEvent.create(account_alias=self.runner.account_alias, action_id=TRAINING_DECISION_ACTION,
+                                    started_at=started_at, finished_at=finished_at, outcome="skipped",
+                                    reason=decision.detail if skip else decision.reason, attempted=False,
+                                    dry_run=False, evidence=evidence)
 
     def _finish(self, decision: FinishTraining, crew: CrewState) -> tuple[ActionResult, Optional[CrewState]]:
         """Run finish_training; the result and the crew rebuilt from the reply (None without a usable reply)."""

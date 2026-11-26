@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """Training, crew, consumable and research wrappers report success only on a parsed success reply.
 
-Every request is mocked at ``Client.request``; nothing reaches Pixel Starships.
+Every request is mocked at ``Client.request``, or answered by FakePss (tests/fakes) for manageTraining; nothing
+reaches Pixel Starships.
 """
 
 import datetime
 import json
+import os
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -16,6 +19,10 @@ import requests
 from sdk import client as client_module
 from sdk.client import Client, DotNet, _extract_collection
 from sdk.device import Device
+from sdk.execution.training import MemoryJournal
+from tests.fakes.pss_server import FakePss
+from tests.fakes.state import FAKE_PASSWORD, Item, default_world, minimal_world, stats
+from tests.synthetic_fixtures import SYNTHETIC_EMAIL
 
 TOKEN = "00000000-1111-2222-3333-444444444444"
 NOW = datetime.datetime(2026, 11, 25, 1, 2, 3)
@@ -654,129 +661,98 @@ class TestResearchLevel(EndpointCase):
         self.assertEqual(self.sent()[1], "/ResearchService/ListAllResearches")
 
 
-STATS = ("@HpImprovement", "@PilotImprovement", "@RepairImprovement", "@WeaponImprovement", "@ScienceImprovement",
-         "@EngineImprovement", "@AttackImprovement", "@AbilityImprovement", "@StaminaImprovement")
-ADDED = b'<TrainingService><AddTraining><Character CharacterId="501"/></AddTraining></TrainingService>'
+class TestManageTrainingAgainstFakePss(unittest.TestCase):
+    """Client.manageTraining through the real Client against FakePss: it runs sdk.execution.training.run_training.
 
-
-def finished_reply(weapon, fatigue, stats=STATS):
-    """A FinishTraining reply: each of ``stats`` at 5, WeaponImprovement at ``weapon``."""
-    values = {"@WeaponImprovement": str(weapon)}
-    attributes = " ".join(f'{stat[1:]}="{values.get(stat, "5")}"' for stat in stats)
-    return reply(f'<TrainingService><FinishTraining><Character CharacterId="501" {attributes} Fatigue="{fatigue}"/>'
-                 f"</FinishTraining></TrainingService>")
-
-
-class TestManageTrainingWithHonestWrappers(EndpointCase):
-    """One weapons crew member at 40% in an Academy with Education 101 done: the primary T1 tier is chosen."""
+    Its own reads (crew, ship, character, training, room and research designs) replace the hasResearch and
+    getResearchLevel helpers and the cached attributes the old method reused.
+    """
 
     def setUp(self):
-        super().setUp()
-        character = {stat: "5" for stat in STATS}  # eight stats at 5 and WeaponImprovement 0: 40 of 100
-        character.update({"@CharacterId": "501", "@CharacterDesignId": "1", "@CharacterName": "Galactic Succubus",
-                          "@RoomId": "r1", "@TrainingEndDate": "", "@Fatigue": "0", "@WeaponImprovement": "0"})
-        self.client.allCharactersOfUser = {"CharacterService": {"ListAllCharactersOfUser": {"Characters": {
-            "Character": character}}}}
-        self.client.allCharacterDesigns = {"CharacterService": {"ListAllCharacterDesigns": {"CharacterDesigns": {
-            "CharacterDesign": [
-                {"@CharacterDesignId": "1", "@TrainingCapacity": "100", "@SpecialAbilityType": "None"},
-                {"@CharacterDesignId": "2", "@TrainingCapacity": "100", "@SpecialAbilityType": "None"},
-            ]}}}}
-        self.client.roomsViaAccessToken = {"RoomService": {"ListRoomsViaAccessToken": {"Rooms": {"Room": {
-            "@RoomId": "r1", "@RoomDesignId": "50"}}}}}
-        self.client.roomDesigns = {"RoomService": {"ListRoomDesigns": {"RoomDesigns": {"RoomDesign": {
-            "@RoomDesignId": "50", "@RoomName": "Academy"}}}}}
-        self.client.trainingDesigns = {"TrainingService": {"ListAllTrainingDesigns": {"TrainingDesigns": {
-            "TrainingDesign": [
-                {"@TrainingDesignId": "31", "@TrainingName": "Read Expert Weapon Theory"},
-                {"@TrainingDesignId": "32", "@TrainingName": "Bench Press"},
-            ]}}}}
-        self.client.allResearches = researches(("1", "700", "Completed"))
-        self.client.allResearchDesigns = research_designs(("700", "Education 101"))
+        tmp = tempfile.TemporaryDirectory(prefix="tachikoma-training-")
+        self.addCleanup(tmp.cleanup)
+        cwd = os.getcwd()
+        os.chdir(tmp.name)  # Device() reads and writes ./.device
+        self.addCleanup(os.chdir, cwd)
 
-    def paths(self):
-        return [urlsplit(url).path for url, _ in self.calls]
+    def manage_training(self, fake, prepare=lambda client: None):
+        """Log in, run ``prepare(client)``, then manageTraining; (result, log text, client)."""
+        from run import CLIENT_CHECKSUM_SETTINGS
 
-    def test_a_failed_finish_still_starts_the_training(self):
-        self.serve(reply(b'<TrainingService><FinishTraining errorMessage="Training not found"/></TrainingService>'),
-                   reply(ADDED))
-        with self.assertLogs(level="INFO") as logs:
-            self.assertIs(self.client.manageTraining(), True)
-        self.assertEqual(self.paths(), ["/TrainingService/FinishTraining", "/TrainingService/AddTraining"])
-        self.assertEqual(self.sent(1)[2][:2], [("trainingDesignId", "31"), ("characterId", "501")])
-        output = "\n".join(logs.output)
-        self.assertNotIn("Completed training", output)
-        self.assertIn("Starting training Read Expert Weapon Theory for Galactic Succubus", output)
+        with self.assertLogs(level="INFO") as logs, fake.install():
+            client = Client(Device(language="en"), {"allow_email_password_login": True, **CLIENT_CHECKSUM_SETTINGS})
+            self.assertTrue(client.login(SYNTHETIC_EMAIL, FAKE_PASSWORD))
+            prepare(client)
+            result = client.manageTraining()
+        return result, "\n".join(logs.output), client
 
-    def test_the_finished_character_reported_is_the_returned_one(self):
-        self.serve(finished_reply(weapon=10, fatigue=7), reply(ADDED))
-        with self.assertLogs(level="INFO") as logs:
-            self.assertIs(self.client.manageTraining(), True)
-        self.assertIn("10.00% training increase and 7 fatigue increase", "\n".join(logs.output))
+    @staticmethod
+    def training_posts(fake):
+        return [(path.rsplit("/", 1)[1], params.get("characterId"))
+                for _, path, params in fake.mutations() if path.startswith("/TrainingService/")]
 
-    def test_the_returned_character_decides_not_the_trainingFinish_attribute(self):
-        returned = {stat: "5" for stat in STATS}
-        returned.update({"@WeaponImprovement": "20", "@Fatigue": "3"})
+    def test_returns_true_and_finishes_pending_sessions(self):
+        fake = FakePss(default_world())
+        result, log, _ = self.manage_training(fake)
+        self.assertIs(result, True)
+        self.assertEqual(self.training_posts(fake), [("FinishTraining", "1001"), ("FinishTraining", "1003"),
+                                                     ("FinishTraining", "1016")])
+        crew = fake.state.character("1001")
+        self.assertEqual((crew.stats["HpImprovement"], crew.fatigue, crew.last_session.applied), (18, 10, True))
+        self.assertIn("INFO:sdk.execution.training:[SyntheticCaptain] Completed training for Galactic Succubus in "
+                      "Galaxy Gym with Hp +2", log)
+        self.assertIn("INFO:sdk.execution.training:[SyntheticCaptain] training: started=0 finished=3 consumables=0 "
+                      "skipped=17 failed=0", log)
+        self.assertEqual((fake.violations, fake.unknown), ([], []))
 
-        def finish(character_id):
-            self.client.trainingFinish = "stale"
-            return returned
+    def test_returns_false_when_characters_unreadable(self):
+        fake = FakePss(default_world())
+        fake.fail("/CharacterService/ListAllCharactersOfUser", status=404)
+        result, log, _ = self.manage_training(fake)
+        self.assertIs(result, False)
+        self.assertEqual(self.training_posts(fake), [])
+        self.assertIn("ERROR:sdk.execution.training:[SyntheticCaptain] training: cannot read characters; no training "
+                      "this run", log)
 
-        self.serve(reply(ADDED))
-        with patch.object(self.client, "finishTraining", side_effect=finish), self.assertLogs(level="INFO") as logs:
-            self.assertIs(self.client.manageTraining(), True)
-        self.assertIn("20.00% training increase and 3 fatigue increase", "\n".join(logs.output))
+    def test_consumable_used_with_access_token_when_item_designs_loaded(self):
+        # D9 and D12: with item designs loaded the grey weapon consumable is used, through ActivateItem3 with the
+        # account's accessToken. One crew member (a single CharacterDesign record, D5) at 20% in the Academy without
+        # research: the primary T1 gate is unmet and fatigue is 0.
+        world = minimal_world()
+        world.add_crew("Delish", room="Academy", stats=stats(Weapon=20))
+        world.items = [Item("9101", "101", 5)]
+        fake = FakePss(world)
 
-    def run_with_finish(self, left_behind, returned):
-        """manageTraining with finishTraining stubbed to leave ``left_behind`` in trainingFinish and return ``returned``."""
-        def finish(character_id):
-            self.client.trainingFinish = left_behind
-            return returned
+        def load_item_designs(client):
+            client.itemDesigns = {"DesignService": {"ListAllDesigns": {"ItemDesigns": {"ItemDesign": [
+                {"@ItemDesignId": "101", "@ItemName": "Common Weapon Consumable", "@ItemSubType": "Consumable"}]}}}}
 
-        self.serve(reply(ADDED))
-        with patch.object(self.client, "finishTraining", side_effect=finish), self.assertLogs(level="INFO") as logs:
-            self.assertIs(self.client.manageTraining(), True)
-        self.assertEqual(self.paths(), ["/TrainingService/AddTraining"])
-        output = "\n".join(logs.output)
-        self.assertIn("Starting training Read Expert Weapon Theory for Galactic Succubus", output)
-        return output
+        result, log, _ = self.manage_training(fake, load_item_designs)
+        self.assertIs(result, True)
+        activations = [params for _, path, params in fake.mutations() if path == "/ItemService/ActivateItem3"]
+        self.assertEqual(activations, [{"itemId": "9101", "targetId": "1001", "accessToken": "<token>"}])
+        self.assertEqual(fake.state.item("9101").quantity, 4)
+        self.assertIn("training: started=0 finished=0 consumables=1 skipped=0 failed=0", log)
 
-    def test_a_failed_finish_is_not_reported_even_with_a_stale_trainingFinish(self):
-        stale = {"TrainingService": {"FinishTraining": {"Character": {"@WeaponImprovement": "20", "@Fatigue": "3"}}}}
-        self.assertNotIn("Completed training", self.run_with_finish(left_behind=stale, returned=None))
+    def test_class_attrs_default(self):
+        self.assertIsNone(Client.training_journal)
+        self.assertEqual(Client.training_account_alias, "legacy")
 
-    def test_a_returned_character_is_reported_even_with_no_trainingFinish(self):
-        returned = {stat: "5" for stat in STATS}
-        returned.update({"@WeaponImprovement": "20", "@Fatigue": "3"})
-        output = self.run_with_finish(left_behind=None, returned=returned)
-        self.assertIn("Completed training for Galactic Succubus", output)
-        self.assertIn("20.00% training increase and 3 fatigue increase", output)
+    def test_client_journal_receives_decision_records(self):
+        fake = FakePss(default_world())
+        journal = MemoryJournal()
 
-    def test_a_partial_finished_character_does_not_crash(self):
-        self.serve(finished_reply(weapon=10, fatigue=7, stats=("@WeaponImprovement",)), reply(ADDED))
-        with self.assertLogs(level="INFO") as logs:
-            self.assertIs(self.client.manageTraining(), True)
-        self.assertEqual(self.paths(), ["/TrainingService/FinishTraining", "/TrainingService/AddTraining"])
-        self.assertIn("10.00% training increase and 7 fatigue increase", "\n".join(logs.output))
+        def use_journal(client):
+            client.training_journal = journal
+            client.training_account_alias = "primary"
 
-    def test_an_unknown_training_sends_no_add(self):
-        self.client.trainingDesigns = {"TrainingService": {"ListAllTrainingDesigns": {"TrainingDesigns": {
-            "TrainingDesign": [{"@TrainingDesignId": "32", "@TrainingName": "Bench Press"}]}}}}
-        self.serve(finished_reply(weapon=10, fatigue=7))
-        self.assertIs(self.client.manageTraining(), True)
-        self.assertEqual(self.paths(), ["/TrainingService/FinishTraining"])
-
-    def test_a_crew_list_left_none_by_an_earlier_failed_read_is_fetched_again(self):
-        self.client.allCharactersOfUser = None  # what a failed listAllCharactersOfUser leaves
-        self.serve(http_error())
-        self.assertIs(self.client.manageTraining(), False)
-        self.assertEqual(self.paths(), ["/CharacterService/ListAllCharactersOfUser"])
-
-    def test_without_research_the_primary_tier_is_skipped(self):
-        self.client.allResearches = researches(("1", "700", "Researching"))
-        request = self.refuse_requests()
-        self.assertIs(self.client.manageTraining(), True)
-        request.assert_not_called()
+        self.manage_training(fake, use_journal)
+        events = journal.read()
+        decisions = [e for e in events if e.action_id == "training_decision"]
+        self.assertEqual([e.evidence["character_id"] for e in decisions], [str(cid) for cid in range(1001, 1018)])
+        self.assertEqual({e.account_alias for e in events}, {"primary"})
+        self.assertEqual([(e.action_id, e.outcome) for e in events if e.action_id != "training_decision"],
+                         [("finish_training", "verified")] * 3)
 
 
 class TestDeadWrappersAndInventory(unittest.TestCase):

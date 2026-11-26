@@ -1,4 +1,4 @@
-"""sdk.training.executor: the legacy daily training step run through the action runner and catalog specs.
+"""sdk.execution.training: the legacy daily training step run through the action runner and catalog specs.
 
 Nothing here touches the network: FakeTrainingClient is a client-shaped object over a small in-memory world. It
 answers the reads the executor and the snapshot provider make with xmltodict-shaped envelopes (stored on the same
@@ -18,8 +18,8 @@ from typing import Any
 
 from sdk.journal import GameplayEvent, GameplayJournal, JournalError
 from sdk.reports.training import contract_violations, validate_decision_evidence
-from sdk.training import executor
-from sdk.training.executor import (
+from sdk.execution import training as executor
+from sdk.execution.training import (
     ActionResult,
     CrewOutcome,
     MemoryJournal,
@@ -34,7 +34,7 @@ UTC = datetime.timezone.utc
 NOW = datetime.datetime(2026, 11, 20, 12, 0, 0, tzinfo=UTC)
 FMT = "%Y-%m-%dT%H:%M:%S"
 STAT_NAMES = ("Hp", "Pilot", "Repair", "Weapon", "Science", "Engine", "Attack", "Ability", "Stamina")
-LOGGER = "sdk.training.executor"
+LOGGER = "sdk.execution.training"
 
 # Room id -> room design id; room design id -> name. 201 Galaxy Gym and 204 GYM are gyms, 202 Academy an academy.
 ROOMS = {"201": "31", "202": "40", "203": "1", "204": "30"}
@@ -690,6 +690,207 @@ class SnapshotTests(unittest.TestCase):
         self.assertEqual(result.crew[0].action.verification, "unknown")
         self.assertEqual(result.crew[1].action.verification, "verified")
         self.assertEqual(self.characters_reads(client), 5)
+
+
+def decision_records(journal) -> list[GameplayEvent]:
+    return [event for event in journal.read() if event.action_id == "training_decision"]
+
+
+def evidence(cid: str, decision: str, in_room: bool, active: bool, code: str | None = None) -> dict:
+    expected = {"kind": "training_decision", "v": 1, "decision": decision, "character_id": cid,
+                "in_training_room": in_room, "training_active": active}
+    if code is not None:
+        expected["reason_code"] = code
+    return expected
+
+
+class DecisionRecordTests(unittest.TestCase):
+    def test_one_decision_record_per_crew_meets_contract(self):
+        journal = MemoryJournal()
+        client = FakeTrainingClient([crew_record("1010", "Rookie Pilot", Hp=10), delish()])
+        run(client, journal=journal)
+        self.assertEqual([event.action_id for event in journal.read()],
+                         ["training_decision", "add_training", "training_decision"])
+        records = decision_records(journal)
+        self.assertEqual([record.evidence for record in records], [
+            evidence("1010", "skip", True, False, "unknown_role"), evidence("1001", "start", True, True)])
+        self.assertEqual([record.reason for record in records],
+                         ["'Rookie Pilot' has no training role", "secondary T1 Bench Press at 72% in gym"])
+        for record in records:
+            self.assertEqual((record.account_alias, record.outcome, record.attempted, record.dry_run),
+                             ("legacy", "skipped", False, False))
+            self.assertEqual((record.started_at, record.finished_at), (NOW.isoformat(), NOW.isoformat()))
+            self.assertEqual(validate_decision_evidence(record.evidence), ())
+            self.assertEqual(contract_violations(record), ())
+        self.assertEqual(len({record.attempt_id for record in records}), 2)
+
+    def test_training_active_only_while_the_end_is_after_the_record(self):
+        running = delish(training="3", end=stamp(NOW + datetime.timedelta(hours=1)))
+        due = delish(training="3", end=stamp(NOW - datetime.timedelta(seconds=30)))  # ended, but not past the grace
+        for record, active in ((running, True), (due, False), (delish(), True), (ended(), False)):
+            with self.subTest(record=record):
+                journal = MemoryJournal()
+                run(FakeTrainingClient([record]), journal=journal)
+                self.assertEqual(decision_records(journal)[0].evidence["training_active"], active)
+
+    def test_training_active_is_false_when_no_snapshot_saw_the_crew(self):
+        journal = MemoryJournal()
+        client = FakeTrainingClient([delish(), maiden(training="3", end=stamp(NOW + datetime.timedelta(hours=2)))])
+        client.script("listAllCharactersOfUser", Act(), Act(), Act(apply=False, result=False))
+        run(client, journal=journal)
+        # 1001's after-snapshot failed: 1002's record falls back to the read the plan used (still running).
+        self.assertEqual([r.evidence["training_active"] for r in decision_records(journal)], [False, True])
+
+    def test_in_training_room_flag(self):
+        journal = MemoryJournal()
+        client = FakeTrainingClient([delish(room="203"), maiden(room="0")])
+        run(client, journal=journal)
+        self.assertEqual([r.evidence for r in decision_records(journal)], [
+            evidence("1001", "skip", False, False, "not_in_training_room"),
+            evidence("1002", "skip", False, False, "not_in_training_room")])
+
+    def test_a_used_consumable_records_the_skip_it_stands_in_for(self):
+        journal = MemoryJournal()
+        run(FakeTrainingClient([low()], items={"101": 5}), journal=journal, item_designs_raw=CONSUMABLE_DESIGNS)
+        record = decision_records(journal)[0]
+        self.assertEqual(record.evidence, evidence("1001", "skip", True, False, "research_missing"))
+        self.assertEqual(record.reason, "primary T1 research gate not met")
+
+    def test_a_replanned_consumable_records_the_replanned_skip(self):
+        journal = MemoryJournal()
+        client = FakeTrainingClient([low(training="21", end=ENDED_2H, Weapon=12)], items={"101": 5})
+        run(client, journal=journal, item_designs_raw=CONSUMABLE_DESIGNS)
+        self.assertEqual(client.mutations(), [("finishTraining", "1001"), ("useConsumable", "101", "1001")])
+        self.assertEqual(decision_records(journal)[0].evidence,
+                         evidence("1001", "skip", True, False, "research_missing"))
+
+    def test_a_failed_finish_records_training_in_progress(self):
+        journal = MemoryJournal()
+        client = FakeTrainingClient([ended()])
+        client.script("finishTraining", Act(apply=False, result=None))
+        run(client, journal=journal)
+        self.assertEqual(decision_records(journal)[0].evidence,
+                         evidence("1001", "skip", True, False, "training_in_progress"))
+
+    def test_runner_events_carry_alias_and_string_params(self):
+        for alias in ("legacy", "primary"):
+            with self.subTest(alias=alias):
+                journal = MemoryJournal()
+                run(FakeTrainingClient([ended(), maiden()], researches=("1", "2")), journal=journal,
+                    account_alias=alias)
+                actions = [(e.account_alias, e.action_id, dict(e.params), e.outcome) for e in journal.read()
+                           if e.action_id != "training_decision"]
+                self.assertEqual(actions, [
+                    (alias, "finish_training", FINISH, "verified"),
+                    (alias, "add_training", {"training_design_id": "4", "character_id": "1001"}, "verified"),
+                    (alias, "add_training", {"training_design_id": "3", "character_id": "1002"}, "verified")])
+
+    def test_no_journal_uses_memory_journal(self):
+        result = run(FakeTrainingClient([delish()]))
+        self.assertIsInstance(result.journal, MemoryJournal)
+        self.assertEqual([e.action_id for e in result.journal.read()], ["add_training", "training_decision"])
+
+    def test_given_journal_receives_records(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            journal = GameplayJournal(Path(tmp) / "journal.jsonl")
+            result = run(FakeTrainingClient([ended(), crew_record("1010", "Rookie Pilot", Hp=10)]), journal=journal)
+            self.assertIs(result.journal, journal)
+            events = journal.read()
+        self.assertEqual([e.action_id for e in events], ["finish_training", "training_decision", "training_decision"])
+        for event in events:
+            self.assertEqual(contract_violations(event), ())
+
+    def test_memory_journal_validates_and_copies(self):
+        journal = MemoryJournal()
+        bad = GameplayEvent.create(account_alias="legacy", action_id="add_training", started_at=NOW, finished_at=NOW,
+                                   outcome="skipped", reason="x", attempted=True)
+        with self.assertRaises(JournalError):
+            journal.append(bad)
+        self.assertEqual(journal.read(), [])
+        journal.read().append(bad)
+        self.assertEqual(journal.read(), [])
+
+    def test_a_failed_decision_record_is_logged_and_never_stops_the_run(self):
+        class NoDecisions(MemoryJournal):
+            def append(self, event):
+                if event.action_id == "training_decision" and event.evidence["character_id"] == "1001":
+                    raise OSError("disk full")
+                super().append(event)
+
+        journal = NoDecisions()
+        client = FakeTrainingClient([delish(), maiden()])
+        result, lines = logged(self, client, journal=journal)
+        self.assertIn("ERROR [Cap] training: Delish (1001) decision record not written: OSError: disk full", lines)
+        self.assertEqual(client.mutations(), [("addTraining", "3", "1001"), ("addTraining", "3", "1002")])
+        self.assertEqual(result.counts, TrainingCounts(started=2))
+        self.assertEqual([r.evidence["character_id"] for r in decision_records(journal)], ["1002"])
+
+
+class IsolationAndClockTests(unittest.TestCase):
+    def test_no_state_carried_between_crew(self):
+        # An unassigned crew member after a trained one never inherits that crew member's room (defect D6).
+        client = FakeTrainingClient([delish(), maiden(room="0")])
+        result = run(client)
+        self.assertEqual(client.mutations(), [("addTraining", "3", "1001")])
+        self.assertEqual(result.crew[1].decision, Skip(1002, "not_in_training_room", "room None is not a training room"))
+
+    def test_an_unassigned_crew_member_is_still_finished(self):
+        client = FakeTrainingClient([ended(room="0")])
+        _, lines = logged(self, client)
+        self.assertEqual(lines[0], "INFO [Cap] Completed training for Delish in no room with Hp +2")
+
+    def test_injected_clock_decides_finished(self):
+        client = FakeTrainingClient([ended()], clock=Clock(NOW - datetime.timedelta(hours=3)))
+        result = run(client)
+        self.assertEqual(client.mutations(), [])
+        self.assertEqual(result.crew[0].decision,
+                         Skip(1001, "training_in_progress", "training ends at 2026-11-20 10:00:00+00:00"))
+
+    def test_naive_clock_raises(self):
+        client = FakeTrainingClient([delish()], clock=Clock(NOW.replace(tzinfo=None)))
+        with self.assertRaises(ValueError):
+            run(client)
+        self.assertEqual(client.mutations(), [])
+
+
+class ClassificationTests(unittest.TestCase):
+    def test_verification_mapping(self):
+        cases = {"verified": "verified", "not-observed": "no-change", "contradicted": "contradicted",
+                 "unknown": "unknown", "skipped": "skipped", "surprise": "unknown"}
+        for outcome, expected in cases.items():
+            with self.subTest(outcome=outcome):
+                self.assertEqual(verification_of(outcome), expected)
+
+    def test_counts_pure(self):
+        def result(action_id, verification, harmless=False):
+            return ActionResult(action_id, {}, verification, "", True, harmless)
+
+        skip = Skip(1, "complete", "")
+        start = StartTraining(1, 3, "")
+        outcomes = [
+            CrewOutcome(1, "a", start, action=result("add_training", "verified")),
+            CrewOutcome(2, "b", start, finish=result("finish_training", "verified"),
+                        action=result("add_training", "verified")),
+            CrewOutcome(3, "c", skip, finish=result("finish_training", "skipped", harmless=True)),
+            CrewOutcome(4, "d", skip, finish=result("finish_training", "unknown")),
+            CrewOutcome(5, "e", start, action=result("use_consumable", "verified")),
+            CrewOutcome(6, "f", start, action=result("add_training", "contradicted")),
+            CrewOutcome(7, "g", skip, error="RuntimeError: boom"),
+            CrewOutcome(8, "h", start, action=result("use_consumable", "no-change")),
+        ]
+        self.assertEqual(count(outcomes), TrainingCounts(started=2, finished=1, consumables=1, skipped=3, failed=4))
+        self.assertEqual([o.failed for o in outcomes], [False, False, False, True, False, True, True, True])
+        self.assertEqual(count([]), TrainingCounts())
+        self.assertEqual(count(iter(outcomes)), count(outcomes))
+
+    def test_summary_line_format(self):
+        self.assertEqual(TrainingCounts(1, 2, 3, 4, 5).line(),
+                         "training: started=1 finished=2 consumables=3 skipped=4 failed=5")
+
+    def test_module_has_no_wall_clock_reads(self):
+        source = Path(executor.__file__).read_text(encoding="utf-8")
+        for call in ("datetime.now(", "utcnow(", "time.time(", "date.today("):
+            self.assertNotIn(call, source)
 
 
 if __name__ == "__main__":
