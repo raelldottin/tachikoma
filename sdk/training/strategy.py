@@ -7,10 +7,10 @@ This preserves the original ``Client.manageTraining`` strategy with its defects 
   substring matching ("Galaxy Gym Annex" used to count) and the "Galexy Gym" typo in the defenders' rooms.
 - "Huge Hellaloya" is spelled "Huge Hellaluya", matching ``sdk.crew_leveling.EXCEPTIONAL_4STAR_NAMES``.
 - Rushers and defenders use gym for both slots, so they keep training in place across the 71%/72% boundary.
-- Research gates: the original passed 101/201/203 as *minimum research levels* to a lookup that could never match.
-  They read as tier labels, so the hundreds digit is taken as the required level (an inference): primary T1 needs
-  Fitness or Education >= 1, primary/secondary T2 >= 2, primary/secondary T3 >= 3, secondary T1 is ungated.
-  The original also computed a "202" gate that nothing used; it is dropped.
+- Research gates keep the original's courses: primary T1 needs Fitness or Education course 101, primary/secondary
+  T2 course 201, primary/secondary T3 course 203; secondary T1 is ungated. A line's level is its highest completed
+  course, read from live names such as "Fitness 203" (``sdk.training.parse.research_course``); the original's
+  lookup could never match them. The original also computed a "202" gate that nothing used; it is dropped.
 - TP caps are strategy data. ``rarity_stars`` maps rarity -> stars (Common 1 ... Legendary 7); ``tp_caps`` maps
   stars -> cap, ``exceptional_tp_caps`` maps (stars, exact name) -> cap and ``captain_tp_caps`` maps stars -> the
   captain cap. ``DEFAULT_STRATEGY`` holds frozen copies of ``sdk.crew_leveling``'s tables (TP_CAPS_BY_RARITY,
@@ -235,8 +235,8 @@ RARITY_STARS: Mapping[str, int] = frozen_mapping(
 )
 
 
-def _gate(level: int) -> tuple[tuple[str, int], ...]:
-    return (("Fitness", level), ("Education", level))
+def _gate(course: int) -> tuple[tuple[str, int], ...]:
+    return (("Fitness", course), ("Education", course))
 
 
 _GYM_STRENGTH = ("Bench Press", "Muscle Beach", "Olympic Weightlifting")
@@ -303,12 +303,12 @@ DEFAULT_STRATEGY = TrainingStrategy(
     ),
     complete_percent=90,
     research_gates={
-        (SLOT_PRIMARY, 1): _gate(1),
-        (SLOT_PRIMARY, 2): _gate(2),
-        (SLOT_PRIMARY, 3): _gate(3),
+        (SLOT_PRIMARY, 1): _gate(101),
+        (SLOT_PRIMARY, 2): _gate(201),
+        (SLOT_PRIMARY, 3): _gate(203),
         (SLOT_SECONDARY, 1): (),
-        (SLOT_SECONDARY, 2): _gate(2),
-        (SLOT_SECONDARY, 3): _gate(3),
+        (SLOT_SECONDARY, 2): _gate(201),
+        (SLOT_SECONDARY, 3): _gate(203),
     },
     max_training_fatigue=100,
     rarity_stars=RARITY_STARS,

@@ -5,7 +5,8 @@ is a dict, several are a list, an empty element is None or missing. Records are 
 ``extract_collection``). Nothing here raises on missing or malformed data: records without a positive id are
 skipped and malformed numbers default to 0. Nothing here imports ``sdk.client`` or performs I/O.
 
-Assumed live attributes (only @TrainingDesignId/@TrainingName are confirmed by the existing client code):
+Assumed live attributes (@TrainingDesignId/@TrainingName are confirmed by the existing client code and the
+ResearchDesign ones by a live reply, see below; the rest are unverified):
 - TrainingDesign: @Rank (tier), @Duration (seconds), @RequiredResearchDesignId ("0" = none), @RequiredRoomType,
   and per-stat chances @HpChance ... @StaminaChance (stat = highest positive chance, ties in canonical order).
 - Character: @CharacterId, @CharacterName, @CharacterDesignId, @Level, @RoomId, @Fatigue, @TrainingDesignId
@@ -14,15 +15,17 @@ Assumed live attributes (only @TrainingDesignId/@TrainingName are confirmed by t
   with ``training_end`` None, which the planner treats as "training end unknown" (fails closed). A repeated
   @CharacterId keeps its first record.
 - CharacterDesign: @TrainingCapacity, @Rarity. Room: @RoomId, @RoomDesignId. RoomDesign: @RoomName.
-- Research: @ResearchDesignId, @ResearchState ("Completed" counts), optional @ResearchLevel.
-  ResearchDesign: @ResearchName, @RootResearchDesignId, optional @Level. Item: @ItemDesignId, @Quantity.
-  ItemDesign: @ItemName, @ItemSubType, @Rarity.
+- Research: @ResearchDesignId, @ResearchState ("Completed" counts). ResearchDesign: @ResearchName,
+  @RootResearchDesignId. Item: @ItemDesignId, @Quantity. ItemDesign: @ItemName, @ItemSubType, @Rarity.
 
-Research levels are recorded twice per completed design: under its family (the root design's @ResearchName with a
-trailing whitespace-separated "Lv N"/"Level N" removed, valued at the highest completed level) for the strategy's
-band gates, and under its own exact @ResearchName for design gates. A TrainingDesign's required research is that
-exact name (e.g. "Fitness Lv3"), so a lower level never satisfies it. A required research that cannot be resolved
-becomes "research_design:<id>", which no research level matches, so it fails closed. An unknown @RequiredRoomType becomes
+Research levels follow one contract (``research_course``), verified against the live ListAllResearchDesigns2 reply
+(design version 717, 2026-11-26; tests/fixtures/training/live_research_designs.xml). Live names are
+"<family> <course>" ("Fitness 101" ... "Fitness 203") or "<family> Lv<n>" ("Advanced Training Lv2"); a design carries
+no level attribute. A completed design counts twice: under its family (the root design's family, via
+@RootResearchDesignId, else its own), valued at the highest completed course, for the strategy's band gates; and
+under its own exact @ResearchName for design gates. A TrainingDesign's required research is that exact name (e.g.
+"Fitness 203"), so a lower course never satisfies it. A required research that cannot be resolved becomes
+"research_design:<id>", which no research level matches, so it fails closed. An unknown @RequiredRoomType becomes
 None (fails open): the server enforces rooms and the original code never checked it.
 """
 
@@ -259,36 +262,42 @@ def _room_type_word(value: object) -> str | None:
     return _ROOM_TYPE_WORDS.get(_text(value).lower())
 
 
-# "Lv"/"Lv."/"Level" must start a word ("Sublevel 2" and "Wolv2" are names, not levels); ASCII digits only.
-_LEVEL_SUFFIX_RE = re.compile(r"\s*\b(?:lv\.?|level)\s*([0-9]+)\s*$", re.IGNORECASE)
+# The " <course>" or " Lv<course>" ending of "<family> <course>": a positive ASCII number without a leading zero.
+# Anchored at the end and searched, so a long name costs linear time (a lazy "(.+?)\s+" family is quadratic).
+_COURSE_SUFFIX_RE = re.compile(r"\s(?:Lv)?([1-9][0-9]*)\Z", re.ASCII)
 
 
-def _split_level(name: str) -> tuple[str, int]:
-    """("Fitness Lv2") -> ("Fitness", 2); names without a level suffix -> (name, 0)."""
-    match = _LEVEL_SUFFIX_RE.search(name)
+def research_course(name: str) -> tuple[str, int]:
+    """A research design name -> (family, level): the one research-name contract, shared with Client.getResearchLevel.
+
+    "Fitness 203" -> ("Fitness", 203) and "Advanced Training Lv2" -> ("Advanced Training", 2), the two live shapes.
+    Any other name is its own family at level 1 ("Advanced Training", the first of its line, -> 1). Surrounding
+    whitespace is stripped; a course of 0, a zero-padded or non-ASCII number is part of the name; a course beyond
+    int()'s digit limit reads as level 0 (never a level).
+    """
+    text = name.strip()
+    match = _COURSE_SUFFIX_RE.search(text)
     if match is None:
-        return name, 0
-    return name[: match.start()].strip(), to_int(match.group(1))
+        return text, 1
+    return text[: match.start()].rstrip(), to_int(match.group(1))
 
 
 def _research_catalog(research_designs_raw: object) -> dict[int, tuple[str, str, int]]:
-    """ResearchDesign id -> (family name, exact name, design level).
+    """ResearchDesign id -> (family, exact name, level), all from ``research_course``.
 
-    The family is the root design's @ResearchName (via @RootResearchDesignId, else the design's own name) with a
-    trailing "Lv N"/"Level N" removed. The exact name is the design's own stripped @ResearchName (a nameless design
-    uses "research_design:<id>"). The level is @Level when positive, else the own name's suffix, else 0.
+    The family is the root design's family (via @RootResearchDesignId, else the design's own family). The exact name
+    is the design's own stripped @ResearchName (a nameless design uses "research_design:<id>" at level 1). The level
+    is the design's own course number.
     """
     records = _by_id(research_designs_raw, "ResearchDesign", "@ResearchDesignId")
     catalog: dict[int, tuple[str, str, int]] = {}
     for design_id, record in records.items():
         own_name = _text(record.get("@ResearchName"))
-        own_family, own_level = _split_level(own_name)
+        own_family, level = research_course(own_name)
         root = records.get(to_int(record.get("@RootResearchDesignId")))
-        root_family = _split_level(_text(root.get("@ResearchName")))[0] if root is not None else ""
+        root_family = research_course(_text(root.get("@ResearchName")))[0] if root is not None else ""
         fallback = f"research_design:{design_id}"
-        family = root_family or own_family or fallback
-        level = to_int(record.get("@Level"))
-        catalog[design_id] = (family, own_name or fallback, level if level > 0 else own_level)
+        catalog[design_id] = (root_family or own_family or fallback, own_name or fallback, level)
     return catalog
 
 
@@ -304,7 +313,7 @@ def parse_training_designs(raw: object, research_designs: object = None) -> tupl
     """TrainingDesign records -> model designs, in payload order; records without a positive id are skipped.
 
     @RequiredResearchDesignId "0"/missing -> None; otherwise the exact research design name from
-    ``research_designs`` (e.g. "Fitness Lv3"), or "research_design:<id>" when it cannot be resolved (no research of
+    ``research_designs`` (e.g. "Fitness 203"), or "research_design:<id>" when it cannot be resolved (no research of
     that name exists, so it fails closed). @Duration (seconds) is clamped to 0..10 years: a negative value becomes
     0, never a negative timedelta.
     """
@@ -394,30 +403,44 @@ def _parse_crew(
 
 
 def parse_research_levels(researches_raw: object, research_designs_raw: object) -> Mapping[str, int]:
-    """Research family name -> highest completed level, plus each completed design's exact name -> its level.
+    """Research family -> highest completed course, plus each completed design's exact name -> its course.
 
-    Only @ResearchState == "Completed" records count; records whose design id is unknown are ignored.
-    Level precedence: the record's @ResearchLevel, then the design's @Level, then a "Lv N" name suffix, then 1.
-    The family keys serve the strategy's band gates; the exact names serve TrainingDesign.required_research.
+    Only @ResearchState == "Completed" records count; records whose design id is unknown are ignored. The level is
+    the design name's course (``research_course``); a record's own attributes never change it. The family keys serve
+    the strategy's band gates; the exact names serve TrainingDesign.required_research.
     """
     return _parse_research_levels(researches_raw, _research_catalog(research_designs_raw))
 
 
+def parse_research_family_levels(researches_raw: object, research_designs_raw: object) -> Mapping[str, int]:
+    """Research family -> highest completed course, with no exact-name keys (Client.getResearchLevel's line query).
+
+    The family keys equal ``parse_research_levels``' family keys; a design's exact name never answers a line query.
+    """
+    levels: dict[str, int] = {}
+    for family, _, level in _completed(researches_raw, _research_catalog(research_designs_raw)):
+        levels[family] = max(levels.get(family, 0), level)
+    return frozen_mapping(levels)
+
+
 def _parse_research_levels(researches_raw: object, catalog: dict[int, tuple[str, str, int]]) -> Mapping[str, int]:
     levels: dict[str, int] = {}
+    for family, exact, level in _completed(researches_raw, catalog):
+        for name in (family, exact):
+            levels[name] = max(levels.get(name, 0), level)
+    return frozen_mapping(levels)
+
+
+def _completed(researches_raw: object, catalog: dict[int, tuple[str, str, int]]) -> list[tuple[str, str, int]]:
+    """The catalog entry of each "Completed" record whose design id the catalog knows, in payload order."""
+    entries: list[tuple[str, str, int]] = []
     for record in extract_collection(researches_raw, "Research"):
         if _text(record.get("@ResearchState")) != "Completed":
             continue
         entry = catalog.get(to_int(record.get("@ResearchDesignId")))
-        if entry is None:
-            continue
-        family, exact, design_level = entry
-        level = to_int(record.get("@ResearchLevel"))
-        if level <= 0:
-            level = design_level if design_level > 0 else 1
-        for name in (family, exact):
-            levels[name] = max(levels.get(name, 0), level)
-    return frozen_mapping(levels)
+        if entry is not None:
+            entries.append(entry)
+    return entries
 
 
 def parse_items(items_raw: object) -> Mapping[int, int]:

@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "name": "consumable-windows",
-  "description": "Academy crew on the exact consumable rule edges. Four crew are already in a five-hour session at the start (in progress, so a consumable is the only allowed action): 20% and 29% with fatigue 0 take Common items, 30% and 29% with fatigue 1 do not. Idle crew at 90% with fatigue 100 take a Hero item; 90% with fatigue 99 and 89% (a move to the gym) do not. Fitness and Education let the crew train once their sessions end.",
+  "description": "Academy crew on the exact consumable rule edges. Four crew are already in a five-hour session at the start (in progress, so a consumable is the only allowed action): 20% and 29% with fatigue 0 take Common items, 30% and 29% with fatigue 1 do not. Idle crew at 90% with fatigue 100 take a Hero item; 90% with fatigue 99 and 89% (a move to the gym) do not. Fitness 101 and Education 101 let the crew train once their sessions end.",
   "tags": ["consumables", "in-training"],
   "seed": 1108,
   "start": "2027-07-05T00:00:00+00:00",
   "days": 7,
   "tick_minutes": 60,
   "rooms": [{"id": 7002, "design": "Academy"}],
-  "research": ["Fitness", "Education"],
+  "research": ["Fitness 101", "Education 101"],
   "inventory": {"Common WPN Consumable": 6, "Hero WPN Consumable": 2},
   "crew": [
     {"id": 801, "name": "Galactic Succubus", "design": "epic", "room": 7002, "stats": {"Weapon": 20},
