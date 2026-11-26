@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "name": "fatigued-crew",
+  "description": "Crew at or near the fatigue maximum with slow recovery: the fatigue gate at 100 and the Hero consumable rule (90% and fatigue 100).",
+  "tags": ["fatigued"],
+  "seed": 1107,
+  "start": "2027-07-05T00:00:00+00:00",
+  "days": 7,
+  "tick_minutes": 60,
+  "fatigue_recovery_seconds": 720,
+  "rooms": [{"id": 7001, "design": "GYM"}, {"id": 7002, "design": "Academy"}],
+  "research": ["Fitness", "Fitness Lv2", "Fitness Lv3", "Education", "Education Lv2", "Education Lv3"],
+  "inventory": {"Hero ATK Consumable": 2, "Hero WPN Consumable": 1},
+  "crew": [
+    {"id": 701, "name": "Cyber Duck", "design": "elite", "room": 7001, "stats": {"Attack": 90}, "fatigue": 100},
+    {"id": 702, "name": "King Dong", "design": "legendary", "room": 7001, "fatigue": 100},
+    {"id": 703, "name": "Galactic Succubus", "design": "epic", "room": 7002, "stats": {"Weapon": 10}, "fatigue": 99},
+    {"id": 704, "name": "Admiral Serena", "design": "captain", "room": 7001, "fatigue": 60}
+  ],
+  "faults": []
+}

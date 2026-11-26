@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "name": "fault-contradicted",
+  "description": "The server accepts two starts but runs another design (Kickbox, Big Book of Science): the off-focus gains show in the focus metric.",
+  "tags": ["fault-contradicted"],
+  "seed": 1111,
+  "start": "2027-07-05T00:00:00+00:00",
+  "days": 7,
+  "tick_minutes": 60,
+  "fatigue_recovery_seconds": 360,
+  "rooms": [{"id": 7001, "design": "GYM"}, {"id": 7002, "design": "Academy"}],
+  "research": ["Fitness", "Fitness Lv2", "Fitness Lv3", "Education", "Education Lv2", "Education Lv3"],
+  "inventory": {},
+  "crew": [
+    {"id": 1101, "name": "Galactic Succubus", "design": "epic", "room": 7002},
+    {"id": 1102, "name": "Mistycball", "design": "epic", "room": 7002},
+    {"id": 1103, "name": "The Conjoint Archon", "design": "unique", "room": 7001},
+    {"id": 1104, "name": "Cyber Duck", "design": "hero", "room": 7001}
+  ],
+  "faults": [
+    {"kind": "contradicted-effect", "method": "addTraining", "day": 0, "call": 1, "training_design": "Kickbox"},
+    {"kind": "contradicted-effect", "method": "addTraining", "day": 1, "call": 3, "training_design": "Big Book of Science"}
+  ]
+}

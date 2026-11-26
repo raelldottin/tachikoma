@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "name": "fresh-crew",
+  "description": "Five untrained crew in GYM and Academy with all research: primary T1-T3 progression and the 72% move-to-gym boundary.",
+  "tags": ["fresh"],
+  "seed": 1101,
+  "start": "2027-07-05T00:00:00+00:00",
+  "days": 7,
+  "tick_minutes": 60,
+  "fatigue_recovery_seconds": 360,
+  "rooms": [{"id": 7001, "design": "GYM"}, {"id": 7002, "design": "Academy"}],
+  "research": ["Fitness", "Fitness Lv2", "Fitness Lv3", "Education", "Education Lv2", "Education Lv3"],
+  "inventory": {},
+  "crew": [
+    {"id": 101, "name": "Galactic Succubus", "design": "epic", "room": 7002},
+    {"id": 102, "name": "Mistycball", "design": "epic", "room": 7002},
+    {"id": 103, "name": "The Conjoint Archon", "design": "unique", "room": 7001},
+    {"id": 104, "name": "Cyber Duck", "design": "hero", "room": 7001},
+    {"id": 105, "name": "Admiral Serena", "design": "legendary", "room": 7001}
+  ],
+  "faults": []
+}

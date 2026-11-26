@@ -16,7 +16,7 @@ REQUIRE_311 = "$(TEST_PYTHON)" -c 'import sys; sys.exit(sys.version_info < (3, 1
 # make lint mirrors the CI lint job, with the ruff version pinned there.
 CI_REQUIREMENTS = .github/requirements-ci.txt
 
-.PHONY: automation-check automation-dry-run syntax-check test test-security mutation git-check lint pre-commit
+.PHONY: automation-check automation-dry-run syntax-check test test-security mutation training-benchmark git-check lint pre-commit
 
 automation-check:
 	PYTHONDONTWRITEBYTECODE=1 \
@@ -43,6 +43,13 @@ test-security:
 mutation:
 	@$(REQUIRE_311)
 	PYTHONDONTWRITEBYTECODE=1 "$(TEST_PYTHON)" "$(CURDIR)/scripts/mutation.py" $(if $(TARGET),--target "$(TARGET)") $(if $(TESTS),--tests $(TESTS)) $(if $(JOBS),--jobs $(JOBS))
+
+# make training-benchmark runs the crew-training simulator benchmark gate (docs/baseline/training-benchmark.md):
+# scores at or above automation/benchmark/training/baseline.json, no policy violations, byte-identical reruns.
+# ARGS passes options instead, e.g. ARGS="--update-baseline" or ARGS="--qa-eval --jobs 8" (local, ~15 minutes).
+training-benchmark:
+	@$(REQUIRE_311)
+	PYTHONDONTWRITEBYTECODE=1 "$(TEST_PYTHON)" "$(CURDIR)/scripts/training_benchmark.py" $(ARGS)
 
 git-check:
 	git diff --check

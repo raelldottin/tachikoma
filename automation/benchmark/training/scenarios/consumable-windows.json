@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "name": "consumable-windows",
+  "description": "Academy crew on the exact consumable rule edges (29/30%, fatigue 0/1, 89/90%, fatigue 99/100) with no research and one fatigue point recovered per day.",
+  "tags": ["consumables"],
+  "seed": 1108,
+  "start": "2027-07-05T00:00:00+00:00",
+  "days": 7,
+  "tick_minutes": 60,
+  "fatigue_recovery_seconds": 86400,
+  "rooms": [{"id": 7002, "design": "Academy"}],
+  "research": [],
+  "inventory": {"Common WPN Consumable": 4, "Hero WPN Consumable": 2},
+  "crew": [
+    {"id": 801, "name": "Galactic Succubus", "design": "epic", "room": 7002, "stats": {"Weapon": 28}},
+    {"id": 802, "name": "Galactic Snow Maiden", "design": "epic", "room": 7002, "stats": {"Weapon": 29}},
+    {"id": 803, "name": "Delish", "design": "epic", "room": 7002, "stats": {"Weapon": 30}},
+    {"id": 804, "name": "Delish", "design": "epic", "room": 7002, "stats": {"Weapon": 29}, "fatigue": 1},
+    {"id": 805, "name": "Galactic Succubus", "design": "elite", "room": 7002, "stats": {"Weapon": 90}, "fatigue": 100},
+    {"id": 806, "name": "Galactic Snow Maiden", "design": "elite", "room": 7002, "stats": {"Weapon": 90}, "fatigue": 99},
+    {"id": 807, "name": "Delish", "design": "elite", "room": 7002, "stats": {"Weapon": 89}, "fatigue": 100}
+  ],
+  "faults": []
+}

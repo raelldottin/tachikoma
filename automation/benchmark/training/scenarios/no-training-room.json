@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "name": "no-training-room",
+  "description": "Crew on the Bridge, in no room and without a role, beside one trainable crew: not_in_training_room, unknown_role and the consumable role/room rules.",
+  "tags": ["no-training-room"],
+  "seed": 1106,
+  "start": "2027-07-05T00:00:00+00:00",
+  "days": 7,
+  "tick_minutes": 60,
+  "fatigue_recovery_seconds": 360,
+  "rooms": [{"id": 7001, "design": "GYM"}, {"id": 7005, "design": "Bridge"}],
+  "research": ["Fitness"],
+  "inventory": {"Common ATK Consumable": 3, "Common WPN Consumable": 3, "Common SCI Consumable": 3},
+  "crew": [
+    {"id": 601, "name": "Delish", "design": "epic", "room": 7005},
+    {"id": 602, "name": "C.P.U.", "design": "unique", "room": 0},
+    {"id": 603, "name": "Visiting Trader", "design": "common", "room": 7001},
+    {"id": 604, "name": "Huntress", "design": "unique", "room": 7001},
+    {"id": 605, "name": "Admiral Serena", "design": "captain", "room": 7005, "stats": {"Attack": 10}}
+  ],
+  "faults": []
+}
