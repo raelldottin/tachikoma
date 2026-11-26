@@ -2407,6 +2407,11 @@ class RepositoryWiringTests(unittest.TestCase):
         self.assertLess(int(step["timeout-minutes"]), int(job["timeout-minutes"]))
         for fragment in ("--jobs 4", "--json mutation.json", '--summary "$GITHUB_STEP_SUMMARY"'):
             self.assertIn(fragment, step["run"])
+        # Only the targets outside sdk/training/: those block merges in the mutation-gate job, whose shape
+        # scripts/ci.py check_mutation_gate enforces.
+        self.assertIn("python scripts/ci.py mutation-config --advisory", step["run"])
+        self.assertIn('--config "$config"', step["run"])
+        self.assertIn("mutation-gate", workflow["jobs"])
         # Exit 1 (score below min_score) is a warning; exit 2 (config, baseline or harness error) stays visible.
         self.assertIn("::warning", step["run"])
         self.assertIn("::error", step["run"])

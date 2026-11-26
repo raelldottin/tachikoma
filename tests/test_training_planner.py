@@ -2123,5 +2123,131 @@ class TestPlannerProperties(unittest.TestCase):
                 self.assertGreaterEqual(seen[label], 3, dict(seen))
 
 
+class TestCapacityOne(unittest.TestCase):
+    """A training capacity of 1 is the smallest valid capacity, not "no capacity"."""
+
+    def test_percent_with_capacity_one(self) -> None:
+        self.assertEqual(percent(0, 1), 0)
+        self.assertEqual(percent(1, 1), 100)
+
+    def test_capacity_one_crew_is_planned(self) -> None:
+        crew = mk_crew(name="Delish", room_name="Academy", capacity=1)
+        self.assertEqual(summary(plan_one(crew, research={"Fitness": 1})), [("start", 1, "Read Expert Weapon Theory")])
+
+    def test_capacity_one_crew_targets_its_band_design_stat(self) -> None:
+        weapon_t1 = TrainingDesign(
+            41, "Read Expert Weapon Theory", 1, "WeaponImprovement", timedelta(hours=1), None, None
+        )
+        # All-zero stats have no highest stat, so only the band design lookup can name one.
+        self.assertEqual(target_stat(mk_crew(capacity=1), (weapon_t1,), DEFAULT_STRATEGY), "WeaponImprovement")
+
+
+class TestTrainingStateValues(unittest.TestCase):
+    def test_training_state_names_each_state(self) -> None:
+        cases = (
+            ("idle", mk_crew()),
+            ("idle", mk_crew(training_end=NOW + timedelta(hours=1))),
+            ("unknown", mk_crew(training_design_id=7)),
+            ("in_progress", mk_crew(training_design_id=7, training_end=NOW + timedelta(seconds=1))),
+            ("finished", mk_crew(training_design_id=7, training_end=NOW)),
+            ("finished", mk_crew(training_design_id=7, training_end=NOW - timedelta(hours=1))),
+        )
+        for expected, crew in cases:
+            with self.subTest(expected=expected, end=crew.training_end):
+                self.assertEqual(training_state(crew, NOW), expected)
+
+
+class TestStrategyValidationMessages(unittest.TestCase):
+    """Each strategy validation failure names the offending field, so a bad strategy edit is easy to locate."""
+
+    def assert_rejected(self, message: str, **changes: object) -> None:
+        with self.assertRaises(ValueError) as caught:
+            dataclasses.replace(DEFAULT_STRATEGY, **changes)
+        self.assertEqual(str(caught.exception), message)
+
+    def test_role_slot_rejects_an_unknown_slot(self) -> None:
+        role = DEFAULT_STRATEGY.roles[0]
+        self.assertIs(role.slot("primary"), role.primary)
+        self.assertIs(role.slot("secondary"), role.secondary)
+        with self.assertRaises(ValueError) as caught:
+            role.slot("tertiary")
+        self.assertEqual(str(caught.exception), "unknown slot: 'tertiary'")
+
+    def test_band_with_an_unknown_slot(self) -> None:
+        bad = TierBand("tertiary", 1, 0, 50)
+        gates = {**DEFAULT_STRATEGY.research_gates, ("tertiary", 1): ()}
+        self.assert_rejected(
+            "band names unknown slot 'tertiary'", bands=(bad, *DEFAULT_STRATEGY.bands[1:]), research_gates=gates
+        )
+
+    def test_consumable_rule_windows(self) -> None:
+        self.assert_rejected(
+            "consumable rule 'Common' has an empty percent window: 30..29",
+            consumable_rules=(ConsumableRule("Common", 30, 29, 0, 0),),
+        )
+        self.assert_rejected(
+            "consumable rule 'Common' has an empty fatigue window: 5..4",
+            consumable_rules=(ConsumableRule("Common", 0, 29, 5, 4),),
+        )
+
+    def test_tp_cap_tables(self) -> None:
+        self.assert_rejected("tp_caps needs positive int stars -> cap, got 3: 0", tp_caps={3: 0})
+        self.assert_rejected("captain_tp_caps needs positive int stars -> cap, got 6: -1", captain_tp_caps={6: -1})
+
+    def test_exceptional_cap_keys(self) -> None:
+        for key in ((0, "Mistycball"), (-4, "Mistycball"), ("4", "Mistycball"), (4, 7), (True, "Mistycball")):
+            with self.subTest(key=key):
+                self.assert_rejected(
+                    f"exceptional_tp_caps needs (stars, name) -> positive int cap, got {key!r}: 100",
+                    exceptional_tp_caps={key: 100},
+                )
+        accepted = dataclasses.replace(DEFAULT_STRATEGY, exceptional_tp_caps={(4, "Mistycball"): 100})
+        self.assertEqual(dict(accepted.exceptional_tp_caps), {(4, "Mistycball"): 100})
+
+    def test_fatigue_limit_must_be_positive(self) -> None:
+        for limit in (0, -1):
+            with self.subTest(limit=limit):
+                self.assert_rejected("max_training_fatigue must be positive", max_training_fatigue=limit)
+        strict = dataclasses.replace(DEFAULT_STRATEGY, max_training_fatigue=1)
+        self.assertEqual(strict.max_training_fatigue, 1)
+        # A limit of 1 means any fatigue at all blocks training.
+        self.assertEqual(summary(plan_one(mk_crew(fatigue=1), strategy=strict)), [("skip", 1, "fatigued")])
+        rested = plan_one(mk_crew(fatigue=0), strategy=strict)
+        self.assertEqual(summary(rested), [("start", 1, "Read Expert Weapon Theory")])
+
+
+class TestStrategyImmutability(unittest.TestCase):
+    def test_strategy_value_objects_are_frozen(self) -> None:
+        objects = (
+            (TierBand("primary", 1, 0, 50), "low", 5),
+            (ConsumableRule("Common", 0, 29, 0, 0), "min_percent", 5),
+            (DEFAULT_STRATEGY, "max_training_fatigue", 5),
+        )
+        for obj, field, value in objects:
+            with self.subTest(type(obj).__name__), self.assertRaises(dataclasses.FrozenInstanceError):
+                setattr(obj, field, value)
+        self.assertEqual(DEFAULT_STRATEGY.max_training_fatigue, 100)
+
+    def test_strategy_copies_mutable_inputs(self) -> None:
+        roles = list(DEFAULT_STRATEGY.roles)
+        stars = dict(DEFAULT_STRATEGY.rarity_stars)
+        rules = list(DEFAULT_STRATEGY.consumable_rules)
+        self.assertTrue(roles and stars and rules)
+        strategy = dataclasses.replace(DEFAULT_STRATEGY, roles=roles, rarity_stars=stars, consumable_rules=rules)
+        roles.clear()
+        stars["Legendary"] = 1
+        rules.clear()
+        self.assertEqual(strategy.roles, DEFAULT_STRATEGY.roles)
+        self.assertEqual(dict(strategy.rarity_stars), dict(DEFAULT_STRATEGY.rarity_stars))
+        self.assertEqual(strategy.consumable_rules, DEFAULT_STRATEGY.consumable_rules)
+        self.assertIsNotNone(role_for("Delish", strategy))
+        with self.assertRaises(TypeError):
+            strategy.rarity_stars["Legendary"] = 1  # type: ignore[index]
+        with self.assertRaises(AttributeError):
+            strategy.roles.append(DEFAULT_STRATEGY.roles[0])  # type: ignore[attr-defined]
+        with self.assertRaises(AttributeError):
+            strategy.consumable_rules.append(DEFAULT_STRATEGY.consumable_rules[0])  # type: ignore[attr-defined]
+
+
 if __name__ == "__main__":
     unittest.main()

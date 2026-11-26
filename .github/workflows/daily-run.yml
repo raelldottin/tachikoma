@@ -51,7 +51,9 @@ jobs:
             --smtp-email "$SMTP_EMAIL" \
             --smtp-password-file <(printf '%s' "$SMTP_PASSWORD") \
             --recipient "$RECIPIENT" \
-            --run-battle
+            --run-battle \
+            --account-alias account-1 \
+            --training-journal-dir "$RUNNER_TEMP/tachikoma-training/journals"
 
       - name: Process account 2
         if: ${{ !contains(format(',{0},', vars.LEGACY_RUN_SKIP), ',2,') }}
@@ -76,7 +78,9 @@ jobs:
             --smtp-email "$SMTP_EMAIL" \
             --smtp-password-file <(printf '%s' "$SMTP_PASSWORD") \
             --recipient "$RECIPIENT" \
-            --run-battle
+            --run-battle \
+            --account-alias account-2 \
+            --training-journal-dir "$RUNNER_TEMP/tachikoma-training/journals"
 
       - name: Process account 3
         if: ${{ !contains(format(',{0},', vars.LEGACY_RUN_SKIP), ',3,') }}
@@ -101,7 +105,9 @@ jobs:
             --smtp-email "$SMTP_EMAIL" \
             --smtp-password-file <(printf '%s' "$SMTP_PASSWORD") \
             --recipient "$RECIPIENT" \
-            --run-battle
+            --run-battle \
+            --account-alias account-3 \
+            --training-journal-dir "$RUNNER_TEMP/tachikoma-training/journals"
 
       - name: Process account 4
         if: ${{ !contains(format(',{0},', vars.LEGACY_RUN_SKIP), ',4,') }}
@@ -126,7 +132,9 @@ jobs:
             --smtp-email "$SMTP_EMAIL" \
             --smtp-password-file <(printf '%s' "$SMTP_PASSWORD") \
             --recipient "$RECIPIENT" \
-            --run-battle
+            --run-battle \
+            --account-alias account-4 \
+            --training-journal-dir "$RUNNER_TEMP/tachikoma-training/journals"
 
       - name: Process account 5
         if: ${{ !contains(format(',{0},', vars.LEGACY_RUN_SKIP), ',5,') }}
@@ -151,4 +159,53 @@ jobs:
             --smtp-email "$SMTP_EMAIL" \
             --smtp-password-file <(printf '%s' "$SMTP_PASSWORD") \
             --recipient "$RECIPIENT" \
-            --run-battle
+            --run-battle \
+            --account-alias account-5 \
+            --training-journal-dir "$RUNNER_TEMP/tachikoma-training/journals"
+
+      # Runs after every account step, also when one failed or LEGACY_RUN_SKIP skipped it. It reads only the
+      # journals written above (run.py --report never logs in or opens a connection) and is given no credentials.
+      # run.py creates each account's journal before login, so an account that failed at login is listed with an
+      # empty journal; only an account LEGACY_RUN_SKIP skipped (or that stopped before run.py ran) is not listed.
+      # The list of journals reaches the job summary first, so it survives a failing report run (which fails the step).
+      - name: Training report
+        if: always()
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          root="$RUNNER_TEMP/tachikoma-training"
+          mkdir -p "$root/journals" "$root/report"
+          set --
+          for journal in "$root"/journals/*.jsonl; do
+            set -- "$@" --journal "$journal"
+          done
+          found="$#"
+          if [ "$found" -eq 0 ]; then
+            set -- --journal "$(mktemp)"
+          fi
+          {
+            if [ "$found" -eq 0 ]; then
+              echo "No account wrote a training journal in this run."
+            else
+              echo "Journals read:"
+              for journal in "$root"/journals/*.jsonl; do
+                echo "- ${journal##*/}"
+              done
+            fi
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+          python run.py --report training "$@" > "$root/report/training-report.md"
+          python run.py --report training "$@" --report-format json > "$root/report/training-report.json"
+          cat "$root/report/training-report.md" >> "$GITHUB_STEP_SUMMARY"
+
+      # Uploads only the training journals and reports. Password files are mktemp files outside this directory,
+      # removed when each account step exits. continue-on-error: an artifact service failure cannot fail the run.
+      - name: Upload training journals and report
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: training-report-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/tachikoma-training
+          retention-days: 14
+          if-no-files-found: warn
