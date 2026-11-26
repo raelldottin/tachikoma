@@ -24,6 +24,7 @@ from .security import (
 from .dotnet import DotNet
 from .redaction import redact_secrets, safe_log_message  # noqa: F401
 from .execution.training import run_training
+from .training.parse import parse_research_family_levels, research_course
 
 
 def lowercase_urlencode(params: dict) -> str:
@@ -54,8 +55,6 @@ PLACE_ROOM_REPLY_ELEMENTS = ("BuyRoom", "BuyRoom2")
 # No captured ActivateItem3 success exists; the server sometimes names the reply element without the version
 # suffix (BuyRoom for BuyRoom2), so both are accepted.
 ACTIVATE_ITEM_REPLY_ELEMENTS = ("ActivateItem3", "ActivateItem")
-# A research design name and its course number: "Fitness 201" -> ("Fitness", "201").
-_RESEARCH_COURSE = re.compile(r"^(?P<base>.+?)\s+(?P<course>\d+)$", re.ASCII)
 # UpgradeRoom2 replies that mean no further room can be upgraded this run.
 SHIP_UPGRADE_REQUIRED = "You need to upgrade your ship first."
 ROOM_UPGRADE_BLOCKERS = (
@@ -202,38 +201,6 @@ def _game_id(value) -> str | None:
     else:
         return None
     return str(number) if number > 0 else None
-
-
-def _completed_research_names(researches, designs) -> list[str]:
-    """Names of the completed research designs, joining per-account records onto designs by ``@ResearchDesignId``.
-
-    ``researches`` and ``designs`` are the raw parsed ListAllResearches and ListAllResearchDesigns2 payloads (what
-    ``Client.allResearches``/``Client.allResearchDesigns`` hold), or None. Per-account records carry only
-    ``@ResearchId``, ``@ResearchDesignId`` and ``@ResearchState`` ("Completed" when done, "Researching" while in
-    progress); the name lives on the design. Designs without an id or a name, and records without a design id,
-    contribute nothing.
-    """
-    names = {design["@ResearchDesignId"]: design["@ResearchName"]
-             for design in _extract_collection(designs, "ResearchDesign")
-             if design.get("@ResearchDesignId") is not None and design.get("@ResearchName")}
-    return [names[record["@ResearchDesignId"]]
-            for record in _extract_collection(researches, "Research")
-            if record.get("@ResearchState") == "Completed" and record.get("@ResearchDesignId") in names]
-
-
-def _research_level(names, line: str) -> int:
-    """The highest course number among ``names`` of the research ``line`` ("Fitness 201" -> 201), or 0.
-
-    A course number in ``line`` is ignored ("Fitness 101" is the line "Fitness"); surrounding whitespace is stripped.
-    """
-    match = _RESEARCH_COURSE.match(line.strip())
-    base = match["base"] if match else line.strip()
-    level = 0
-    for name in names:
-        course = _RESEARCH_COURSE.match(name.strip())
-        if course and course["base"] == base:
-            level = max(level, int(course["course"]))
-    return level
 
 
 def _marker_collected(marker: dict) -> bool:
@@ -2076,8 +2043,8 @@ class Client(object):
             logging.exception("Unable to upgrade research.", exc_info=True)
             return False
 
-    def _completedResearchNames(self) -> list[str]:
-        """Names of the research designs this account has completed (the join is ``_completed_research_names``).
+    def _researchLevels(self):
+        """Research family (line) -> highest completed course, by ``sdk.training.parse``'s contract.
 
         Each list is fetched at most once per client. A failed fetch leaves its attribute absent (never a None
         placeholder), so readers that fetch on a missing attribute, like speedUpResearchUsingBoostGauge, still do.
@@ -2091,11 +2058,14 @@ class Client(object):
                     fetch()
                 except ExpatError:
                     logging.error("Research data could not be parsed.")
-        return _completed_research_names(getattr(self, "allResearches", None),
-                                         getattr(self, "allResearchDesigns", None))
+        return parse_research_family_levels(getattr(self, "allResearches", None),
+                                            getattr(self, "allResearchDesigns", None))
 
     def getResearchLevel(self, researchName: str) -> int:
-        """The highest completed course number of a research line ("Fitness 201" completed -> 201).
+        """The highest completed course of a research line ("Fitness 201" completed -> 201).
+
+        The line and its level follow ``sdk.training.parse.research_course``, the parser crew training uses: a
+        course's line is its root design's family, and an unnumbered completed design is level 1.
 
         Args:
             researchName: The research line, e.g. "Fitness" or "Education"; a course number in it is ignored.
@@ -2103,7 +2073,7 @@ class Client(object):
         Returns:
             The course number, or 0 when no course of that line is completed or the research lists are unavailable.
         """
-        return _research_level(self._completedResearchNames(), researchName)
+        return self._researchLevels().get(research_course(researchName)[0], 0)
 
     def hasResearch(self, researchName: str, minLevel: int = 1) -> bool:
         """Whether this account has completed a course of a research line at or above ``minLevel``.

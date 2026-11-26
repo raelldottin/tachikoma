@@ -102,12 +102,9 @@ def _character(member: CrewMember) -> dict[str, str]:
 
 
 def _research_design(entry: ResearchDesign) -> dict[str, str]:
-    """The ResearchDesign record ``sdk.training``'s parser reads, with its @Level when the design carries one."""
-    record = {"@ResearchDesignId": entry.design_id, "@RootResearchDesignId": entry.root_id or "",
-              "@ResearchName": entry.name}
-    if entry.level is not None:
-        record["@Level"] = entry.level
-    return record
+    """The ResearchDesign record ``sdk.training``'s parser reads: the level is the name's course, so id, root, name."""
+    return {"@ResearchDesignId": entry.design_id, "@RootResearchDesignId": entry.root_id or "",
+            "@ResearchName": entry.name}
 
 
 def training_payloads(snapshot: AccountSnapshot,

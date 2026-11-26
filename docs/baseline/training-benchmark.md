@@ -91,9 +91,9 @@ Every scenario is built from one fixed catalog of literal tables in the script, 
 | Table | Contents |
 | --- | --- |
 | `CATALOG_ROOMS` | GYM 1000, Galaxy Gym 1001 (upgraded from 1000), Academy 1100, Lunar College 1101 (from 1100), Bridge 1200 (not a training room). Records carry `@RoomDesignId`, `@RoomName` and `@UpgradeFromRoomDesignId`. |
-| `CATALOG_RESEARCH` | Fitness 2010, Fitness Lv2 2011, Fitness Lv3 2012, Education 2020, Education Lv2 2021, Education Lv3 2022. Records carry `@ResearchName` and `@RootResearchDesignId`, so `parse.py` derives the family and the level from the "Lv N" suffix. |
+| `CATALOG_RESEARCH` | The live training lines (ListAllResearchDesigns2, design version 717): Fitness 101-203 (ids 74-79, root 74) and Education 101-203 (ids 101-106, root 101). Records carry `@ResearchName` and `@RootResearchDesignId`, so `parse.py` derives the family from the root and the level from the course number. |
 | `CATALOG_TRAININGS` | The 21 training names of `DEFAULT_ROLES`: 12 in the Academy (3011-3043: Weapon, Science, Engine, Pilot) and 9 in the GYM (3111-3133: Attack, Stamina, Hp), tiers 1 to 3. |
-| `TIER_PARAMS` | T1: 1 h, +10 fatigue, gain 1-3. T2: 3 h, +20, gain 5-9, needs the Lv2 research of the room's family. T3: 6 h, +30, gain 12-18, needs Lv3. |
+| `TIER_PARAMS` | T1: 1 h, +10 fatigue, gain 1-3. T2: 3 h, +20, gain 5-9, needs course 201 of the room's line (Fitness for the GYM, Education for the Academy). T3: 6 h, +30, gain 12-18, needs course 203. |
 | `CATALOG_CHARACTERS` | common (Common 60), elite (Elite 100), unique (Unique 100), epic (Epic 100), hero (Hero 120), special (Special 120), captain (Special 200), legendary (Legendary 150), standard (Standard 50): rarity and `@TrainingCapacity`. |
 | `CATALOG_ITEMS` | Common and Hero consumables for ATK, WPN, SCI, ENG, STA and HP (5001-5006, 5011-5016). Common items add 2 points; Hero items add 5 and recover 50 fatigue. |
 
@@ -131,7 +131,7 @@ A test runs each fault scenario and checks that every fault fires.
 | fault-raise | fault-raise | 7 | A start with effect and a finish without effect both raise. |
 | fault-ambiguous | fault-ambiguous | 7 | A finish with effect and a start without effect both return no answer. |
 | fault-snapshot | fault-snapshot | 7 | A failed account read on day 1 and one after a start on day 0. |
-| fitness-only | research-split | 7 | Only Fitness and Fitness Lv2: the band gate accepts either family, but each design needs its own. |
+| fitness-only | research-split | 7 | Only Fitness 101 to 201: the band gate accepts either family, but each design needs its own. |
 
 The schema is strict: an unknown key is an error, and `validate_scenario` reports every problem at once.
 
@@ -164,7 +164,7 @@ A tag is a claim about what a scenario exercises, and `test_every_tag_shows_its_
 The review found two scenarios that failed their own claims, and both are fixed:
 
 - **fatigued-crew** fired the fatigue gate once in 7 days. With recovery at 720 s per point (5 points an hour), the crew never sat at 100 at a tick. Recovery is now 7200 s, and the gate fires 169 times per seed.
-- **consumable-windows** had U = 0 because it had no research. It now has Fitness and Education. Its Common-rule edges are crew loaded inside a running session, the in-progress branch where a consumable is the planner's only action. That also covers the crew `training` schema field, which no scenario used before.
+- **consumable-windows** had U = 0 because it had no research. It now has Fitness 101 and Education 101. Its Common-rule edges are crew loaded inside a running session, the in-progress branch where a consumable is the planner's only action. That also covers the crew `training` schema field, which no scenario used before.
 
 ## Metrics and score
 
@@ -370,35 +370,35 @@ A smoke run of six mutants (`--only` the ids below, `--jobs 4`) took 55 s. It fo
 
 | Mutant | Change | Class | Benchmark reasons |
 | --- | --- | --- | --- |
-| `sdk/training/planner.py:390:20:compare:0` | fatigue gate `>=` to `<` | both | `fatigue_violation:fatigued-crew`, scenarios below baseline |
-| `sdk/training/planner.py:397:7:negate:0` | design research check inverted | both | scenarios below baseline |
-| `sdk/training/planner.py:205:63:boundary:1` | design research needs level >= 2 | tests-only | (equivalent in this world: every gated catalog design needs a Lv2 or Lv3 research) |
+| `sdk/training/planner.py:391:20:compare:0` | fatigue gate `>=` to `<` | both | `fatigue_violation:fatigued-crew`, scenarios below baseline |
+| `sdk/training/planner.py:398:7:negate:0` | design research check inverted | both | scenarios below baseline |
+| `sdk/training/planner.py:206:63:boundary:1` | design research needs level >= 2 | tests-only | (equivalent in this world: every gated catalog design needs course 201 or 203) |
 | `sdk/training/strategy.py:313:25:constant:0` | `max_training_fatigue` 100 to 101 | both | `fatigue_violation:fatigued-crew` (v1: tests only) |
 | `sdk/training/strategy.py:316:61:constant:0` | Common rule max percent 29 to 30 | both | `consumable_violation:consumable-windows` |
 | `sdk/training/strategy.py:297:37:constant:0` | primary T1 band high 50 to 51 | invalid-strategy | (the bands no longer tile: import fails) |
 
 ### qa-eval results
 
-Measured on 2026-11-25 at commit `dc872ad`, with both channels:
+Measured on 2026-11-26 on the live-research-names fix (the commit after `5671451` that changes the gates to 101 / 201 / 203), with both channels:
 
 ```bash
 .venv/bin/python scripts/training_benchmark.py --qa-eval --jobs 12 --json qa.json --markdown qa.md
 ```
 
-The run took 324 s of wall time (3362 s of CPU time) and exited 0, with the qa-eval passing.
+The run exited 0, with the qa-eval passing. (The 2026-11-25 run at `dc872ad` took 324 s of wall time and 3362 s of CPU time.)
 
 | Rate | Value | Over |
 | --- | ---: | --- |
-| Benchmark channel | 0.588 | 197 of 335 importable |
+| Benchmark channel | 0.585 | 196 of 335 importable |
 | Tests channel | 1.000 | 335 of 335 importable |
 | Detection, gated (minimum 0.9) | 1.000 | 415 of 415 eligible |
 | Detection, importable only | 1.000 | 335 of 335 importable |
 
 | Target | Mutants | Invalid strategy | Both | Tests-only | Benchmark-only | Drift-only | Neither | Benchmark rate | Detection |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `sdk/training/planner.py` | 207 | 0 | 159 | 48 | 0 | 0 | 0 | 0.768 | 1.000 |
+| `sdk/training/planner.py` | 207 | 0 | 158 | 49 | 0 | 0 | 0 | 0.763 | 1.000 |
 | `sdk/training/strategy.py` | 208 | 80 | 38 | 90 | 0 | 0 | 0 | 0.297 | 1.000 |
-| **total** | **415** | **80** | **197** | **138** | **0** | **0** | **0** | **0.588** | **1.000** |
+| **total** | **415** | **80** | **196** | **139** | **0** | **0** | **0** | **0.585** | **1.000** |
 
 No mutant was incompetent, equivalent, benchmark-only, drift-only or caught by neither channel. `qa_eval.equivalent` stays empty, and no entry was reported stale.
 
@@ -413,6 +413,8 @@ Round history:
 
 Between the rounds, the QA loop killed all 25 neither mutants with `PlannerContractTests`. The benchmark channel did not change, because no planner or strategy code changed.
 
+With live research names (2026-11-26), the gates moved to the original courses 101 / 201 / 203 and the catalog to the live lines (`Fitness 101` ... `Education 203`). Every scenario score stayed the same: each old level maps onto the course that opens the same gates (1 to 101, 2 to 201, 3 to 203). One planner mutant moved from both channels to tests only: `planner.py:199:41:constant:0` (a missing research counted as level 1 instead of 0) no longer opens a gate in any scenario, because no default gate is below 101. `test_missing_research_counts_as_level_zero` kills it.
+
 ## Known limitations
 
 - **One shared random stream per account.** The simulator draws every session's gain from one per-account `training_rng`, in finish order (`sdk/simulation/game.py`). A change for one crew reshuffles every later gain of every crew, so two planners never see the same draws. The simulator is frozen for this unit. The benchmark averages three seeds and reports the spread; the gate stays exact (see [Seeds, determinism and the gate](#seeds-determinism-and-the-gate)).
@@ -422,7 +424,7 @@ Between the rounds, the QA loop killed all 25 neither mutants with `PlannerContr
 - **The simulator has no room or research reads, and no read faults on its reads** (follow-up for the simulator owner). `RecordingClient` builds `listRoomsViaAccessToken`, `listRoomDesigns2`, `listAllResearches` and `listAllResearchDesigns2` itself, and emulates a failed `listAllCharactersOfUser` with `snapshot()` and a clock rewind. Other simulator users (Unit 9's executor tests, the `run.py` simulation) do not get these reads, and the emulation depends on `snapshot()` ticking the clock exactly once. Moving the reads and the read-fault handling into `SimulatedGame` (`sdk/simulation/game.py`) would fix it once for everyone. The simulator is outside this unit's files, so the benchmark keeps the emulation for now.
 - **`BenchSubprocessRunner` duplicates `mutation.SubprocessTestRunner`** (follow-up for the owner of `scripts/mutation.py`). Both carry the same process lifecycle: the lock, the live set, the closed flag, a new session, kill on timeout or interrupt, `drain_killed` and `kill_all`. `SubprocessTestRunner` builds its own command and parses test output inside `__call__`, so it cannot be reused by composition without editing it. The benchmark reuses the public helpers it can (`child_environment`, `kill_process_tree`, `drain_killed`, `CHILD_TMP`). A shared runner in `scripts/mutation.py` that takes the command and the result parser would remove about 50 duplicated lines.
 - **Cap overshoot** is reported, not gated (see [Oracles](#oracles)).
-- **A design-research boundary is invisible to the benchmark.** Every gated catalog design needs a research named "Lv2" or "Lv3", so a planner that demanded level 2 instead of 1 for a design's own research behaves identically here. The planner tests catch that mutant.
+- **A design-research boundary is invisible to the benchmark.** Every gated catalog design needs course 201 or 203 of its line (Fitness for gym designs, Education for academy designs), so a planner that demanded a higher course for a design's own research behaves identically here. The planner tests catch that mutant.
 - **The script's own mutation target** is not in `automation/mutation/config.json`, because `tests/test_mutation_harness.py` requires every target path to start with `sdk/`. Measure it with `make mutation TARGET=scripts/training_benchmark.py TESTS="tests.test_training_benchmark" JOBS=6`. The `copy` list already covers the script and the scenarios. The full run measured 90.4% (2426 mutants: 2188 killed, 4 timeouts, 234 survived). Re-running the 234 survivors against the final tests killed 49 more, which puts the score at 92.4%. The rest are mostly message strings, dataclass defaults and response envelope keys that `build_context` ignores.
 - **The reusable-manifest sync.** `automation/reusable-manifest.json` syncs `automation/benchmark` as a whole directory (with `delete_stale`) into the reusable repo-automation template, so the crew-training scenarios and baseline are exported with it. Excluding the path is an owner decision.
 
@@ -432,10 +434,10 @@ These are what the metrics reveal about the owner-approved planner. None of them
 
 1. **Training at high fatigue for no gain.** The fatigue gate is at 100 only. In fatigued-crew the planner runs 216 sessions per seed that gain nothing, because sessions started at fatigue 99 draw 0. A planner that rests at 90 or more runs about 23, and scores higher (9.33 against 8.94). The planner never rests.
 2. **The band gate and the design gate disagree.** The band gate accepts either research family, but each design needs its own family's research.
-   - fitness-only: 484 `research_missing` skips. Weapons and shields crew pass the T2 band gate through Fitness Lv2, then fail on Education Lv2.
-   - long-run: 1124 (no Education Lv3 for the academy T3 designs).
+   - fitness-only: 484 `research_missing` skips. Weapons and shields crew pass the T2 band gate through Fitness 201, then fail on Education 201.
+   - long-run: 1124 (no Education 203 for the academy T3 designs).
    - mixed-rooms: 148 (gym designs need Fitness).
-   - consumable-windows: 608 (Education Lv1 only, so no T2 for the academy crew).
+   - consumable-windows: 608 (Education 101 only, so no T2 for the academy crew).
 3. **The design-research consumable fallback can never fire with the default rules.** The planner allows a consumable when a design's own research is missing. However, the Common rule needs 29% or less, where every band trains a T1 design that needs no research, and the Hero rule needs 90% or more, where no band applies. `test_each_consumable_rule` documents it.
 4. **Waiting to move is the largest idle share.** "move to" skips: mixed-rooms 464, consumable-windows 168, mid-level-crew 155, fault-contradicted 131, fresh-crew 127. This is a planner/executor gap: nothing can carry out a move.
 5. **Cap overshoot.** The last session can end above the cap: near-cap-crew 37 TP, fresh-crew 32, long-run 25, fault-contradicted 24. The planner has no gain-aware stop near the cap.

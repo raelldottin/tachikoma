@@ -59,7 +59,7 @@ The roadmap cannot be completed without these decisions. Each is asked once, rec
 | **G4** | Sanitized current captures of `SellItem3` and `Purchase4`; live trades on the test account with a value cap | M3 (market) | Not given |
 | **G5** | A second owned test account; operator-minute logging; live fleet runs | M4 | Not given |
 | **G6** | Sanitized captures of one room purchase with the ship and design records; one live room placement on the trial account | SPEC-13 | Approved 2026-11-12 for the captures, and used on 2026-11-13: run 43393262041 placed a verified Gas Collector Lv1 on `pss5` under [authorization-g6-pss5-place.json](../experiments/live/authorization-g6-pss5-place.json) |
-| **G8 (proposed)** | Approve one training account, its schedule, mineral and gas budgets, and the scheduled validation | SPEC-14 | Pending |
+| **G8** | Record the verified account, test window, mineral and gas budgets, and any recurring schedule | SPEC-14 | Owner approved live testing. Execution authorization pending. |
 
 ## Milestones
 
