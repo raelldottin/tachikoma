@@ -2265,6 +2265,7 @@ QA_COPY_PATHS = (
     "sdk",
     "tests",
     "scripts/ci.py",
+    "run.py",  # the mutation config copies it for the offline daily-run suite (#289); a workspace needs a superset
     "scripts/mutation.py",
     "scripts/training_benchmark.py",
     "automation/benchmark/training",
