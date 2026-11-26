@@ -1,6 +1,6 @@
 {
   "benchmark": "crew-training",
-  "composite": 65.184417,
+  "composite": 65.184847,
   "lowered": [],
   "qa_eval": {
     "equivalent": [],
@@ -32,8 +32,8 @@
       "trace_digest": "sha256:8108748d1a61b108975cc9edc14bdf329dd633d2254a6548d827a6c3e0c5f200"
     },
     "fault-snapshot": {
-      "score": 95.209864,
-      "trace_digest": "sha256:e6a7ae98a7eafbc4ae7ac6e2cf62e1c5b14ef75eef40e4b2e24fe1304f52e3d2"
+      "score": 95.216306,
+      "trace_digest": "sha256:d56dfa83673c2fb84bc212fccb4bf1f05bf5074dc7ca3064505ab09af0b9bdb1"
     },
     "fitness-only": {
       "score": 37.738796,

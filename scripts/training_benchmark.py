@@ -23,6 +23,7 @@ import threading
 import time
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Mapping, Sequence
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -392,6 +393,11 @@ def _int_in(value: object, low: int, high: int | None = None) -> bool:
     return _is_int(value) and value >= low and (high is None or value <= high)
 
 
+def _known(value: object, table: Mapping) -> bool:
+    """A catalog name in ``table``; a JSON list or object (unhashable) is simply not one."""
+    return isinstance(value, str) and value in table
+
+
 def _parse_start(value: object) -> datetime | None:
     if not isinstance(value, str):
         return None
@@ -416,7 +422,7 @@ def _validate_rooms(value: object, problems: list[str]) -> tuple[RoomSpec, ...]:
             problems.append(f"{where}.id: must be a positive integer")
         elif any(room.id == entry["id"] for room in rooms):
             problems.append(f"{where}.id: duplicate room id {entry['id']}")
-        elif entry["design"] not in CATALOG_ROOMS:
+        elif not _known(entry["design"], CATALOG_ROOMS):
             problems.append(f"{where}.design: unknown room design {entry['design']!r}")
         else:
             rooms.append(RoomSpec(entry["id"], entry["design"]))
@@ -444,7 +450,7 @@ def _validate_session(value: object, where: str, problems: list[str]) -> tuple[s
     if (
         not isinstance(value, Mapping)
         or set(value) != {"design", "ends_after_minutes"}
-        or value["design"] not in CATALOG_TRAININGS
+        or not _known(value["design"], CATALOG_TRAININGS)
         or not _int_in(value["ends_after_minutes"], 1)
     ):
         problems.append(f"{where}.training: needs a catalog training design and ends_after_minutes >= 1")
@@ -482,7 +488,7 @@ def _validate_crew(value: object, room_ids: set[int], problems: list[str]) -> tu
         design = CATALOG_CHARACTERS.get(entry["design"]) if isinstance(entry["design"], str) else None
         if design is None:
             problems.append(f"{where}.design: unknown character design {entry['design']!r}")
-        if not (entry["room"] == 0 and _is_int(entry["room"])) and entry["room"] not in room_ids:
+        if not (_is_int(entry["room"]) and (entry["room"] == 0 or entry["room"] in room_ids)):
             problems.append(f"{where}.room: {entry['room']!r} is neither 0 nor a declared room id")
         fatigue, level = entry.get("fatigue", 0), entry.get("level", 1)
         if not _int_in(fatigue, 0, 100):
@@ -513,7 +519,7 @@ def _validate_fault(entry: object, where: str, problems: list[str]) -> Mapping[s
     if "effect" in entry and kind not in ("raise", "ambiguous-response"):
         problems.append(f"{where}.effect: only raise and ambiguous-response faults take an effect")
     design = entry.get("training_design")
-    if kind == "contradicted-effect" and design not in CATALOG_TRAININGS:
+    if kind == "contradicted-effect" and not _known(design, CATALOG_TRAININGS):
         problems.append(f"{where}.training_design: contradicted-effect needs a catalog training design")
     elif kind != "contradicted-effect" and "training_design" in entry:
         problems.append(f"{where}.training_design: only contradicted-effect faults take a training design")
@@ -564,7 +570,7 @@ def validate_scenario(data: Mapping, *, source: str = "<scenario>") -> Scenario:
     rooms = _validate_rooms(get("rooms"), problems) if "rooms" in data else ()
     research = get("research", [])
     if not (isinstance(research, list) and len(set(map(str, research))) == len(research)) or any(
-        name not in CATALOG_RESEARCH for name in research
+        not _known(name, CATALOG_RESEARCH) for name in research
     ):
         problems.append(f"research: must be unique names among {', '.join(CATALOG_RESEARCH)}")
         research = []
@@ -582,7 +588,10 @@ def validate_scenario(data: Mapping, *, source: str = "<scenario>") -> Scenario:
         faults_raw = []
     for index, entry in enumerate(faults_raw):
         fault = _validate_fault(entry, f"faults[{index}]", problems)
-        if fault is not None:
+        if fault is not None and "day" in fault and _int_in(get("days"), 1, 30) and fault["day"] >= get("days"):
+            problems.append(f"faults[{index}].day: {fault['day']} is past the last day ({get('days') - 1}); "
+                            "it would never fire")
+        elif fault is not None:
             faults.append(fault)
     if problems:
         raise ScenarioError(problems, source)
@@ -875,10 +884,15 @@ class SimEnvironment:
         """build_context's payload keyword arguments (without now); ObservationError when a read fails."""
         game = self.game
         if self.world.read_faults:
+            # snapshot() reads the simulated clock, which ticks one second per reading; put it back so a read-fault
+            # scenario keeps the same tick times as a fault-free one.
+            now = self.clock.now
             try:
                 game.snapshot()
             except SimulatedFaultError as error:
                 raise ObservationError(str(error)) from None
+            finally:
+                self.clock.now = now
         game.listAllCharactersOfUser()
         game.listAllTrainingDesigns2()
         game.listAllCharacterDesigns2()
@@ -903,8 +917,11 @@ class SimEnvironment:
             result = getattr(self.game, method)(*args)
         except SimulatedFaultError as error:
             return CallOutcome("raised", str(error), tuple(self.game.fired[fired:]))
-        status = "ok" if result is True else "ambiguous" if result is None else "refused"
-        return CallOutcome(status, "", tuple(self.game.fired[fired:]))
+        faults = tuple(self.game.fired[fired:])
+        # useConsumable reports True for an activateItem3 with no reply, so a fired call fault decides "ambiguous".
+        if result is None or any(fault.endswith(": ambiguous-response") for fault in faults):
+            return CallOutcome("ambiguous", "", faults)
+        return CallOutcome("ok" if result is True else "refused", "", faults)
 
     def finish_response(self) -> object:
         return getattr(self.game, "trainingFinish", None)
@@ -1400,7 +1417,8 @@ def compute_metrics(episode: Episode) -> Metrics:
         dropped=recorder.dropped,
         replans=recorder.replans,
         violations=tuple(recorder.violations),
-        cap_overshoot_tp=sum(max(0, final[cid] - meta.cap) for cid, meta in world.crew.items()),
+        # TP pushed past the cap during the run; a crew that started above its cap only counts what it gained.
+        cap_overshoot_tp=sum(max(0, final[cid] - max(meta.cap, meta.initial_total)) for cid, meta in world.crew.items()),
         skip_reasons=dict(recorder.skip_reasons),
         skip_moves=recorder.skip_moves,
         consumables_used=recorder.consumables_used,
@@ -1506,7 +1524,9 @@ def gate(suite: SuiteResult, baseline: Mapping | None, *, deterministic: bool, s
     if baseline is None:
         return GateResult(False, (*reasons, "baseline_missing"))
     recorded = baseline["scenarios"]
-    if not subset and {result.name for result in suite.scenarios} != set(recorded):
+    names = {result.name for result in suite.scenarios}
+    # A full run must match the baseline's scenarios exactly; a --scenario subset must at least all be in it.
+    if (names - set(recorded)) if subset else (names != set(recorded)):
         reasons.append("baseline_mismatch")
     if not subset and suite.composite < baseline["composite"]:
         reasons.append("composite_below_baseline")
@@ -1517,8 +1537,8 @@ def gate(suite: SuiteResult, baseline: Mapping | None, *, deterministic: bool, s
             reasons.append(f"scenario_error:{result.name}")
         if entry is not None and result.score < entry["score"]:
             reasons.append(f"scenario_below_baseline:{result.name}")
-        if entry is not None and result.trace_digest != entry["trace_digest"]:
-            drift.append(result.name)
+        if entry is not None and result.error is None and result.trace_digest != entry["trace_digest"]:
+            drift.append(result.name)  # an errored scenario has no trace: it is a scenario_error, not drift
         if result.metrics is not None:
             for name, label in VIOLATION_REASONS:
                 if getattr(result.metrics, name):
@@ -1651,7 +1671,9 @@ def update_baseline(suite: SuiteResult, baseline: Mapping | None, *, determinist
     new["lowered"] = [dict(entry) for entry in baseline["lowered"]]
     new["qa_eval"] = baseline["qa_eval"]
     drops = []
-    if suite.composite < baseline["composite"]:
+    # A changed scenario set makes the composites incomparable (a new scenario below the mean is not a regression);
+    # the per-scenario checks below still catch every lowered or removed scenario.
+    if set(new["scenarios"]) == set(baseline["scenarios"]) and suite.composite < baseline["composite"]:
         drops.append(f"composite {baseline['composite']} -> {suite.composite}")
     for name, entry in sorted(baseline["scenarios"].items()):
         if name not in new["scenarios"]:
@@ -1750,6 +1772,7 @@ class BenchSubprocessRunner:
         self.kill = kill
         self._lock = threading.Lock()
         self._live: set = set()
+        self._closed = False
 
     def _kill(self, process) -> None:
         if self.kill is not None:
@@ -1775,12 +1798,20 @@ class BenchSubprocessRunner:
                              encoding="utf-8", errors="replace", **options)
         with self._lock:
             self._live.add(process)
+            closed = self._closed
         try:
-            output, errors = process.communicate(timeout=timeout)
-        except subprocess.TimeoutExpired:
+            if closed:  # started after kill_all (run_mutants is stopping): never left running
+                self._kill(process)
+            try:
+                output, errors = process.communicate(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                self._kill(process)
+                mutation.drain_killed(process)
+                return BenchOutcome("timeout")
+        except BaseException:
+            # Ctrl-C or SIGTERM in this thread: the child is in its own session and never saw the signal.
             self._kill(process)
-            mutation.drain_killed(process)
-            return BenchOutcome("timeout")
+            raise
         finally:
             with self._lock:
                 self._live.discard(process)
@@ -1798,6 +1829,7 @@ class BenchSubprocessRunner:
 
     def kill_all(self) -> None:
         with self._lock:
+            self._closed = True
             live = list(self._live)
         for process in live:
             self._kill(process)
@@ -1944,8 +1976,8 @@ def qa_eval(
         target_only = None if only is None else [mutant_id for mutant_id in only if mutant_id.startswith(rel + ":")]
         if target_only == []:
             continue
-        with open(os.path.join(repo_root, rel), encoding="utf-8") as handle:
-            source = handle.read()
+        # The bytes run_mutants writes (no newline translation), so the digests QaRunner records match.
+        source = mutation.read_source(Path(repo_root) / rel)
         generated = mutation.generate_mutants(rel, source)
         entries = [entry for entry in qa["equivalent"] if entry["id"].startswith(rel + ":")]
         stale = stale_equivalents(entries, generated)
@@ -2119,6 +2151,10 @@ def _usage_error(args: argparse.Namespace) -> str | None:
         return "--allow-lower needs --update-baseline"
     if args.update_baseline and (args.quick or args.seed is not None or args.scenario):
         return "--update-baseline runs the whole suite as checked in (no --quick, --seed or --scenario)"
+    if args.qa_eval and (args.gate or args.update_baseline or args.quick or args.seed is not None or args.scenario):
+        return "--qa-eval takes no --gate, --update-baseline, --quick, --seed or --scenario (it would ignore them)"
+    if args.gate and (args.update_baseline or args.quick or args.seed is not None):
+        return "--gate cannot run with --update-baseline, --quick or --seed (those runs are never gated)"
     return None
 
 

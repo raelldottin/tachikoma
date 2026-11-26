@@ -1230,7 +1230,7 @@ class QaEvalTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             baseline_path = os.path.join(directory, "baseline.json")
-            planner_source = open(os.path.join(bench.ROOT, "sdk", "training", "planner.py"), encoding="utf-8").read()
+            planner_source = mutation.read_source(Path(bench.ROOT) / "sdk" / "training" / "planner.py")
             first = mutation.generate_mutants("sdk/training/planner.py", planner_source)[0]
             equivalent = {"id": first.id, "original": first.original, "replacement": first.replacement,
                           "reason": "proved equivalent"}
@@ -1282,6 +1282,179 @@ class QaEvalTests(unittest.TestCase):
         self.assertLessEqual(set(config.copy), set(bench.QA_COPY_PATHS))
         mutation.validate_run("scripts/training_benchmark.py", ("tests.test_training_benchmark",),
                               Path(bench.ROOT), config.copy)
+
+
+class ReviewRegressionTests(unittest.TestCase):
+    """Regression coverage for defects found in the Unit 11 code review."""
+
+    def test_read_fault_observation_does_not_move_the_clock(self):
+        faults = [{"kind": "snapshot-failure", "method": "snapshot", "day": 0, "call": 2}]
+        scenario = bench.validate_scenario(mini(faults=faults))
+        world = bench.build_world(scenario)
+        self.assertTrue(world.read_faults)
+        env = bench.SimEnvironment(world, scenario, scenario.seed)
+        before = env.now()
+        env.observe()  # snapshot read 1: succeeds
+        self.assertEqual(env.now(), before)
+        with self.assertRaises(bench.ObservationError):
+            env.observe()  # snapshot read 2: the injected failure
+        self.assertEqual(env.now(), before)
+        env.observe()
+        self.assertEqual(env.now(), before)
+        # Over a whole episode, the read-fault scenario keeps whole-hour windows like a fault-free one.
+        metrics = bench.compute_metrics(bench.run_episode(scenario))
+        self.assertEqual(metrics.eligible_crew_hours, 24.0)
+
+    def test_ambiguous_consumable_reply_is_not_accepted(self):
+        for effect in (False, True):
+            with self.subTest(effect=effect):
+                faults = [{"kind": "ambiguous-response", "method": "activateItem3", "call": 1, "effect": effect}]
+                _, env, _ = observe_context(mini(faults=faults, inventory={"Common ATK Consumable": 2}))
+                outcome = env.call("useConsumable", ("5001", "101"))
+                self.assertEqual(outcome.status, "ambiguous")
+                self.assertEqual(outcome.faults, ("day 0 activateItem3 #1: ambiguous-response",))
+                recorder = bench.Recorder()
+                recorder.now = T0
+                crew = observe_context(mini())[2].crew[0]
+                recorder.executed(bench.UseConsumable(101, 5001, "use"), crew, outcome)
+                self.assertEqual((recorder.accepted, recorder.consumables_used), (0, 0))
+                self.assertEqual(recorder.outcomes["ambiguous"], 1)
+
+    def test_validate_scenario_reports_unhashable_values(self):
+        cases = {
+            "room design list": (mini(rooms=[{"id": 7001, "design": ["GYM"]}]), "rooms[0].design"),
+            "crew room list": (mini(crew=[captain(room=[7001])]), "crew[0].room"),
+            "crew design list": (mini(crew=[captain(design=["captain"])]), "crew[0].design"),
+            "session design object": (
+                mini(crew=[captain(training={"design": {}, "ends_after_minutes": 5})]), "crew[0].training"
+            ),
+            "fault design list": (
+                mini(faults=[{"kind": "contradicted-effect", "method": "addTraining", "training_design": []}]),
+                "training_design",
+            ),
+            "fault kind list": (mini(faults=[{"kind": ["reject"], "method": "addTraining"}]), "kind"),
+            "research nested list": (mini(research=[["Fitness"]]), "research"),
+        }
+        for name, (data, needle) in cases.items():
+            with self.subTest(case=name):
+                with self.assertRaises(bench.ScenarioError) as raised:
+                    bench.validate_scenario(data)
+                self.assertIn(needle, str(raised.exception))
+
+    def test_fault_day_beyond_the_scenario_is_rejected(self):
+        late = {"kind": "reject", "method": "addTraining", "day": 1, "call": 1}
+        with self.assertRaises(bench.ScenarioError) as raised:
+            bench.validate_scenario(mini(days=1, faults=[late]))
+        self.assertIn("faults[0].day", str(raised.exception))
+        self.assertEqual(bench.validate_scenario(mini(days=2, faults=[late])).faults, (late,))
+        with self.assertRaises(bench.ScenarioError) as raised:
+            bench.validate_scenario(mini(days=0, faults=[late]))
+        self.assertEqual(len(raised.exception.problems), 1)  # only days: no fault-day noise from bad days
+
+    def test_gate_subset_needs_baseline_entries_and_errors_are_not_drift(self):
+        baseline = synthetic_baseline({"a": 50.0, "b": 70.0})
+        unknown = bench.gate(synthetic_suite({"c": 99.0}), baseline, deterministic=True, subset=True)
+        self.assertFalse(unknown.passed)
+        self.assertEqual(unknown.reasons, ("baseline_mismatch",))
+        errored = bench.SuiteResult((bench.ScenarioResult("a", 1, None, 0.0, "", "Boom"),
+                                     bench.ScenarioResult("b", 1, bench.Metrics(), 70.0, DIGEST_A)), 35.0)
+        verdict = bench.gate(errored, baseline, deterministic=True)
+        self.assertIn("scenario_error:a", verdict.reasons)
+        self.assertEqual(verdict.drift, ())
+
+    def test_update_baseline_accepts_a_new_lower_scenario(self):
+        old = synthetic_baseline({"a": 50.0, "b": 70.0})
+        added = bench.update_baseline(synthetic_suite({"a": 50.0, "b": 70.0, "c": 20.0}), old, deterministic=True,
+                                      allow_lower=None)
+        self.assertEqual(added["composite"], 46.666667)
+        self.assertEqual(added["lowered"], [])
+        with self.assertRaisesRegex(bench.BaselineRefused, "b 70.0 -> 69.0"):
+            bench.update_baseline(synthetic_suite({"a": 50.0, "b": 69.0, "c": 99.0}), old, deterministic=True,
+                                  allow_lower=None)
+
+    def test_cap_overshoot_ignores_crew_that_started_above_cap(self):
+        huntress = {"id": 3, "name": "Huntress", "design": "unique", "room": 7001, "stats": {"Attack": 80}}
+        scenario = bench.validate_scenario(mini(crew=[captain(), huntress]))
+        world = bench.build_world(scenario)
+        self.assertLess(world.crew[3].cap, 80)
+        episode = bench.run_episode(scenario)
+        self.assertEqual(episode.final[3], 80)
+        self.assertEqual(bench.compute_metrics(episode).cap_overshoot_tp, 0)
+        crew = dict(world.crew)
+        crew[3] = bench.replace(crew[3], initial_total=60)  # had it started below cap, the 20 TP over cap counts
+        self.assertEqual(bench.compute_metrics(bench.replace(episode, world=bench.replace(world, crew=crew)))
+                         .cap_overshoot_tp, 10)
+
+    def test_bench_subprocess_kills_child_on_interrupt_and_after_kill_all(self):
+        class Interrupted(FakeProcess):
+            def communicate(self, timeout=None):
+                raise KeyboardInterrupt
+
+        killed = []
+        process = Interrupted()
+        with tempfile.TemporaryDirectory() as workspace:
+            runner = bench.BenchSubprocessRunner(popen=lambda command, **options: process, kill=killed.append)
+            with self.assertRaises(KeyboardInterrupt):
+                runner(workspace, 5.0)
+            self.assertEqual(killed, [process])
+            self.assertEqual(runner._live, set())
+            killed.clear()
+            late = FakeProcess(0, json.dumps({"gate": {"passed": True, "reasons": [], "drift": []}}))
+            runner = bench.BenchSubprocessRunner(popen=lambda command, **options: late, kill=killed.append)
+            runner.kill_all()
+            runner(workspace, 5.0)
+            self.assertEqual(killed, [late])
+
+    def test_qa_eval_matches_outcomes_on_a_crlf_target(self):
+        source = TOY_SOURCE.replace("\n", "\r\n")
+        rel = "sdk/toy.py"
+
+        def fake_run_mutants(target, tests, **kwargs):
+            raw = mutation.read_source(Path(kwargs["repo_root"]) / target)
+            results = []
+            with tempfile.TemporaryDirectory() as workspace:
+                os.makedirs(os.path.join(workspace, "sdk"))
+                for mutant in kwargs["generated"]:
+                    with open(os.path.join(workspace, target), "wb") as handle:
+                        handle.write(mutation.apply_mutant(raw, mutant).encode("utf-8"))
+                    run = kwargs["test_runner"](workspace, tuple(tests), 10.0)
+                    results.append(mutation.MutantResult(mutant, "killed" if run.status == "failed" else "survived",
+                                                         0.0, ""))
+            return mutation.Report(target, tuple(tests), tuple(results), 1.0, 10.0)
+
+        with tempfile.TemporaryDirectory() as repo:
+            os.makedirs(os.path.join(repo, "sdk"))
+            with open(os.path.join(repo, rel), "wb") as handle:
+                handle.write(source.encode("utf-8"))
+            with mock.patch.object(mutation, "run_mutants", fake_run_mutants):
+                result = bench.qa_eval(
+                    targets=(rel,), repo_root=repo, baseline_path=os.path.join(repo, "none.json"),
+                    tests_runner=lambda ws, tests, timeout: mutation.RunResult("passed", 0.0, "", 1),
+                    bench_runner=lambda ws, timeout: bench.BenchOutcome("detected", ("caught",)),
+                )
+        self.assertGreater(result["overall"]["eligible"], 0)
+        self.assertEqual(result["overall"]["counts"]["benchmark-only"], result["overall"]["eligible"])
+        self.assertEqual(result["overall"]["detection_rate"], 1.0)
+
+    def test_usage_rejects_flags_that_would_be_ignored(self):
+        parser = bench.build_parser()
+        for argv in (
+            ["--gate", "--quick"],
+            ["--gate", "--seed", "5"],
+            ["--gate", "--update-baseline"],
+            ["--qa-eval", "--scenario", "mini"],
+            ["--qa-eval", "--quick"],
+            ["--qa-eval", "--seed", "1"],
+            ["--qa-eval", "--update-baseline"],
+            ["--qa-eval", "--gate"],
+        ):
+            with self.subTest(argv=argv):
+                self.assertIsNotNone(bench._usage_error(parser.parse_args(argv)))
+                with contextlib.redirect_stderr(io.StringIO()):
+                    self.assertEqual(bench.main(argv), bench.EXIT_ERROR)
+        for argv in ([], ["--gate"], ["--quick"], ["--seed", "3"], ["--gate", "--scenario", "x"], ["--qa-eval"]):
+            with self.subTest(ok=argv):
+                self.assertIsNone(bench._usage_error(parser.parse_args(argv)))
 
 
 if __name__ == "__main__":

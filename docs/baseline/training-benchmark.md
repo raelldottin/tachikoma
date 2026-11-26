@@ -17,8 +17,8 @@ make training-benchmark ARGS="--qa-eval --jobs 8"        # local only, about 15 
 | Flag | Meaning |
 | --- | --- |
 | `--gate` | The default mode: run the suite twice in-process, compare the reports byte for byte, gate against `baseline.json`. |
-| `--scenario NAME` | Run only this scenario (repeatable). Only the listed scenarios are gated, and the composite is not compared. |
-| `--quick` | Override every scenario to 2 days. Report only, never gated. |
+| `--scenario NAME` | Run only this scenario (repeatable). Only the listed scenarios are gated (each must be in the baseline), and the composite is not compared. |
+| `--quick` | Override every scenario to 2 days. Report only, never gated (faults after day 1 do not fire). |
 | `--seed N` | Override every scenario's seed. Report only, never gated. |
 | `--json PATH` | Write the JSON report, with a `gate` object in gate mode. `-` prints it instead of the markdown. |
 | `--markdown PATH`, `--summary PATH` | Write, or append (for `$GITHUB_STEP_SUMMARY`), the markdown report. |
@@ -26,6 +26,8 @@ make training-benchmark ARGS="--qa-eval --jobs 8"        # local only, about 15 
 | `--scenarios-dir`, `--baseline` | Other inputs (the tests use temporary ones). |
 | `--update-baseline`, `--allow-lower REASON` | See [Gate and baseline](#gate-and-baseline). |
 | `--qa-eval`, `--jobs`, `--timeout`, `--only ID...`, `--qa-target PATH...`, `--channels tests,benchmark` | See [qa-eval](#qa-eval). |
+
+Flags a mode would ignore are a usage error (exit 2): `--gate` with `--update-baseline`, `--quick` or `--seed`, and `--qa-eval` with `--gate`, `--update-baseline`, `--quick`, `--seed` or `--scenario`.
 
 The CI job `training-benchmark` in `.github/workflows/python-tests.yml` runs `make training-benchmark ARGS="--gate --json training-benchmark.json --summary $GITHUB_STEP_SUMMARY"` and uploads the JSON report. It is blocking: `blocking-ci.yml` calls that workflow as its `tests` job, which `CI required` needs. Locally the gate takes about 3 seconds (the 15 scenarios, run twice).
 
@@ -86,7 +88,7 @@ The schema is strict: an unknown key is an error, and `validate_scenario` report
 - `research`: unique `CATALOG_RESEARCH` names.
 - `inventory`: `{item name: quantity}`.
 - `crew`: `{"id", "name", "design", "room"}` (room 0 means none) plus optional `fatigue` (0-100), `level`, `stats` (simulator stat names; the total must stay within capacity) and `training` (`{"design", "ends_after_minutes"}` for a session already running).
-- `faults`: `{"kind", "method", "day"?, "call"?, "probability"?}`, where the kind is one of `reject`, `contradicted-effect`, `raise`, `ambiguous-response` and `snapshot-failure`. `raise` and `ambiguous-response` take an optional `effect`; `contradicted-effect` needs a `training_design` (a catalog name). The simulator's `Fault` re-validates every fault.
+- `faults`: `{"kind", "method", "day"?, "call"?, "probability"?}`, where the kind is one of `reject`, `contradicted-effect`, `raise`, `ambiguous-response` and `snapshot-failure`. `raise` and `ambiguous-response` take an optional `effect`; `contradicted-effect` needs a `training_design` (a catalog name). A fault `day` must be before `days` (a later one would never fire). The simulator's `Fault` re-validates every fault.
 
 ## Metrics and score
 
@@ -97,7 +99,7 @@ E is the set of eligible crew: those with a role in the oracle table and a room 
 | P, progress AUC | `sum over days d of G_d / (D * H)`, where `G_d = sum over E of min(headroom_i, max(0, T_i(d) - T0_i))` and `T_i(d)` is the total at the end of day d. P rewards getting there sooner. |
 | U, utilisation | `1 - idle / eligible` crew-seconds. A crew's window runs from the start until its first finish or item use that reaches its cap or 90% of capacity, or until the horizon. Busy time is the union of its sessions; collection delay and "move to" waits count as idle. A crew that starts at its cap or at 90% has no window. U is 1.0 when there is no window at all. |
 | F, focus | TP gained in the role's focus stats (weapons: Weapon/Attack, shields: Science/Attack, engines: Attack/Engine, rushers: Stamina/Attack, defenders: Attack/Hp), as a share of all TP gained by E. 0 when nothing was gained. |
-| R, reliability | `accepted / (accepted + refused)` executed calls. A refusal caused by an injected `reject` fault does not count. 1.0 when nothing ran. |
+| R, reliability | `accepted / (accepted + refused)` executed calls. A refusal caused by an injected `reject` fault does not count. A call with no reply (an `ambiguous-response` fault, including on `activateItem3` behind `useConsumable`) is ambiguous, neither accepted nor refused. 1.0 when nothing ran. |
 
 ```text
 score     = 0                                              if the run errored, or any hard violation occurred
@@ -128,7 +130,7 @@ Each oracle judges the crew state its decision was made from (the rebuilt crew f
 | `consumable_violations` | An executed UseConsumable whose item is not a catalog consumable, whose tier rule does not allow the crew's percent and fatigue, whose crew has no role, or whose crew is not in a training room. |
 | `research_gate_violations` | An executed StartTraining below 90% whose band gate is not met by the observed research. |
 
-**Cap overshoot is reported, not gated.** The planner cannot know a session's gain in advance, so a session started below the cap can end above it. Gating "total above cap" would fail the unmutated planner, so the gate counts acting at or above the cap, and `cap_overshoot_tp` reports the overshoot.
+**Cap overshoot is reported, not gated.** The planner cannot know a session's gain in advance, so a session started below the cap can end above it. Gating "total above cap" would fail the unmutated planner, so the gate counts acting at or above the cap, and `cap_overshoot_tp` reports the overshoot: the TP above `max(cap, starting total)`, so a crew that started above its cap only counts what it gained.
 
 The unmodified planner triggers no oracle in any scenario.
 
@@ -138,15 +140,15 @@ The unmodified planner triggers no oracle in any scenario.
 
 - `nondeterministic`: the two in-process reports differ.
 - `baseline_missing`: no baseline file (exit 2).
-- `baseline_mismatch`: the scenario set differs from the baseline.
+- `baseline_mismatch`: the scenario set differs from the baseline (with `--scenario`: a listed scenario is not in it).
 - `composite_below_baseline`.
 - `scenario_below_baseline:<name>`.
 - `cap_violation:<name>`, `consumable_violation:<name>`, `research_gate_violation:<name>`.
 - `scenario_error:<name>`.
 
-The trace digest is a sha256 of the decision trace and the simulator log. A digest that differs from the baseline is reported as drift (behaviour changed while the scores held). Drift is a warning, never a failure.
+The trace digest is a sha256 of the decision trace and the simulator log. A digest that differs from the baseline is reported as drift (behaviour changed while the scores held). Drift is a warning, never a failure. An errored scenario is a `scenario_error`, never drift.
 
-`--update-baseline` always runs the determinism check first. It refuses (exit 1) a nondeterministic run, a scenario error or any hard violation. It writes the file when every score is at or above the old one; equal scores refresh the digests, and new scenarios are added. Any lower score, a lower composite or a removed scenario is refused unless `--allow-lower REASON` gives a non-empty reason, which is then appended to `lowered`. The `qa_eval` block is always kept as it is.
+`--update-baseline` always runs the determinism check first. It refuses (exit 1) a nondeterministic run, a scenario error or any hard violation. It writes the file when every score is at or above the old one; equal scores refresh the digests, and new scenarios are added. Any lower score, a removed scenario, or a lower composite over the same scenario set is refused (a new scenario that scores below the mean is not a regression) unless `--allow-lower REASON` gives a non-empty reason, which is then appended to `lowered`. The `qa_eval` block is always kept as it is.
 
 ### Measured baseline
 
@@ -160,7 +162,7 @@ These are the scores of the unmodified planner as checked in (seeded, byte-ident
 | fault-contradicted | 81.124174 | 0.887 | 0.544 | 0.985 | 1.000 | 344 | 131 / 287 | 24 | 0 |
 | fault-raise | 88.334199 | 0.823 | 0.994 | 1.000 | 1.000 | 358 | 1 / 165 | 18 | 0 |
 | fault-reject | 90.537546 | 0.864 | 0.974 | 1.000 | 1.000 | 163 | 2 / 78 | 13 | 0 |
-| fault-snapshot | 95.209864 | 0.944 | 0.954 | 1.000 | 1.000 | 248 | 5.03 / 109.03 | 8 | 0 |
+| fault-snapshot | 95.216306 | 0.944 | 0.954 | 1.000 | 1.000 | 248 | 5 / 109 | 8 | 0 |
 | fitness-only | 37.738796 | 0.407 | 0.051 | 1.000 | 1.000 | 57 | 484 / 510 | 0 | 0 |
 | fresh-crew | 83.666527 | 0.892 | 0.626 | 1.000 | 1.000 | 465 | 127 / 340 | 32 | 0 |
 | long-run | 70.071850 | 0.832 | 0.240 | 1.000 | 1.000 | 767 | 1124 / 1478 | 25 | 0 |
@@ -169,7 +171,7 @@ These are the scores of the unmodified planner as checked in (seeded, byte-ident
 | mixed-rooms | 42.932331 | 0.466 | 0.105 | 1.000 | 1.000 | 138 | 612 / 684 | 0 | 0 |
 | near-cap-crew | 94.428571 | 0.914 | 1.000 | 1.000 | 1.000 | 133 | 0 / 52 | 37 | 0 |
 | no-training-room | 61.342687 | 0.733 | 0.149 | 1.000 | 1.000 | 52 | 143 / 168 | 0 | 0 |
-| **composite** | **65.184417** | | | | | | | | |
+| **composite** | **65.184847** | | | | | | | | |
 
 ## qa-eval
 
@@ -201,7 +203,7 @@ A smoke run of three mutants (`--only sdk/training/planner.py:374:13:compare:0 s
 ## Known gaps
 
 - **No room moves.** Neither the simulator nor the client can move crew between rooms. Weapons, shields and engines crew wait on `not_in_training_room` "move to ..." from 72%. Every planner pays the same cost and the baseline absorbs it. It shows in `skip_moves` and in the idle hours.
-- **Snapshot faults** are modelled only as failed observations: the tick is skipped. The planner never sees a stale or foreign snapshot.
+- **Snapshot faults** are modelled only as failed observations: the tick is skipped. The planner never sees a stale or foreign snapshot. The snapshot read does not move the simulated clock, so a read-fault scenario keeps the same tick times as a fault-free one.
 - **Cap overshoot** is reported, not gated (see [Oracles](#oracles)).
 - **Research never arrives mid-run.** The simulator completes "Researching" entries at a day boundary, so scenarios list only completed research.
 - **The script's own mutation target** is not in `automation/mutation/config.json`, because `tests/test_mutation_harness.py` requires every target path to start with `sdk/`. Measure it with `python scripts/mutation.py --target scripts/training_benchmark.py --tests tests.test_training_benchmark`.
