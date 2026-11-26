@@ -864,7 +864,8 @@ class FakePss:
         self._check_version(p, "Training")
         rows = [el("TrainingDesign", {"TrainingDesignId": d.id, "TrainingName": d.name, "Stat": d.stat,
                                       "Gain": d.gain, "Fatigue": d.fatigue,
-                                      "Duration": int(d.duration.total_seconds())})
+                                      "Duration": int(d.duration.total_seconds()),
+                                      **({"PriceString": d.price} if d.price is not None else {})})
                 for d in self.state.training_designs]
         return envelope("TrainingService", "ListAllTrainingDesigns", el("TrainingDesigns", None, *rows))
 
@@ -950,6 +951,14 @@ class FakePss:
     def _h_items(self, p: dict) -> str:
         rows = [el("Item", {"ItemId": i.id, "ItemDesignId": i.design_id, "Quantity": i.quantity})
                 for i in self.state.items]
+        if self.state.report_resource_items:
+            resources = self.state.resources
+            rows.extend((
+                el("Item", {"ItemId": "900001", "ItemDesignId": "1", "ItemType": "Mineral",
+                            "Quantity": resources.mineral}),
+                el("Item", {"ItemId": "900002", "ItemDesignId": "2", "ItemType": "Gas",
+                            "Quantity": resources.gas}),
+            ))
         return envelope("ItemService", "ListItemsOfAShip", el("Items", None, *rows))
 
     def _h_add_starbux(self, p: dict) -> str:
@@ -1027,6 +1036,13 @@ class FakePss:
             raise _Reject("Crew must be in a training room")
         if crew.session and not crew.session.applied:
             raise _Reject("Crew is already training")
+        if design.price is not None:
+            kind, cost = parse_price(design.price)
+            wallet, field = (self.state.account, "credits") if kind == "starbux" else (self.state.resources, kind)
+            balance = getattr(wallet, field)
+            if cost > balance:
+                raise _Reject(f"Not enough {kind} for training")
+            setattr(wallet, field, balance - cost)
         crew.session = TrainingSession(design.id, self.now, self.now + design.duration)  # TrainingEndDate follows
         return envelope("TrainingService", "AddTraining", el("Character", self._character_attrs(crew)))
 

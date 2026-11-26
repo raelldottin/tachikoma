@@ -1,0 +1,75 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "id": "holdout-paid-one-mineral-short",
+      "kind": "paid-boundary",
+      "seeds": [907],
+      "input": {
+        "account": "holdout-alpha",
+        "minerals": 749,
+        "gas": 1100,
+        "mineral_reserve": 250,
+        "course_mineral_cost": 500,
+        "character_id": 1003,
+        "character_design_id": 503,
+        "character_name": "Delish",
+        "room_id": 102,
+        "course_id": 11,
+        "course_name": "Read Expert Weapon Theory",
+        "research": {"Education": 1}
+      },
+      "expected": {
+        "add_training_requests": 0,
+        "mineral_delta": 0,
+        "gas_delta": 0,
+        "verified_starts": 0
+      }
+    },
+    {
+      "id": "holdout-repair-over-shield-score",
+      "kind": "role-coverage",
+      "seeds": [1223],
+      "input": {
+        "roles": ["shields", "repair", "weapons"],
+        "crew": [
+          {"character_id": 741, "display_name": "Orchard", "science": 17, "repair": 0, "weapon": 0},
+          {"character_id": 516, "display_name": "Harbor", "science": 0, "repair": 0, "weapon": 13},
+          {"character_id": 224, "display_name": "Orchard", "science": 21, "repair": 15, "weapon": 0}
+        ]
+      },
+      "expected": {
+        "assignments": {"shields": 741, "repair": 224, "weapons": 516},
+        "unfilled_roles": [],
+        "add_training_requests": 0
+      }
+    },
+    {
+      "id": "holdout-success-with-a-different-course",
+      "kind": "reconciliation",
+      "seeds": [2089],
+      "input": {
+        "account": "holdout-bravo",
+        "character_id": 662,
+        "requested_course_id": 74,
+        "initial_course_id": null,
+        "initial_training_end": null,
+        "course_mineral_cost": 500,
+        "minerals": 800,
+        "server_reports_success": true,
+        "observed_course_id": 75,
+        "observation_time": "2026-01-09T18:30:00Z",
+        "observed_training_end": "2026-01-09T19:30:00Z",
+        "next_candidate": {"character_id": 199, "course_id": 76}
+      },
+      "expected": {
+        "add_training_requests": 1,
+        "verified_starts": 0,
+        "mineral_delta": -500,
+        "gas_delta": 0,
+        "account_training_paused": true,
+        "next_dispatch_add_training_requests": 0
+      }
+    }
+  ]
+}
