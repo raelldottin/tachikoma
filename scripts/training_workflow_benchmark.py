@@ -104,8 +104,13 @@ def observe_legacy_training(vector, seed):
     if course.name != vector["course_name"]:
         raise ValueError("fixture course ID and name identify different courses")
     course.price = f"mineral:{vector['course_mineral_cost']}"
-    for index, (family, level) in enumerate(vector["research"].items(), start=10):
-        world.research_designs.append(ResearchDesign(str(index), str(index), f"{family} Lv{level}", 0))
+    # The manifest names semantic training tiers. The game reports course numbers.
+    research_courses = {1: 101, 2: 201, 3: 203}
+    for index, (family, tier) in enumerate(vector["research"].items(), start=10):
+        if family not in ("Education", "Fitness") or type(tier) is not int or tier not in research_courses:
+            raise ValueError(f"unknown training research fixture: {family!r} tier {tier!r}")
+        name = f"{family} {research_courses[tier]}"
+        world.research_designs.append(ResearchDesign(str(index), str(index), name, 0))
         world.researches.append(Research(str(index)))
 
     fake = FakePss(world, seed=seed)
