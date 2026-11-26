@@ -3,6 +3,7 @@
 import ast
 import copy
 from contextlib import redirect_stderr, redirect_stdout
+from datetime import date, datetime, timedelta, timezone
 import hashlib
 import io
 import json
@@ -2333,6 +2334,273 @@ class WorkflowPolicyTests(unittest.TestCase):
             text = json.dumps(self.documents[filename])
             for forbidden in ("secrets.", "secrets: inherit", "--run-battle", "pss_langgraph_automation"):
                 self.assertNotIn(forbidden, text)
+
+
+PSS5_WORKFLOWS = ("daily-run.yml", "live-trial.yml", "live-trial-schedule.yml")
+
+
+class SerializedLegacyRunTests(unittest.TestCase):
+    """S06-R6: an authorization that claims legacy_run_serialized is checked against the three pss5 workflows."""
+
+    def setUp(self):
+        self.documents = ci.workflow_documents(ci.ROOT)
+        self.serialized = ci.serialized_authorizations(ci.ROOT)
+
+    # Verifies: S06-R6
+    def test_the_committed_files_claim_serialized_and_the_workflows_honour_it(self):
+        self.assertEqual(
+            self.serialized,
+            [
+                f"docs/experiments/live/authorization-{name}.json"
+                for name in ("g2-pss5-canary", "g2-pss5-trial", "g6-pss5-place", "g7-pss5-ship")
+            ],
+        )
+        self.assertIsNone(ci.check_serialized_legacy_run(self.documents, self.serialized))
+        for filename in PSS5_WORKFLOWS:
+            with self.subTest(filename=filename):
+                self.assertEqual(
+                    self.documents[filename]["concurrency"], {"group": "live-trial", "cancel-in-progress": "false"}
+                )
+
+    # Verifies: S06-R6
+    def test_each_way_of_breaking_the_shared_group_fails_its_own_check(self):
+        mutations = {
+            "missing": ("must set a workflow-level concurrency group", lambda doc: doc.pop("concurrency")),
+            "shorthand": (
+                "must set a workflow-level concurrency group",
+                lambda doc: doc.__setitem__("concurrency", "live-trial"),
+            ),
+            "renamed": (
+                "must share one concurrency group",
+                lambda doc: doc["concurrency"].__setitem__("group", "pss5-other"),
+            ),
+            "expression": (
+                "fixed name, not an expression",
+                lambda doc: doc["concurrency"].__setitem__("group", "${{ github.workflow }}"),
+            ),
+            "cancel_true": (
+                "cancel-in-progress: false",
+                lambda doc: doc["concurrency"].__setitem__("cancel-in-progress", "true"),
+            ),
+            "cancel_missing": ("cancel-in-progress: false", lambda doc: doc["concurrency"].pop("cancel-in-progress")),
+            "job_level": ("must set a workflow-level concurrency group", self.move_to_job),
+            "job_level_too": ("only at the workflow level", self.copy_to_job),
+        }
+        for filename in PSS5_WORKFLOWS:
+            for mutation, (message, apply) in mutations.items():
+                docs = copy.deepcopy(self.documents)
+                apply(docs[filename])
+                with self.subTest(filename=filename, mutation=mutation):
+                    with self.assertRaisesRegex(ValueError, re.escape(message)):
+                        ci.check_serialized_legacy_run(docs, self.serialized)
+                    # The general workflow policy alone would not have caught it.
+                    if mutation not in ("job_level", "job_level_too"):
+                        self.assertIsNone(ci.check_workflows(docs))
+
+    @staticmethod
+    def move_to_job(document):
+        next(iter(document["jobs"].values()))["concurrency"] = document.pop("concurrency")
+
+    @staticmethod
+    def copy_to_job(document):
+        next(iter(document["jobs"].values()))["concurrency"] = dict(document["concurrency"])
+
+    # Verifies: S06-R6
+    def test_the_rule_applies_only_while_a_file_claims_serialized(self):
+        docs = copy.deepcopy(self.documents)
+        for filename in PSS5_WORKFLOWS:
+            docs[filename].pop("concurrency")
+        self.assertIsNone(ci.check_serialized_legacy_run(docs, []))
+        with self.assertRaisesRegex(ValueError, "authorization-x.json"):
+            ci.check_serialized_legacy_run(docs, ["docs/experiments/live/authorization-x.json"])
+
+    # Verifies: S06-R6
+    def test_serialized_authorizations_finds_every_claim_under_the_live_directory(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.assertEqual(ci.serialized_authorizations(root), [])
+            live = root / "docs/experiments/live"
+            (live / "nested").mkdir(parents=True)
+            files = {
+                "authorization-a.json": {"legacy_run_serialized": [5]},
+                "authorization-b.json": {"legacy_run_skipped": [5]},
+                "nested/authorization-c.json": {"legacy_run_serialized": []},
+                "registry-d.json": {"version": 1, "accounts": []},
+                "list.json": [{"legacy_run_serialized": [5]}],
+            }
+            for name, payload in files.items():
+                (live / name).write_text(json.dumps(payload), encoding="utf-8")
+            (root / "docs/experiments/authorization-outside.json").write_text(
+                json.dumps({"legacy_run_serialized": [5]}), encoding="utf-8"
+            )
+            self.assertEqual(
+                ci.serialized_authorizations(root),
+                [
+                    "docs/experiments/live/authorization-a.json",
+                    "docs/experiments/live/nested/authorization-c.json",
+                ],
+            )
+            (live / "broken.json").write_text("{", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "broken.json"):
+                ci.serialized_authorizations(root)
+
+    # Verifies: S06-R6
+    def test_the_repository_check_runs_the_serialized_rule(self):
+        docs = copy.deepcopy(self.documents)
+        docs["daily-run.yml"].pop("concurrency")
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "docs/experiments/live").mkdir(parents=True)
+            (root / "docs/experiments/live/authorization-a.json").write_text(
+                json.dumps({"legacy_run_serialized": [5]}), encoding="utf-8"
+            )
+            with (
+                patch.object(ci, "workflow_documents", return_value=docs),
+                patch.object(ci, "check_workflows"),
+                patch.object(ci, "check_mutation_policy", side_effect=AssertionError("ran past the rule")),
+            ):
+                with self.assertRaisesRegex(ValueError, "daily-run.yml must set a workflow-level concurrency group"):
+                    ci.check_repository(root)
+
+
+TRIAL_STEP_NAME = "Decide today's step"
+
+
+def trial_days(start, end):
+    first, last = date.fromisoformat(start), date.fromisoformat(end)
+    return [first + timedelta(days=offset) for offset in range((last - first).days + 1)]
+
+
+@skip_unless_dependency(shutil.which("bash"), "the trial's day decision is a bash step")
+class TrialScheduleDecisionTests(unittest.TestCase):
+    """live-trial-schedule.yml's "Decide today's step", run as written with a stubbed `date`."""
+
+    def setUp(self):
+        self.workflow = ci.workflow_documents(ci.ROOT)["live-trial-schedule.yml"]
+        job = self.workflow["jobs"]["trial"]
+        self.script = next(step for step in job["steps"] if step.get("name") == TRIAL_STEP_NAME)["run"]
+        self.stop_file = job["env"]["STOP_FILE"]
+        self.crons = [entry["cron"] for entry in self.workflow["on"]["schedule"]]
+        self.schedule = json.loads(
+            (ci.ROOT / "docs/experiments/r2-progression-trial/schedule.json").read_text(encoding="utf-8")
+        )
+
+    def decide(self, today, *, schedule=None, stop=False):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            fake = root / "bin/date"
+            fake.parent.mkdir()
+            fake.write_text('#!/bin/sh\n[ "$*" = "-u +%F" ] || exit 9\necho "$FAKE_TODAY"\n', encoding="utf-8")
+            fake.chmod(0o755)
+            if stop:
+                (root / self.stop_file).parent.mkdir(parents=True)
+                (root / self.stop_file).write_text("", encoding="utf-8")
+            output = root / "github-output"
+            result = subprocess.run(
+                ["bash", "-c", self.script],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                env={
+                    "PATH": f"{fake.parent}{os.pathsep}{os.environ.get('PATH', '')}",
+                    "FAKE_TODAY": str(today),
+                    "SCHEDULE": self.crons[0] if schedule is None else schedule,
+                    "STOP_FILE": self.stop_file,
+                    "GITHUB_OUTPUT": str(output),
+                },
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            pairs = dict(line.split("=", 1) for line in output.read_text(encoding="utf-8").splitlines())
+            return pairs["snapshot"], pairs["execute"]
+
+    def test_one_cron_in_a_gap_of_the_daily_run(self):
+        self.assertEqual(self.crons, ["30 4 * * *"])
+        daily = ci.workflow_documents(ci.ROOT)["daily-run.yml"]["on"]["schedule"]
+        self.assertEqual([entry["cron"] for entry in daily], ["0 0 * * *", "0 8 * * *", "0 16 * * *"])
+
+    def test_every_date_boundary(self):
+        cases = {
+            "2026-11-16": ("no", "no"),  # the day before the first run that closes a trial day
+            "2026-11-17": ("yes", "no"),  # closes trial day 2026-11-16, the first
+            "2026-11-29": ("yes", "no"),  # closes 2026-11-28; 2026-11-29 is still manual
+            "2026-11-30": ("yes", "yes"),  # closes manual 2026-11-29, opens automated 2026-11-30
+            "2026-12-06": ("yes", "yes"),
+            "2026-12-13": ("yes", "yes"),  # the last automated day
+            "2026-12-14": ("yes", "no"),  # closes automated 2026-12-13; 2026-12-14 is manual
+            "2026-12-21": ("yes", "no"),  # closes trial day 2026-12-20, the last
+            "2026-12-22": ("no", "no"),  # the day after
+        }
+        for today, expected in cases.items():
+            with self.subTest(today=today):
+                self.assertEqual(self.decide(today), expected)
+
+    def test_a_stop_file_stops_only_the_execute_run(self):
+        self.assertEqual(self.decide("2026-12-01", stop=True), ("yes", "stopped"))
+        self.assertEqual(self.decide("2026-11-25", stop=True), ("yes", "no"))
+        self.assertEqual(self.decide("2026-12-21", stop=True), ("yes", "no"))
+
+    def test_any_other_trigger_does_nothing(self):
+        for schedule in ("", "30 23 * * *", "30 0 * * *", "0 4 * * *"):
+            with self.subTest(schedule=schedule):
+                self.assertEqual(self.decide("2026-12-01", schedule=schedule), ("no", "no"))
+
+    def test_the_runs_cover_exactly_the_approved_trial_days(self):
+        blocks = self.schedule["blocks"]
+        days = trial_days(blocks[0]["start"], blocks[-1]["end"])
+        automated = [
+            day for block in blocks if block["arm"] == "baseline-v1" for day in trial_days(block["start"], block["end"])
+        ]
+        closed, opened = [], []
+        for today in trial_days("2026-11-10", "2026-12-31"):
+            snapshot, execute = self.decide(today)
+            if snapshot == "yes":
+                closed.append(today - timedelta(days=1))  # a run's snapshot closes the previous trial day
+            if execute == "yes":
+                opened.append(today)
+        self.assertEqual(closed, days)
+        self.assertEqual(opened, automated)
+
+    def test_the_snapshot_comes_first_and_each_kind_keeps_its_artifact(self):
+        steps = self.workflow["jobs"]["trial"]["steps"]
+        names = [step.get("name", "") for step in steps]
+        snapshot = names.index("Read-only snapshot of pss5")
+        execute = names.index("Automated day (baseline-v1, full mode)")
+        self.assertLess(names.index(TRIAL_STEP_NAME), snapshot)
+        self.assertLess(snapshot, execute)
+        self.assertEqual(steps[snapshot]["if"], "steps.day.outputs.snapshot == 'yes'")
+        # The execute run does not depend on the snapshot succeeding, as when they were separate runs.
+        self.assertEqual(steps[execute]["if"], "${{ !cancelled() && steps.day.outputs.execute == 'yes' }}")
+        self.assertIn("--baseline", steps[snapshot]["run"])
+        self.assertNotIn("--fleet-execute", steps[snapshot]["run"])
+        run = steps[execute]["run"]
+        self.assertLess(run.index("--fleet-dry-run"), run.index("--fleet-execute"))
+        uploads = {
+            step["with"]["name"]: step for step in steps if step.get("uses", "").startswith("actions/upload-artifact@")
+        }
+        self.assertEqual(set(uploads), {"trial-snapshot-${{ github.run_id }}", "trial-execute-${{ github.run_id }}"})
+        for kind, root in (("snapshot", "OUT"), ("execute", "EXECUTE_OUT")):
+            upload = uploads[f"trial-{kind}-${{{{ github.run_id }}}}"]
+            with self.subTest(kind=kind):
+                self.assertEqual(upload["if"], f"always() && steps.day.outputs.{kind} == 'yes'")
+                self.assertEqual(upload["with"]["path"], f"${{{{ env.{root} }}}}")
+                self.assertEqual(upload["with"]["retention-days"], "90")
+                self.assertEqual(upload["with"]["if-no-files-found"], "ignore")
+        self.assertIn('"$OUT/baselines"', steps[snapshot]["run"])
+        self.assertIn('"$EXECUTE_OUT/journals"', run)
+        self.assertNotIn("$OUT/", run)
+
+    def test_every_execute_run_falls_inside_the_trial_authorization(self):
+        from sdk.fleet.authorization import load_authorization
+
+        authorization = load_authorization(ci.ROOT / self.workflow["jobs"]["trial"]["env"]["TRIAL_AUTHORIZATION"])
+        minute, hour = (int(field) for field in self.crons[0].split()[:2])
+        for day in trial_days("2026-11-30", "2026-12-13"):
+            start = datetime(day.year, day.month, day.day, hour, minute, tzinfo=timezone.utc)
+            with self.subTest(day=day):
+                self.assertEqual(self.decide(day)[1], "yes")
+                self.assertLessEqual(authorization.not_before, start)
+                # GitHub starts scheduled runs late, so leave room for a long delay.
+                self.assertLess(start + timedelta(hours=12), authorization.expires)
 
 
 @skip_unless_dependency(shutil.which("git"), "release provenance tests require Git")
