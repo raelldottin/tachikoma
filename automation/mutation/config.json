@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "description": "Targets for scripts/mutation.py (make mutation). min_score is a ratchet: the measured floor, raised when tests improve and never lowered to pass.",
-  "copy": ["sdk", "tests", "scripts/ci.py", "run.py"],
+  "copy": ["sdk", "tests", "scripts/ci.py", "scripts/mutation.py", "scripts/training_benchmark.py", "automation/benchmark/training", "run.py"],
   "targets": [
     {"path": "sdk/crew_leveling.py", "tests": ["tests.test_crew_leveling"], "min_score": 0.81, "equivalent": []},
     {"path": "sdk/game_formulas.py", "tests": ["tests.test_game_formulas"], "min_score": 0.73, "equivalent": []},

@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "name": "mid-level-crew",
+  "description": "Partly trained crew sitting on the band edges (50/51, 64/65, 71/72) with full research, including an exceptional 4-star cap.",
+  "tags": ["mid-level"],
+  "seed": 1102,
+  "start": "2027-07-05T00:00:00+00:00",
+  "days": 7,
+  "tick_minutes": 60,
+  "fatigue_recovery_seconds": 360,
+  "rooms": [{"id": 7001, "design": "GYM"}, {"id": 7002, "design": "Academy"}],
+  "research": ["Fitness", "Fitness Lv2", "Fitness Lv3", "Education", "Education Lv2", "Education Lv3"],
+  "inventory": {},
+  "crew": [
+    {"id": 201, "name": "Galactic Snow Maiden", "design": "epic", "room": 7002, "stats": {"Weapon": 50}},
+    {"id": 202, "name": "C.P.U.", "design": "unique", "room": 7002, "stats": {"Science": 60}},
+    {"id": 203, "name": "Galactic Sprite", "design": "hero", "room": 7001, "stats": {"Attack": 70}},
+    {"id": 204, "name": "Huge Hellaluya", "design": "epic", "room": 7001, "stats": {"Stamina": 64}},
+    {"id": 205, "name": "Huntress", "design": "special", "room": 7001, "stats": {"Attack": 80}}
+  ],
+  "faults": []
+}

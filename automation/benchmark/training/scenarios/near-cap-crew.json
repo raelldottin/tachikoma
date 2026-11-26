@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "name": "near-cap-crew",
+  "description": "GYM crew a few points below (or at) the TP cap of each rarity: the cap oracle per rarity, tp_cap_reached and cap overshoot.",
+  "tags": ["near-cap"],
+  "seed": 1103,
+  "start": "2027-07-05T00:00:00+00:00",
+  "days": 7,
+  "tick_minutes": 60,
+  "fatigue_recovery_seconds": 360,
+  "rooms": [{"id": 7001, "design": "GYM"}],
+  "research": ["Fitness", "Fitness Lv2", "Fitness Lv3", "Education", "Education Lv2", "Education Lv3"],
+  "inventory": {"Common ATK Consumable": 2, "Hero ATK Consumable": 2},
+  "crew": [
+    {"id": 301, "name": "Ancestral Spirit", "design": "unique", "room": 7001, "stats": {"Attack": 40, "Hp": 27}},
+    {"id": 302, "name": "Green Ranger - Oliver", "design": "epic", "room": 7001, "stats": {"Attack": 77}},
+    {"id": 303, "name": "Huge Hellaluya", "design": "epic", "room": 7001, "stats": {"Stamina": 50, "Attack": 28}},
+    {"id": 304, "name": "Turkey Hero", "design": "hero", "room": 7001, "stats": {"Attack": 86}},
+    {"id": 305, "name": "1st engineer Tully", "design": "special", "room": 7001, "stats": {"Attack": 96}},
+    {"id": 306, "name": "King Dong", "design": "legendary", "room": 7001, "stats": {"Attack": 106}},
+    {"id": 307, "name": "Admiral Serena", "design": "captain", "room": 7001, "stats": {"Attack": 150}},
+    {"id": 308, "name": "Cyber Duck", "design": "elite", "room": 7001, "stats": {"Attack": 85}},
+    {"id": 309, "name": "Huntress", "design": "unique", "room": 7001, "stats": {"Attack": 70}}
+  ],
+  "faults": []
+}
