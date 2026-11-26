@@ -10,7 +10,7 @@
       <TrainingDesign TrainingDesignId="105" TrainingName="Muscle Beach" Rank="2" Duration="11700" RequiredResearchDesignId="0" AttackChance="70" />
       <TrainingDesign TrainingDesignId="106" TrainingName="Big Book of Science" Rank="1" Duration="3600" RequiredResearchDesignId="0" RequiredRoomType="Academy" ScienceChance="80" />
       <TrainingDesign TrainingDesignId="107" TrainingName="Scientific Summit" Rank="2" Duration="11700" RequiredResearchDesignId="0" ScienceChance="70" />
-      <TrainingDesign TrainingDesignId="108" TrainingName="Space Marine" Rank="3" Duration="44100" RequiredResearchDesignId="40" HpChance="40" AttackChance="40" />
+      <TrainingDesign TrainingDesignId="108" TrainingName="Space Marine" Rank="3" Duration="44100" RequiredResearchDesignId="38" HpChance="40" AttackChance="40" />
     </TrainingDesigns>
   </ListAllTrainingDesigns2>
 </TrainingService>

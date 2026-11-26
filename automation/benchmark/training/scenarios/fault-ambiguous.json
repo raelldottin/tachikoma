@@ -9,7 +9,7 @@
   "tick_minutes": 60,
   "fatigue_recovery_seconds": 360,
   "rooms": [{"id": 7001, "design": "GYM"}],
-  "research": ["Fitness", "Fitness Lv2", "Fitness Lv3"],
+  "research": ["Fitness 101", "Fitness 102", "Fitness 103", "Fitness 201", "Fitness 202", "Fitness 203"],
   "inventory": {},
   "crew": [
     {"id": 1301, "name": "Admiral Serena", "design": "captain", "room": 7001},
