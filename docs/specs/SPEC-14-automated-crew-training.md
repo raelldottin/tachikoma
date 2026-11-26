@@ -92,7 +92,7 @@ During the red stage, run `python scripts/training_workflow_benchmark.py --gate`
 | Id | Question | Needed before | Safe default |
 | --- | --- | --- | --- |
 | S14-Q1 | Approve this policy and the proposed one-start limit? | Implementation | Approved for offline implementation, with one start per account per run. |
-| S14-Q2 | Which account, schedule, mineral and gas caps and reserves are authorized? | Scheduled live execution | Live testing approved in principle for `pss5`. Record the verified account identity, test window, caps and reserves in G8 before a live course start. A recurring schedule needs its own authorization. |
+| S14-Q2 | Which account, schedule, mineral and gas caps and reserves are authorized? | Scheduled live execution | The owner chose on 2026-11-26 to run the live test on `pss5` while the [R2 trial](../experiments/r2-progression-trial.md) is still running. Record the verified account identity, test window, caps and reserves in G8 before a live course start. A recurring schedule needs its own authorization. |
 
 ## Evidence
 

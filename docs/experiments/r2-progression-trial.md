@@ -69,6 +69,14 @@ The legacy daily run and the trial never run on pss5 at the same time:
 - **Limitation:** a GitHub concurrency group holds at most one running and one pending run. A third run that queues cancels the pending one (it does not wait). Scheduled runs are short (the daily run takes about 2 to 5 minutes), so this needs three runs within a few minutes. That is unlikely but realistic in one case: a run is in progress, another is waiting, and the owner dispatches `live-trial.yml` or `daily-run.yml` by hand. A dispatch whose job is then skipped (for example `live-trial.yml` from a branch other than `main`) still takes the pending place. If the cancelled run is the trial's, that day has no snapshot, so two days lose their one-day pair. Before a manual dispatch, check that no pss5 workflow is running or waiting.
 - **Scope of the guarantee:** it covers only those three workflows, as they are on `main`. Dispatch `daily-run.yml` only from `main`: a run from an older branch uses that branch's file, which may have no concurrency group. `daily-run-langgraph.yml` also logs in to pss5 (00:00, 08:00 and 16:00 UTC) and is not in the group; the [runbook](live/RUNBOOK.md) has the owner disable it while the trial lasts, and the serialized claim holds only while it stays disabled. A `--fleet-execute` run started anywhere else (a local run, another workflow) is not serialized either.
 
+## SPEC-14 live test on pss5 during the trial
+
+The owner chose on 2026-11-26 to run the [SPEC-14](../specs/SPEC-14-automated-crew-training.md) `training-v2` live test on pss5 while this trial is still running. A paid Academy start spends minerals that research and room upgrades (the primary metric) would otherwise use. SPEC-14 S14-R6 also requires `LEGACY_RUN_SKIP=5` before the first `training-v2` start, which takes pss5 out of the legacy daily run described above. So:
+
+- Log each `training-v2` course start, and each change to `LEGACY_RUN_SKIP`, in `interventions.md` with its UTC time and the active arm.
+- The trial report flags every trial day that has one of those entries.
+- Nothing in this trial's schedule, arms or stop rules changes.
+
 ## Primary metric and sample
 
 - **Metric:** growth velocity, `growth-per-day`: completed research plus room upgrades per account-day, from snapshot diffs (study design §Metrics).
