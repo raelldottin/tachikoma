@@ -2767,6 +2767,30 @@
         "make test",
         "git diff --check"
       ]
+    },
+
+    {
+      "slice_id": "spec14-workflow-red",
+      "title": "Freeze crew training workflow fixtures and reproduce missing behavior",
+      "status": "queued",
+      "priority": 500,
+      "domain": "crew-training",
+      "allowed_paths": [
+        "scripts/training_workflow_benchmark.py",
+        "tests/test_training_workflow_benchmark.py",
+        "tests/fixtures/training/workflow_benchmark.json",
+        "tests/fixtures/training/workflow_holdout.json",
+        "tests/fakes/pss_server.py",
+        "tests/fakes/state.py"
+      ],
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ],
+      "depends_on": [],
+      "max_files_changed": 6,
+      "notes": "Implements S14-R1, S14-R2, S14-R3, S14-R4, S14-R5, S14-R6, S14-R7 (SPEC-14). Read docs/specs/SPEC-14-automated-crew-training.md and docs/specs/README.md. Freeze fixture inputs, independent expected traces and the holdout before changing production. Exercise the real CLI with mocked game traffic and capture named behavioral failures on unchanged production paired with passing legacy controls. Keep default test discovery green and record the explicit red gate separately from passing validations. Do not change production, live workflows or game accounts."
     }
   ]
 }
