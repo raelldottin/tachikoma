@@ -28,7 +28,7 @@
 
 ## Interfaces
 
-- `daily-run.yml`: a step-level `if:` on `vars.LEGACY_RUN_SKIP` (owner edit).
+- `daily-run.yml`: a step-level `if:` on `vars.LEGACY_RUN_SKIP` (owner edit). Since 2026-11-26 every account runs in its own leg of one matrix job, all at the same time; the account step's `if:` compares `LEGACY_RUN_SKIP` with the leg's `matrix.account`, and the leg reads only its own `PSS_ACCOUNT_<N>_*` secrets, as `secrets[format('PSS_ACCOUNT_{0}_…', matrix.account)]`. The workflow-level `live-trial` group (S06-R6) covers the whole run, every leg included.
 - `AccountProfile.legacy_run_account` (optional int) and an authorization field `legacy_run_skipped: [N]`.
 - An authorization field `legacy_run_serialized: [N]` (S06-R6): distinct positive integers, none also in `legacy_run_skipped`. The refusal names both fields.
 - `daily-run.yml`, `live-trial.yml`, `live-trial-schedule.yml`: `concurrency: {group: live-trial, cancel-in-progress: false}` at the workflow level (S06-R6; the `daily-run.yml` block is an owner-requested edit).

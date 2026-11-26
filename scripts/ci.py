@@ -48,10 +48,14 @@ RELEASE_PRIVATE_WORDS = frozenset(
     auth capture captures device devices profile profiles dump dumps har pcap log logs env
     """.split()
 )
-# daily-run.yml (SPEC-06): each account's step reads PSS_ACCOUNT_<N>_* secrets and must be skippable through the
-# LEGACY_RUN_SKIP repository variable, so a trial account can be fenced off without deleting its secrets.
-LEGACY_ACCOUNT_SECRET_RE = re.compile(r"\$\{\{\s*secrets\.PSS_ACCOUNT_([0-9]+)_")
-LEGACY_RUN_SKIP_CONDITION = "${{{{ !contains(format(',{{0}},', vars.LEGACY_RUN_SKIP), ',{account},') }}}}"
+# daily-run.yml (SPEC-06): one matrix job runs every account at the same time, one leg per account on its own runner.
+# A leg reads only its own PSS_ACCOUNT_<N>_* secrets, looked up by matrix.account, and its account step is skippable
+# through the LEGACY_RUN_SKIP repository variable, so a trial account can be fenced off without deleting its secrets.
+DAILY_ACCOUNTS_JOB = "accounts"
+DAILY_REPORT_JOB = "training-report"
+ACCOUNT_SECRET_MENTION_RE = re.compile(r"PSS_ACCOUNT_")
+MATRIX_ACCOUNT_SECRET_RE = re.compile(r"secrets\[format\('PSS_ACCOUNT_\{0\}_[A-Z]+', matrix\.account\)\]")
+LEGACY_RUN_SKIP_CONDITION = "${{ !contains(format(',{0},', vars.LEGACY_RUN_SKIP), format(',{0},', matrix.account)) }}"
 # SPEC-06 S06-R6: while an authorization file under LIVE_AUTHORIZATION_DIR declares legacy_run_serialized, these
 # workflows share one fixed workflow-level concurrency group with cancel-in-progress false, so GitHub never runs two
 # of them at once.
@@ -92,17 +96,26 @@ MUTATION_GATE_PRELUDE = (
 WEAKENING_MUTATION_TARGET_KEYS = ("functions", "operators", "timeout")
 # Shell that would let a failing command pass: an or-list, an explicit success exit, errexit turned off or a trap.
 SWALLOWING_SHELL_RE = re.compile(r"\|\||\bexit\s+0\b|\bset\s+\+[a-z]*e|\bset\s+\+o\b|\btrap\b")
-# daily-run.yml crew training: each account step journals training to $RUNNER_TEMP/tachikoma-training/journals under
-# its own alias, then one credential-free step reports on every journal and one uploads only that directory.
+# daily-run.yml crew training: each leg journals training to $RUNNER_TEMP/tachikoma-training/journals under its own
+# alias and uploads that directory as its own artifact; the credential-free training-report job downloads every leg's
+# artifact into the same directory, reports on every journal and uploads only the training directory.
 DAILY_TRAINING_DIR = "$RUNNER_TEMP/tachikoma-training"
 DAILY_TRAINING_JOURNAL_ARG = f'--training-journal-dir "{DAILY_TRAINING_DIR}/journals"'
 DAILY_TRAINING_REPORT_COMMAND = "python run.py --report training"
+# The account step passes --account-alias account-$ACCOUNT_NUMBER, with ACCOUNT_NUMBER set from matrix.account in its env.
+DAILY_ACCOUNT_ALIAS = "account-$ACCOUNT_NUMBER"
+DAILY_ACCOUNT_NUMBER_ENV = ("ACCOUNT_NUMBER", "${{ matrix.account }}")
 ACCOUNT_ALIAS_ARG_RE = re.compile(r"""--account-alias[ =](?:"([^"\s]*)"|'([^'\s]*)'|([^"'\s]+))""")
 # A `${{ }}` expression naming the secrets context anywhere before its closing `}}`: a lone `}` inside it (a format()
 # placeholder) or a line break does not end it.
 SECRETS_EXPRESSION_RE = re.compile(r"\$\{\{(?:(?!\}\}).)*?\bsecrets\b", re.DOTALL)
 DAILY_TRAINING_ARTIFACT_PATH = "${{ runner.temp }}/tachikoma-training"
+DAILY_JOURNALS_ARTIFACT_PATH = "${{ runner.temp }}/tachikoma-training/journals"
+DAILY_JOURNAL_ARTIFACT = "training-journal-account-${{ matrix.account }}"
+DAILY_JOURNAL_ARTIFACT_PATTERN = "training-journal-account-*"
 DAILY_TRAINING_UPLOAD_KEYS = frozenset({"name", "path", "retention-days", "if-no-files-found"})
+DAILY_JOURNAL_UPLOAD_KEYS = DAILY_TRAINING_UPLOAD_KEYS | {"overwrite"}
+DAILY_JOURNAL_DOWNLOAD_KEYS = frozenset({"pattern", "path", "merge-multiple"})
 MAX_DAILY_TRAINING_RETENTION_DAYS = 30
 VERSION_RE = re.compile(r"v?((?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))\Z")
 # Hollow tests (`hollow-tests`): unittest tests that assert nothing about project behaviour. The baseline records the
@@ -998,8 +1011,7 @@ def check_workflows(documents: dict) -> None:
         gate = documents[filename]["jobs"]["required"]
         if gate.get("if") != "${{ always() }}" or gate.get("needs") != ["checks", "tests"]:
             raise ValueError("aggregate gate must always evaluate all required workflows")
-    check_legacy_run(documents["daily-run.yml"])
-    check_daily_training(documents["daily-run.yml"])
+    check_daily_run(documents["daily-run.yml"])
     check_mutation_gate(documents)
     # live-trial.yml touches real accounts, so only an owner's manual dispatch may start it.
     if set(documents["live-trial.yml"]["on"]) != {"workflow_dispatch"}:
@@ -1017,24 +1029,6 @@ def check_workflows(documents: dict) -> None:
         raise ValueError("release publication must depend on downloaded artifact verification")
     if jobs["publish"].get("if") != "${{ github.event_name == 'push' && github.ref_type == 'tag' }}":
         raise ValueError("release publication must require a real tag push")
-
-
-def check_legacy_run(document: dict) -> None:
-    """Every daily-run.yml step that reads an account's secrets is gated on that account's LEGACY_RUN_SKIP entry."""
-    accounts = []
-    for job in document["jobs"].values():
-        for step in job.get("steps", []):
-            numbers = set(LEGACY_ACCOUNT_SECRET_RE.findall(json.dumps(step)))
-            if not numbers:
-                continue
-            if len(numbers) != 1:
-                raise ValueError("a legacy run step must read exactly one account's secrets")
-            account = numbers.pop()
-            if step.get("if") != LEGACY_RUN_SKIP_CONDITION.format(account=account):
-                raise ValueError(f"legacy run step for account {account} must be skippable through LEGACY_RUN_SKIP")
-            accounts.append(account)
-    if not accounts or len(set(accounts)) != len(accounts):
-        raise ValueError("the legacy run must have one skippable step per account")
 
 
 def serialized_authorizations(repo: Path) -> list[str]:
@@ -1094,65 +1088,165 @@ def _condition(value: object) -> str:
     return "".join((wrapped.group(1) if wrapped else text).split())
 
 
-def check_daily_training(document: dict) -> None:
-    """daily-run.yml journals each account's crew training under its own alias and reports on every journal.
+def check_daily_run(document: dict) -> None:
+    """daily-run.yml runs every account at once and reports on every account's crew training (SPEC-06).
 
-    Only the account steps read secrets. The report step runs after all of them, even when one failed or was skipped,
-    is given no credentials and cannot be skipped by continue-on-error.
+    The ``accounts`` job is a matrix with one leg per account number. Its single account step reads that leg's own
+    PSS_ACCOUNT_<N>_* secrets, is skippable through LEGACY_RUN_SKIP, journals training under the leg's alias and keeps
+    continue-on-error; the leg then uploads its journal. The ``training-report`` job runs after every leg, also when one
+    failed or was skipped, is given no secrets, downloads every journal, reports on them and uploads the result.
     """
     if SECRETS_EXPRESSION_RE.search(json.dumps(document.get("env", {}))):
-        raise ValueError("daily-run: only the account steps may read secrets, not the workflow env")
-    reports = []  # (job name, step, its index, the index of the last account step of its job)
-    uploads = []  # (job name, step, its index)
-    for job_name, job in document.get("jobs", {}).items():
-        if SECRETS_EXPRESSION_RE.search(json.dumps(job.get("env", {}))):
-            raise ValueError(f"daily-run: only the account steps may read secrets, not the env of job {job_name}")
-        steps = job.get("steps", [])
-        last_account = -1
-        for index, step in enumerate(steps):
-            text = json.dumps(step)
-            numbers = set(LEGACY_ACCOUNT_SECRET_RE.findall(text))
-            if not numbers:
-                if SECRETS_EXPRESSION_RE.search(text):
-                    raise ValueError(f"daily-run: only the account steps may read secrets ({step.get('name', index)})")
-                continue
-            last_account = index
-            if len(numbers) != 1:  # check_legacy_run refuses this too; checked here so the alias check is not arbitrary
-                raise ValueError(f"daily-run: step {step.get('name', index)} reads several accounts' secrets")
-            account = numbers.pop()
-            run = _text(step.get("run"))
-            if ["".join(groups) for groups in ACCOUNT_ALIAS_ARG_RE.findall(run)] != [f"account-{account}"]:
+        raise ValueError("daily-run: only the account step may read secrets, not the workflow env")
+    jobs = document.get("jobs", {})
+    if set(jobs) != {DAILY_ACCOUNTS_JOB, DAILY_REPORT_JOB}:
+        raise ValueError(f"daily-run must have exactly the jobs {DAILY_ACCOUNTS_JOB} and {DAILY_REPORT_JOB}")
+    check_daily_accounts_job(jobs[DAILY_ACCOUNTS_JOB])
+    check_daily_report_job(jobs[DAILY_REPORT_JOB])
+
+
+def _check_matrix(job: dict) -> None:
+    """The accounts job's matrix is one `account` list of distinct positive integers and never fails fast; an include
+    or exclude could add, drop or rewrite a leg."""
+    strategy = job.get("strategy")
+    if not isinstance(strategy, dict) or strategy.get("fail-fast") != "false":
+        raise ValueError(
+            "daily-run accounts job must set strategy fail-fast: false, so one leg cannot cancel the others"
+        )
+    matrix = strategy.get("matrix")
+    accounts = matrix.get("account") if isinstance(matrix, dict) and set(matrix) == {"account"} else None
+    if (
+        not isinstance(accounts, list)
+        or not accounts
+        or not all(isinstance(number, str) and re.fullmatch(r"[1-9][0-9]*", number) for number in accounts)
+        or len(set(accounts)) != len(accounts)
+    ):
+        raise ValueError("daily-run accounts matrix must be only `account:` listing distinct positive account numbers")
+
+
+def check_daily_accounts_job(job: dict) -> None:
+    _check_matrix(job)
+    if SECRETS_EXPRESSION_RE.search(json.dumps(job.get("env", {}))):
+        raise ValueError("daily-run: only the account step may read secrets, not the env of the accounts job")
+    steps = job.get("steps", [])
+    account_steps = []
+    for index, step in enumerate(steps):
+        text = json.dumps(step)
+        mentions = len(ACCOUNT_SECRET_MENTION_RE.findall(text))
+        if mentions:
+            # A literal secrets.PSS_ACCOUNT_<N>_ would hand every leg the same account's credentials.
+            if len(MATRIX_ACCOUNT_SECRET_RE.findall(text)) != mentions:
                 raise ValueError(
-                    f"daily-run account {account} step must pass --account-alias account-{account} exactly once"
+                    "daily-run reads account secrets only as secrets[format('PSS_ACCOUNT_{0}_<NAME>', matrix.account)] "
+                    f"({step.get('name', index)})"
                 )
-            if run.count(DAILY_TRAINING_JOURNAL_ARG) != 1:
-                raise ValueError(
-                    f"daily-run account {account} step must journal training with "
-                    f"{DAILY_TRAINING_JOURNAL_ARG} exactly once"
-                )
-            if step.get("continue-on-error") != "true":
-                raise ValueError(
-                    f"daily-run account {account} step must keep continue-on-error: true, so one "
-                    "account's failure cannot skip the others"
-                )
-        reports += [
-            (job_name, step, index, last_account)
-            for index, step in enumerate(steps)
-            if DAILY_TRAINING_REPORT_COMMAND in _text(step.get("run"))
-        ]
-        uploads += [
-            (job_name, step, index)
-            for index, step in enumerate(steps)
-            if _text(step.get("uses")).startswith("actions/upload-artifact@")
-        ]
+            account_steps.append(index)
+        elif SECRETS_EXPRESSION_RE.search(text):
+            raise ValueError(f"daily-run: only the account step may read secrets ({step.get('name', index)})")
+    if len(account_steps) != 1:
+        raise ValueError("daily-run accounts job needs exactly one account step reading the leg's account secrets")
+    (account_index,) = account_steps
+    account = steps[account_index]
+    if _condition(account.get("if")) != _condition(LEGACY_RUN_SKIP_CONDITION):
+        raise ValueError("daily-run account step must be skippable through LEGACY_RUN_SKIP for its matrix.account")
+    run = _text(account.get("run"))
+    if ["".join(groups) for groups in ACCOUNT_ALIAS_ARG_RE.findall(run)] != [DAILY_ACCOUNT_ALIAS]:
+        raise ValueError(f"daily-run account step must pass --account-alias {DAILY_ACCOUNT_ALIAS} exactly once")
+    env = account.get("env")
+    name, value = DAILY_ACCOUNT_NUMBER_ENV
+    if not isinstance(env, dict) or _text(env.get(name)).strip() != value:
+        raise ValueError(f"daily-run account step must set {name}: {value} in its env, for its alias")
+    if run.count(DAILY_TRAINING_JOURNAL_ARG) != 1:
+        raise ValueError(f"daily-run account step must journal training with {DAILY_TRAINING_JOURNAL_ARG} exactly once")
+    if account.get("continue-on-error") != "true":
+        raise ValueError(
+            "daily-run account step must keep continue-on-error: true, so one account's failure cannot fail the run"
+        )
+    uploads = [
+        index for index, step in enumerate(steps) if _text(step.get("uses")).startswith("actions/upload-artifact@")
+    ]
+    if len(uploads) != 1:
+        raise ValueError("daily-run accounts job needs exactly one artifact upload step, for the leg's journal")
+    (upload_index,) = uploads
+    if upload_index < account_index:
+        raise ValueError("daily-run journal upload step must come after the account step")
+    _check_upload(
+        steps[upload_index],
+        "journal upload",
+        path=DAILY_JOURNALS_ARTIFACT_PATH,
+        keys=DAILY_JOURNAL_UPLOAD_KEYS,
+    )
+    inputs = steps[upload_index]["with"]
+    # One artifact name per leg, so the legs do not collide, and overwrite: true, so a re-run leg replaces its journal
+    # instead of failing to upload it.
+    if _text(inputs.get("name")).strip() != DAILY_JOURNAL_ARTIFACT:
+        raise ValueError(f"daily-run journal upload step must be named {DAILY_JOURNAL_ARTIFACT}")
+    if inputs.get("overwrite") != "true":
+        raise ValueError("daily-run journal upload step must set overwrite: true, so a re-run leg replaces its journal")
+
+
+def _check_upload(step: dict, kind: str, *, path: str, keys: frozenset) -> None:
+    if _condition(step.get("if")) != "always()":
+        raise ValueError(f"the daily-run {kind} step must run with if: always()")
+    if step.get("continue-on-error") != "true":
+        raise ValueError(
+            f"the daily-run {kind} step must keep continue-on-error: true, so an artifact service failure "
+            "cannot fail the daily run"
+        )
+    inputs = step.get("with")
+    if not isinstance(inputs, dict) or _text(inputs.get("path")).strip() != path:
+        raise ValueError(f"the daily-run {kind} step must upload only {path}")
+    if not set(inputs) <= keys:
+        raise ValueError(f"unexpected {kind} inputs in daily-run: {sorted(set(inputs) - keys)}")
+    retention = _text(inputs.get("retention-days"))
+    if not (re.fullmatch(r"[0-9]+", retention) and 1 <= int(retention) <= MAX_DAILY_TRAINING_RETENTION_DAYS):
+        raise ValueError(f"the daily-run {kind} needs retention-days between 1 and {MAX_DAILY_TRAINING_RETENTION_DAYS}")
+
+
+def check_daily_report_job(job: dict) -> None:
+    """The training-report job waits for every leg, runs even when one failed, and never sees a secret."""
+    if SECRETS_EXPRESSION_RE.search(json.dumps(job)):
+        raise ValueError("daily-run: only the account step may read secrets, not the training-report job")
+    needs = job.get("needs")
+    if needs not in (DAILY_ACCOUNTS_JOB, [DAILY_ACCOUNTS_JOB]):
+        raise ValueError(
+            f"the daily-run training-report job must need {DAILY_ACCOUNTS_JOB}, so it runs after every leg"
+        )
+    if _condition(job.get("if")) != "always()":
+        raise ValueError("the daily-run training-report job must run with if: always(), also when a leg failed")
+    steps = job.get("steps", [])
+
+    def find(marker) -> list[int]:
+        return [index for index, step in enumerate(steps) if marker(step)]
+
+    downloads = find(lambda step: _text(step.get("uses")).startswith("actions/download-artifact@"))
+    reports = find(lambda step: DAILY_TRAINING_REPORT_COMMAND in _text(step.get("run")))
+    uploads = find(lambda step: _text(step.get("uses")).startswith("actions/upload-artifact@"))
+    if len(downloads) != 1:
+        raise ValueError("the daily-run training-report job needs exactly one download step, for the legs' journals")
     if len(reports) != 1:
         raise ValueError("daily-run needs exactly one training report step")
-    ((report_job, report, report_index, last_account),) = reports
+    if len(uploads) != 1:
+        raise ValueError("the daily-run training-report job needs exactly one artifact upload step")
+    ((download_index,), (report_index,), (upload_index,)) = (downloads, reports, uploads)
+    download = steps[download_index].get("with")
+    # No name, run-id or token: only this run's legs' journals, all merged into the directory the report reads.
+    if (
+        not isinstance(download, dict)
+        or set(download) != DAILY_JOURNAL_DOWNLOAD_KEYS
+        or _text(download.get("pattern")).strip() != DAILY_JOURNAL_ARTIFACT_PATTERN
+        or _text(download.get("path")).strip() != DAILY_JOURNALS_ARTIFACT_PATH
+        or download.get("merge-multiple") != "true"
+    ):
+        raise ValueError(
+            f"the daily-run download step must merge only {DAILY_JOURNAL_ARTIFACT_PATTERN} into "
+            f"{DAILY_JOURNALS_ARTIFACT_PATH}"
+        )
+    report = steps[report_index]
     if _condition(report.get("if")) != "always()":
         raise ValueError("the daily-run training report step must run with if: always()")
-    # A report in a job without the account steps runs on another runner and never sees their journals.
-    if last_account < 0 or report_index < last_account:
-        raise ValueError("the daily-run training report step must come after every account step, in their job")
+    if report_index < download_index:
+        raise ValueError("the daily-run training report step must come after the download step")
     if "continue-on-error" in report:
         raise ValueError("the daily-run training report step must not carry continue-on-error")
     run = _text(report.get("run"))
@@ -1168,31 +1262,11 @@ def check_daily_training(document: dict) -> None:
         raise ValueError(f"the daily-run training report step must read the journals under {DAILY_TRAINING_DIR}")
     if any(flag in run for flag in ("--login-email", "--password-file", "--auth-file", "--smtp-")):
         raise ValueError("the daily-run training report step must not be given credentials")
-    if len(uploads) != 1:
-        raise ValueError("daily-run needs exactly one artifact upload step, for the training journals and report")
-    ((upload_job, upload, upload_index),) = uploads
-    if _condition(upload.get("if")) != "always()":
-        raise ValueError("the daily-run training upload step must run with if: always()")
-    if upload.get("continue-on-error") != "true":
-        raise ValueError(
-            "the daily-run training upload step must keep continue-on-error: true, so an artifact service failure "
-            "cannot fail the daily run"
-        )
-    # Another job runs on another runner, whose $RUNNER_TEMP holds no journals or report.
-    if upload_job != report_job:
-        raise ValueError("the daily-run training upload step must run in the training report step's job")
     if upload_index < report_index:
         raise ValueError("the daily-run training upload step must come after the training report step")
-    inputs = upload.get("with")
-    if not isinstance(inputs, dict) or _text(inputs.get("path")).strip() != DAILY_TRAINING_ARTIFACT_PATH:
-        raise ValueError(f"the daily-run training upload step must upload only {DAILY_TRAINING_ARTIFACT_PATH}")
-    if not set(inputs) <= DAILY_TRAINING_UPLOAD_KEYS:
-        raise ValueError(f"unexpected upload inputs in daily-run: {sorted(set(inputs) - DAILY_TRAINING_UPLOAD_KEYS)}")
-    retention = _text(inputs.get("retention-days"))
-    if not (re.fullmatch(r"[0-9]+", retention) and 1 <= int(retention) <= MAX_DAILY_TRAINING_RETENTION_DAYS):
-        raise ValueError(
-            f"the daily-run training upload needs retention-days between 1 and {MAX_DAILY_TRAINING_RETENTION_DAYS}"
-        )
+    _check_upload(
+        steps[upload_index], "training upload", path=DAILY_TRAINING_ARTIFACT_PATH, keys=DAILY_TRAINING_UPLOAD_KEYS
+    )
 
 
 def check_mutation_gate(documents: dict) -> None:
