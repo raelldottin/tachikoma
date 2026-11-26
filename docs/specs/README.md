@@ -44,6 +44,7 @@ A spec that needs no live evidence goes from stage 6 straight to `Done`.
 | [SPEC-11](SPEC-11-alert-delivery.md) | Scheduled reports and alert delivery | R6 | G2 | 05 | Verified offline |
 | [SPEC-12](SPEC-12-study-report.md) | Automation effectiveness study report | R6 exit | — | 07, 08, 09, 10 | Verified offline |
 | [SPEC-13](SPEC-13-room-placement.md) | Automated room placement | ops (supports R2) | G6 | 03, 05 | Done ([evidence](SPEC-13-room-placement.md#evidence)) |
+| [SPEC-14](SPEC-14-automated-crew-training.md) | Automated crew training | R2 | G8 (proposed) | 05, 06 | Approved |
 
 ## Owner gates
 
@@ -58,6 +59,7 @@ The roadmap cannot be completed without these decisions. Each is asked once, rec
 | **G4** | Sanitized current captures of `SellItem3` and `Purchase4`; live trades on the test account with a value cap | M3 (market) | Not given |
 | **G5** | A second owned test account; operator-minute logging; live fleet runs | M4 | Not given |
 | **G6** | Sanitized captures of one room purchase with the ship and design records; one live room placement on the trial account | SPEC-13 | Approved 2026-11-12 for the captures, and used on 2026-11-13: run 43393262041 placed a verified Gas Collector Lv1 on `pss5` under [authorization-g6-pss5-place.json](../experiments/live/authorization-g6-pss5-place.json) |
+| **G8** | Record the verified account, test window, mineral and gas budgets, and any recurring schedule | SPEC-14 | Owner approved live testing. Execution authorization pending. |
 
 ## Milestones
 
