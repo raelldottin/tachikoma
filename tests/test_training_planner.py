@@ -1426,7 +1426,8 @@ class TestStructure(unittest.TestCase):
                         self.assertLessEqual({alias.name for alias in node.names}, leveling_constants)
         sources = sorted(PACKAGE_DIR.glob("*.py"))
         names = {path.name for path in sources}
-        self.assertEqual(names, {"__init__.py", "actions.py", "model.py", "strategy.py", "parse.py", "planner.py"})
+        self.assertEqual(names, {"__init__.py", "actions.py", "model.py", "strategy.py", "parse.py", "planner.py",
+                                 "prestige.py"})
         for path in sources:
             tree = ast.parse(path.read_text(encoding="utf-8"))
             for node in ast.walk(tree):
@@ -1450,13 +1451,24 @@ class TestStructure(unittest.TestCase):
 
     def test_planner_helpers_are_public_and_take_the_strategy_explicitly(self) -> None:
         expected = {
+            "CrewDecision",
+            "CrewObservation",
+            "CrewPlan",
+            "RoleAssignment",
+            "RoomObservation",
+            "TrainingInputs",
+            "assign_roles",
             "band_for",
+            "choose_course",
+            "course_blocker",
+            "crew_blocker",
             "design_research_ok",
             "effective_cap",
             "highest_stat",
             "percent",
             "pick_consumable",
             "pick_design",
+            "plan_crew",
             "plan_training",
             "remaining_stock",
             "replan_after_finish",
