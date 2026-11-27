@@ -593,7 +593,8 @@
       "kind": "mutating",
       "evidence": "mocked-test",
       "tests": [
-        "tests/test_boost.py"
+        "tests/test_boost.py",
+        "tests/test_training_endpoints.py"
       ]
     },
     {
@@ -602,7 +603,8 @@
       "kind": "mutating",
       "evidence": "mocked-test",
       "tests": [
-        "tests/test_boost.py"
+        "tests/test_boost.py",
+        "tests/test_daily_run_offline_e2e.py"
       ]
     },
     {

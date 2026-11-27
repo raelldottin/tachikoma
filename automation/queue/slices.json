@@ -2770,6 +2770,29 @@
     },
 
     {
+      "slice_id": "pr296-ship-boost",
+      "title": "Implement ship boost via SpeedUpShipConstructionUsingBoostGauge (PR #296)",
+      "status": "done",
+      "priority": 440,
+      "domain": "boost",
+      "allowed_paths": [
+        "sdk/client.py",
+        "tests/fakes/pss_server.py",
+        "tests/test_training_endpoints.py",
+        "docs/baseline/capability-inventory.json",
+        "automation/handoffs/"
+      ],
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "make lint",
+        "git diff --check"
+      ],
+      "depends_on": [],
+      "max_files_changed": 5,
+      "notes": "Live mitmproxy capture (scripts/mitm_addon.py) confirms: POST /ShipService/SpeedUpShipConstructionUsingBoostGauge with shipId, clientDateTime, accessToken; returns full upgraded ship XML under ShipService/SpeedUpShipConstructionUsingBoostGauge/Ship (plus User), not a Success envelope. Fake server and client updated to match. Capability inventory entries marked mocked-test."
+    },
+    {
       "slice_id": "spec14-workflow-red",
       "title": "Freeze crew training workflow fixtures and reproduce missing behavior",
       "status": "done",

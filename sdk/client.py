@@ -720,8 +720,20 @@ class Client(object):
         An empty ``<ShipService/>`` or ``<GetShipByUserId/>`` parses to None rather than a mapping.
         """
         node = getattr(self, "shipByUserId", None)
-        for key in ("ShipService", "GetShipByUserId", "Ship"):
+        for key in ("ShipService",):
             node = node.get(key) if isinstance(node, dict) else None
+        if not isinstance(node, dict):
+            return None
+        # The ship read (GetShipByUserId) and the ship boost reply
+        # (SpeedUpShipConstructionUsingBoostGauge) both carry a Ship under
+        # ShipService; accept either wrapper.
+        for wrapper in ("GetShipByUserId", "SpeedUpShipConstructionUsingBoostGauge"):
+            if wrapper in node:
+                node = node.get(wrapper)
+                break
+        else:
+            return None
+        node = node.get("Ship") if isinstance(node, dict) else None
         return node if isinstance(node, dict) else None
 
     def getShipByUserId(self, userId=0):
@@ -1946,10 +1958,27 @@ class Client(object):
         url = f"https://api.pixelstarships.com/RoomService/SpeedUpRoomConstructionUsingBoostGauge?roomId={roomId}&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}&accessToken={self.accessToken}"
         return self._speedUpUsingBoostGauge("room construction", url)
 
-    def speedUpShipConstructionUsingBoostGauge(self, shipId):
-        """Speeds up a ship upgrade too: the live game sends ship upgrades to this construction endpoint."""
-        url = f"https://api.pixelstarships.com/ShipService/SpeedUpShipConstructionUsingBoostGauge?shipId={shipId}&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}&accessToken={self.accessToken}"
-        return self._speedUpUsingBoostGauge("ship construction", url)
+    def speedUpShipConstructionUsingBoostGauge(self, shipId, shipDesignId=None):
+        """Speeds up a ship upgrade too: the live game sends ship upgrades to this construction endpoint.
+        Live capture returns the full upgraded ship; parse it like a ship read
+        so callers see the updated state without an extra GetShipByUserId."""
+        url = f"https://api.pixelstarships.com/ShipService/SpeedUpShipConstructionUsingBoostGauge?shipId={shipId}&clientDateTime={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}&accessToken={self.accessToken}"
+        r = self.request(url, "POST")
+        if not r or "errorMessage" in r.text or "@errorMessage" in r.text:
+            logging.info(f"[{self.info['@Name']}] Failed to speed up ship construction.")
+            return False
+        try:
+            parsed = xmltodict.parse(r.content, xml_attribs=True)
+            if isinstance(parsed, dict) and "ShipService" in parsed:
+                self.shipByUserId = parsed
+                ship = self._shipRecord()
+                if isinstance(ship, dict):
+                    self.rooms = (ship.get("Rooms") or {}).get("Room") or []
+                    self.researches = (ship.get("Researches") or {}).get("Research") or []
+        except Exception:
+            logging.exception(f"[{self.info['@Name']}] Failed to parse ship boost reply.")
+        logging.info(f"[{self.info['@Name']}] Speeding up ship construction.")
+        return True
 
     def speedUpBoostGauge(self):
         """Spend the boost gauge on at most one in-progress item per run.
