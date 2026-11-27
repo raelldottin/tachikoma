@@ -2200,16 +2200,26 @@ class TrainingProvisionTests(TrainingExecutionCase):
         self.assertEqual(self.provision()[0], 2)
         self.assertFalse(self.store_path.exists())
 
+    # Regression C10: --account kept meaning --account-alias (argparse abbreviation) for every older command line
+    def test_an_older_account_command_line_still_sets_the_alias(self):
+        for flag in ("--account", "--account-alias", "--account-a"):
+            with self.subTest(flag=flag):
+                with patch("run.open_training_journal", side_effect=run.TrainingJournalError("stop here")) as opened:
+                    code, _, err = self.main("--training-journal-dir", "training-journals", flag, "myacct")
+                self.assertEqual(code, 2, err)
+                opened.assert_called_once_with("training-journals", "myacct")
+        code, out, err = self.main("--fleet-provision-training", *COMMON_TRAINING_ARGS, "--account-alias", "alpha")
+        self.assertEqual(code, 0, out + err)
+        self.assertTrue(self.store_path.exists())
+
     def test_new_flag_guards(self):
         for argv in (
-            ("--account", "alpha"),
             ("--fleet-provision-training", *COMMON_TRAINING_ARGS),
             ("--fleet-provision-training", "--fleet-resolve-training", *COMMON_TRAINING_ARGS, "--account", "alpha"),
             ("--fleet-provision-training", "--fleet-execute", *COMMON_TRAINING_ARGS, "--account", "alpha"),
             ("--fleet-provision-training", *COMMON_TRAINING_ARGS, "--account", "alpha",
              "--authorization", "authorization.json"),
             ("--fleet-resolve-training", *COMMON_TRAINING_ARGS, "--account", "alpha", "--concurrent", "2"),
-            ("--fleet-dry-run", *COMMON_TRAINING_ARGS, "--account", "alpha"),
         ):
             with self.subTest(argv=argv):
                 code, _, err = self.main(*argv)

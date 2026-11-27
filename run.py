@@ -1803,9 +1803,12 @@ def main():
     )
     parser.add_argument(
         "--account-alias",
+        "--account",  # the older abbreviation of --account-alias, and the alias option of the training store commands
         dest="account_alias",
-        default="primary",
-        help="lowercase account alias used in the progression and training journals (default: primary)",
+        default=None,
+        metavar="ALIAS",
+        help="lowercase account alias used in the progression and training journals (default: primary); with "
+        "--fleet-provision-training or --fleet-resolve-training, the registry account alias (required there)",
     )
     parser.add_argument(
         "--progression-journal",
@@ -2019,13 +2022,6 @@ def main():
         "fresh read-only roster read, under the account lock, so training starts resume; changes nothing without "
         "authoritative evidence and never changes the game account (SPEC-14)",
     )
-    parser.add_argument(
-        "--account",
-        dest="account",
-        default=None,
-        metavar="ALIAS",
-        help="with --fleet-provision-training or --fleet-resolve-training: the registry account alias",
-    )
     args = parser.parse_args()
 
     # The fleet and baseline commands are handled before any SMTP setup or single-account login.
@@ -2057,12 +2053,12 @@ def main():
         conflicting = [flag for flag, value in other_flags if value]
         if conflicting:
             parser.error(f"{command} cannot be combined with {', '.join(conflicting)}")
-        if not args.registry or not args.account:
+        if not args.registry or args.account_alias is None:
             parser.error(f"{command} needs --registry PATH and --account ALIAS")
         handler = run_fleet_provision_training if args.fleet_provision_training else run_fleet_resolve_training
-        sys.exit(handler(args.registry, args.account, args.fleet_journal_dir, args.identity_salt_env))
-    if args.account is not None:
-        parser.error("--account is only used with --fleet-provision-training or --fleet-resolve-training")
+        sys.exit(handler(args.registry, args.account_alias, args.fleet_journal_dir, args.identity_salt_env))
+    if args.account_alias is None:  # elsewhere --account-alias (or --account) defaults to "primary", as it always did
+        args.account_alias = "primary"
     if args.crew_plan:
         # Read-only: only --registry and --identity-salt-env apply (SPEC-14, S14-R3).
         other_flags = (
