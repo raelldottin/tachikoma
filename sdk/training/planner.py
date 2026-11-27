@@ -72,11 +72,19 @@ Notes:
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import datetime
 
 from sdk.training.model import (
     CANONICAL_STATS,
+    PRICE_MALFORMED,
+    PRICE_OK,
+    PRICE_PREMIUM,
+    PRICE_UNAVAILABLE,
+    SESSION_ENDED_UNCLAIMED,
+    SESSION_RUNNING,
+    SESSION_UNKNOWN,
+    CourseObservation,
     SKIP_COMPLETE,
     SKIP_DESIGN_MISSING,
     SKIP_FATIGUED,
@@ -92,26 +100,41 @@ from sdk.training.model import (
     StartTraining,
     TrainingContext,
     TrainingDesign,
+    TrainingSession,
     UseConsumable,
     frozen_mapping,
 )
 from sdk.training.strategy import (
+    CREW_SKIP_CODES,
+    DEFAULT_CREW_POLICY,
     DEFAULT_STRATEGY,
     STAT_CODES,
     ConsumableRule,
+    CrewPolicy,
     Role,
     TierBand,
     TrainingStrategy,
 )
 
 __all__ = (
+    "CrewDecision",
+    "CrewObservation",
+    "CrewPlan",
+    "RoleAssignment",
+    "RoomObservation",
+    "TrainingInputs",
+    "assign_roles",
     "band_for",
+    "choose_course",
+    "course_blocker",
+    "crew_blocker",
     "design_research_ok",
     "effective_cap",
     "highest_stat",
     "percent",
     "pick_consumable",
     "pick_design",
+    "plan_crew",
     "plan_training",
     "remaining_stock",
     "replan_after_finish",
@@ -399,3 +422,385 @@ def _primary_decision(
         gated = f"{name} requires research {design.required_research}"
         return consumable_or(Skip(cid, SKIP_RESEARCH_MISSING, gated), pct)
     return StartTraining(cid, design.id, f"{band.slot} T{band.tier} {name} at {pct}% in {room_type}")
+
+
+# --- SPEC-14 training-v2: roles and courses (S14-R1, S14-R2) --------------------------------------------------------
+# training-v2 plans from fresh observations (``CrewObservation``, ``RoomObservation``, ``model.CourseObservation``),
+# never from ``CrewState``: None is "not observed" everywhere and always fails closed, while 0 is an observed value.
+#
+# Roles (``assign_roles``). Each of ``policy.roles`` is one specialist slot measured by one stat. Among crew whose nine
+# stats were all observed, the assignment fills as many distinct slots as possible, then maximises the sum of the
+# assigned stats, then gives the higher scores to the lower instance ids, then fills earlier slots (policy order)
+# first. No crew holds two slots. A crew with any stat unobserved is never assigned (``stats_unknown``): design data
+# carries no base stats to estimate from, and the TP cap check needs all nine. Only each slot's top
+# ``len(policy.roles)`` crew (by stat, then id) can be in the best assignment, so the exhaustive search is bounded by
+# the slot count, never by the roster size.
+
+
+@dataclass(frozen=True)
+class CrewObservation:
+    """One crew member as fresh reads report it; None = not observed.
+
+    ``stats`` holds all nine ``CANONICAL_STATS`` (stored read-only), or is None when any was not observed.
+    ``design_id`` and ``fatigue`` are whole numbers (not bools) or None. ``session`` is the training judged at the
+    observation time (``model.TrainingSession``).
+    """
+
+    character_id: int
+    design_id: int | None
+    stats: Mapping[str, int] | None
+    fatigue: int | None
+    room_id: str | None
+    session: TrainingSession
+
+    def __post_init__(self) -> None:
+        if not _whole(self.character_id) or self.character_id <= 0:
+            raise ValueError(f"character_id must be a positive int: {self.character_id!r}")
+        for name in ("design_id", "fatigue"):
+            value = getattr(self, name)
+            if value is not None and not _whole(value):
+                raise ValueError(f"{name} must be a whole number or None: {value!r}")
+        if self.stats is not None:
+            if set(self.stats) != set(CANONICAL_STATS):
+                raise ValueError(f"stats must hold exactly the nine CANONICAL_STATS, got {sorted(self.stats)}")
+            object.__setattr__(self, "stats", frozen_mapping(self.stats))
+
+
+def _whole(value: object) -> bool:
+    """An int (not a bool) that is not negative."""
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+@dataclass(frozen=True)
+class RoomObservation:
+    """One room and its design's name, type, level and training capacity; ``running`` counts the running sessions in
+    it (None = unknown). ``room_id`` is non-empty text; the names, type and status are text or None; the counts are
+    whole numbers (not bools) or None. Anything else raises ValueError."""
+
+    room_id: str
+    design_name: str | None
+    room_type: str | None
+    level: int | None
+    capacity: int | None
+    status: str | None
+    running: int | None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.room_id, str) or not self.room_id:
+            raise ValueError(f"room_id must be non-empty text: {self.room_id!r}")
+        for name in ("design_name", "room_type", "status"):
+            value = getattr(self, name)
+            if value is not None and not isinstance(value, str):
+                raise ValueError(f"{name} must be text or None: {value!r}")
+        for name in ("level", "capacity", "running"):
+            value = getattr(self, name)
+            if value is not None and not _whole(value):
+                raise ValueError(f"{name} must be a whole number or None: {value!r}")
+
+
+@dataclass(frozen=True)
+class TrainingInputs:
+    """Everything ``plan_crew`` reads, observed together.
+
+    ``courses`` None = the course designs were not observed; ``research`` (design id -> state) None = the research
+    section was not completely observed. ``capacities`` maps a character design id to its TrainingCapacity. ``funds``
+    and ``spend_caps`` map "mineral" / "gas" to what is spendable above the reserve and left under the spend cap after
+    earlier planned requests (None: unknown balance / no cap); both must name "mineral" and "gas", each an int (not a
+    bool; a balance below the reserve is negative) or None. ``action_slots`` is the requests left under
+    ``max_requests`` (None = unlimited). Mappings are stored read-only; crew ids must be distinct.
+    """
+
+    crew: tuple[CrewObservation, ...]
+    rooms: Mapping[str, RoomObservation]
+    courses: tuple[CourseObservation, ...] | None
+    research: Mapping[int, str] | None
+    capacities: Mapping[int, int]
+    funds: Mapping[str, int | None]
+    spend_caps: Mapping[str, int | None]
+    action_slots: int | None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "crew", tuple(self.crew))
+        ids = [entry.character_id for entry in self.crew]
+        if len(set(ids)) != len(ids):
+            raise ValueError(f"crew ids must be distinct: {sorted(ids)}")
+        object.__setattr__(self, "rooms", frozen_mapping(self.rooms))
+        if self.courses is not None:
+            object.__setattr__(self, "courses", tuple(self.courses))
+        if self.research is not None:
+            object.__setattr__(self, "research", frozen_mapping(self.research))
+        object.__setattr__(self, "capacities", frozen_mapping(self.capacities))
+        for name in ("funds", "spend_caps"):
+            amounts = frozen_mapping(getattr(self, name))
+            for currency in ("mineral", "gas"):
+                if currency not in amounts:
+                    raise ValueError(f"{name} must name {currency!r} (None when unknown or uncapped)")
+            for currency, amount in amounts.items():
+                if amount is not None and (isinstance(amount, bool) or not isinstance(amount, int)):
+                    raise ValueError(f"{name}[{currency!r}] must be a whole number or None: {amount!r}")
+            object.__setattr__(self, name, amounts)
+
+
+@dataclass(frozen=True)
+class RoleAssignment:
+    """Covered role word -> character id (read-only), the uncovered role words in policy order, and the ids of crew
+    with a stat not observed (ascending). Role words are non-empty text, ids positive ints; no id or word appears
+    twice and no role is both covered and uncovered (else ValueError)."""
+
+    roles: Mapping[str, int]
+    uncovered: tuple[str, ...]
+    stats_unknown: tuple[int, ...]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "roles", frozen_mapping(self.roles))
+        object.__setattr__(self, "uncovered", tuple(self.uncovered))
+        object.__setattr__(self, "stats_unknown", tuple(self.stats_unknown))
+        words = [*self.roles, *self.uncovered]
+        if not all(isinstance(word, str) and word for word in words):
+            raise ValueError(f"role words must be non-empty text: {words!r}")
+        ids = [*self.roles.values(), *self.stats_unknown]
+        if not all(_whole(cid) and cid > 0 for cid in ids):
+            raise ValueError(f"character ids must be positive ints: {ids!r}")
+        if set(self.roles) & set(self.uncovered):
+            raise ValueError(f"a role is both covered and uncovered: {sorted(set(self.roles) & set(self.uncovered))}")
+        if len(set(words)) != len(words) or len(set(ids)) != len(ids):
+            raise ValueError(f"role words and character ids must be distinct: {words!r}, {ids!r}")
+
+
+def _assignment_choices(
+    candidates: tuple[tuple[CrewObservation, ...], ...], chosen: tuple[CrewObservation | None, ...]
+) -> Iterable[tuple[CrewObservation | None, ...]]:
+    """Every way to give each remaining slot no crew or one of its candidates not chosen for an earlier slot."""
+    if len(chosen) == len(candidates):
+        yield chosen
+        return
+    used = {entry.character_id for entry in chosen if entry is not None}
+    for option in (None, *candidates[len(chosen)]):
+        if option is None or option.character_id not in used:
+            yield from _assignment_choices(candidates, (*chosen, option))
+
+
+def _assignment_key(roles: tuple[tuple[str, str], ...], choice: tuple[CrewObservation | None, ...]) -> tuple:
+    """Smaller is better: more slots filled, a higher stat sum, higher scores on lower ids, earlier slots filled."""
+    scored = [(entry.stats[stat], entry.character_id) for (_, stat), entry in zip(roles, choice) if entry is not None]
+    return (
+        -len(scored),
+        -sum(score for score, _ in scored),
+        sorted((-score, cid) for score, cid in scored),
+        tuple(entry is None for entry in choice),
+        tuple(entry.character_id for entry in choice if entry is not None),
+    )
+
+
+def assign_roles(crew: Sequence[CrewObservation], policy: CrewPolicy) -> RoleAssignment:
+    """The best role assignment for ``crew`` (see the section comment above); deterministic in any input order."""
+    known = [entry for entry in crew if entry.stats is not None]
+    slots = len(policy.roles)
+    candidates = tuple(
+        tuple(sorted(known, key=lambda entry, stat=stat: (-entry.stats[stat], entry.character_id))[:slots])
+        for _, stat in policy.roles
+    )
+    choice = min(_assignment_choices(candidates, ()), key=lambda chosen: _assignment_key(policy.roles, chosen))
+    pairs = tuple(zip(policy.roles, choice))
+    return RoleAssignment(
+        frozen_mapping({word: entry.character_id for (word, _), entry in pairs if entry is not None}),
+        tuple(word for (word, _), entry in pairs if entry is None),
+        tuple(sorted(entry.character_id for entry in crew if entry.stats is None)),
+    )
+
+
+# Eligibility. ``crew_blocker`` checks the crew member and its room, ``course_blocker`` one course in that room; each
+# returns a ``Blocker`` (skip code, detail, unknown) for the first failed check, or None. Every unknown fails closed;
+# ``unknown`` is True when the check failed only because its data was not observed ("[u]" below), so the code names
+# the check, not an observed failure.
+#
+# | Check (crew, in order) | Fails when                                                        | Code                 |
+# |------------------------|-------------------------------------------------------------------|----------------------|
+# | stats                  | [u] a stat was not observed                                       | stats_unknown        |
+# | session                | running, or [u] unknown (the member may still be training)        | training_in_progress |
+# |                        | ended but not claimed                                             | unclaimed_course     |
+# | fatigue                | [u] unknown, or >= ``policy.max_fatigue``                         | fatigued             |
+# | training points        | [u] the design or its capacity unknown, or the nine stats' sum >= it | tp_cap_reached    |
+# | room                   | [u] no observed room or type, or not ``policy.training_room_type`` | not_in_training_room |
+# | room status            | [u] unknown, or not ``policy.ready_status``                       | room_not_ready       |
+# | room capacity          | [u] capacity or running sessions unknown, or running >= capacity  | room_capacity        |
+
+Blocker = tuple[str, str, bool]
+
+
+def crew_blocker(crew: CrewObservation, inputs: TrainingInputs, policy: CrewPolicy) -> Blocker | None:
+    """Why ``crew`` cannot start any course now (see the table above), or None."""
+    if crew.stats is None:
+        return "stats_unknown", f"character {crew.character_id} has a stat that was not observed", True
+    phase = crew.session.phase
+    if phase in (SESSION_RUNNING, SESSION_UNKNOWN):
+        return "training_in_progress", f"training session {phase}", phase == SESSION_UNKNOWN
+    if phase == SESSION_ENDED_UNCLAIMED:
+        return "unclaimed_course", f"course {crew.session.course_id} ended and was not claimed", False
+    if crew.fatigue is None or crew.fatigue >= policy.max_fatigue:
+        return "fatigued", f"fatigue {crew.fatigue}, limit {policy.max_fatigue}", crew.fatigue is None
+    capacity = inputs.capacities.get(crew.design_id)
+    total = sum(crew.stats.values())
+    if capacity is None or total >= capacity:
+        return "tp_cap_reached", f"{total} TP, design {crew.design_id} capacity {capacity}", capacity is None
+    room = inputs.rooms.get(crew.room_id)
+    if room is None or room.room_type != policy.training_room_type:
+        return ("not_in_training_room", f"room {crew.room_id} is not a {policy.training_room_type} room",
+                room is None or room.room_type is None)
+    if room.status != policy.ready_status:
+        return "room_not_ready", f"room {room.room_id} status {room.status}", room.status is None
+    if room.capacity is None or room.running is None or room.running >= room.capacity:
+        return ("room_capacity", f"room {room.room_id} runs {room.running} of {room.capacity} sessions",
+                room.capacity is None or room.running is None)
+    return None
+
+
+# | Check (course, in order) | Fails when                                                          | Code                 |
+# |--------------------------|---------------------------------------------------------------------|----------------------|
+# | room type                | [u] requirement unknown; non-blank and [u] the room's name unknown, | not_in_training_room |
+# |                          | or the name's type (``policy.room_type_of``, any case) not it       |                      |
+# | room level (a minimum)   | [u] requirement unknown, or > 0 and the room's [u] unknown or lower | room_level           |
+# | research                 | [u] requirement unknown, or non-zero and [u] research unobserved    | research_unknown     |
+# |                          | non-zero and not ``policy.completed_research``                      | research_missing     |
+# | price                    | unavailable                                                         | price_unavailable    |
+# |                          | malformed                                                           | price_malformed      |
+# |                          | premium (Starbux, never spent)                                      | premium_currency     |
+# | funds                    | non-zero and above what its currency has spendable, or [u] unknown  | insufficient_funds   |
+# | spend cap                | non-zero and above what the currency's cap leaves                   | cap_exceeded         |
+
+_PRICE_SKIP_CODES: Mapping[str, str] = frozen_mapping(
+    {PRICE_UNAVAILABLE: "price_unavailable", PRICE_MALFORMED: "price_malformed", PRICE_PREMIUM: "premium_currency"}
+)
+
+
+def course_blocker(
+    course: CourseObservation, room: RoomObservation, inputs: TrainingInputs, policy: CrewPolicy
+) -> Blocker | None:
+    """Why ``course`` cannot start in ``room`` now (see the table above), or None. A price of 0 always fits."""
+    required_room = course.required_room_name
+    if required_room is None:
+        return "not_in_training_room", f"course {course.design_id} room requirement not observed", True
+    if required_room and policy.room_type_of(room.design_name) != required_room.casefold():
+        return ("not_in_training_room",
+                f"course {course.design_id} needs a {required_room} room, room {room.room_id} is a {room.design_name}",
+                room.design_name is None)
+    level = course.required_room_level
+    if level is None or (level and (room.level is None or room.level < level)):
+        return ("room_level", f"course {course.design_id} needs room level {level}, room level {room.level}",
+                level is None or room.level is None)
+    research = course.required_research_design_id
+    if research is None or (research and inputs.research is None):
+        return "research_unknown", f"course {course.design_id} research {research} not observed", True
+    if research and inputs.research.get(research) != policy.completed_research:
+        return ("research_missing", f"course {course.design_id} needs research {research} {policy.completed_research}",
+                False)
+    price = course.price
+    if price.status != PRICE_OK:
+        return _PRICE_SKIP_CODES[price.status], f"course {course.design_id} price {price.status}", False
+    amount, currency = price.amount, price.currency
+    spendable = inputs.funds.get(currency)
+    if amount and (spendable is None or amount > spendable):
+        return ("insufficient_funds", f"course {course.design_id} costs {amount} {currency}, {spendable} spendable",
+                spendable is None)
+    cap = inputs.spend_caps.get(currency)
+    if amount and cap is not None and amount > cap:
+        return ("cap_exceeded", f"course {course.design_id} costs {amount} {currency}, {cap} left under the cap",
+                False)
+    return None
+
+
+def choose_course(
+    stat: str, room: RoomObservation, inputs: TrainingInputs, policy: CrewPolicy
+) -> CourseObservation | Blocker:
+    """The lowest-id observed course that trains ``stat`` and can start in ``room`` now.
+
+    Else the lowest-id such course's blocker, or ``design_missing`` when no observed course trains ``stat`` (unknown
+    when the courses were not observed). Rank is not used: the planner trains one stat per role.
+    """
+    if inputs.courses is None:
+        return "design_missing", f"{stat} courses: course designs not observed", True
+    candidates = sorted((entry for entry in inputs.courses if entry.stat == stat), key=lambda entry: entry.design_id)
+    if not candidates:
+        return "design_missing", f"no observed course trains {stat}", False
+    for candidate in candidates:
+        if course_blocker(candidate, room, inputs, policy) is None:
+            return candidate
+    return course_blocker(candidates[0], room, inputs, policy)
+
+
+@dataclass(frozen=True)
+class CrewDecision:
+    """One line of the crew plan: a role (None for a crew whose stats are unknown), its crew (None when the role is
+    uncovered) and either the course to start or a skip code from ``CREW_SKIP_CODES``, never both. ``unknown`` is the
+    skip's blocker label: True when the check failed because its data was not observed (only with a skip code)."""
+
+    role: str | None
+    character_id: int | None
+    course: CourseObservation | None
+    code: str | None
+    detail: str
+    unknown: bool = False
+
+    def __post_init__(self) -> None:
+        if (self.course is None) == (self.code is None):
+            raise ValueError(f"a crew decision needs exactly one of a course and a skip code: {self!r}")
+        if self.code is not None and self.code not in CREW_SKIP_CODES:
+            raise ValueError(f"unknown crew skip code: {self.code!r}")
+        if not isinstance(self.unknown, bool):
+            raise ValueError(f"unknown must be a bool: {self.unknown!r}")
+        if self.unknown and self.code is None:
+            raise ValueError("only a skip can be unknown")
+
+
+@dataclass(frozen=True)
+class CrewPlan:
+    """The role assignment and the decisions: one per role in policy order, then one per stats-unknown crew (by id).
+    At most one decision starts a course."""
+
+    assignment: RoleAssignment
+    decisions: tuple[CrewDecision, ...]
+
+    def __post_init__(self) -> None:
+        if len([entry for entry in self.decisions if entry.course is not None]) > 1:
+            raise ValueError("a crew plan has at most one start")
+
+    @property
+    def start(self) -> CrewDecision | None:
+        """The decision that starts a course, or None."""
+        return next((entry for entry in self.decisions if entry.course is not None), None)
+
+
+def plan_crew(inputs: TrainingInputs, policy: CrewPolicy = DEFAULT_CREW_POLICY) -> CrewPlan:
+    """Assign roles, then give each role's crew its course or the first reason it cannot start (S14-R1, S14-R2).
+
+    Only the first eligible role (policy order) starts: one training start per account per run, and only while
+    ``inputs.action_slots`` is None or positive; any later eligible role reports ``action_cap_reached``.
+    """
+    assignment = assign_roles(inputs.crew, policy)
+    crew_by_id = {entry.character_id: entry for entry in inputs.crew}
+    decisions: list[CrewDecision] = []
+    started = False
+    for word, stat in policy.roles:
+        cid = assignment.roles.get(word)
+        if cid is None:
+            decisions.append(CrewDecision(word, None, None, "role_uncovered", f"no observed crew for the {stat} slot"))
+            continue
+        crew = crew_by_id[cid]
+        outcome = crew_blocker(crew, inputs, policy) or choose_course(stat, inputs.rooms[crew.room_id], inputs, policy)
+        if isinstance(outcome, tuple):
+            decisions.append(CrewDecision(word, cid, None, *outcome))
+        elif started:
+            decisions.append(CrewDecision(word, cid, None, "action_cap_reached",
+                                          f"course {outcome.design_id} waits: one training start per account per run"))
+        elif inputs.action_slots is not None and inputs.action_slots < 1:
+            decisions.append(CrewDecision(word, cid, None, "action_cap_reached",
+                                          f"course {outcome.design_id} waits: {inputs.action_slots} requests left "
+                                          "under max_requests"))
+        else:
+            started = True
+            decisions.append(CrewDecision(word, cid, outcome, None, f"course {outcome.design_id} {outcome.name}"))
+    decisions.extend(
+        CrewDecision(None, cid, None, "stats_unknown", f"character {cid} has a stat that was not observed", True)
+        for cid in assignment.stats_unknown
+    )
+    return CrewPlan(assignment, tuple(decisions))

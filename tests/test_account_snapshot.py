@@ -1,6 +1,8 @@
 """Tests for sdk.state account snapshots. Synthetic data only; no network."""
 
+import dataclasses
 import json
+import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 
@@ -10,6 +12,16 @@ from sdk.state import (
     SnapshotInputError,
     build_snapshot,
     diff_snapshots,
+)
+from sdk.state.baseline import load_baseline, write_baseline
+from sdk.training.model import (
+    SESSION_ENDED_UNCLAIMED,
+    SESSION_FINISHED,
+    SESSION_NONE,
+    SESSION_RUNNING,
+    SESSION_UNKNOWN,
+    CoursePrice,
+    TrainingSession,
 )
 from tests.synthetic_fixtures import SYNTHETIC_ACCESS_TOKEN, SYNTHETIC_EMAIL
 
@@ -327,6 +339,255 @@ class HullUpgradeFieldTests(unittest.TestCase):
                 self.assertIsNone(snapshot.upgrade_ship_design_id)
         padded = build_snapshot("alpha", T0, "fixture", ship={**SHIP, "@UpgradeShipDesignId": " 107 "})
         self.assertEqual(padded.upgrade_ship_design_id, "107")
+
+
+TRAINING_DESIGNS = {
+    "TrainingService": {
+        "ListAllTrainingDesigns": {
+            "TrainingDesigns": {
+                "TrainingDesign": [
+                    {"@TrainingDesignId": "40001", "@TrainingName": "Engineering Manual", "@RepairChance": "100",
+                     "@Rank": "1", "@RequiredRoomType": "Academy", "@RequiredRoomLevel": "2",
+                     "@RequiredResearchDesignId": "60001", "@CostString": "mineral:500"},
+                    {"@TrainingDesignId": "40002", "@TrainingName": "Free Weights", "@HpChance": "100"},
+                ]
+            }
+        }
+    }
+}
+ROOM_DESIGNS = {
+    "RoomService": {
+        "ListRoomDesigns": {
+            "RoomDesigns": {
+                "RoomDesign": [
+                    {"@RoomDesignId": "11", "@RoomName": "Academy", "@Level": "2", "@Capacity": "2"},
+                    {"@RoomDesignId": "21", "@RoomName": "Gym", "@Level": "1"},
+                    {"@RoomDesignId": "31", "@RoomName": "Closed Academy", "@Level": "1", "@Capacity": "0"},
+                ]
+            }
+        }
+    }
+}
+ERROR_PAYLOAD = {"TrainingService": {"@errorMessage": "Failed"}}
+
+
+def room_facts(snapshot, room_id):
+    room = snapshot.room(room_id)
+    return room.design_name, room.level, room.capacity
+
+
+# Verifies: S14-R2
+class TrainingObservationTests(unittest.TestCase):
+    def test_without_design_payloads_nothing_is_observed(self):
+        snapshot = full_snapshot()
+        self.assertIsNone(snapshot.courses)
+        self.assertIsNone(snapshot.course(40001))
+        self.assertEqual(room_facts(snapshot, "r1"), (None, None, None))
+
+    def test_training_designs_become_courses(self):
+        snapshot = full_snapshot(training_designs=TRAINING_DESIGNS)
+        self.assertIsInstance(snapshot.courses, tuple)
+        self.assertEqual([course.design_id for course in snapshot.courses], [40001, 40002])
+        self.assertEqual(snapshot.course(40001).price, CoursePrice("ok", "mineral", 500))
+        self.assertEqual(snapshot.course(40001).required_room_level, 2)
+        self.assertEqual(snapshot.course(40002).price, CoursePrice("unavailable"))
+        self.assertIsNone(snapshot.course(999))
+
+    def test_an_empty_design_list_is_observed_and_an_error_is_not(self):
+        empty = full_snapshot(training_designs={"TrainingService": {"ListAllTrainingDesigns": {"TrainingDesigns": None}}})
+        self.assertEqual(empty.courses, ())
+        self.assertIsNone(empty.course(40001))
+        for payload in (ERROR_PAYLOAD, {"Unexpected": {}}, "junk"):
+            with self.subTest(payload=payload):
+                self.assertIsNone(full_snapshot(training_designs=payload).courses)
+
+    def test_rooms_are_joined_with_their_design(self):
+        rooms = ROOMS + [
+            {"@RoomId": "r3", "@RoomDesignId": "31", "@RoomStatus": "Normal"},
+            {"@RoomId": "r4", "@RoomDesignId": "99", "@RoomStatus": "Normal"},
+            {"@RoomId": "r5", "@RoomStatus": "Normal"},
+        ]
+        snapshot = full_snapshot(rooms=rooms, room_designs=ROOM_DESIGNS)
+        self.assertEqual(room_facts(snapshot, "r1"), ("Academy", 2, 2))
+        self.assertEqual(room_facts(snapshot, "r2"), ("Gym", 1, None))
+        self.assertEqual(room_facts(snapshot, "r3"), ("Closed Academy", 1, 0))
+        self.assertEqual(room_facts(snapshot, "r4"), (None, None, None))
+        self.assertEqual(room_facts(snapshot, "r5"), (None, None, None))
+        self.assertEqual([room.status for room in snapshot.rooms], ["Normal", "Upgrading", "Normal", "Normal", "Normal"])
+        self.assertTrue(snapshot.room("r2").upgrading)
+        self.assertIs(snapshot.section("rooms"), Completeness.COMPLETE)
+
+    def test_a_nameless_room_design_has_no_name(self):
+        designs = {"RoomDesigns": {"RoomDesign": {"@RoomDesignId": "11", "@Level": "2"}}}
+        self.assertEqual(room_facts(full_snapshot(room_designs=designs), "r1"), (None, 2, None))
+
+    def test_a_room_design_error_observes_nothing(self):
+        for payload in ({"RoomService": {"@errorMessage": "Failed"}}, {"Unexpected": {}}):
+            with self.subTest(payload=payload):
+                snapshot = full_snapshot(room_designs=payload)
+                self.assertEqual(room_facts(snapshot, "r1"), (None, None, None))
+
+    def test_design_facts_stay_out_of_equality_and_baselines(self):
+        enriched = full_snapshot(training_designs=TRAINING_DESIGNS, room_designs=ROOM_DESIGNS)
+        self.assertEqual(enriched, full_snapshot())
+        with tempfile.TemporaryDirectory() as directory:
+            path = write_baseline(enriched, directory, "0.999.55")
+            loaded = load_baseline(path)
+        self.assertEqual(loaded, enriched)
+        self.assertIsNone(loaded.courses)
+
+    def test_to_dict_keeps_its_top_level_keys_and_carries_room_facts(self):
+        enriched = full_snapshot(training_designs=TRAINING_DESIGNS, room_designs=ROOM_DESIGNS).to_dict()
+        payload = json.loads(json.dumps(enriched))
+        self.assertEqual(set(payload), set(full_snapshot().to_dict()))
+        self.assertNotIn("courses", payload)
+        self.assertEqual(
+            {key: payload["rooms"][0][key] for key in ("design_name", "level", "capacity")},
+            {"design_name": "Academy", "level": 2, "capacity": 2},
+        )
+
+    def test_training_session_is_judged_at_the_observation_time(self):
+        later = (T0 + timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%S")
+        earlier = (T0 - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%S")
+        at_t0 = T0.strftime("%Y-%m-%dT%H:%M:%S")
+        crew = [
+            {"@CharacterId": "c1", "@TrainingEndDate": "", "@TrainingDesignId": "0"},
+            {"@CharacterId": "c2", "@TrainingEndDate": later, "@TrainingDesignId": "7"},
+            {"@CharacterId": "c3", "@TrainingEndDate": at_t0, "@TrainingDesignId": "7"},
+            {"@CharacterId": "c4", "@TrainingEndDate": earlier, "@TrainingDesignId": "0"},
+            {"@CharacterId": "c5", "@TrainingDesignId": "7"},
+        ]
+        snapshot = full_snapshot(crew=crew)
+        self.assertEqual(snapshot.training_session("c1"), TrainingSession(None, None, SESSION_NONE))
+        self.assertEqual(snapshot.training_session("c2"), TrainingSession(7, T0 + timedelta(hours=1), SESSION_RUNNING))
+        self.assertEqual(snapshot.training_session("c3"), TrainingSession(7, T0, SESSION_ENDED_UNCLAIMED))
+        self.assertEqual(snapshot.training_session("c4"), TrainingSession(None, T0 - timedelta(hours=1), SESSION_FINISHED))
+        self.assertEqual(snapshot.training_session("c5"), TrainingSession(None, None, SESSION_UNKNOWN))
+        self.assertIsNone(snapshot.training_session("c9"))
+        two_hours_on = full_snapshot(crew=crew, observed_at=T0 + timedelta(hours=2))
+        self.assertEqual(two_hours_on.training_session("c2").phase, SESSION_ENDED_UNCLAIMED)
+
+    def test_a_missing_or_blank_course_is_not_an_explicit_zero(self):
+        earlier = (T0 - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%S")
+        later = (T0 + timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%S")
+        crew = [
+            {"@CharacterId": "d1", "@TrainingEndDate": earlier},
+            {"@CharacterId": "d2", "@TrainingEndDate": earlier, "@TrainingDesignId": ""},
+            {"@CharacterId": "d3", "@TrainingEndDate": earlier, "@TrainingDesignId": " 0 "},
+            {"@CharacterId": "d4", "@TrainingEndDate": earlier, "@TrainingDesignId": "00"},
+            {"@CharacterId": "d5", "@TrainingEndDate": later},
+        ]
+        snapshot = full_snapshot(crew=crew)
+        self.assertEqual(
+            [snapshot.crew_member(cid).training_design_reported for cid in ("d1", "d2", "d3", "d4")],
+            [None, "", "0", "00"],
+        )
+        self.assertEqual({snapshot.crew_member(cid).training_design_id for cid in ("d1", "d2", "d3", "d4")}, {None})
+        self.assertEqual(snapshot.training_session("d1"), TrainingSession(None, None, SESSION_UNKNOWN))
+        self.assertEqual(snapshot.training_session("d2"), TrainingSession(None, None, SESSION_UNKNOWN))
+        self.assertEqual(snapshot.training_session("d3").phase, SESSION_FINISHED)
+        self.assertEqual(snapshot.training_session("d4").phase, SESSION_FINISHED)
+        self.assertEqual(snapshot.training_session("d5"), TrainingSession(None, T0 + timedelta(hours=1), SESSION_RUNNING))
+        # The reported text stays out of equality and baselines; a loaded member falls back to its design id.
+        self.assertEqual(snapshot, full_snapshot(crew=[{**record, "@TrainingDesignId": "0"} for record in crew]))
+        ended = full_snapshot(crew=[{"@CharacterId": "c1", "@TrainingEndDate": earlier, "@TrainingDesignId": "7"}])
+        with tempfile.TemporaryDirectory() as directory:
+            loaded = load_baseline(write_baseline(ended, directory, "0.999.55"))
+        self.assertEqual(loaded, ended)
+        self.assertIsNone(loaded.crew_member("c1").training_design_reported)
+        self.assertEqual(loaded.training_session("c1"), ended.training_session("c1"))
+        self.assertEqual(loaded.training_session("c1").phase, SESSION_ENDED_UNCLAIMED)
+
+    def test_an_empty_end_is_no_training_and_a_missing_one_is_unknown(self):
+        crew = [
+            {"@CharacterId": "c1", "@TrainingEndDate": "", "@TrainingDesignId": "7"},
+            {"@CharacterId": "c2", "@TrainingDesignId": "0"},
+            {"@CharacterId": "c3", "@TrainingEndDate": "   ", "@TrainingDesignId": "7"},
+        ]
+        snapshot = full_snapshot(crew=crew)
+        self.assertEqual(snapshot.training_session("c1"), TrainingSession(None, None, SESSION_NONE))
+        self.assertEqual(snapshot.training_session("c2"), TrainingSession(None, None, SESSION_UNKNOWN))
+        self.assertEqual(snapshot.training_session("c3"), TrainingSession(7, None, SESSION_UNKNOWN))
+
+    def test_a_naive_observation_time_gives_an_unknown_session(self):
+        later = (T0 + timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%S")
+        crew = [{"@CharacterId": "c1", "@TrainingEndDate": later, "@TrainingDesignId": "7"}]
+        snapshot = dataclasses.replace(full_snapshot(crew=crew), observed_at=T0.replace(tzinfo=None))
+        self.assertEqual(snapshot.training_session("c1"), TrainingSession(None, None, SESSION_UNKNOWN))
+        self.assertIsNone(snapshot.training_session("c9"))
+
+    def test_course_accepts_an_int_or_a_digit_string(self):
+        snapshot = full_snapshot(training_designs=TRAINING_DESIGNS)
+        for design_id in (40001, "40001", " 40001 ", "040001"):
+            with self.subTest(design_id=design_id):
+                self.assertEqual(snapshot.course(design_id).design_id, 40001)
+        for design_id in ("x", "-40001", "40001.0", True, None, 0, "", 40001.0):
+            with self.subTest(design_id=design_id):
+                self.assertIsNone(snapshot.course(design_id))
+
+    def test_room_type_is_joined_from_the_room_design(self):
+        designs = {
+            "RoomDesigns": {
+                "RoomDesign": [
+                    {"@RoomDesignId": "11", "@RoomName": "Academy", "@RoomType": " Training "},
+                    {"@RoomDesignId": "21", "@RoomName": "Gym"},
+                ]
+            }
+        }
+        rooms = ROOMS + [{"@RoomId": "r3", "@RoomDesignId": "99", "@RoomStatus": "Normal"}]
+        snapshot = full_snapshot(rooms=rooms, room_designs=designs)
+        self.assertEqual([snapshot.room(room_id).room_type for room_id in ("r1", "r2", "r3")], ["Training", None, None])
+        self.assertIsNone(full_snapshot().room("r1").room_type)
+        self.assertEqual(snapshot, full_snapshot(rooms=rooms))
+
+
+def training_crew(*members):
+    """Crew records in rooms: each member is (character id, room id, design id, end)."""
+    return [
+        {"@CharacterId": cid, "@RoomId": room, "@TrainingDesignId": design, "@TrainingEndDate": end}
+        for cid, room, design, end in members
+    ]
+
+
+# Verifies: S14-R2
+class RunningSessionsTests(unittest.TestCase):
+    later = (T0 + timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%S")
+    earlier = (T0 - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%S")
+
+    def test_an_observed_zero_is_kept(self):
+        snapshot = full_snapshot(crew=training_crew(("c1", "r1", "0", ""), ("c2", "r2", "7", self.later)))
+        self.assertEqual(snapshot.running_sessions("r1"), 0)
+        self.assertEqual(snapshot.running_sessions("r9"), 0)
+
+    def test_running_members_of_the_room_are_counted(self):
+        crew = training_crew(
+            ("c1", "r1", "7", self.later),
+            ("c2", "r1", "8", self.later),
+            ("c3", "r1", "0", ""),
+            ("c4", "r2", "7", self.later),
+        )
+        self.assertEqual(full_snapshot(crew=crew).running_sessions("r1"), 2)
+        self.assertEqual(full_snapshot(crew=crew[:1]).running_sessions("r1"), 1)
+
+    def test_an_ended_unclaimed_course_is_not_running(self):
+        crew = training_crew(("c1", "r1", "7", self.earlier), ("c2", "r1", "8", self.later))
+        self.assertEqual(full_snapshot(crew=crew).running_sessions("r1"), 1)
+
+    def test_an_unknown_member_in_the_room_makes_the_count_unknown(self):
+        crew = training_crew(("c1", "r1", "7", self.later), ("c2", "r1", "7", "soon"))
+        self.assertIsNone(full_snapshot(crew=crew).running_sessions("r1"))
+        unobserved = training_crew(("c1", "r1", "7", self.later)) + [{"@CharacterId": "c2", "@RoomId": "r1"}]
+        self.assertIsNone(full_snapshot(crew=unobserved).running_sessions("r1"))
+        elsewhere = training_crew(("c1", "r1", "7", self.later), ("c2", "r2", "7", "soon"))
+        self.assertEqual(full_snapshot(crew=elsewhere).running_sessions("r1"), 1)
+
+    def test_an_incomplete_crew_section_gives_no_count(self):
+        partial = training_crew(("c1", "r1", "7", self.later)) + [{"@RoomId": "r1"}]
+        snapshot = full_snapshot(crew=partial)
+        self.assertIs(snapshot.section("crew"), Completeness.PARTIAL)
+        self.assertIsNone(snapshot.running_sessions("r1"))
+        missing = build_snapshot("alpha", T0, "synthetic-fixture")
+        self.assertIsNone(missing.running_sessions("r1"))
 
 
 if __name__ == "__main__":
