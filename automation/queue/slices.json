@@ -2796,7 +2796,7 @@
     {
       "slice_id": "spec14-training-observations",
       "title": "Observe course prices, room levels and training timers from fresh account reads",
-      "status": "queued",
+      "status": "done",
       "priority": 500,
       "domain": "crew-training",
       "allowed_paths": [
@@ -2821,6 +2821,42 @@
       ],
       "max_files_changed": 10,
       "notes": "Implements S14-R2, S14-R5 (SPEC-14). Read docs/specs/SPEC-14-automated-crew-training.md and the wire-field assumptions in scripts/training_workflow_benchmark.py (item 5: CostString, RequiredRoomType, RequiredRoomLevel, RequiredResearchDesignId, Rank, <Stat>Chance; room design Level and Capacity; Mineral and Gas items; PrestigeCharacterTo). Parse them into pure observations that keep an observed zero and mark missing data unknown, expose them through the snapshot provider, and give add_training a verified postcondition on course ID and running timer. Keep training-v1, baseline-v1 and the legacy daily workflow behavior unchanged and the existing benchmark and mutation gates green. Do not change run.py, the fleet path, live workflows or game accounts."
+    },
+
+    {
+      "slice_id": "spec14-crew-policy",
+      "title": "Assign crew roles from the roster, choose role-matched courses and preview them with --crew-plan",
+      "status": "queued",
+      "priority": 500,
+      "domain": "crew-training",
+      "allowed_paths": [
+        "sdk/training/strategy.py",
+        "sdk/training/planner.py",
+        "sdk/training/prestige.py",
+        "sdk/policy/training.py",
+        "sdk/policy/progression.py",
+        "sdk/policy/__init__.py",
+        "sdk/fleet/factory.py",
+        "sdk/client.py",
+        "run.py",
+        "README.template",
+        "README.md",
+        "automation/mutation/config.json",
+        "tests/test_training_planner.py",
+        "tests/test_training_policy.py",
+        "tests/test_crew_plan.py",
+        "tests/test_training_endpoints.py"
+      ],
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ],
+      "depends_on": [
+        "spec14-training-observations"
+      ],
+      "max_files_changed": 16,
+      "notes": "Implements S14-R1, S14-R2, S14-R3 (SPEC-14). Read docs/specs/SPEC-14-automated-crew-training.md, the frozen harness contract in scripts/training_workflow_benchmark.py (items 5 and 6: crew-plan and Prestige line formats, skip codes, vocabulary) and the hand-off section of #301. Add training-v2 to the policy registry on top of training-v1: deterministic role assignment from observed stats (distinct repair, shields and weapons specialists first, ties by character instance id, unobserved stats unknown, role_uncovered reported), course choice by assigned stat, room, room level, research, fatigue, training points and observed price, and read-only --crew-plan with Prestige routes resolved by design id (duplicates counted). Previews make no gameplay writes. Paid execution, the attempt store, the lock, --fleet-provision-training, --fleet-resolve-training and the pre-login refusals belong to spec14-training-execution: do not add them, not even as stubs. Keep training-v1, baseline-v1 and the legacy daily run unchanged, and keep the training benchmark and blocking mutation gate green."
     }
   ]
 }
