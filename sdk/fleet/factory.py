@@ -1350,9 +1350,9 @@ class _ExecuteGateMixin:
     finishes). The fleet run's reasons then name the halt, not the stop file,
     and the halt is the fleet's ``stop_reason``.
 
-    training-v2 in ``full`` mode (SPEC-14 step 4, ``guarded_training``): once the account's identity is verified
-    (login, journal claim and first snapshot make no mutating request), ``attempts`` takes the account's non-blocking
-    lock, keyed by that identity, and reads its attempt store; the whole scheduler run (planning, progression
+    training-v2 (SPEC-14 step 4, ``guarded_training``): once the account's identity is verified (login, journal
+    claim and first snapshot make no mutating request), ``attempts`` takes the account's non-blocking lock, keyed by
+    that identity, in every execute mode; in ``full`` mode it also reads its attempt store; the whole scheduler run (planning, progression
     actions, the training start and its settlement) happens under the lock, which is released however the run ends.
     An account whose lock another dispatch holds ends ``locked`` with no account write; it does not count as stopped,
     so it never halts the fleet. A missing or unreadable store, or one of another identity, ends it ``error``. The
@@ -1395,9 +1395,7 @@ class _ExecuteGateMixin:
         return super()._stop_requested() or self._halted() is not None
 
     def _guarded(self, profile: AccountProfile) -> bool:
-        """Whether this account's run takes the training lock and attempt store (training-v2, full mode)."""
-        if self.gate.mode != FULL:
-            return False
+        """Whether this account's execute run takes the training lock (training-v2, whatever the mode)."""
         try:
             return guarded_training(get_policy(profile.policy_id))
         except Exception:  # an unknown policy fails inside the scheduler run, as before
@@ -1411,12 +1409,16 @@ class _ExecuteGateMixin:
         if self.attempts is None:
             return self._finish(profile, started, "error",
                                 f"{STATE_MISSING}: this run was given no training attempt store", game_identity=identity)
-        with self.attempts.dispatch(profile.alias, identity) as dispatch:  # the account lock is taken here
+        # Every execute mode takes the account lock, so no other dispatch spends while a start is rechecked and sent;
+        # only full mode (the one that starts training) reads the store and guards the start.
+        full = self.gate.mode == FULL
+        take = self.attempts.dispatch if full else self.attempts.hold
+        with take(profile.alias, identity) as dispatch:  # the account lock is taken here
             if dispatch.locked:
                 return self._finish(profile, started, "locked", dispatch.refusal, game_identity=identity)
             if dispatch.refusal is not None:
                 return self._finish(profile, started, "error", dispatch.refusal, game_identity=identity)
-            return self._run_gated(profile, context, execute, started, claims, dispatch=dispatch)
+            return self._run_gated(profile, context, execute, started, claims, dispatch=dispatch if full else None)
         # ... and released when the block exits, however it exits (never settled there)
 
     def _training_recheck(self, profile: AccountProfile, context: AccountContext, policy: ProgressionPolicy):

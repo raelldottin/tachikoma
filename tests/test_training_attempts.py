@@ -586,6 +586,23 @@ class DispatchTests(TempDirCase):
             with service.dispatch("alpha", ID_A) as dispatch:
                 self.assertEqual(codes_in(dispatch.refusal), {"state_unreadable"})
 
+    # Verifies: S14-R6 (regression C3)
+    def test_hold_takes_only_the_lock(self):
+        service = self.attempts_service()
+        with patch.object(service.store, "load", side_effect=AssertionError("the store is not read")):
+            with service.hold("alpha", ID_A) as dispatch:  # unprovisioned: the lock alone, its directory created
+                self.assertEqual((dispatch.locked, dispatch.refusal, dispatch.state), (False, None, None))
+                self.assertIsNone(service.lock.try_acquire(ID_A))
+                with service.hold("alpha", ID_A) as overlapping:
+                    self.assertTrue(overlapping.locked)
+                    self.assertEqual(codes_in(overlapping.refusal), {"locked"})
+        handle = service.lock.try_acquire(ID_A)
+        self.assertIsNotNone(handle)
+        handle.release()
+        self.assertEqual(store_artifacts(self.root, "alpha"), [])  # no store is created by holding the lock
+        with service.hold("alpha", None) as dispatch:
+            self.assertEqual(codes_in(dispatch.refusal), {"state_unreadable"})
+
     def test_dispatch_block_reason(self):
         service = self.attempts_service()
         service.store.provision("alpha", ID_A, T0)

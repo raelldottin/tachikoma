@@ -2408,6 +2408,49 @@ class TrainingStartTests(TrainingStartCase):
         self.assertIsNone(record["stop_reason"])
         self.assertEqual(self.store()["attempts"], [])
 
+    # Verifies: S14-R6 (regression C3: every execute mode of a training-v2 account takes the lock)
+    def test_every_execute_mode_of_a_locked_training_v2_account_sends_no_writes(self):
+        from sdk.fleet.attempts import FileAccountLock
+
+        modes = {
+            "canary": (dict(actions=["collect_all_resources"], modes=["canary"]), ("--mode", "canary")),
+            "upgrade-ship": (dict(actions=["upgrade_ship"], modes=["upgrade-ship"],
+                                  hull_upgrades={"alpha": [{"ship_design_id": 3}]}),
+                             ("--mode", "upgrade-ship", "--upgrade-ship", "3")),
+        }
+        for mode, (authorization, argv) in modes.items():
+            with self.subTest(mode=mode):
+                self.setUp()
+                self.ready()
+                self.write_authorization(**authorization)
+                held = FileAccountLock(self.store_root).try_acquire(self.identity)
+                try:
+                    mark = self.mark()
+                    code, out, err = self.main("--fleet-execute", "--authorization", "authorization.json", *argv,
+                                               *COMMON_TRAINING_ARGS)
+                finally:
+                    held.release()
+                self.assertEqual(self.mutations_since(mark), [], out + err)
+                [account] = self.latest_record()["accounts"]
+                self.assertEqual((account["status"], codes_in(account["reason"] or "")), ("locked", {"locked"}),
+                                 out + err)
+                self.assertIsNone(self.latest_record()["stop_reason"])
+                self.assertEqual(self.store()["attempts"], [])
+                self.assert_lock_released()
+
+    def test_a_non_full_execute_takes_no_store_and_creates_no_attempt(self):
+        self.ready()
+        self.write_authorization(actions=["collect_all_resources"], modes=["canary"])
+        self.store_path.write_bytes(HARNESS_CORRUPTION)  # only full mode reads the store
+        code, out, err = self.main("--fleet-execute", "--authorization", "authorization.json", "--mode", "canary",
+                                   *COMMON_TRAINING_ARGS)
+        [account] = self.latest_record()["accounts"]
+        self.assertNotEqual(account["status"], "locked", out + err)
+        self.assertNotIn("state_unreadable", out + err)
+        self.assertEqual(self.store_path.read_bytes(), HARNESS_CORRUPTION)
+        self.assertEqual(self.starts_since((0, 0)), [])
+        self.assert_lock_released()
+
     def change_the_price_after_planning(self, price):
         """The course's price changes after the planning read, before the runner's read under the lock (the 3rd
         course list read of an execute run: claim snapshot, planning snapshot, then the runner's ``before``)."""

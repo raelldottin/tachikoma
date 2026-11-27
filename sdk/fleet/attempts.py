@@ -927,6 +927,29 @@ class TrainingAttempts:
         finally:
             handle.release()
 
+    @contextmanager
+    def hold(self, alias: str, identity: Optional[str]) -> Iterator[Dispatch]:
+        """Only the account's lock, for an execute dispatch that never starts training (canary, place, upgrade-ship):
+        an overlapping dispatch of the same identity skips the account. The store is neither read nor required (its
+        directory is created for the lock file); the lock is released when the block exits, however it exits."""
+        if not isinstance(identity, str) or not GAME_IDENTITY_PATTERN.match(identity):
+            yield Dispatch(alias, identity, refusal=UNKNOWN_IDENTITY_REASON)
+            return
+        try:
+            self.store.ensure_root()
+            handle = self.lock.try_acquire(identity)
+        except (OSError, ValueError) as error:
+            yield Dispatch(alias, identity, refusal=(f"{STATE_UNREADABLE}: the account's training lock could not "
+                                                     f"be opened ({type(error).__name__})"))
+            return
+        if handle is None:
+            yield Dispatch(alias, identity, refusal=LOCKED_REASON, locked=True)
+            return
+        try:
+            yield Dispatch(alias, identity)
+        finally:
+            handle.release()
+
     def provision(self, alias: str, identity: str, now: datetime, *, events: Callable[[], Iterable[Any]] = tuple,
                   policy_id: Optional[str] = None) -> bool:
         """Provision the store of ``alias`` for the verified ``identity`` under its lock (``AccountLocked``).
