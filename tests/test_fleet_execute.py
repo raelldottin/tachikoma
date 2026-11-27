@@ -1996,9 +1996,11 @@ class TrainingExecutionCase(unittest.TestCase):
         self.journals = self.directory / "journals"
         self.store_root = self.journals / "training-attempts"
         self.store_path = self.store_root / "alpha.json"
+        self.marker_path = None  # set once the identity is known
         epoch = datetime.now(timezone.utc).replace(tzinfo=None, microsecond=0)
         self.fake = crew_plan_tests.FakePss(self.world(), epoch=epoch)
         self.identity = game_identity_fingerprint(self.fake.state.account.user_id, TRAINING_SALT)
+        self.marker_path = self.journals / "training-provisioned" / f"{self.identity}.json"
         self.write_registry()
         self.write_authorization()
 
@@ -2074,7 +2076,8 @@ class TrainingProvisionTests(TrainingExecutionCase):
         self.assertEqual(self.store()["attempts"], [])
         self.assertIn("Provisioned the training attempt store of account 'alpha'", out)
         self.assertEqual(sorted(path.name for path in self.store_root.iterdir()),
-                         sorted(["alpha.json", f"{self.identity}.lock", f"{self.identity}.provisioned"]))
+                         sorted(["alpha.json", f"{self.identity}.lock"]))
+        self.assertTrue(self.marker_path.is_file())  # outside the directory it protects
 
     def test_provision_twice_is_a_no_op_without_login(self):
         self.assertEqual(self.provision()[0], 0)
@@ -2106,6 +2109,79 @@ class TrainingProvisionTests(TrainingExecutionCase):
         self.assertEqual([codes_in(line) for line in self.refusal_lines(err)], [{"state_missing"}])
         self.assertFalse(self.store_path.exists())  # established state is never recreated
         self.assertEqual(self.requests_since(mark), [])
+
+    # Verifies: S14-R6 (regression C4/D3)
+    def test_a_removed_store_directory_is_never_recreated(self):
+        import shutil
+
+        self.assertEqual(self.provision()[0], 0)
+        self.assertEqual(self.main("--fleet-dry-run", *COMMON_TRAINING_ARGS)[0], 0)
+        shutil.rmtree(self.store_root)
+        mark = self.mark()
+        code, _, err = self.provision()
+        self.assertEqual(code, 1, err)
+        [line] = self.refusal_lines(err)
+        self.assertEqual(codes_in(line), {"state_missing"})
+        self.assertIn("never recreated", line)
+        self.assertFalse(self.store_path.exists())
+        code, _, err = self.main("--fleet-execute", "--authorization", "authorization.json", "--mode", "full",
+                                 *COMMON_TRAINING_ARGS)
+        self.assertEqual(code, 2, err)
+        [line] = self.refusal_lines(err)
+        self.assertEqual(codes_in(line), {"state_missing"})
+        self.assertIn("never recreated", line)
+        self.assertEqual(self.requests_since(mark), [])
+        self.assertFalse(self.store_path.exists())
+
+    # Verifies: S14-R6 (regression C4: the account journal is a second witness)
+    def test_a_journal_that_records_a_training_v2_start_is_never_provisioned_fresh(self):
+        import shutil
+
+        self.assertEqual(self.provision()[0], 0)
+        self.assertEqual(self.main("--fleet-dry-run", *COMMON_TRAINING_ARGS)[0], 0)
+        self.assertEqual(self.main("--fleet-execute", "--authorization", "authorization.json", "--mode", "full",
+                                   *COMMON_TRAINING_ARGS)[0], 0)  # Cora starts her course
+        shutil.rmtree(self.store_root)
+        shutil.rmtree(self.marker_path.parent)  # a backup from before provisioning, say: both witnesses on disk gone
+        mark = self.mark()
+        code, _, err = self.provision()
+        self.assertEqual(code, 1, err)
+        [line] = self.refusal_lines(err)
+        self.assertEqual(codes_in(line), {"state_missing"})
+        self.assertIn("journal", line)
+        self.assertEqual(self.requests_since(mark), [])
+        self.assertFalse(self.store_path.exists())
+        self.assertFalse(self.marker_path.exists())
+
+    def test_a_training_v1_journal_does_not_stop_provisioning(self):
+        GameplayJournal(self.journals / "alpha.log").append(GameplayEvent.create(
+            account_alias="alpha", action_id="add_training", started_at=datetime.now(timezone.utc),
+            finished_at=datetime.now(timezone.utc), outcome="verified", reason="a training-v1 start", attempted=True,
+            params={"character_id": "1001", "training_design_id": "41"}))
+        code, out, err = self.provision()
+        self.assertEqual(code, 0, err)
+        self.assertTrue(self.store_path.exists())
+
+    # Verifies: S14-R6 (regression C5)
+    def test_provision_rewrites_a_missing_marker_only_beside_a_readable_store(self):
+        self.assertEqual(self.provision()[0], 0)
+        self.marker_path.unlink()
+        before = self.store_path.read_bytes()
+        mark = self.mark()
+        code, out, err = self.provision()
+        self.assertEqual(code, 0, err)
+        self.assertNotIn("nothing changed", out)
+        self.assertIn("marker", out)
+        self.assertTrue(self.marker_path.is_file())
+        self.assertEqual(self.store_path.read_bytes(), before)
+        self.assertEqual(self.requests_since(mark), [])  # no login: the store already names the identity
+        # an unreadable store gets no marker
+        self.marker_path.unlink()
+        self.store_path.write_bytes(HARNESS_CORRUPTION)
+        code, _, err = self.provision()
+        self.assertEqual(code, 1, err)
+        self.assertFalse(self.marker_path.exists())
+        self.assertEqual(self.store_path.read_bytes(), HARNESS_CORRUPTION)
 
     def test_provision_checks_policy_and_alias_but_not_authorization(self):
         self.write_registry(policy_id="training-v1")

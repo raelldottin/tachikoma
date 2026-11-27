@@ -454,9 +454,11 @@ def run_fleet_provision_training(registry_path, alias, journal_dir=None, identit
     from datetime import datetime, timezone
 
     from sdk.fleet.accounts import game_identity_refusal
-    from sdk.fleet.attempts import StoreMissing, TrainingStateError, state_reason
+    from sdk.fleet.attempts import (STATE_UNREADABLE, StoreMissing, TrainingStateError, journal_witnesses_store,
+                                    state_reason)
     from sdk.fleet.factory import EnvironmentAccountFactory, LogScrubber
     from sdk.fleet.orchestrator import error_reason
+    from sdk.journal import JournalError, read_events
 
     command = "--fleet-provision-training"
     out = out or sys.stdout
@@ -480,8 +482,31 @@ def run_fleet_provision_training(registry_path, alias, journal_dir=None, identit
         reason = attempts.preflight(alias, profile.expected_game_identity)
         if reason is not None:
             return _training_store_failure(command, alias, reason)
-        out.write(f"Training attempt store of account {alias!r} already provisioned: {location}; nothing changed\n")
+        if attempts.store.established(profile.expected_game_identity):
+            out.write(f"Training attempt store of account {alias!r} already provisioned: {location}; nothing "
+                      "changed\n")
+            return 0
+        # A readable store of the declared identity whose establishment marker is missing (a crash between the two
+        # writes, say): the marker is written again under the lock. No login: the store already names the identity.
+        try:
+            attempts.provision(alias, profile.expected_game_identity, clock())
+        except TrainingStateError as error:
+            return _training_store_failure(command, alias, state_reason(location, error))
+        except OSError as error:
+            return _training_store_failure(command, alias, f"{type(error).__name__}: the establishment marker could "
+                                                           "not be written")
+        out.write(f"Training attempt store of account {alias!r} already provisioned: {location}; its missing "
+                  "establishment marker was written again\n")
         return 0
+    journal_path = journal_dir / f"{alias}.log"
+    try:  # the account journal is a second witness: a start made under the store means it was established
+        witnessed = journal_witnesses_store(read_events(journal_path), alias, profile.policy_id)
+    except JournalError as error:
+        return _training_store_failure(command, alias, f"{STATE_UNREADABLE}: account journal {journal_path} "
+                                                       f"cannot be read ({error})")
+    if witnessed:
+        return _training_store_failure(command, alias, state_reason(location, StoreMissing("journal",
+                                                                                           journal_witness=True)))
 
     scrubber = LogScrubber()
     scrubber.add_secrets([identity_salt])
@@ -499,7 +524,8 @@ def run_fleet_provision_training(registry_path, alias, journal_dir=None, identit
             refusal = "its game identity was not observed"
         if refusal is not None:
             return _training_store_failure(command, alias, f"{refusal}; nothing provisioned")
-        created = attempts.provision(alias, session.game_identity, clock())
+        created = attempts.provision(alias, session.game_identity, clock(), events=lambda: read_events(journal_path),
+                                     policy_id=profile.policy_id)
     except TrainingStateError as error:
         return _training_store_failure(command, alias, state_reason(location, error))
     except Exception as error:  # a login or file system failure: nothing was provisioned

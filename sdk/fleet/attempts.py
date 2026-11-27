@@ -19,13 +19,15 @@ The pure core (schema parsing, transitions, the block, resolution classification
 operator wording) takes explicit inputs and times. I/O lives in the two ports and their file implementations; the
 in-memory implementations honour the same contracts for unit tests.
 
-On disk, under ``<journal dir>/training-attempts/`` (directory 0700, files 0600):
+On disk, under ``<journal dir>/`` (directories 0700, files 0600):
 
-- ``<alias>.json``: the account's store, one JSON object (``STORE_KIND``, version 1);
-- ``<game identity>.provisioned``: written when the store is provisioned, so a deleted store is told apart from one
-  that never existed: established state is never recreated;
-- ``<game identity>.lock``: the ``flock`` target. Each acquisition opens it anew, so two dispatches in one process
-  (threads mode) contend exactly like two processes. ``flock`` needs a local file system.
+- ``training-attempts/<alias>.json``: the account's store, one JSON object (``STORE_KIND``, version 1);
+- ``training-attempts/<game identity>.lock``: the ``flock`` target. Each acquisition opens it anew, so two dispatches
+  in one process (threads mode) contend exactly like two processes. ``flock`` needs a local file system;
+- ``training-provisioned/<game identity>.json``: the establishment marker, written right after the store, outside the
+  directory it protects, so a deleted store (or a deleted ``training-attempts/``) is told apart from one that never
+  existed: established state is never recreated. The account journal is a second witness: once it records a start
+  made under a training-v2 dry-run plan, a missing store is established too (``journal_witnesses_store``).
 
 Nothing here retries, sleeps or blocks on the lock, and nothing catches ``BaseException``: a crashed process leaves
 its intent ``pending`` and the operating system releases its lock.
@@ -50,10 +52,13 @@ from sdk.state.snapshot import ACCOUNT_ALIAS_PATTERN, GAME_IDENTITY_PATTERN
 from sdk.training.model import SESSION_ENDED_UNCLAIMED, SESSION_RUNNING, SESSION_UNKNOWN
 
 STORE_DIR = "training-attempts"
+MARKER_DIR = "training-provisioned"
+# The journal evidence key a completed dry run's events carry their policy id in (sdk.fleet.factory.DRY_RUN_POLICY).
+DRY_RUN_POLICY_KEY = "dry_run_policy"
 STORE_KIND = "tachikoma.training-attempts"
 MARKER_KIND = "tachikoma.training-attempts.marker"
 STORE_VERSION = 1
-STORE_SUFFIX, MARKER_SUFFIX, LOCK_SUFFIX = ".json", ".provisioned", ".lock"
+STORE_SUFFIX, MARKER_SUFFIX, LOCK_SUFFIX = ".json", ".json", ".lock"
 
 PENDING, VERIFIED, UNRESOLVED, RESOLVED = "pending", "verified", "unresolved", "resolved"
 STATES = frozenset({PENDING, VERIFIED, UNRESOLVED, RESOLVED})
@@ -90,9 +95,10 @@ class TrainingStateError(Exception):
 class StoreMissing(TrainingStateError):
     code = STATE_MISSING
 
-    def __init__(self, detail: str, *, established: bool = False) -> None:
+    def __init__(self, detail: str, *, established: bool = False, journal_witness: bool = False) -> None:
         super().__init__(detail)
-        self.established = established
+        self.established = established or journal_witness
+        self.journal_witness = journal_witness
 
 
 class StoreUnreadable(TrainingStateError):
@@ -337,6 +343,22 @@ def reconciled_attempt_ids(state: StoreState, events: Iterable[Any] = ()) -> fro
     return frozenset(ids)
 
 
+def journal_witnesses_store(events: Iterable[Any], alias: str, policy_id: str) -> bool:
+    """Whether ``alias``'s journal shows its training attempt store was established: an attempted training start
+    after a completed dry run of ``policy_id`` (execute starts only from such a plan, under the store). A start the
+    journal records only under another policy's plans (training-v1 before the switch) is no witness."""
+    planned = False
+    for event in events:
+        if getattr(event, "account_alias", None) != alias:
+            continue
+        evidence = getattr(event, "evidence", None) or {}
+        if getattr(event, "dry_run", False) and evidence.get(DRY_RUN_POLICY_KEY) == policy_id:
+            planned = True
+        elif planned and getattr(event, "attempted", False) and getattr(event, "action_id", None) in GUARDED_ACTIONS:
+            return True
+    return False
+
+
 def resolved(state: StoreState, resolutions: Mapping[str, Mapping[str, Any]], now: datetime,
              events: Iterable[Any] = ()) -> StoreState:
     """Record an operator's reconciliation (authoritative evidence) for each blocking attempt named.
@@ -432,6 +454,9 @@ def start_refusal(preview: Any, params: Mapping[str, Any], expected_cost: Option
 def state_reason(location: str, error: TrainingStateError) -> str:
     """The operator text, code first, for an attempt store that cannot be used."""
     if isinstance(error, StoreMissing):
+        if error.journal_witness:
+            return (f"{STATE_MISSING}: the account journal records a training-v2 training start, so the training "
+                    f"attempt store {location} was established; it is missing and is never recreated")
         if error.established:
             return (f"{STATE_MISSING}: the established training attempt store {location} is missing and is never "
                     "recreated")
@@ -461,7 +486,8 @@ class AttemptStore(Protocol):
     def ensure_root(self) -> None: ...
     def load(self, alias: str, identity: Optional[str] = None) -> StoreState: ...
     def established(self, identity: str) -> bool: ...
-    def provision(self, alias: str, identity: str, now: datetime) -> bool: ...
+    def provision(self, alias: str, identity: str, now: datetime,
+                  journal_witness: Callable[[], bool] = lambda: False) -> bool: ...
     def write_intent(self, alias: str, attempt: Attempt) -> None: ...
     def settle(self, alias: str, intent_id: str, settlement: Mapping[str, Any]) -> None: ...
     def resolve(self, alias: str, resolutions: Mapping[str, Mapping[str, Any]], now: datetime,
@@ -507,11 +533,14 @@ class _StoreBase:
             raise StoreMissing("no training attempt store", established=established)
         return parse_store(raw, alias)
 
-    def provision(self, alias: str, identity: str, now: datetime) -> bool:
-        """Create the virgin store: ``True`` when created, ``False`` when it already exists for ``identity``.
+    def provision(self, alias: str, identity: str, now: datetime,
+                  journal_witness: Callable[[], bool] = lambda: False) -> bool:
+        """Create the virgin store: ``True`` when created, ``False`` when it already exists for ``identity`` (its
+        marker is written again when missing).
 
         Refused: a store of another identity or an unreadable one (``StoreUnreadable``, bytes untouched) and an
-        established store that is missing (``StoreMissing``, nothing recreated).
+        established store that is missing (``StoreMissing``, nothing recreated): its marker exists, or
+        ``journal_witness()`` says the account journal records a start made under the store.
         """
         _check_alias(alias)
         _check_identity(identity)
@@ -526,6 +555,8 @@ class _StoreBase:
             return False
         if self.established(identity):
             raise StoreMissing("established store missing", established=True)
+        if journal_witness():
+            raise StoreMissing("the journal records an established store", journal_witness=True)
         self._create(alias, dump_store(virgin_store(alias, identity, now)))  # the store first, then its marker
         self._mark(alias, identity, now)
         return True
@@ -553,6 +584,7 @@ class FileAttemptStore(_StoreBase):
 
     def __init__(self, journal_dir: Path | str) -> None:
         self.root = Path(journal_dir) / STORE_DIR
+        self.marker_root = Path(journal_dir) / MARKER_DIR
 
     def path(self, alias: str) -> Path:
         return self.root / f"{_check_alias(alias)}{STORE_SUFFIX}"
@@ -576,7 +608,7 @@ class FileAttemptStore(_StoreBase):
 
     def _temporary(self, path: Path, data: bytes) -> Path:
         """``data`` in a new, fsynced temporary file beside ``path`` (removed again if writing fails)."""
-        temporary = self.root / f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
+        temporary = path.parent / f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
         fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0), 0o600)
         written = False
         try:
@@ -589,8 +621,8 @@ class FileAttemptStore(_StoreBase):
                 temporary.unlink(missing_ok=True)
         return temporary
 
-    def _sync_root(self) -> None:
-        fd = os.open(self.root, os.O_RDONLY)
+    def _sync_root(self, directory: Optional[Path] = None) -> None:
+        fd = os.open(directory if directory is not None else self.root, os.O_RDONLY)
         try:
             os.fsync(fd)
         finally:
@@ -605,7 +637,7 @@ class FileAttemptStore(_StoreBase):
         finally:
             if not replaced:
                 temporary.unlink(missing_ok=True)
-        self._sync_root()
+        self._sync_root(path.parent)
 
     def _create(self, alias: str, data: bytes) -> None:
         path = self.path(alias)
@@ -620,12 +652,13 @@ class FileAttemptStore(_StoreBase):
         self._write_atomic(self.path(alias), data)
 
     def _marker(self, identity: str) -> Path:
-        return self.root / f"{_check_identity(identity)}{MARKER_SUFFIX}"
+        return self.marker_root / f"{_check_identity(identity)}{MARKER_SUFFIX}"
 
     def established(self, identity: str) -> bool:
         return self._marker(identity).exists()
 
     def _mark(self, alias: str, identity: str, now: datetime) -> None:
+        self.marker_root.mkdir(mode=0o700, parents=True, exist_ok=True)
         payload = {"kind": MARKER_KIND, "version": STORE_VERSION, "alias": alias, "game_identity": identity,
                    "provisioned_at": _iso(now)}
         self._write_atomic(self._marker(identity), (json.dumps(payload, sort_keys=True) + "\n").encode("utf-8"))
@@ -871,8 +904,9 @@ class TrainingAttempts:
         if not isinstance(identity, str) or not GAME_IDENTITY_PATTERN.match(identity):
             yield Dispatch(alias, identity, refusal=UNKNOWN_IDENTITY_REASON)
             return
-        if not self.store.exists():
-            yield Dispatch(alias, identity, refusal=state_reason(self.location(alias), StoreMissing("no store")))
+        if not self.store.exists():  # no lock file is created; the marker tells a removed store directory apart
+            missing = StoreMissing("no store", established=self.store.established(identity))
+            yield Dispatch(alias, identity, refusal=state_reason(self.location(alias), missing))
             return
         try:
             handle = self.lock.try_acquire(identity)
@@ -893,15 +927,21 @@ class TrainingAttempts:
         finally:
             handle.release()
 
-    def provision(self, alias: str, identity: str, now: datetime) -> bool:
-        """Provision the store of ``alias`` for the verified ``identity`` under its lock (``AccountLocked``)."""
+    def provision(self, alias: str, identity: str, now: datetime, *, events: Callable[[], Iterable[Any]] = tuple,
+                  policy_id: Optional[str] = None) -> bool:
+        """Provision the store of ``alias`` for the verified ``identity`` under its lock (``AccountLocked``).
+
+        With ``policy_id``, the account journal (``events``, read under the lock) is a second witness of an
+        established store (``journal_witnesses_store``).
+        """
         _check_identity(identity)
         self.store.ensure_root()
         handle = self.lock.try_acquire(identity)
         if handle is None:
             raise AccountLocked(LOCKED_REASON)
         try:
-            return self.store.provision(alias, identity, now)
+            return self.store.provision(alias, identity, now, lambda: policy_id is not None
+                                        and journal_witnesses_store(events(), alias, policy_id))
         finally:
             handle.release()
 

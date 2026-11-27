@@ -334,8 +334,39 @@ class FileStoreTests(StoreContract, TempDirCase):
         self.assertEqual(store_artifacts(self.root, "alpha"), ["alpha.json"])
         self.assertEqual(stat.S_IMODE(os.stat(self.root).st_mode), 0o700)
         self.assertEqual(stat.S_IMODE(os.stat(self.root / "alpha.json").st_mode), 0o600)
-        self.assertTrue((self.root / f"{ID_A}.provisioned").is_file())
         self.assertEqual(store.location("alpha"), str(self.root / "alpha.json"))
+
+    # Verifies: S14-R6 (regression C4/D3: the marker lives outside the directory it protects)
+    def test_the_establishment_marker_lives_beside_the_store_directory(self):
+        store = self.make_store()
+        store.provision("alpha", ID_A, T0)
+        markers = self.journal_dir / attempts.MARKER_DIR
+        marker = markers / f"{ID_A}.json"
+        self.assertEqual(sorted(path.name for path in markers.iterdir()), [marker.name])
+        self.assertEqual(stat.S_IMODE(os.stat(markers).st_mode), 0o700)
+        self.assertEqual(stat.S_IMODE(os.stat(marker).st_mode), 0o600)
+        self.assertEqual(json.loads(marker.read_text())["game_identity"], ID_A)
+        self.assertEqual(sorted(path.name for path in self.root.iterdir()), ["alpha.json"])
+        import shutil
+
+        shutil.rmtree(self.root)  # the whole store directory is lost
+        with self.assertRaises(StoreMissing) as caught:
+            store.load("alpha", identity=ID_A)
+        self.assertTrue(caught.exception.established)
+        with self.assertRaises(StoreMissing) as caught:
+            store.provision("alpha", ID_A, T0)
+        self.assertTrue(caught.exception.established)
+        self.assertFalse((self.root / "alpha.json").exists())
+
+    def test_a_crash_between_the_store_and_its_marker_leaves_a_usable_store(self):
+        store = self.make_store()
+        with patch.object(FileAttemptStore, "_mark", side_effect=OSError("crash before the marker")):
+            with self.assertRaises(OSError):
+                store.provision("alpha", ID_A, T0)
+        self.assertEqual(store.load("alpha").game_identity, ID_A)  # the store first ...
+        self.assertFalse(store.established(ID_A))  # ... then its marker
+        self.assertFalse(store.provision("alpha", ID_A, T0))  # provisioning again only writes the marker
+        self.assertTrue(store.established(ID_A))
 
     def test_provision_refuses_to_recreate_established_state(self):
         store = self.make_store()
@@ -398,6 +429,7 @@ class FileStoreTests(StoreContract, TempDirCase):
         handle = FileAccountLock(self.root).try_acquire(ID_A)
         handle.release()
         self.assertEqual(store_artifacts(self.root, "alpha"), ["alpha.json"])
+        self.assertEqual(sorted(path.name for path in self.root.iterdir()), ["alpha.json", f"{ID_A}.lock"])
 
     def test_aliases_that_could_leave_the_directory_are_refused(self):
         store = self.make_store()
@@ -573,6 +605,55 @@ class DispatchTests(TempDirCase):
         why = service.preflight("alpha", ID_A)
         self.assertEqual(codes_in(why), {"state_missing"})
         self.assertIn("never recreated", why)
+
+    # Verifies: S14-R6 (regression C4/D3)
+    def test_a_removed_store_directory_is_established_state_missing(self):
+        import shutil
+
+        service = self.attempts_service()
+        service.provision("alpha", ID_A, T0)
+        shutil.rmtree(self.root)
+        why = service.preflight("alpha", ID_A)
+        self.assertEqual(codes_in(why), {"state_missing"})
+        self.assertIn("never recreated", why)
+        with service.dispatch("alpha", ID_A) as dispatch:
+            self.assertEqual(codes_in(dispatch.refusal), {"state_missing"})
+            self.assertIn("never recreated", dispatch.refusal)
+        with self.assertRaises(StoreMissing) as caught:
+            service.provision("alpha", ID_A, T0)
+        self.assertTrue(caught.exception.established)
+        self.assertFalse((self.root / "alpha.json").exists())
+
+    # Verifies: S14-R6 (regression C4: the account journal is a second witness)
+    def test_a_journal_with_a_training_v2_start_is_never_provisioned_fresh(self):
+        from sdk.fleet.factory import DRY_RUN_POLICY
+        from sdk.journal import GameplayEvent
+
+        self.assertEqual(attempts.DRY_RUN_POLICY_KEY, DRY_RUN_POLICY)
+
+        def event(action_id="add_training", attempted=True, dry_run=False, policy=None):
+            return GameplayEvent.create(account_alias="alpha", action_id=action_id, started_at=T0, finished_at=T0,
+                                        outcome="skipped" if not attempted else "verified", reason="r",
+                                        attempted=attempted, dry_run=dry_run, params=params(),
+                                        evidence={DRY_RUN_POLICY: policy} if policy else {})
+
+        v2_plan, v1_plan = event(attempted=False, dry_run=True, policy="training-v2"), event(
+            attempted=False, dry_run=True, policy="training-v1")
+        witness = attempts.journal_witnesses_store
+        self.assertFalse(witness([], "alpha", "training-v2"))
+        self.assertFalse(witness([v1_plan, event()], "alpha", "training-v2"))  # a training-v1 start before the switch
+        self.assertFalse(witness([v2_plan, event(attempted=False)], "alpha", "training-v2"))  # skipped only
+        self.assertFalse(witness([v2_plan, event("collect_all_resources")], "alpha", "training-v2"))
+        self.assertTrue(witness([v1_plan, event(), v2_plan, event()], "alpha", "training-v2"))
+        self.assertFalse(witness([v2_plan, event()], "bravo", "training-v2"))  # another account's events
+        service = self.attempts_service()
+        with self.assertRaises(StoreMissing) as caught:
+            service.provision("alpha", ID_A, T0, events=lambda: [v2_plan, event()], policy_id="training-v2")
+        self.assertTrue(caught.exception.established)
+        self.assertFalse((self.root / "alpha.json").exists())
+        self.assertEqual(codes_in(attempts.state_reason("x", caught.exception)), {"state_missing"})
+        self.assertTrue(service.provision("alpha", ID_A, T0, events=lambda: [v1_plan, event()],
+                                          policy_id="training-v2"))
 
     def test_provision_under_the_lock(self):
         service = self.attempts_service()
