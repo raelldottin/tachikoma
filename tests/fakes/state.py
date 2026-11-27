@@ -30,6 +30,7 @@ from tests.synthetic_fixtures import SYNTHETIC_EMAIL
 # Production order (sdk/training/model.py ``CANONICAL_STATS``), without the "@".
 STATS = ("HpImprovement", "PilotImprovement", "RepairImprovement", "WeaponImprovement", "ScienceImprovement",
          "EngineImprovement", "AttackImprovement", "AbilityImprovement", "StaminaImprovement")
+MAX_TRAINING_FATIGUE = 100  # strict_training_rules refuse a crew this tired (sdk/training/strategy.py's v1 limit)
 FAKE_EPOCH = datetime.datetime(2026, 11, 20, 12, 0, 0)  # naive UTC; test code never calls utcnow()
 FAKE_PASSWORD = "synthetic-daily-pass-0001"  # synthetic; never a real credential
 GUEST_USER_ID = "700000999"
@@ -106,6 +107,10 @@ class RoomDesign:
     room_hp: int = 10
     power_generated: int = 0
     max_population: int = 0
+    # Opt-in (SPEC-14 workflow benchmark): emitted as Level and Capacity only when set. Capacity is how many crew
+    # can train in a room of this design at once; strict_training_rules enforces both.
+    level: int | None = None
+    capacity: int | None = None
 
 
 @dataclass
@@ -166,6 +171,11 @@ class Character:
     stats: dict[str, int] = field(default_factory=stats)
     session: TrainingSession | None = None
     available_date: datetime.datetime | None = None
+    # Opt-in: stat attributes (e.g. "RepairImprovement") left out of the character record, so production sees them as
+    # unobserved rather than as 0.
+    omit_stats: tuple[str, ...] = ()
+    # Opt-in: left out of ListAllCharactersOfUser altogether (a roster read that lacks the character's id).
+    hidden: bool = False
 
     @property
     def training_end(self) -> datetime.datetime | None:
@@ -187,6 +197,29 @@ class TrainingDesign:
     gain: int
     fatigue: int
     duration: datetime.timedelta
+    # Opt-in (SPEC-14 workflow benchmark); all None by default, so a default design's record is unchanged. ``price``
+    # is the advertised CostString (any text, malformed included); ``charge`` is what AddTraining takes under
+    # World.strict_training_rules, defaulting to ``price``. A charge that ``parse_price`` rejects charges nothing.
+    price: str | None = None
+    charge: str | None = None
+    rank: int | None = None
+    required_room_type: str | None = None  # a room design name, e.g. "Academy"
+    required_room_level: int | None = None
+    required_research_id: str | None = None
+
+    @property
+    def wire_extended(self) -> bool:
+        """Whether the record carries the opt-in fields (and then also its ``<Stat>Chance`` attribute)."""
+        return any(value is not None for value in (self.price, self.charge, self.rank, self.required_room_type,
+                                                   self.required_room_level, self.required_research_id))
+
+    def charged(self) -> tuple[str, int] | None:
+        """(kind, amount) AddTraining takes under strict rules, or None when nothing parseable is set."""
+        text = self.charge if self.charge is not None else self.price
+        try:
+            return parse_price(text) if text is not None else None
+        except ValueError:
+            return None
 
 
 @dataclass
@@ -277,6 +310,23 @@ class World:
     # at login. False: no User element, so a later starbux total can only come from the login reply (or a purchase).
     collect_reply_has_user: bool = True
     design_versions: dict[str, str] = field(default_factory=_default_design_versions)
+    # Opt-in (SPEC-14 workflow benchmark), all off by default:
+    # - typed_resource_items: ListItemsOfAShip also lists one Type="Mineral" and one Type="Gas" item holding
+    #   ``resources``, so the snapshot observes minerals and gas (ListAllDesigns4 is absent here).
+    # - strict_training_rules: AddTraining also refuses a room that is not Normal, of the wrong design name or level,
+    #   or full, a missing required research, a crew whose fatigue is at least MAX_TRAINING_FATIGUE, a crew whose
+    #   training points (the sum of its STATS) reached its design's training capacity, and a course the account
+    #   cannot pay; then it charges the course.
+    # - ship_omits_researches: GetShipByUserId carries no Researches element (research unobserved).
+    # - prestige_recipes: (design id, design id, target design id) rows served by PrestigeCharacterTo.
+    # - concurrent_sessions: a login keeps the account's earlier tokens valid. Off (the default), each login revokes
+    #   them, as the live server's single session does; two overlapping dispatches of one account then break each
+    #   other's session in an order only thread timing decides.
+    typed_resource_items: bool = False
+    strict_training_rules: bool = False
+    ship_omits_researches: bool = False
+    prestige_recipes: list[tuple[str, str, str]] = field(default_factory=list)
+    concurrent_sessions: bool = False
 
     def character(self, cid: str) -> Character:
         return _find(self.characters, cid, "character")
@@ -289,6 +339,9 @@ class World:
 
     def research_design(self, did: str) -> ResearchDesign:
         return _find(self.research_designs, did, "research design")
+
+    def character_design(self, did: str) -> CharacterDesign:
+        return _find(self.character_designs, did, "character design")
 
     def training_design(self, tid: str) -> TrainingDesign:
         return _find(self.training_designs, tid, "training design")
@@ -344,6 +397,12 @@ class World:
                     problems.append(f"room design {design.id}: {bad}")
         for research in self.researches:
             check(f"research {research.design_id}", "research design", research.design_id, "design")
+        for course in self.training_designs:
+            check(f"training design {course.id}", "research design", course.required_research_id,
+                  "required research")
+        for recipe in self.prestige_recipes:
+            for design_id in recipe:
+                check(f"prestige recipe {recipe}", "character design", design_id)
         for task in self.tasks:
             check(f"task {task.design_id}", "task design", task.design_id, "design")
         for kind, rows in (("character", self.characters), ("room", self.rooms), ("item", self.items),

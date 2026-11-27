@@ -1,0 +1,3300 @@
+{
+  "schema": "tachikoma.training-workflow/1",
+  "suite": "required",
+  "declared": "2026-11-26",
+  "authored_from": {
+    "text": "Hand-written from docs/specs/SPEC-14-automated-crew-training.md (S14-R1..R7, S14-AC1..AC4, AC6) and the worlds in this file, before any training-v2 code exists. training-v2 traces state what the spec requires of each world; training-v1 control traces state what the v1 rules require (roles by exact crew name from sdk/training/strategy.py DEFAULT_ROLES, tier bands by stat total over capacity, the Fitness 101 gate for primary T1, an explicit zero declared cost, one start per idle crew, UncertainPriorAttemptError after an unknown attempt). No expected value was produced by running the code under test.",
+    "interpretations": [
+      "I1 Role assignment (S14-R1): first assign as many distinct requested specialist slots (repair, shields, weapons) as the roster supports, then maximise the sum of the assigned crew's stats in their roles; equal scores go to the lower instance id. A role no crew can fill is reported role_uncovered.",
+      "I2 Role words map to stats repair=Repair, shields=Science, weapons=Weapon (vocabulary.roles). A crew can fill a role when that stat is observed, an observed 0 included: an observed 0 is never unknown. A stat missing from the reply is unknown, never 0; S14-R1 lets the planner either skip such a crew (stats_unknown) or estimate the missing stat from design and level (observed stats preferred), so no trace freezes either choice for a crew with a missing stat (alternatives are listed with any_of where the choice changes the plan).",
+      "I3 At most one training start per account per run (S14-Q1): a dry run journals at most one add_training per account, and an execute sends at most one AddTraining per account, whichever of several eligible crew it picks unless the trace names the winner (candidate_one_of otherwise).",
+      "I4 Training is planned after the progression block (S14 Interfaces): an earlier upgrade's spend counts against the balance, the authorization's per-account spend caps and the registry's max_actions before a training start.",
+      "I5 Previews (crew-plan, dry-run) need no provisioned attempt store. An execute needs one provisioned explicitly (step kind provision) and refuses with state_missing otherwise; it never creates or recreates the store itself.",
+      "I6 A refusal inside a run is a skip with exit 0 unless the trace says otherwise; a refusal before login exits nonzero. A disabled account (registry enabled false) is not run at all: zero requests, no code required.",
+      "I7 Eligibility from fresh reads (S14-R2): room status Normal, the course's room type and level, room capacity (running sessions in the room below Capacity), required research Completed, no running or unclaimed course, observed fatigue below 100 (fatigued otherwise), training points (the sum of the nine stats) below the design's training capacity (tp_cap_reached otherwise).",
+      "I8 Price (S14-R4): CostString '<currency>:<amount>'; absent -> price_unavailable, unparseable -> price_malformed, starbux -> premium_currency, above the balance -> insufficient_funds, above the remaining authorization cap -> cap_exceeded; an explicitly observed 0 is accepted. Each scenario has exactly one valid code.",
+      "I9 Verification (S14-R5): verified only from a fresh roster read after the start showing the requested course with a running timer. A different course, a roster that lacks the character, a failed post-read or a lost reply leave the attempt unresolved (journal outcome unknown, not-observed or contradicted unless the trace pins one) and block every later start on the account, another crew included, until an operator resolution (step kind resolve) records a durable reconciliation; the next execute may then start one eligible crew.",
+      "I10 After sending, the pending record survives every failure. A lost AddTraining reply with failing post-reads keeps the attempt store present and journals the attempt unresolved. A settle write that fails after an applied start (SETTLE_WRITE_HOOK) also keeps the store present, the start applied once, so the next execute (after a fresh dry run) sends no AddTraining and reports unresolved_attempt. An intent that cannot be persisted sends nothing (intent_not_persisted).",
+      "I11 Overlapping dispatches of one identity: the lock holder starts at most one eligible crew (either), the other dispatch sends no account write and reports locked; a separate account starts independently.",
+      "I12 The operator stop control: a STOP file present before the run refuses before login; a STOP file created during the run stops the account before its training start, recorded with status or reason 'stopped'.",
+      "I13 A crew in a non-training room keeps its role in the crew plan and is skipped not_in_training_room; it is not moved (relocation is out of scope).",
+      "I14 Research unobserved (the ship read omits Researches) -> research_unknown and the dry run plans nothing.",
+      "I15 'A matching recent dry run' (S14-R4): every execute after an earlier execute or resolve runs right after a fresh dry-run step (world edits aside), so the traces hold under either reading, SPEC-05's completed dry run of the same registry and policy within 24 hours, or a dry run that planned this very start. A dry run is a read-only preview: it completes (exit 0) for an account blocked by an unresolved attempt, and the execute run reports the block.",
+      "I16 A course's room level is a minimum (S14-R2 'matches room level'): a course of level n can be taken in a training room of level n or more, so a level-1 course trains in a level-2 Academy, and never in a lower one.",
+      "I17 A locked account (an overlapping dispatch of the same identity holds its lock) is skipped, not stopped or failed: it does not count toward the fleet halt share (DEFAULT_HALT_SHARE 0.0 in sdk/fleet/factory.py halts on any stopped account), so the dispatch goes on to its other accounts."
+    ]
+  },
+  "seeds": [1401, 1402, 1403],
+  "cases_declared": [
+    "role-coverage",
+    "preview-prestige",
+    "paid-boundary",
+    "stale-preflight",
+    "reconciliation",
+    "persisted-intent-restart",
+    "overlapping-dispatch",
+    "distinct-accounts",
+    "store-stop-controls"
+  ],
+  "vocabulary": {
+    "roles": {"weapons": "WeaponImprovement", "shields": "ScienceImprovement", "repair": "RepairImprovement"},
+    "skip_codes": [
+      "not_in_training_room",
+      "training_in_progress",
+      "unclaimed_course",
+      "room_not_ready",
+      "room_level",
+      "room_capacity",
+      "research_missing",
+      "research_unknown",
+      "stats_unknown",
+      "price_unavailable",
+      "price_malformed",
+      "premium_currency",
+      "insufficient_funds",
+      "cap_exceeded",
+      "locked",
+      "unresolved_attempt",
+      "intent_not_persisted",
+      "stopped",
+      "state_missing",
+      "state_unreadable",
+      "dry_run_stale",
+      "not_authorized",
+      "legacy_run_not_skipped",
+      "role_uncovered",
+      "fatigued",
+      "tp_cap_reached",
+      "action_cap_reached"
+    ],
+    "control_skip_codes": [
+      "not_in_training_room",
+      "training_in_progress",
+      "research_missing",
+      "tp_cap_reached",
+      "design_missing",
+      "unknown_role",
+      "fatigued",
+      "complete"
+    ],
+    "outcomes": ["verified", "not-observed", "contradicted", "unknown", "skipped"],
+    "matching": "A skip matches only in a structured record of that account: a run-record account entry (status, reason, results reasons, rejected candidates and reasons), a journal event (reason and params), or a pre-login refusal line \"  - account '<alias>': ...\" naming exactly one code; the crew's seeded instance id must be in the same record when the expectation names a crew. Free stdout never matches a skip. A crew-plan entry matches one stdout line holding the crew's instance id, the role word and the course name or exactly one skip code. A prestige entry matches one stdout line holding the target and ingredient design names and 'missing <n>'. Step kinds provision and resolve, the attempt store's location and the intent-write hook are interface assumptions pinned in scripts/training_workflow_benchmark.py (INTERFACE ASSUMPTIONS), never here."
+  },
+  "catalog": {
+    "room_designs": {
+      "bridge": {"id": 50101, "name": "Bridge", "type": "Bridge", "level": 1},
+      "academy_l1": {"id": 50901, "name": "Academy", "type": "Training", "level": 1, "capacity": 2},
+      "academy_l2": {"id": 50902, "name": "Academy", "type": "Training", "level": 2, "capacity": 2, "upgrade_from": "academy_l1", "price": "mineral:3000"},
+      "storage": {"id": 50501, "name": "Mineral Storage", "type": "Storage", "level": 1},
+      "storage_l2": {"id": 50502, "name": "Mineral Storage Lv2", "type": "Storage", "level": 2, "upgrade_from": "storage", "price": "mineral:600"}
+    },
+    "research_designs": {"fitness_101": {"id": 60001, "name": "Fitness 101", "root": "fitness_101", "gas": 1000}},
+    "character_designs": {
+      "cadet": {"id": 30001, "name": "Synthetic Cadet", "capacity": 100, "rarity": "Common"},
+      "succubus": {"id": 30002, "name": "Galactic Succubus", "capacity": 80, "rarity": "Legendary"},
+      "veteran": {"id": 30003, "name": "Synthetic Veteran", "capacity": 100, "rarity": "Common"}
+    },
+    "training_designs": {
+      "eng_manual": {
+        "id": 40001,
+        "name": "Study Expert Engineering Manual",
+        "stat": "RepairImprovement",
+        "gain": 2,
+        "fatigue": 10,
+        "duration_s": 3600,
+        "rank": 1,
+        "room_type": "Academy",
+        "room_level": 2,
+        "research": "fitness_101",
+        "price": "mineral:500"
+      },
+      "weapon_drill": {
+        "id": 40002,
+        "name": "Synthetic Weapon Drills",
+        "stat": "WeaponImprovement",
+        "gain": 2,
+        "fatigue": 10,
+        "duration_s": 3600,
+        "rank": 1,
+        "room_type": "Academy",
+        "room_level": 1,
+        "research": "fitness_101",
+        "price": "mineral:400"
+      },
+      "science_primer": {
+        "id": 40003,
+        "name": "Synthetic Science Primer",
+        "stat": "ScienceImprovement",
+        "gain": 2,
+        "fatigue": 10,
+        "duration_s": 3600,
+        "rank": 1,
+        "room_type": "Academy",
+        "room_level": 1,
+        "research": "fitness_101",
+        "price": "mineral:300"
+      },
+      "v1_weapon_theory": {"id": 40011, "name": "Read Expert Weapon Theory", "stat": "WeaponImprovement", "gain": 2, "fatigue": 10, "duration_s": 3600}
+    },
+    "prestige": [{"to": "succubus", "from": ["cadet", "cadet"]}]
+  },
+  "cases": [
+    {
+      "id": "role-coverage",
+      "requirements": ["S14-R1", "S14-R3"],
+      "acceptance": ["S14-AC1", "S14-AC6"],
+      "summary": "A roster without any original target name gets distinct repair, weapons and shields specialists; swapping two crew members' stats swaps their roles. Both previews agree and neither mutates.",
+      "red": {"expected_cause": "registry refuses training-v2 before login (exit 2); --crew-plan is not implemented"},
+      "scenarios": [
+        {
+          "id": "swap",
+          "courses": ["eng_manual", "weapon_drill", "science_primer"],
+          "accounts": [
+            {
+              "alias": "alpha",
+              "user_id": "700100501",
+              "refresh_token": "RT-synthetic-wf-alpha-0001",
+              "secret": "TWB_ALPHA",
+              "registry": {"policy_id": "training-v2"},
+              "authorization": {"actions": ["add_training"], "caps": {"minerals": 1000, "gas": 1000}},
+              "world": {
+                "resources": {"mineral": 1000, "gas": 0},
+                "typed_resource_items": true,
+                "strict_training_rules": true,
+                "rooms": [
+                  {"label": "bridge", "base_id": 11001, "design": "bridge"},
+                  {"label": "academy", "base_id": 11002, "design": "academy_l2"}
+                ],
+                "researches": [{"design": "fitness_101"}],
+                "crew": [
+                  {"label": "ana", "base_id": 10001, "name": "Ana Synthetic", "design": "cadet", "room": "academy", "stats": {"Weapon": 40, "Repair": 35}},
+                  {"label": "ben", "base_id": 10002, "name": "Ben Synthetic", "design": "cadet", "room": "bridge", "stats": {"Weapon": 38}},
+                  {"label": "cyd", "base_id": 10003, "name": "Cyd Synthetic", "design": "cadet", "room": "bridge", "stats": {"Science": 30}}
+                ]
+              }
+            }
+          ],
+          "steps": [
+            {"id": "plan1", "kind": "crew-plan"},
+            {"id": "dry1", "kind": "dry-run"},
+            {
+              "id": "swap",
+              "kind": "mutate",
+              "set": [{"crew": "ana", "stats": {"Weapon": 38}}, {"crew": "ben", "stats": {"Weapon": 40, "Repair": 35}}]
+            },
+            {"id": "plan2", "kind": "crew-plan"},
+            {"id": "dry2", "kind": "dry-run"}
+          ],
+          "expected": {
+            "plan1": {
+              "exit": 0,
+              "mutations": {},
+              "other_mutations": 0,
+              "crew_plan": [
+                {"crew": "ana", "role": "repair", "course": "eng_manual"},
+                {"crew": "ben", "role": "weapons", "skip": "not_in_training_room"},
+                {"crew": "cyd", "role": "shields", "skip": "not_in_training_room"}
+              ]
+            },
+            "dry1": {
+              "exit": 0,
+              "mutations": {},
+              "other_mutations": 0,
+              "journal_planned": [{"alias": "alpha", "action": "add_training", "crew": "ana", "course": "eng_manual"}]
+            },
+            "plan2": {
+              "exit": 0,
+              "mutations": {},
+              "other_mutations": 0,
+              "crew_plan": [
+                {"crew": "ben", "role": "repair", "skip": "not_in_training_room"},
+                {"crew": "ana", "role": "weapons", "course": "weapon_drill"},
+                {"crew": "cyd", "role": "shields", "skip": "not_in_training_room"}
+              ]
+            },
+            "dry2": {
+              "exit": 0,
+              "mutations": {},
+              "other_mutations": 0,
+              "journal_planned": [{"alias": "alpha", "action": "add_training", "crew": "ana", "course": "weapon_drill"}]
+            }
+          },
+          "witnesses": []
+        }
+      ],
+      "control": {
+        "policy_id": "training-v1",
+        "scenarios": [
+          {
+            "id": "v1-named-weapons",
+            "courses": ["v1_weapon_theory"],
+            "accounts": [
+              {
+                "alias": "alpha",
+                "user_id": "700100501",
+                "refresh_token": "RT-synthetic-wf-alpha-0001",
+                "secret": "TWB_ALPHA",
+                "registry": {"policy_id": "training-v1"},
+                "authorization": {"actions": ["add_training"], "caps": {"minerals": 1000, "gas": 1000}},
+                "world": {
+                  "resources": {"mineral": 1000, "gas": 0},
+                  "typed_resource_items": true,
+                  "strict_training_rules": true,
+                  "rooms": [
+                    {"label": "bridge", "base_id": 11001, "design": "bridge"},
+                    {"label": "academy", "base_id": 11002, "design": "academy_l1"}
+                  ],
+                  "researches": [{"design": "fitness_101"}],
+                  "crew": [
+                    {"label": "delish", "base_id": 10101, "name": "Delish", "design": "veteran", "room": "academy", "stats": {"Weapon": 40}}
+                  ]
+                }
+              }
+            ],
+            "steps": [{"id": "dry", "kind": "dry-run"}],
+            "expected": {
+              "dry": {
+                "exit": 0,
+                "mutations": {},
+                "other_mutations": 0,
+                "journal_planned": [
+                  {"alias": "alpha", "action": "add_training", "crew": "delish", "course": "v1_weapon_theory"}
+                ]
+              }
+            },
+            "witnesses": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "preview-prestige",
+      "requirements": ["S14-R1", "S14-R3"],
+      "acceptance": ["S14-AC1", "S14-AC6"],
+      "summary": "The crew plan shows the direct Prestige route to an original named target (Galactic Succubus from two Synthetic Cadets) with one missing when the roster has one copy, reports uncovered roles, and labels research unknown when the ship read omits it. Neither preview mutates.",
+      "red": {"expected_cause": "registry refuses training-v2 before login (exit 2); --crew-plan is not implemented"},
+      "scenarios": [
+        {
+          "id": "one-copy",
+          "courses": ["eng_manual", "weapon_drill", "science_primer"],
+          "accounts": [
+            {
+              "alias": "alpha",
+              "user_id": "700100501",
+              "refresh_token": "RT-synthetic-wf-alpha-0001",
+              "secret": "TWB_ALPHA",
+              "registry": {"policy_id": "training-v2"},
+              "authorization": {"actions": ["add_training"], "caps": {"minerals": 1000, "gas": 1000}},
+              "world": {
+                "resources": {"mineral": 1000, "gas": 0},
+                "typed_resource_items": true,
+                "strict_training_rules": true,
+                "prestige": true,
+                "rooms": [
+                  {"label": "bridge", "base_id": 11001, "design": "bridge"},
+                  {"label": "academy", "base_id": 11002, "design": "academy_l2"}
+                ],
+                "researches": [{"design": "fitness_101"}],
+                "crew": [
+                  {"label": "cora", "base_id": 10001, "name": "Cora Synthetic", "design": "cadet", "room": "academy", "stats": {"Repair": 20}}
+                ]
+              }
+            }
+          ],
+          "steps": [{"id": "plan", "kind": "crew-plan"}, {"id": "dry", "kind": "dry-run"}],
+          "expected": {
+            "plan": {
+              "exit": 0,
+              "mutations": {},
+              "other_mutations": 0,
+              "crew_plan": [
+                {"crew": "cora", "role": "repair", "course": "eng_manual"},
+                {"role": "weapons", "skip": "role_uncovered"},
+                {"role": "shields", "skip": "role_uncovered"}
+              ],
+              "prestige": [{"target": "succubus", "ingredient": "cadet", "missing": 1}]
+            },
+            "dry": {
+              "exit": 0,
+              "mutations": {},
+              "other_mutations": 0,
+              "journal_planned": [{"alias": "alpha", "action": "add_training", "crew": "cora", "course": "eng_manual"}]
+            }
+          },
+          "witnesses": []
+        },
+        {
+          "id": "research-unknown",
+          "courses": ["eng_manual", "weapon_drill", "science_primer"],
+          "accounts": [
+            {
+              "alias": "alpha",
+              "user_id": "700100501",
+              "refresh_token": "RT-synthetic-wf-alpha-0001",
+              "secret": "TWB_ALPHA",
+              "registry": {"policy_id": "training-v2"},
+              "authorization": {"actions": ["add_training"], "caps": {"minerals": 1000, "gas": 1000}},
+              "world": {
+                "resources": {"mineral": 1000, "gas": 0},
+                "typed_resource_items": true,
+                "strict_training_rules": true,
+                "prestige": true,
+                "ship_omits_researches": true,
+                "rooms": [
+                  {"label": "bridge", "base_id": 11001, "design": "bridge"},
+                  {"label": "academy", "base_id": 11002, "design": "academy_l2"}
+                ],
+                "researches": [{"design": "fitness_101"}],
+                "crew": [
+                  {"label": "cora", "base_id": 10001, "name": "Cora Synthetic", "design": "cadet", "room": "academy", "stats": {"Repair": 20}}
+                ]
+              }
+            }
+          ],
+          "steps": [{"id": "plan", "kind": "crew-plan"}, {"id": "dry", "kind": "dry-run"}],
+          "expected": {
+            "plan": {
+              "exit": 0,
+              "mutations": {},
+              "other_mutations": 0,
+              "crew_plan": [{"crew": "cora", "role": "repair", "skip": "research_unknown"}],
+              "prestige": [{"target": "succubus", "ingredient": "cadet", "missing": 1}]
+            },
+            "dry": {"exit": 0, "mutations": {}, "other_mutations": 0, "journal_planned": []}
+          },
+          "witnesses": []
+        }
+      ],
+      "control": {
+        "policy_id": "training-v1",
+        "scenarios": [
+          {
+            "id": "v1-dry-run-reads-only",
+            "courses": ["v1_weapon_theory"],
+            "accounts": [
+              {
+                "alias": "alpha",
+                "user_id": "700100501",
+                "refresh_token": "RT-synthetic-wf-alpha-0001",
+                "secret": "TWB_ALPHA",
+                "registry": {"policy_id": "training-v1"},
+                "authorization": {"actions": ["add_training"], "caps": {"minerals": 1000, "gas": 1000}},
+                "world": {
+                  "resources": {"mineral": 1000, "gas": 0},
+                  "typed_resource_items": true,
+                  "strict_training_rules": true,
+                  "prestige": true,
+                  "rooms": [
+                    {"label": "bridge", "base_id": 11001, "design": "bridge"},
+                    {"label": "academy", "base_id": 11002, "design": "academy_l1"}
+                  ],
+                  "researches": [{"design": "fitness_101"}],
+                  "crew": [
+                    {"label": "delish", "base_id": 10101, "name": "Delish", "design": "veteran", "room": "academy", "stats": {"Weapon": 40}}
+                  ]
+                }
+              }
+            ],
+            "steps": [{"id": "dry", "kind": "dry-run"}],
+            "expected": {
+              "dry": {
+                "exit": 0,
+                "mutations": {},
+                "other_mutations": 0,
+                "journal_planned": [
+                  {"alias": "alpha", "action": "add_training", "crew": "delish", "course": "v1_weapon_theory"}
+                ]
+              }
+            },
+            "witnesses": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "paid-boundary",
+      "requirements": ["S14-R2", "S14-R4"],
+      "acceptance": ["S14-AC2", "S14-AC6"],
+      "summary": "An idle repair specialist in a ready level 2 Academy with a 500-mineral Engineering Manual: exactly 500 spendable starts it and charges 500; 499, an earlier reservation, a premium price or an unavailable price start nothing; an explicitly observed zero price starts it for free. Spend above the authorization cap, or above the cap or action budget an earlier upgrade left, starts nothing.",
+      "red": {"expected_cause": "registry refuses training-v2 before login (exit 2); --fleet-provision-training is not implemented (exit 2)"},
+      "scenarios": [
+        {
+          "id": "exact-500",
+          "courses": ["eng_manual"],
+          "accounts": [
+            {
+              "alias": "alpha",
+              "user_id": "700100501",
+              "refresh_token": "RT-synthetic-wf-alpha-0001",
+              "secret": "TWB_ALPHA",
+              "registry": {"policy_id": "training-v2"},
+              "authorization": {"actions": ["add_training"], "caps": {"minerals": 1000, "gas": 1000}},
+              "world": {
+                "resources": {"mineral": 500, "gas": 0},
+                "typed_resource_items": true,
+                "strict_training_rules": true,
+                "rooms": [
+                  {"label": "bridge", "base_id": 11001, "design": "bridge"},
+                  {"label": "academy", "base_id": 11002, "design": "academy_l2"}
+                ],
+                "researches": [{"design": "fitness_101"}],
+                "crew": [
+                  {"label": "fixer", "base_id": 10001, "name": "Fixer Synthetic", "design": "cadet", "room": "academy", "stats": {"Repair": 30}}
+                ]
+              }
+            }
+          ],
+          "steps": [
+            {"id": "provision", "kind": "provision"},
+            {"id": "dry", "kind": "dry-run"},
+            {"id": "exec", "kind": "execute"}
+          ],
+          "expected": {
+            "provision": {"exit": 0, "mutations": {}, "other_mutations": 0, "store": {"alpha": "present"}},
+            "dry": {
+              "exit": 0,
+              "mutations": {},
+              "other_mutations": 0,
+              "journal_planned": [{"alias": "alpha", "action": "add_training", "crew": "fixer", "course": "eng_manual"}]
+            },
+            "exec": {
+              "exit": 0,
+              "mutations": {
+                "POST /TrainingService/AddTraining": [{"alias": "alpha", "crew": "fixer", "course": "eng_manual"}]
+              },
+              "applied": {"POST /TrainingService/AddTraining": 1},
+              "other_mutations": 0,
+              "resource_delta": {"alpha": {"mineral": -500, "gas": 0, "starbux": 0}},
+              "timer": {"fixer": {"course": "eng_manual", "duration_s": 3600}},
+              "journal": [
+                {"alias": "alpha", "action": "add_training", "outcome": "verified", "attempted": true, "crew": "fixer", "course": "eng_manual", "cost": {"minerals": 500, "gas": 0}}
+              ]
+            }
+          },
+          "witnesses": []
+        },
+        {
+          "id": "short-499",
+          "courses": ["eng_manual"],
+          "accounts": [
+            {
+              "alias": "alpha",
+              "user_id": "700100501",
+              "refresh_token": "RT-synthetic-wf-alpha-0001",
+              "secret": "TWB_ALPHA",
+              "registry": {"policy_id": "training-v2"},
+              "authorization": {"actions": ["add_training"], "caps": {"minerals": 1000, "gas": 1000}},
+              "world": {
+                "resources": {"mineral": 499, "gas": 0},
+                "typed_resource_items": true,
+                "strict_training_rules": true,
+                "rooms": [
+                  {"label": "bridge", "base_id": 11001, "design": "bridge"},
+                  {"label": "academy", "base_id": 11002, "design": "academy_l2"}
+                ],
+                "researches": [{"design": "fitness_101"}],
+                "crew": [
+                  {"label": "fixer", "base_id": 10001, "name": "Fixer Synthetic", "design": "cadet", "room": "academy", "stats": {"Repair": 30}}
+                ]
+              }
+            }
+          ],
+          "steps": [
+            {"id": "provision", "kind": "provision"},
+            {"id": "dry", "kind": "dry-run"},
+            {"id": "exec", "kind": "execute"}
+          ],
+          "expected": {
+            "provision": {"exit": 0, "mutations": {}, "other_mutations": 0, "store": {"alpha": "present"}},
+            "dry": {"exit": 0, "mutations": {}, "other_mutations": 0, "journal_planned": []},
+            "exec": {
+              "exit": 0,
+              "mutations": {"POST /TrainingService/AddTraining": []},
+              "other_mutations": 0,
+              "resource_delta": {"alpha": {"mineral": 0, "gas": 0, "starbux": 0}},
+              "timer": {},
+              "journal": [],
+              "skips": [{"alias": "alpha", "crew": "fixer", "code": "insufficient_funds"}]
+            }
+          },
+          "witnesses": []
+        },
+        {
+          "id": "earlier-reservation",
+          "courses": ["eng_manual"],
+          "accounts": [
+            {
+              "alias": "alpha",
+              "user_id": "700100501",
+              "refresh_token": "RT-synthetic-wf-alpha-0001",
+              "secret": "TWB_ALPHA",
+              "registry": {"policy_id": "training-v2"},
+              "authorization": {"actions": ["add_training", "upgrade_room"], "caps": {"minerals": 1000, "gas": 1000}},
+              "world": {
+                "resources": {"mineral": 900, "gas": 0},
+                "typed_resource_items": true,
+                "strict_training_rules": true,
+                "rooms": [
+                  {"label": "bridge", "base_id": 11001, "design": "bridge"},
+                  {"label": "academy", "base_id": 11002, "design": "academy_l2"},
+                  {"label": "storage", "base_id": 11003, "design": "storage"}
+                ],
+                "researches": [{"design": "fitness_101"}],
+                "crew": [
+                  {"label": "fixer", "base_id": 10001, "name": "Fixer Synthetic", "design": "cadet", "room": "academy", "stats": {"Repair": 30}}
+                ]
+              }
+            }
+          ],
+          "steps": [
+            {"id": "provision", "kind": "provision"},
+            {"id": "dry", "kind": "dry-run"},
+            {"id": "exec", "kind": "execute"}
+          ],
+          "expected": {
+            "provision": {"exit": 0, "mutations": {}, "other_mutations": 0, "store": {"alpha": "present"}},
+            "dry": {"exit": 0, "mutations": {}, "other_mutations": 0, "journal_planned": []},
+            "exec": {
+              "exit": 0,
+              "mutations": {
+                "POST /TrainingService/AddTraining": [],
+                "POST /RoomService/UpgradeRoom2": [{"alias": "alpha", "room": "storage", "design": "storage_l2"}]
+              },
+              "applied": {"POST /RoomService/UpgradeRoom2": 1},
+              "other_mutations": 0,
+              "resource_delta": {"alpha": {"mineral": -600, "gas": 0, "starbux": 0}},
+              "timer": {},
+              "journal": [
+                {"alias": "alpha", "action": "upgrade_room", "outcome": "verified", "attempted": true, "room": "storage", "design": "storage_l2", "cost": {"minerals": 600, "gas": 0}}
+              ],
+              "skips": [{"alias": "alpha", "crew": "fixer", "code": "insufficient_funds"}]
+            }
+          },
+          "witnesses": []
+        },
+        {
+          "id": "premium",
+          "courses": ["eng_manual"],
+          "course_overrides": {"eng_manual": {"price": "starbux:5"}},
+          "accounts": [
+            {
+              "alias": "alpha",
+              "user_id": "700100501",
+              "refresh_token": "RT-synthetic-wf-alpha-0001",
+              "secret": "TWB_ALPHA",
+              "registry": {"policy_id": "training-v2"},
+              "authorization": {"actions": ["add_training"], "caps": {"minerals": 1000, "gas": 1000}},
+              "world": {
+                "resources": {"mineral": 1000, "gas": 0},
+                "credits": 100,
+                "typed_resource_items": true,
+                "strict_training_rules": true,
+                "rooms": [
+                  {"label": "bridge", "base_id": 11001, "design": "bridge"},
+                  {"label": "academy", "base_id": 11002, "design": "academy_l2"}
+                ],
+                "researches": [{"design": "fitness_101"}],
+                "crew": [
+                  {"label": "fixer", "base_id": 10001, "name": "Fixer Synthetic", "design": "cadet", "room": "academy", "stats": {"Repair": 30}}
+                ]
+              }
+            }
+          ],
+          "steps": [
+            {"id": "provision", "kind": "provision"},
+            {"id": "dry", "kind": "dry-run"},
+            {"id": "exec", "kind": "execute"}
+          ],
+          "expected": {
+            "provision": {"exit": 0, "mutations": {}, "other_mutations": 0, "store": {"alpha": "present"}},
+            "dry": {"exit": 0, "mutations": {}, "other_mutations": 0, "journal_planned": []},
+            "exec": {
+              "exit": 0,
+              "mutations": {"POST /TrainingService/AddTraining": []},
+              "other_mutations": 0,
+              "resource_delta": {"alpha": {"mineral": 0, "gas": 0, "starbux": 0}},
+              "timer": {},
+              "journal": [],
+              "skips": [{"alias": "alpha", "crew": "fixer", "code": "premium_currency"}]
+            }
+          },
+          "witnesses": []
+        },
+        {
+          "id": "unavailable-price",
+          "courses": ["eng_manual"],
+          "course_overrides": {"eng_manual": {"price": null, "charge": "mineral:500"}},
+          "accounts": [
+            {
+              "alias": "alpha",
+              "user_id": "700100501",
+              "refresh_token": "RT-synthetic-wf-alpha-0001",
+              "secret": "TWB_ALPHA",
+              "registry": {"policy_id": "training-v2"},
+              "authorization": {"actions": ["add_training"], "caps": {"minerals": 1000, "gas": 1000}},
+              "world": {
+                "resources": {"mineral": 1000, "gas": 0},
+                "typed_resource_items": true,
+                "strict_training_rules": true,
+                "rooms": [
+                  {"label": "bridge", "base_id": 11001, "design": "bridge"},
+                  {"label": "academy", "base_id": 11002, "design": "academy_l2"}
+                ],
+                "researches": [{"design": "fitness_101"}],
+                "crew": [
+                  {"label": "fixer", "base_id": 10001, "name": "Fixer Synthetic", "design": "cadet", "room": "academy", "stats": {"Repair": 30}}
+                ]
+              }
+            }
+          ],
+          "steps": [
+            {"id": "provision", "kind": "provision"},
+            {"id": "dry", "kind": "dry-run"},
+            {"id": "exec", "kind": "execute"}
+          ],
+          "expected": {
+            "provision": {"exit": 0, "mutations": {}, "other_mutations": 0, "store": {"alpha": "present"}},
+            "dry": {"exit": 0, "mutations": {}, "other_mutations": 0, "journal_planned": []},
+            "exec": {
+              "exit": 0,
+              "mutations": {"POST /TrainingService/AddTraining": []},
+              "other_mutations": 0,
+              "resource_delta": {"alpha": {"mineral": 0, "gas": 0, "starbux": 0}},
+              "timer": {},
+              "journal": [],
+              "skips": [{"alias": "alpha", "crew": "fixer", "code": "price_unavailable"}]
+            }
+          },
+          "witnesses": []
+        },
+        {
+          "id": "explicit-zero",
+          "courses": ["eng_manual"],
+          "course_overrides": {"eng_manual": {"price": "mineral:0"}},
+          "accounts": [
+            {
+              "alias": "alpha",
+              "user_id": "700100501",
+              "refresh_token": "RT-synthetic-wf-alpha-0001",
+              "secret": "TWB_ALPHA",
+              "registry": {"policy_id": "training-v2"},
+              "authorization": {"actions": ["add_training"], "caps": {"minerals": 1000, "gas": 1000}},
+              "world": {
+                "resources": {"mineral": 0, "gas": 0},
+                "typed_resource_items": true,
+                "strict_training_rules": true,
+                "rooms": [
+                  {"label": "bridge", "base_id": 11001, "design": "bridge"},
+                  {"label": "academy", "base_id": 11002, "design": "academy_l2"}
+                ],
+                "researches": [{"design": "fitness_101"}],
+                "crew": [
+                  {"label": "fixer", "base_id": 10001, "name": "Fixer Synthetic", "design": "cadet", "room": "academy", "stats": {"Repair": 30}}
+                ]
+              }
+            }
+          ],
+          "steps": [
+            {"id": "provision", "kind": "provision"},
+            {"id": "dry", "kind": "dry-run"},
+            {"id": "exec", "kind": "execute"}
+          ],
+          "expected": {
+            "provision": {"exit": 0, "mutations": {}, "other_mutations": 0, "store": {"alpha": "present"}},
+            "dry": {
+              "exit": 0,
+              "mutations": {},
+              "other_mutations": 0,
+              "journal_planned": [{"alias": "alpha", "action": "add_training", "crew": "fixer", "course": "eng_manual"}]
+            },
+            "exec": {
+              "exit": 0,
+              "mutations": {
+                "POST /TrainingService/AddTraining": [{"alias": "alpha", "crew": "fixer", "course": "eng_manual"}]
+              },
+              "applied": {"POST /TrainingService/AddTraining": 1},
+              "other_mutations": 0,
+              "resource_delta": {"alpha": {"mineral": 0, "gas": 0, "starbux": 0}},
+              "timer": {"fixer": {"course": "eng_manual", "duration_s": 3600}},
+              "journal": [
+                {"alias": "alpha", "action": "add_training", "outcome": "verified", "attempted": true, "crew": "fixer", "course": "eng_manual", "cost": {"minerals": 0, "gas": 0}}
+              ]
+            }
+          },
+          "witnesses": []
+        },
+        {
+          "id": "cap-exceeded",
+          "courses": ["eng_manual"],
+          "accounts": [
+            {
+              "alias": "alpha",
+              "user_id": "700100501",
+              "refresh_token": "RT-synthetic-wf-alpha-0001",
+              "secret": "TWB_ALPHA",
+              "registry": {"policy_id": "training-v2"},
+              "authorization": {"actions": ["add_training"], "caps": {"minerals": 400, "gas": 1000}},
+              "world": {
+                "resources": {"mineral": 1000, "gas": 0},
+                "typed_resource_items": true,
+                "strict_training_rules": true,
+                "rooms": [
+                  {"label": "bridge", "base_id": 11001, "design": "bridge"},
+                  {"label": "academy", "base_id": 11002, "design": "academy_l2"}
+                ],
+                "researches": [{"design": "fitness_101"}],
+                "crew": [
+                  {"label": "fixer", "base_id": 10001, "name": "Fixer Synthetic", "design": "cadet", "room": "academy", "stats": {"Repair": 30}}
+                ]
+              }
+            }
+          ],
+          "steps": [
+            {"id": "provision", "kind": "provision"},
+            {"id": "dry", "kind": "dry-run"},
+            {"id": "exec", "kind": "execute"}
+          ],
+          "expected": {
+            "provision": {"exit": 0, "mutations": {}, "other_mutations": 0, "store": {"alpha": "present"}},
+            "dry": {"exit": 0, "mutations": {}, "other_mutations": 0},
+            "exec": {
+              "exit": 0,
+              "mutations": {"POST /TrainingService/AddTraining": []},
+              "other_mutations": 0,
+              "resource_delta": {"alpha": {"mineral": 0, "gas": 0, "starbux": 0}},
+              "timer": {},
+              "journal": [],
+              "skips": [{"alias": "alpha", "crew": "fixer", "code": "cap_exceeded"}]
+            }
+          },
+          "witnesses": []
+        },
+        {
+          "id": "spend-cap-after-earlier",
+          "courses": ["eng_manual"],
+          "accounts": [
+            {
+              "alias": "alpha",
+              "user_id": "700100501",
+              "refresh_token": "RT-synthetic-wf-alpha-0001",
+              "secret": "TWB_ALPHA",
+              "registry": {"policy_id": "training-v2"},
+              "authorization": {"actions": ["add_training", "upgrade_room"], "caps": {"minerals": 1000, "gas": 1000}},
+              "world": {
+                "resources": {"mineral": 2000, "gas": 0},
+                "typed_resource_items": true,
+                "strict_training_rules": true,
+                "rooms": [
+                  {"label": "bridge", "base_id": 11001, "design": "bridge"},
+                  {"label": "academy", "base_id": 11002, "design": "academy_l2"},
+                  {"label": "storage", "base_id": 11003, "design": "storage"}
+                ],
+                "researches": [{"design": "fitness_101"}],
+                "crew": [
+                  {"label": "fixer", "base_id": 10001, "name": "Fixer Synthetic", "design": "cadet", "room": "academy", "stats": {"Repair": 30}}
+                ]
+              }
+            }
+          ],
+          "steps": [
+            {"id": "provision", "kind": "provision"},
+            {"id": "dry", "kind": "dry-run"},
+            {"id": "exec", "kind": "execute"}
+          ],
+          "expected": {
+            "provision": {"exit": 0, "mutations": {}, "other_mutations": 0, "store": {"alpha": "present"}},
+            "dry": {"exit": 0, "mutations": {}, "other_mutations": 0},
+            "exec": {
+              "exit": 0,
+              "mutations": {
+                "POST /TrainingService/AddTraining": [],
+                "POST /RoomService/UpgradeRoom2": [{"alias": "alpha", "room": "storage", "design": "storage_l2"}]
+              },
+              "applied": {"POST /RoomService/UpgradeRoom2": 1},
+              "other_mutations": 0,
+              "resource_delta": {"alpha": {"mineral": -600, "gas": 0, "starbux": 0}},
+              "timer": {},
+              "journal": [
+                {"alias": "alpha", "action": "upgrade_room", "outcome": "verified", "attempted": true, "room": "storage", "design": "storage_l2", "cost": {"minerals": 600, "gas": 0}}
+              ],
+              "skips": [{"alias": "alpha", "crew": "fixer", "code": "cap_exceeded"}]
+            }
+          },
+          "witnesses": []
+        },
+        {
+          "id": "action-cap-after-earlier",
+          "courses": ["eng_manual"],
+          "accounts": [
+            {
+              "alias": "alpha",
+              "user_id": "700100501",
+              "refresh_token": "RT-synthetic-wf-alpha-0001",
+              "secret": "TWB_ALPHA",
+              "registry": {"policy_id": "training-v2", "max_actions": 1},
+              "authorization": {"actions": ["add_training", "upgrade_room"], "caps": {"minerals": 2000, "gas": 1000}},
+              "world": {
+                "resources": {"mineral": 2000, "gas": 0},
+                "typed_resource_items": true,
+                "strict_training_rules": true,
+                "rooms": [
+                  {"label": "bridge", "base_id": 11001, "design": "bridge"},
+                  {"label": "academy", "base_id": 11002, "design": "academy_l2"},
+                  {"label": "storage", "base_id": 11003, "design": "storage"}
+                ],
+                "researches": [{"design": "fitness_101"}],
+                "crew": [
+                  {"label": "fixer", "base_id": 10001, "name": "Fixer Synthetic", "design": "cadet", "room": "academy", "stats": {"Repair": 30}}
+                ]
+              }
+            }
+          ],
+          "steps": [
+            {"id": "provision", "kind": "provision"},
+            {"id": "dry", "kind": "dry-run"},
+            {"id": "exec", "kind": "execute"}
+          ],
+          "expected": {
+            "provision": {"exit": 0, "mutations": {}, "other_mutations": 0, "store": {"alpha": "present"}},
+            "dry": {"exit": 0, "mutations": {}, "other_mutations": 0},
+            "exec": {
+              "exit": 0,
+              "mutations": {
+                "POST /TrainingService/AddTraining": [],
+                "POST /RoomService/UpgradeRoom2": [{"alias": "alpha", "room": "storage", "design": "storage_l2"}]
+              },
+              "applied": {"POST /RoomService/UpgradeRoom2": 1},
+              "other_mutations": 0,
+              "resource_delta": {"alpha": {"mineral": -600, "gas": 0, "starbux": 0}},
+              "timer": {},
+              "journal": [
+                {"alias": "alpha", "action": "upgrade_room", "outcome": "verified", "attempted": true, "room": "storage", "design": "storage_l2", "cost": {"minerals": 600, "gas": 0}}
+              ],
+              "skips": [{"alias": "alpha", "crew": "fixer", "code": "action_cap_reached"}]
+            }
+          },
+          "witnesses": []
+        }
+      ],
+      "control": {
+        "policy_id": "training-v1",
+        "scenarios": [
+          {
+            "id": "v1-unpriced-start",
+            "courses": ["v1_weapon_theory"],
+            "accounts": [
+              {
+                "alias": "alpha",
+                "user_id": "700100501",
+                "refresh_token": "RT-synthetic-wf-alpha-0001",
+                "secret": "TWB_ALPHA",
+                "registry": {"policy_id": "training-v1"},
+                "authorization": {"actions": ["add_training"], "caps": {"minerals": 1000, "gas": 1000}},
+                "world": {
+                  "resources": {"mineral": 1000, "gas": 0},
+                  "typed_resource_items": true,
+                  "strict_training_rules": true,
+                  "rooms": [
+                    {"label": "bridge", "base_id": 11001, "design": "bridge"},
+                    {"label": "academy", "base_id": 11002, "design": "academy_l2"}
+                  ],
+                  "researches": [{"design": "fitness_101"}],
+                  "crew": [
+                    {"label": "delish", "base_id": 10101, "name": "Delish", "design": "veteran", "room": "academy", "stats": {"Weapon": 40}}
+                  ]
+                }
+              }
+            ],
+            "steps": [{"id": "dry", "kind": "dry-run"}, {"id": "exec", "kind": "execute"}],
+            "expected": {
+              "dry": {
+                "exit": 0,
+                "mutations": {},
+                "other_mutations": 0,
+                "journal_planned": [
+                  {"alias": "alpha", "action": "add_training", "crew": "delish", "course": "v1_weapon_theory"}
+                ]
+              },
+              "exec": {
+                "exit": 0,
+                "mutations": {
+                  "POST /TrainingService/AddTraining": [
+                    {"alias": "alpha", "crew": "delish", "course": "v1_weapon_theory"}
+                  ]
+                },
+                "applied": {"POST /TrainingService/AddTraining": 1},
+                "other_mutations": 0,
+                "resource_delta": {"alpha": {"mineral": 0, "gas": 0, "starbux": 0}},
+                "timer": {"delish": {"course": "v1_weapon_theory", "duration_s": 3600}},
+                "journal": [
+                  {"alias": "alpha", "action": "add_training", "outcome": "verified", "attempted": true, "crew": "delish", "course": "v1_weapon_theory", "cost": {"minerals": 0, "gas": 0}}
+                ]
+              }
+            },
+            "witnesses": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "stale-preflight",
+      "requirements": ["S14-R2", "S14-R4"],
+      "acceptance": ["S14-AC2", "S14-AC6"],
+      "summary": "The dry run and the execute plan see an eligible start; just after the execute run's first roster read the room starts upgrading, the crew moves out, the research disappears or the price rises. The preflight recheck from fresh reads sends nothing. A full Academy, a crew at its training-point capacity, or a crew that becomes fatigued after the first read starts nothing.",
+      "red": {"expected_cause": "registry refuses training-v2 before login (exit 2); --fleet-provision-training is not implemented (exit 2)"},
+      "scenarios": [
+        {
+          "id": "room-upgrading",
+          "courses": ["eng_manual"],
+          "accounts": [
+            {
+              "alias": "alpha",
+              "user_id": "700100501",
+              "refresh_token": "RT-synthetic-wf-alpha-0001",
+              "secret": "TWB_ALPHA",
+              "registry": {"policy_id": "training-v2"},
+              "authorization": {"actions": ["add_training"], "caps": {"minerals": 1000, "gas": 1000}},
+              "world": {
+                "resources": {"mineral": 1000, "gas": 0},
+                "typed_resource_items": true,
+                "strict_training_rules": true,
+                "rooms": [
+                  {"label": "bridge", "base_id": 11001, "design": "bridge"},
+                  {"label": "academy", "base_id": 11002, "design": "academy_l2"}
+                ],
+                "researches": [{"design": "fitness_101"}],
+                "crew": [
+                  {"label": "fixer", "base_id": 10001, "name": "Fixer Synthetic", "design": "cadet", "room": "academy", "stats": {"Repair": 30}}
+                ]
+              }
+            }
+          ],
+          "steps": [
+            {"id": "provision", "kind": "provision"},
+            {"id": "dry", "kind": "dry-run"},
+            {
+              "id": "exec",
+              "kind": "execute",
+              "triggers": [
+                {
+                  "route": "GET /CharacterService/ListAllCharactersOfUser",
+                  "after_nth": 1,
+                  "apply": [{"room": "academy", "status": "Upgrading"}]
+                }
+              ]
+            }
+          ],
+          "expected": {
+            "provision": {"exit": 0, "mutations": {}, "other_mutations": 0, "store": {"alpha": "present"}},
+            "dry": {
+              "exit": 0,
+              "mutations": {},
+              "other_mutations": 0,
+              "journal_planned": [{"alias": "alpha", "action": "add_training", "crew": "fixer", "course": "eng_manual"}]
+            },
+            "exec": {
+              "exit": 0,
+              "mutations": {"POST /TrainingService/AddTraining": []},
+              "other_mutations": 0,
+              "resource_delta": {"alpha": {"mineral": 0, "gas": 0, "starbux": 0}},
+              "timer": {},
+              "journal": [],
+              "skips": [{"alias": "alpha", "crew": "fixer", "code": "room_not_ready"}]
+            }
+          },
+          "witnesses": ["exec:trigger:0"]
+        },
+        {
+          "id": "crew-moved",
+          "courses": ["eng_manual"],
+          "accounts": [
+            {
+              "alias": "alpha",
+              "user_id": "700100501",
+              "refresh_token": "RT-synthetic-wf-alpha-0001",
+              "secret": "TWB_ALPHA",
+              "registry": {"policy_id": "training-v2"},
+              "authorization": {"actions": ["add_training"], "caps": {"minerals": 1000, "gas": 1000}},
+              "world": {
+                "resources": {"mineral": 1000, "gas": 0},
+                "typed_resource_items": true,
+                "strict_training_rules": true,
+                "rooms": [
+                  {"label": "bridge", "base_id": 11001, "design": "bridge"},
+                  {"label": "academy", "base_id": 11002, "design": "academy_l2"}
+                ],
+                "researches": [{"design": "fitness_101"}],
+                "crew": [
+                  {"label": "fixer", "base_id": 10001, "name": "Fixer Synthetic", "design": "cadet", "room": "academy", "stats": {"Repair": 30}}
+                ]
+              }
+            }
+          ],
+          "steps": [
+            {"id": "provision", "kind": "provision"},
+            {"id": "dry", "kind": "dry-run"},
+            {
+              "id": "exec",
+              "kind": "execute",
+              "triggers": [
+                {
+                  "route": "GET /CharacterService/ListAllCharactersOfUser",
+                  "after_nth": 1,
+                  "apply": [{"crew": "fixer", "to_room": "bridge"}]
+                }
+              ]
+            }
+          ],
+          "expected": {
+            "provision": {"exit": 0, "mutations": {}, "other_mutations": 0, "store": {"alpha": "present"}},
+            "dry": {
+              "exit": 0,
+              "mutations": {},
+              "other_mutations": 0,
+              "journal_planned": [{"alias": "alpha", "action": "add_training", "crew": "fixer", "course": "eng_manual"}]
+            },
+            "exec": {
+              "exit": 0,
+              "mutations": {"POST /TrainingService/AddTraining": []},
+              "other_mutations": 0,
+              "resource_delta": {"alpha": {"mineral": 0, "gas": 0, "starbux": 0}},
+              "timer": {},
+              "journal": [],
+              "skips": [{"alias": "alpha", "crew": "fixer", "code": "not_in_training_room"}]
+            }
+          },
+          "witnesses": ["exec:trigger:0"]
+        },
+        {
+          "id": "research-removed",
+          "courses": ["eng_manual"],
+          "accounts": [
+            {
+              "alias": "alpha",
+              "user_id": "700100501",
+              "refresh_token": "RT-synthetic-wf-alpha-0001",
+              "secret": "TWB_ALPHA",
+              "registry": {"policy_id": "training-v2"},
+              "authorization": {"actions": ["add_training"], "caps": {"minerals": 1000, "gas": 1000}},
+              "world": {
+                "resources": {"mineral": 1000, "gas": 0},
+                "typed_resource_items": true,
+                "strict_training_rules": true,
+                "rooms": [
+                  {"label": "bridge", "base_id": 11001, "design": "bridge"},
+                  {"label": "academy", "base_id": 11002, "design": "academy_l2"}
+                ],
+                "researches": [{"design": "fitness_101"}],
+                "crew": [
+                  {"label": "fixer", "base_id": 10001, "name": "Fixer Synthetic", "design": "cadet", "room": "academy", "stats": {"Repair": 30}}
+                ]
+              }
+            }
+          ],
+          "steps": [
+            {"id": "provision", "kind": "provision"},
+            {"id": "dry", "kind": "dry-run"},
+            {
+              "id": "exec",
+              "kind": "execute",
+              "triggers": [
+                {
+                  "route": "GET /CharacterService/ListAllCharactersOfUser",
+                  "after_nth": 1,
+                  "apply": [{"research": "fitness_101", "remove": true}]
+                }
+              ]
+            }
+          ],
+          "expected": {
+            "provision": {"exit": 0, "mutations": {}, "other_mutations": 0, "store": {"alpha": "present"}},
+            "dry": {
+              "exit": 0,
+              "mutations": {},
+              "other_mutations": 0,
+              "journal_planned": [{"alias": "alpha", "action": "add_training", "crew": "fixer", "course": "eng_manual"}]
+            },
+            "exec": {
+              "exit": 0,
+              "mutations": {"POST /TrainingService/AddTraining": []},
+              "other_mutations": 0,
+              "resource_delta": {"alpha": {"mineral": 0, "gas": 0, "starbux": 0}},
+              "timer": {},
+              "journal": [],
+              "skips": [{"alias": "alpha", "crew": "fixer", "code": "research_missing"}]
+            }
+          },
+          "witnesses": ["exec:trigger:0"]
+        },
+        {
+          "id": "price-raised",
+          "courses": ["eng_manual"],
+          "accounts": [
+            {
+              "alias": "alpha",
+              "user_id": "700100501",
+              "refresh_token": "RT-synthetic-wf-alpha-0001",
+              "secret": "TWB_ALPHA",
+              "registry": {"policy_id": "training-v2"},
+              "authorization": {"actions": ["add_training"], "caps": {"minerals": 2000, "gas": 1000}},
+              "world": {
+                "resources": {"mineral": 1000, "gas": 0},
+                "typed_resource_items": true,
+                "strict_training_rules": true,
+                "rooms": [
+                  {"label": "bridge", "base_id": 11001, "design": "bridge"},
+                  {"label": "academy", "base_id": 11002, "design": "academy_l2"}
+                ],
+                "researches": [{"design": "fitness_101"}],
+                "crew": [
+                  {"label": "fixer", "base_id": 10001, "name": "Fixer Synthetic", "design": "cadet", "room": "academy", "stats": {"Repair": 30}}
+                ]
+              }
+            }
+          ],
+          "steps": [
+            {"id": "provision", "kind": "provision"},
+            {"id": "dry", "kind": "dry-run"},
+            {
+              "id": "exec",
+              "kind": "execute",
+              "triggers": [
+                {
+                  "route": "GET /CharacterService/ListAllCharactersOfUser",
+                  "after_nth": 1,
+                  "apply": [{"course": "eng_manual", "price": "mineral:1100"}]
+                }
+              ]
+            }
+          ],
+          "expected": {
+            "provision": {"exit": 0, "mutations": {}, "other_mutations": 0, "store": {"alpha": "present"}},
+            "dry": {
+              "exit": 0,
+              "mutations": {},
+              "other_mutations": 0,
+              "journal_planned": [{"alias": "alpha", "action": "add_training", "crew": "fixer", "course": "eng_manual"}]
+            },
+            "exec": {
+              "exit": 0,
+              "mutations": {"POST /TrainingService/AddTraining": []},
+              "other_mutations": 0,
+              "resource_delta": {"alpha": {"mineral": 0, "gas": 0, "starbux": 0}},
+              "timer": {},
+              "journal": [],
+              "skips": [{"alias": "alpha", "crew": "fixer", "code": "insufficient_funds"}]
+            }
+          },
+          "witnesses": ["exec:trigger:0"]
+        },
+        {
+          "id": "room-full",
+          "courses": ["eng_manual", "weapon_drill", "science_primer"],
+          "accounts": [
+            {
+              "alias": "alpha",
+              "user_id": "700100501",
+              "refresh_token": "RT-synthetic-wf-alpha-0001",
+              "secret": "TWB_ALPHA",
+              "registry": {"policy_id": "training-v2"},
+              "authorization": {"actions": ["add_training"], "caps": {"minerals": 1000, "gas": 1000}},
+              "world": {
+                "resources": {"mineral": 1000, "gas": 0},
+                "typed_resource_items": true,
+                "strict_training_rules": true,
+                "rooms": [
+                  {"label": "bridge", "base_id": 11001, "design": "bridge"},
+                  {"label": "academy", "base_id": 11002, "design": "academy_l2"}
+                ],
+                "researches": [{"design": "fitness_101"}],
+                "crew": [
+                  {"label": "busy_w", "base_id": 10003, "name": "Busy Weapons", "design": "cadet", "room": "academy", "stats": {"Weapon": 30}, "training": {"course": "weapon_drill", "end_offset_s": 7200}},
+                  {"label": "busy_s", "base_id": 10004, "name": "Busy Shields", "design": "cadet", "room": "academy", "stats": {"Science": 30}, "training": {"course": "science_primer", "end_offset_s": 7200}},
+                  {"label": "fixer", "base_id": 10001, "name": "Fixer Synthetic", "design": "cadet", "room": "academy", "stats": {"Repair": 30}}
+                ]
+              }
+            }
+          ],
+          "steps": [
+            {"id": "provision", "kind": "provision"},
+            {"id": "dry", "kind": "dry-run"},
+            {"id": "exec", "kind": "execute"}
+          ],
+          "expected": {
+            "provision": {"exit": 0, "mutations": {}, "other_mutations": 0, "store": {"alpha": "present"}},
+            "dry": {"exit": 0, "mutations": {}, "other_mutations": 0, "journal_planned": []},
+            "exec": {
+              "exit": 0,
+              "mutations": {"POST /TrainingService/AddTraining": []},
+              "other_mutations": 0,
+              "resource_delta": {"alpha": {"mineral": 0, "gas": 0, "starbux": 0}},
+              "timer": {},
+              "journal": [],
+              "skips": [{"alias": "alpha", "crew": "fixer", "code": "room_capacity"}]
+            }
+          },
+          "witnesses": []
+        },
+        {
+          "id": "crew-fatigued",
+          "courses": ["eng_manual"],
+          "accounts": [
+            {
+              "alias": "alpha",
+              "user_id": "700100501",
+              "refresh_token": "RT-synthetic-wf-alpha-0001",
+              "secret": "TWB_ALPHA",
+              "registry": {"policy_id": "training-v2"},
+              "authorization": {"actions": ["add_training"], "caps": {"minerals": 1000, "gas": 1000}},
+              "world": {
+                "resources": {"mineral": 1000, "gas": 0},
+                "typed_resource_items": true,
+                "strict_training_rules": true,
+                "rooms": [
+                  {"label": "bridge", "base_id": 11001, "design": "bridge"},
+                  {"label": "academy", "base_id": 11002, "design": "academy_l2"}
+                ],
+                "researches": [{"design": "fitness_101"}],
+                "crew": [
+                  {"label": "fixer", "base_id": 10001, "name": "Fixer Synthetic", "design": "cadet", "room": "academy", "stats": {"Repair": 30}}
+                ]
+              }
+            }
+          ],
+          "steps": [
+            {"id": "provision", "kind": "provision"},
+            {"id": "dry", "kind": "dry-run"},
+            {
+              "id": "exec",
+              "kind": "execute",
+              "triggers": [
+                {
+                  "route": "GET /CharacterService/ListAllCharactersOfUser",
+                  "after_nth": 1,
+                  "apply": [{"crew": "fixer", "fatigue": 100}]
+                }
+              ]
+            }
+          ],
+          "expected": {
+            "provision": {"exit": 0, "mutations": {}, "other_mutations": 0, "store": {"alpha": "present"}},
+            "dry": {
+              "exit": 0,
+              "mutations": {},
+              "other_mutations": 0,
+              "journal_planned": [{"alias": "alpha", "action": "add_training", "crew": "fixer", "course": "eng_manual"}]
+            },
+            "exec": {
+              "exit": 0,
+              "mutations": {"POST /TrainingService/AddTraining": []},
+              "other_mutations": 0,
+              "resource_delta": {"alpha": {"mineral": 0, "gas": 0, "starbux": 0}},
+              "timer": {},
+              "journal": [],
+              "skips": [{"alias": "alpha", "crew": "fixer", "code": "fatigued"}]
+            }
+          },
+          "witnesses": ["exec:trigger:0"]
+        },
+        {
+          "id": "tp-capped",
+          "courses": ["eng_manual"],
+          "accounts": [
+            {
+              "alias": "alpha",
+              "user_id": "700100501",
+              "refresh_token": "RT-synthetic-wf-alpha-0001",
+              "secret": "TWB_ALPHA",
+              "registry": {"policy_id": "training-v2"},
+              "authorization": {"actions": ["add_training"], "caps": {"minerals": 1000, "gas": 1000}},
+              "world": {
+                "resources": {"mineral": 1000, "gas": 0},
+                "typed_resource_items": true,
+                "strict_training_rules": true,
+                "rooms": [
+                  {"label": "bridge", "base_id": 11001, "design": "bridge"},
+                  {"label": "academy", "base_id": 11002, "design": "academy_l2"}
+                ],
+                "researches": [{"design": "fitness_101"}],
+                "crew": [
+                  {"label": "fixer", "base_id": 10001, "name": "Fixer Synthetic", "design": "cadet", "room": "academy", "stats": {"Repair": 100}}
+                ]
+              }
+            }
+          ],
+          "steps": [
+            {"id": "provision", "kind": "provision"},
+            {"id": "dry", "kind": "dry-run"},
+            {"id": "exec", "kind": "execute"}
+          ],
+          "expected": {
+            "provision": {"exit": 0, "mutations": {}, "other_mutations": 0, "store": {"alpha": "present"}},
+            "dry": {"exit": 0, "mutations": {}, "other_mutations": 0, "journal_planned": []},
+            "exec": {
+              "exit": 0,
+              "mutations": {"POST /TrainingService/AddTraining": []},
+              "other_mutations": 0,
+              "resource_delta": {"alpha": {"mineral": 0, "gas": 0, "starbux": 0}},
+              "timer": {},
+              "journal": [],
+              "skips": [{"alias": "alpha", "crew": "fixer", "code": "tp_cap_reached"}]
+            }
+          },
+          "witnesses": []
+        }
+      ],
+      "control": {
+        "policy_id": "training-v1",
+        "scenarios": [
+          {
+            "id": "v1-wrong-room",
+            "courses": ["v1_weapon_theory"],
+            "accounts": [
+              {
+                "alias": "alpha",
+                "user_id": "700100501",
+                "refresh_token": "RT-synthetic-wf-alpha-0001",
+                "secret": "TWB_ALPHA",
+                "registry": {"policy_id": "training-v1"},
+                "authorization": {"actions": ["add_training"], "caps": {"minerals": 1000, "gas": 1000}},
+                "world": {
+                  "resources": {"mineral": 1000, "gas": 0},
+                  "typed_resource_items": true,
+                  "strict_training_rules": true,
+                  "rooms": [
+                    {"label": "bridge", "base_id": 11001, "design": "bridge"},
+                    {"label": "academy", "base_id": 11002, "design": "academy_l1"}
+                  ],
+                  "researches": [{"design": "fitness_101"}],
+                  "crew": [
+                    {"label": "delish", "base_id": 10101, "name": "Delish", "design": "veteran", "room": "bridge", "stats": {"Weapon": 40}}
+                  ]
+                }
+              }
+            ],
+            "steps": [{"id": "dry", "kind": "dry-run"}, {"id": "exec", "kind": "execute"}],
+            "expected": {
+              "dry": {"exit": 0, "mutations": {}, "other_mutations": 0, "journal_planned": []},
+              "exec": {
+                "exit": 0,
+                "mutations": {"POST /TrainingService/AddTraining": []},
+                "other_mutations": 0,
+                "resource_delta": {"alpha": {"mineral": 0, "gas": 0, "starbux": 0}},
+                "timer": {},
+                "journal": [],
+                "skips": [{"alias": "alpha", "crew": "delish", "code": "not_in_training_room"}]
+              }
+            },
+            "witnesses": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "reconciliation",
+      "requirements": ["S14-R4", "S14-R5"],
+      "acceptance": ["S14-AC3", "S14-AC6"],
+      "summary": "A fresh read with the requested course and timer verifies a start. An active course, a missing or stale dry run, a missing authorization or a disabled account start nothing. A different course or a missing post-read leaves an unresolved attempt that blocks the next run even for another eligible crew member. A post-read that lacks the character's id is unresolved too; an operator resolution lifts the block and the next run starts exactly one eligible crew. The disabled account's dry run first shows training-v2 accepted.",
+      "red": {"expected_cause": "registry refuses training-v2 before login (exit 2); --fleet-provision-training and --fleet-resolve-training are not implemented (exit 2)"},
+      "scenarios": [
+        {
+          "id": "verified",
+          "courses": ["eng_manual"],
+          "accounts": [
+            {
+              "alias": "alpha",
+              "user_id": "700100501",
+              "refresh_token": "RT-synthetic-wf-alpha-0001",
+              "secret": "TWB_ALPHA",
+              "registry": {"policy_id": "training-v2"},
+              "authorization": {"actions": ["add_training"], "caps": {"minerals": 1000, "gas": 1000}},
+              "world": {
+                "resources": {"mineral": 1000, "gas": 0},
+                "typed_resource_items": true,
+                "strict_training_rules": true,
+                "rooms": [
+                  {"label": "bridge", "base_id": 11001, "design": "bridge"},
+                  {"label": "academy", "base_id": 11002, "design": "academy_l2"}
+                ],
+                "researches": [{"design": "fitness_101"}],
+                "crew": [
+                  {"label": "fixer", "base_id": 10001, "name": "Fixer Synthetic", "design": "cadet", "room": "academy", "stats": {"Repair": 30}}
+                ]
+              }
+            }
+          ],
+          "steps": [
+            {"id": "provision", "kind": "provision"},
+            {"id": "dry", "kind": "dry-run"},
+            {"id": "exec", "kind": "execute"}
+          ],
+          "expected": {
+            "provision": {"exit": 0, "mutations": {}, "other_mutations": 0, "store": {"alpha": "present"}},
+            "dry": {
+              "exit": 0,
+              "mutations": {},
+              "other_mutations": 0,
+              "journal_planned": [{"alias": "alpha", "action": "add_training", "crew": "fixer", "course": "eng_manual"}]
+            },
+            "exec": {
+              "exit": 0,
+              "mutations": {
+                "POST /TrainingService/AddTraining": [{"alias": "alpha", "crew": "fixer", "course": "eng_manual"}]
+              },
+              "applied": {"POST /TrainingService/AddTraining": 1},
+              "other_mutations": 0,
+              "resource_delta": {"alpha": {"mineral": -500, "gas": 0, "starbux": 0}},
+              "timer": {"fixer": {"course": "eng_manual", "duration_s": 3600}},
+              "journal": [
+                {"alias": "alpha", "action": "add_training", "outcome": "verified", "attempted": true, "crew": "fixer", "course": "eng_manual", "cost": {"minerals": 500, "gas": 0}}
+              ]
+            }
+          },
+          "witnesses": []
+        },
+        {
+          "id": "already-active",
+          "courses": ["eng_manual"],
+          "accounts": [
+            {
+              "alias": "alpha",
+              "user_id": "700100501",
+              "refresh_token": "RT-synthetic-wf-alpha-0001",
+              "secret": "TWB_ALPHA",
+              "registry": {"policy_id": "training-v2"},
+              "authorization": {"actions": ["add_training"], "caps": {"minerals": 1000, "gas": 1000}},
+              "world": {
+                "resources": {"mineral": 1000, "gas": 0},
+                "typed_resource_items": true,
+                "strict_training_rules": true,
+                "rooms": [
+                  {"label": "bridge", "base_id": 11001, "design": "bridge"},
+                  {"label": "academy", "base_id": 11002, "design": "academy_l2"}
+                ],
+                "researches": [{"design": "fitness_101"}],
+                "crew": [
+                  {"label": "fixer", "base_id": 10001, "name": "Fixer Synthetic", "design": "cadet", "room": "academy", "stats": {"Repair": 30}, "training": {"course": "eng_manual", "end_offset_s": 7200}}
+                ]
+              }
+            }
+          ],
+          "steps": [
+            {"id": "provision", "kind": "provision"},
+            {"id": "dry", "kind": "dry-run"},
+            {"id": "exec", "kind": "execute"}
+          ],
+          "expected": {
+            "provision": {"exit": 0, "mutations": {}, "other_mutations": 0, "store": {"alpha": "present"}},
+            "dry": {"exit": 0, "mutations": {}, "other_mutations": 0, "journal_planned": []},
+            "exec": {
+              "exit": 0,
+              "mutations": {"POST /TrainingService/AddTraining": []},
+              "other_mutations": 0,
+              "resource_delta": {"alpha": {"mineral": 0, "gas": 0, "starbux": 0}},
+              "timer": {},
+              "journal": [],
+              "skips": [{"alias": "alpha", "crew": "fixer", "code": "training_in_progress"}]
+            }
+          },
+          "witnesses": []
+        },
+        {
+          "id": "no-dry-run",
+          "courses": ["eng_manual"],
+          "accounts": [
+            {
+              "alias": "alpha",
+              "user_id": "700100501",
+              "refresh_token": "RT-synthetic-wf-alpha-0001",
+              "secret": "TWB_ALPHA",
+              "registry": {"policy_id": "training-v2"},
+              "authorization": {"actions": ["add_training"], "caps": {"minerals": 1000, "gas": 1000}},
+              "world": {
+                "resources": {"mineral": 1000, "gas": 0},
+                "typed_resource_items": true,
+                "strict_training_rules": true,
+                "rooms": [
+                  {"label": "bridge", "base_id": 11001, "design": "bridge"},
+                  {"label": "academy", "base_id": 11002, "design": "academy_l2"}
+                ],
+                "researches": [{"design": "fitness_101"}],
+                "crew": [
+                  {"label": "fixer", "base_id": 10001, "name": "Fixer Synthetic", "design": "cadet", "room": "academy", "stats": {"Repair": 30}}
+                ]
+              }
+            }
+          ],
+          "steps": [{"id": "provision", "kind": "provision"}, {"id": "exec", "kind": "execute"}],
+          "expected": {
+            "provision": {"exit": 0, "mutations": {}, "other_mutations": 0, "store": {"alpha": "present"}},
+            "exec": {
+              "exit": "nonzero",
+              "requests": {"alpha": 0},
+              "mutations": {"POST /TrainingService/AddTraining": []},
+              "other_mutations": 0,
+              "skips": [{"alias": "alpha", "code": "dry_run_stale"}]
+            }
+          },
+          "witnesses": []
+        },
+        {
+          "id": "registry-changed",
+          "courses": ["eng_manual"],
+          "accounts": [
+            {
+              "alias": "alpha",
+              "user_id": "700100501",
+              "refresh_token": "RT-synthetic-wf-alpha-0001",
+              "secret": "TWB_ALPHA",
+              "registry": {"policy_id": "training-v2"},
+              "authorization": {"actions": ["add_training"], "caps": {"minerals": 1000, "gas": 1000}},
+              "world": {
+                "resources": {"mineral": 1000, "gas": 0},
+                "typed_resource_items": true,
+                "strict_training_rules": true,
+                "rooms": [
+                  {"label": "bridge", "base_id": 11001, "design": "bridge"},
+                  {"label": "academy", "base_id": 11002, "design": "academy_l2"}
+                ],
+                "researches": [{"design": "fitness_101"}],
+                "crew": [
+                  {"label": "fixer", "base_id": 10001, "name": "Fixer Synthetic", "design": "cadet", "room": "academy", "stats": {"Repair": 30}}
+                ]
+              }
+            }
+          ],
+          "steps": [
+            {"id": "provision", "kind": "provision"},
+            {"id": "dry", "kind": "dry-run"},
+            {"id": "exec", "kind": "execute", "registry_variant": {"alpha": {"max_actions": 19}}}
+          ],
+          "expected": {
+            "provision": {"exit": 0, "mutations": {}, "other_mutations": 0, "store": {"alpha": "present"}},
+            "dry": {
+              "exit": 0,
+              "mutations": {},
+              "other_mutations": 0,
+              "journal_planned": [{"alias": "alpha", "action": "add_training", "crew": "fixer", "course": "eng_manual"}]
+            },
+            "exec": {
+              "exit": "nonzero",
+              "requests": {"alpha": 0},
+              "mutations": {"POST /TrainingService/AddTraining": []},
+              "other_mutations": 0,
+              "skips": [{"alias": "alpha", "code": "dry_run_stale"}]
+            }
+          },
+          "witnesses": []
+        },
+        {
+          "id": "no-authorization",
+          "courses": ["eng_manual"],
+          "accounts": [
+            {
+              "alias": "alpha",
+              "user_id": "700100501",
+              "refresh_token": "RT-synthetic-wf-alpha-0001",
+              "secret": "TWB_ALPHA",
+              "registry": {"policy_id": "training-v2"},
+              "authorization": {"actions": ["upgrade_room"], "caps": {"minerals": 1000, "gas": 1000}},
+              "world": {
+                "resources": {"mineral": 1000, "gas": 0},
+                "typed_resource_items": true,
+                "strict_training_rules": true,
+                "rooms": [
+                  {"label": "bridge", "base_id": 11001, "design": "bridge"},
+                  {"label": "academy", "base_id": 11002, "design": "academy_l2"}
+                ],
+                "researches": [{"design": "fitness_101"}],
+                "crew": [
+                  {"label": "fixer", "base_id": 10001, "name": "Fixer Synthetic", "design": "cadet", "room": "academy", "stats": {"Repair": 30}}
+                ]
+              }
+            }
+          ],
+          "steps": [
+            {"id": "provision", "kind": "provision"},
+            {"id": "dry", "kind": "dry-run"},
+            {"id": "exec", "kind": "execute"}
+          ],
+          "expected": {
+            "provision": {"exit": 0, "mutations": {}, "other_mutations": 0, "store": {"alpha": "present"}},
+            "dry": {
+              "exit": 0,
+              "mutations": {},
+              "other_mutations": 0,
+              "journal_planned": [{"alias": "alpha", "action": "add_training", "crew": "fixer", "course": "eng_manual"}]
+            },
+            "exec": {
+              "mutations": {"POST /TrainingService/AddTraining": []},
+              "other_mutations": 0,
+              "resource_delta": {"alpha": {"mineral": 0, "gas": 0, "starbux": 0}},
+              "skips": [{"alias": "alpha", "code": "not_authorized"}]
+            }
+          },
+          "witnesses": []
+        },
+        {
+          "id": "disabled",
+          "courses": ["eng_manual"],
+          "accounts": [
+            {
+              "alias": "alpha",
+              "user_id": "700100501",
+              "refresh_token": "RT-synthetic-wf-alpha-0001",
+              "secret": "TWB_ALPHA",
+              "registry": {"policy_id": "training-v2"},
+              "authorization": {"actions": ["add_training"], "caps": {"minerals": 1000, "gas": 1000}},
+              "world": {
+                "resources": {"mineral": 1000, "gas": 0},
+                "typed_resource_items": true,
+                "strict_training_rules": true,
+                "rooms": [
+                  {"label": "bridge", "base_id": 11001, "design": "bridge"},
+                  {"label": "academy", "base_id": 11002, "design": "academy_l2"}
+                ],
+                "researches": [{"design": "fitness_101"}],
+                "crew": [
+                  {"label": "fixer", "base_id": 10001, "name": "Fixer Synthetic", "design": "cadet", "room": "academy", "stats": {"Repair": 30}}
+                ]
+              }
+            }
+          ],
+          "steps": [
+            {"id": "provision", "kind": "provision"},
+            {"id": "dry", "kind": "dry-run"},
+            {"id": "exec", "kind": "execute", "registry_variant": {"alpha": {"enabled": false}}}
+          ],
+          "expected": {
+            "provision": {"exit": 0, "mutations": {}, "other_mutations": 0, "store": {"alpha": "present"}},
+            "dry": {
+              "exit": 0,
+              "mutations": {},
+              "other_mutations": 0,
+              "journal_planned": [{"alias": "alpha", "action": "add_training", "crew": "fixer", "course": "eng_manual"}]
+            },
+            "exec": {
+              "requests": {"alpha": 0},
+              "mutations": {"POST /TrainingService/AddTraining": []},
+              "other_mutations": 0
+            }
+          },
+          "witnesses": []
+        },
+        {
+          "id": "different-course",
+          "courses": ["eng_manual", "weapon_drill"],
+          "accounts": [
+            {
+              "alias": "alpha",
+              "user_id": "700100501",
+              "refresh_token": "RT-synthetic-wf-alpha-0001",
+              "secret": "TWB_ALPHA",
+              "registry": {"policy_id": "training-v2"},
+              "authorization": {"actions": ["add_training"], "caps": {"minerals": 1000, "gas": 1000}},
+              "world": {
+                "resources": {"mineral": 2000, "gas": 0},
+                "typed_resource_items": true,
+                "strict_training_rules": true,
+                "rooms": [
+                  {"label": "bridge", "base_id": 11001, "design": "bridge"},
+                  {"label": "academy", "base_id": 11002, "design": "academy_l2"}
+                ],
+                "researches": [{"design": "fitness_101"}],
+                "crew": [
+                  {"label": "fixer", "base_id": 10001, "name": "Fixer Synthetic", "design": "cadet", "room": "academy", "stats": {"Repair": 30}},
+                  {"label": "gunner", "base_id": 10002, "name": "Gunner Synthetic", "design": "cadet", "room": "bridge", "stats": {"Weapon": 30}}
+                ]
+              }
+            }
+          ],
+          "steps": [
+            {"id": "provision", "kind": "provision"},
+            {"id": "dry", "kind": "dry-run"},
+            {"id": "exec1", "kind": "execute", "misapply": {"course": "weapon_drill"}},
+            {"id": "move", "kind": "mutate", "set": [{"crew": "gunner", "to_room": "academy"}]},
+            {"id": "dry2", "kind": "dry-run"},
+            {"id": "exec2", "kind": "execute", "blocked_after_unresolved": true}
+          ],
+          "expected": {
+            "provision": {"exit": 0, "mutations": {}, "other_mutations": 0, "store": {"alpha": "present"}},
+            "dry": {
+              "exit": 0,
+              "mutations": {},
+              "other_mutations": 0,
+              "journal_planned": [{"alias": "alpha", "action": "add_training", "crew": "fixer", "course": "eng_manual"}]
+            },
+            "exec1": {
+              "mutations": {
+                "POST /TrainingService/AddTraining": [{"alias": "alpha", "crew": "fixer", "course": "eng_manual"}]
+              },
+              "applied": {"POST /TrainingService/AddTraining": 1},
+              "other_mutations": 0,
+              "resource_delta": {"alpha": {"mineral": -500, "gas": 0, "starbux": 0}},
+              "timer": {"fixer": {"course": "weapon_drill", "duration_s": 3600}},
+              "journal": [
+                {"alias": "alpha", "action": "add_training", "outcome_in": ["contradicted", "unknown", "not-observed"], "attempted": true, "crew": "fixer", "course": "eng_manual"}
+              ]
+            },
+            "dry2": {"exit": 0, "mutations": {}, "other_mutations": 0},
+            "exec2": {
+              "mutations": {"POST /TrainingService/AddTraining": []},
+              "other_mutations": 0,
+              "resource_delta": {"alpha": {"mineral": 0, "gas": 0, "starbux": 0}},
+              "timer": {},
+              "skips": [{"alias": "alpha", "code": "unresolved_attempt"}]
+            }
+          },
+          "witnesses": ["exec1:misapply"]
+        },
+        {
+          "id": "missing-post-read",
+          "courses": ["eng_manual", "weapon_drill"],
+          "accounts": [
+            {
+              "alias": "alpha",
+              "user_id": "700100501",
+              "refresh_token": "RT-synthetic-wf-alpha-0001",
+              "secret": "TWB_ALPHA",
+              "registry": {"policy_id": "training-v2"},
+              "authorization": {"actions": ["add_training"], "caps": {"minerals": 1000, "gas": 1000}},
+              "world": {
+                "resources": {"mineral": 2000, "gas": 0},
+                "typed_resource_items": true,
+                "strict_training_rules": true,
+                "rooms": [
+                  {"label": "bridge", "base_id": 11001, "design": "bridge"},
+                  {"label": "academy", "base_id": 11002, "design": "academy_l2"}
+                ],
+                "researches": [{"design": "fitness_101"}],
+                "crew": [
+                  {"label": "fixer", "base_id": 10001, "name": "Fixer Synthetic", "design": "cadet", "room": "academy", "stats": {"Repair": 30}},
+                  {"label": "gunner", "base_id": 10002, "name": "Gunner Synthetic", "design": "cadet", "room": "bridge", "stats": {"Weapon": 30}}
+                ]
+              }
+            }
+          ],
+          "steps": [
+            {"id": "provision", "kind": "provision"},
+            {"id": "dry", "kind": "dry-run"},
+            {
+              "id": "exec1",
+              "kind": "execute",
+              "faults": [
+                {"route": "GET /CharacterService/ListAllCharactersOfUser", "after_route": "POST /TrainingService/AddTraining", "status": 404, "times": 99}
+              ]
+            },
+            {"id": "move", "kind": "mutate", "set": [{"crew": "gunner", "to_room": "academy"}]},
+            {"id": "dry2", "kind": "dry-run"},
+            {"id": "exec2", "kind": "execute", "blocked_after_unresolved": true}
+          ],
+          "expected": {
+            "provision": {"exit": 0, "mutations": {}, "other_mutations": 0, "store": {"alpha": "present"}},
+            "dry": {
+              "exit": 0,
+              "mutations": {},
+              "other_mutations": 0,
+              "journal_planned": [{"alias": "alpha", "action": "add_training", "crew": "fixer", "course": "eng_manual"}]
+            },
+            "exec1": {
+              "mutations": {
+                "POST /TrainingService/AddTraining": [{"alias": "alpha", "crew": "fixer", "course": "eng_manual"}]
+              },
+              "applied": {"POST /TrainingService/AddTraining": 1},
+              "other_mutations": 0,
+              "resource_delta": {"alpha": {"mineral": -500, "gas": 0, "starbux": 0}},
+              "timer": {"fixer": {"course": "eng_manual", "duration_s": 3600}},
+              "journal": [
+                {"alias": "alpha", "action": "add_training", "outcome": "unknown", "attempted": true, "crew": "fixer", "course": "eng_manual"}
+              ]
+            },
+            "dry2": {"exit": 0, "mutations": {}, "other_mutations": 0},
+            "exec2": {
+              "mutations": {"POST /TrainingService/AddTraining": []},
+              "other_mutations": 0,
+              "resource_delta": {"alpha": {"mineral": 0, "gas": 0, "starbux": 0}},
+              "timer": {},
+              "skips": [{"alias": "alpha", "code": "unresolved_attempt"}]
+            }
+          },
+          "witnesses": ["exec1:fault:0"]
+        },
+        {
+          "id": "missing-id",
+          "courses": ["eng_manual", "weapon_drill"],
+          "accounts": [
+            {
+              "alias": "alpha",
+              "user_id": "700100501",
+              "refresh_token": "RT-synthetic-wf-alpha-0001",
+              "secret": "TWB_ALPHA",
+              "registry": {"policy_id": "training-v2"},
+              "authorization": {"actions": ["add_training"], "caps": {"minerals": 1000, "gas": 1000}},
+              "world": {
+                "resources": {"mineral": 2000, "gas": 0},
+                "typed_resource_items": true,
+                "strict_training_rules": true,
+                "rooms": [
+                  {"label": "bridge", "base_id": 11001, "design": "bridge"},
+                  {"label": "academy", "base_id": 11002, "design": "academy_l2"}
+                ],
+                "researches": [{"design": "fitness_101"}],
+                "crew": [
+                  {"label": "fixer", "base_id": 10001, "name": "Fixer Synthetic", "design": "cadet", "room": "academy", "stats": {"Repair": 30}},
+                  {"label": "gunner", "base_id": 10002, "name": "Gunner Synthetic", "design": "cadet", "room": "bridge", "stats": {"Weapon": 30}}
+                ]
+              }
+            }
+          ],
+          "steps": [
+            {"id": "provision", "kind": "provision"},
+            {"id": "dry", "kind": "dry-run"},
+            {
+              "id": "exec1",
+              "kind": "execute",
+              "triggers": [
+                {
+                  "route": "POST /TrainingService/AddTraining",
+                  "after_nth": 1,
+                  "apply": [{"crew": "fixer", "hidden": true}]
+                }
+              ]
+            },
+            {
+              "id": "move",
+              "kind": "mutate",
+              "set": [{"crew": "fixer", "hidden": false}, {"crew": "gunner", "to_room": "academy"}]
+            },
+            {"id": "dry2", "kind": "dry-run"},
+            {"id": "exec2", "kind": "execute", "blocked_after_unresolved": true}
+          ],
+          "expected": {
+            "provision": {"exit": 0, "mutations": {}, "other_mutations": 0, "store": {"alpha": "present"}},
+            "dry": {
+              "exit": 0,
+              "mutations": {},
+              "other_mutations": 0,
+              "journal_planned": [{"alias": "alpha", "action": "add_training", "crew": "fixer", "course": "eng_manual"}]
+            },
+            "exec1": {
+              "mutations": {
+                "POST /TrainingService/AddTraining": [{"alias": "alpha", "crew": "fixer", "course": "eng_manual"}]
+              },
+              "applied": {"POST /TrainingService/AddTraining": 1},
+              "other_mutations": 0,
+              "resource_delta": {"alpha": {"mineral": -500, "gas": 0, "starbux": 0}},
+              "timer": {"fixer": {"course": "eng_manual", "duration_s": 3600}},
+              "journal": [
+                {"alias": "alpha", "action": "add_training", "attempted": true, "crew": "fixer", "course": "eng_manual", "outcome_in": ["unknown", "not-observed", "contradicted"]}
+              ]
+            },
+            "dry2": {"exit": 0, "mutations": {}, "other_mutations": 0},
+            "exec2": {
+              "mutations": {"POST /TrainingService/AddTraining": []},
+              "other_mutations": 0,
+              "resource_delta": {"alpha": {"mineral": 0, "gas": 0, "starbux": 0}},
+              "timer": {},
+              "skips": [{"alias": "alpha", "code": "unresolved_attempt"}]
+            }
+          },
+          "witnesses": ["exec1:trigger:0"]
+        },
+        {
+          "id": "resolved-after-reconciliation",
+          "courses": ["eng_manual", "weapon_drill"],
+          "accounts": [
+            {
+              "alias": "alpha",
+              "user_id": "700100501",
+              "refresh_token": "RT-synthetic-wf-alpha-0001",
+              "secret": "TWB_ALPHA",
+              "registry": {"policy_id": "training-v2"},
+              "authorization": {"actions": ["add_training"], "caps": {"minerals": 1000, "gas": 1000}},
+              "world": {
+                "resources": {"mineral": 2000, "gas": 0},
+                "typed_resource_items": true,
+                "strict_training_rules": true,
+                "rooms": [
+                  {"label": "bridge", "base_id": 11001, "design": "bridge"},
+                  {"label": "academy", "base_id": 11002, "design": "academy_l2"}
+                ],
+                "researches": [{"design": "fitness_101"}],
+                "crew": [
+                  {"label": "fixer", "base_id": 10001, "name": "Fixer Synthetic", "design": "cadet", "room": "academy", "stats": {"Repair": 30}},
+                  {"label": "gunner", "base_id": 10002, "name": "Gunner Synthetic", "design": "cadet", "room": "bridge", "stats": {"Weapon": 30}}
+                ]
+              }
+            }
+          ],
+          "steps": [
+            {"id": "provision", "kind": "provision"},
+            {"id": "dry", "kind": "dry-run"},
+            {
+              "id": "exec1",
+              "kind": "execute",
+              "faults": [
+                {"route": "GET /CharacterService/ListAllCharactersOfUser", "after_route": "POST /TrainingService/AddTraining", "status": 404, "times": 99}
+              ]
+            },
+            {"id": "move", "kind": "mutate", "set": [{"crew": "gunner", "to_room": "academy"}]},
+            {"id": "dry2", "kind": "dry-run"},
+            {"id": "exec2", "kind": "execute", "blocked_after_unresolved": true},
+            {"id": "resolve", "kind": "resolve"},
+            {"id": "dry3", "kind": "dry-run"},
+            {"id": "exec3", "kind": "execute"}
+          ],
+          "expected": {
+            "provision": {"exit": 0, "mutations": {}, "other_mutations": 0, "store": {"alpha": "present"}},
+            "dry": {
+              "exit": 0,
+              "mutations": {},
+              "other_mutations": 0,
+              "journal_planned": [{"alias": "alpha", "action": "add_training", "crew": "fixer", "course": "eng_manual"}]
+            },
+            "exec1": {
+              "mutations": {
+                "POST /TrainingService/AddTraining": [{"alias": "alpha", "crew": "fixer", "course": "eng_manual"}]
+              },
+              "applied": {"POST /TrainingService/AddTraining": 1},
+              "other_mutations": 0,
+              "resource_delta": {"alpha": {"mineral": -500, "gas": 0, "starbux": 0}},
+              "timer": {"fixer": {"course": "eng_manual", "duration_s": 3600}},
+              "journal": [
+                {"alias": "alpha", "action": "add_training", "outcome": "unknown", "attempted": true, "crew": "fixer", "course": "eng_manual"}
+              ]
+            },
+            "dry2": {"exit": 0, "mutations": {}, "other_mutations": 0},
+            "exec2": {
+              "mutations": {"POST /TrainingService/AddTraining": []},
+              "other_mutations": 0,
+              "resource_delta": {"alpha": {"mineral": 0, "gas": 0, "starbux": 0}},
+              "timer": {},
+              "skips": [{"alias": "alpha", "code": "unresolved_attempt"}]
+            },
+            "resolve": {
+              "exit": 0,
+              "mutations": {"POST /TrainingService/AddTraining": []},
+              "other_mutations": 0,
+              "resource_delta": {"alpha": {"mineral": 0, "gas": 0, "starbux": 0}}
+            },
+            "dry3": {"exit": 0, "mutations": {}, "other_mutations": 0},
+            "exec3": {
+              "exit": 0,
+              "mutations": {
+                "POST /TrainingService/AddTraining": [{"alias": "alpha", "crew": "gunner", "course": "weapon_drill"}]
+              },
+              "applied": {"POST /TrainingService/AddTraining": 1},
+              "other_mutations": 0,
+              "resource_delta": {"alpha": {"mineral": -400, "gas": 0, "starbux": 0}},
+              "timer": {"gunner": {"course": "weapon_drill", "duration_s": 3600}},
+              "journal": [
+                {"alias": "alpha", "action": "add_training", "outcome": "verified", "attempted": true, "crew": "gunner", "course": "weapon_drill", "cost": {"minerals": 400, "gas": 0}}
+              ]
+            }
+          },
+          "witnesses": ["exec1:fault:0"]
+        }
+      ],
+      "control": {
+        "policy_id": "training-v1",
+        "scenarios": [
+          {
+            "id": "v1-missing-post-read",
+            "courses": ["v1_weapon_theory"],
+            "accounts": [
+              {
+                "alias": "alpha",
+                "user_id": "700100501",
+                "refresh_token": "RT-synthetic-wf-alpha-0001",
+                "secret": "TWB_ALPHA",
+                "registry": {"policy_id": "training-v1"},
+                "authorization": {"actions": ["add_training"], "caps": {"minerals": 1000, "gas": 1000}},
+                "world": {
+                  "resources": {"mineral": 1000, "gas": 0},
+                  "typed_resource_items": true,
+                  "strict_training_rules": true,
+                  "rooms": [
+                    {"label": "bridge", "base_id": 11001, "design": "bridge"},
+                    {"label": "academy", "base_id": 11002, "design": "academy_l1"}
+                  ],
+                  "researches": [{"design": "fitness_101"}],
+                  "crew": [
+                    {"label": "delish", "base_id": 10101, "name": "Delish", "design": "veteran", "room": "academy", "stats": {"Weapon": 40}},
+                    {"label": "maiden", "base_id": 10102, "name": "Galactic Snow Maiden", "design": "veteran", "room": "bridge", "stats": {"Weapon": 40}}
+                  ]
+                }
+              }
+            ],
+            "steps": [
+              {"id": "dry", "kind": "dry-run"},
+              {
+                "id": "exec1",
+                "kind": "execute",
+                "faults": [
+                  {"route": "GET /CharacterService/ListAllCharactersOfUser", "after_route": "POST /TrainingService/AddTraining", "status": 404, "times": 99}
+                ]
+              },
+              {"id": "move", "kind": "mutate", "set": [{"crew": "maiden", "to_room": "academy"}]},
+              {"id": "exec2", "kind": "execute"}
+            ],
+            "expected": {
+              "dry": {
+                "exit": 0,
+                "mutations": {},
+                "other_mutations": 0,
+                "journal_planned": [
+                  {"alias": "alpha", "action": "add_training", "crew": "delish", "course": "v1_weapon_theory"}
+                ]
+              },
+              "exec1": {
+                "mutations": {
+                  "POST /TrainingService/AddTraining": [
+                    {"alias": "alpha", "crew": "delish", "course": "v1_weapon_theory"}
+                  ]
+                },
+                "applied": {"POST /TrainingService/AddTraining": 1},
+                "other_mutations": 0,
+                "resource_delta": {"alpha": {"mineral": 0, "gas": 0, "starbux": 0}},
+                "timer": {"delish": {"course": "v1_weapon_theory", "duration_s": 3600}},
+                "journal": [
+                  {"alias": "alpha", "action": "add_training", "outcome": "unknown", "attempted": true, "crew": "delish", "course": "v1_weapon_theory"}
+                ]
+              },
+              "exec2": {
+                "mutations": {
+                  "POST /TrainingService/AddTraining": [
+                    {"alias": "alpha", "crew": "maiden", "course": "v1_weapon_theory"}
+                  ]
+                },
+                "applied": {"POST /TrainingService/AddTraining": 1},
+                "other_mutations": 0,
+                "resource_delta": {"alpha": {"mineral": 0, "gas": 0, "starbux": 0}},
+                "timer": {"maiden": {"course": "v1_weapon_theory", "duration_s": 3600}},
+                "journal": [
+                  {"alias": "alpha", "action": "add_training", "outcome": "verified", "attempted": true, "crew": "maiden", "course": "v1_weapon_theory", "cost": {"minerals": 0, "gas": 0}}
+                ]
+              }
+            },
+            "witnesses": ["exec1:fault:0"]
+          }
+        ]
+      }
+    },
+    {
+      "id": "persisted-intent-restart",
+      "requirements": ["S14-R5", "S14-R6"],
+      "acceptance": ["S14-AC4", "S14-AC6"],
+      "summary": "A crash after sending (applied) or before the server applied, and an intent store that cannot be written, all leave the next run with no training start, even with a different crew member eligible. A lost AddTraining reply with failing post-reads (lost-reply-failed-post-read) leaves only the original request and a durable pending record that blocks the rerun; a settle write that fails after an applied start (settle-write-fails) keeps the pending intent, so the next execute sends nothing (unresolved_attempt).",
+      "red": {"expected_cause": "registry refuses training-v2 before login (exit 2); --fleet-provision-training is not implemented (exit 2)"},
+      "scenarios": [
+        {
+          "id": "crash-after-send",
+          "courses": ["eng_manual", "weapon_drill"],
+          "accounts": [
+            {
+              "alias": "alpha",
+              "user_id": "700100501",
+              "refresh_token": "RT-synthetic-wf-alpha-0001",
+              "secret": "TWB_ALPHA",
+              "registry": {"policy_id": "training-v2"},
+              "authorization": {"actions": ["add_training"], "caps": {"minerals": 1000, "gas": 1000}},
+              "world": {
+                "resources": {"mineral": 2000, "gas": 0},
+                "typed_resource_items": true,
+                "strict_training_rules": true,
+                "rooms": [
+                  {"label": "bridge", "base_id": 11001, "design": "bridge"},
+                  {"label": "academy", "base_id": 11002, "design": "academy_l2"}
+                ],
+                "researches": [{"design": "fitness_101"}],
+                "crew": [
+                  {"label": "fixer", "base_id": 10001, "name": "Fixer Synthetic", "design": "cadet", "room": "academy", "stats": {"Repair": 30}},
+                  {"label": "gunner", "base_id": 10002, "name": "Gunner Synthetic", "design": "cadet", "room": "bridge", "stats": {"Weapon": 30}}
+                ]
+              }
+            }
+          ],
+          "steps": [
+            {"id": "provision", "kind": "provision"},
+            {"id": "dry", "kind": "dry-run"},
+            {"id": "exec1", "kind": "execute", "crash": {"route": "POST /TrainingService/AddTraining", "apply": true}},
+            {"id": "move", "kind": "mutate", "set": [{"crew": "gunner", "to_room": "academy"}]},
+            {"id": "dry2", "kind": "dry-run"},
+            {"id": "exec2", "kind": "execute", "blocked_after_unresolved": true}
+          ],
+          "expected": {
+            "provision": {"exit": 0, "mutations": {}, "other_mutations": 0, "store": {"alpha": "present"}},
+            "dry": {
+              "exit": 0,
+              "mutations": {},
+              "other_mutations": 0,
+              "journal_planned": [{"alias": "alpha", "action": "add_training", "crew": "fixer", "course": "eng_manual"}]
+            },
+            "exec1": {
+              "exit": "crashed",
+              "mutations": {
+                "POST /TrainingService/AddTraining": [{"alias": "alpha", "crew": "fixer", "course": "eng_manual"}]
+              },
+              "applied": {"POST /TrainingService/AddTraining": 1},
+              "other_mutations": 0,
+              "resource_delta": {"alpha": {"mineral": -500, "gas": 0, "starbux": 0}},
+              "timer": {"fixer": {"course": "eng_manual", "duration_s": 3600}}
+            },
+            "dry2": {"exit": 0, "mutations": {}, "other_mutations": 0},
+            "exec2": {
+              "mutations": {"POST /TrainingService/AddTraining": []},
+              "other_mutations": 0,
+              "resource_delta": {"alpha": {"mineral": 0, "gas": 0, "starbux": 0}},
+              "timer": {},
+              "skips": [{"alias": "alpha", "code": "unresolved_attempt"}]
+            }
+          },
+          "witnesses": ["exec1:crash"]
+        },
+        {
+          "id": "crash-before-apply",
+          "courses": ["eng_manual", "weapon_drill"],
+          "accounts": [
+            {
+              "alias": "alpha",
+              "user_id": "700100501",
+              "refresh_token": "RT-synthetic-wf-alpha-0001",
+              "secret": "TWB_ALPHA",
+              "registry": {"policy_id": "training-v2"},
+              "authorization": {"actions": ["add_training"], "caps": {"minerals": 1000, "gas": 1000}},
+              "world": {
+                "resources": {"mineral": 2000, "gas": 0},
+                "typed_resource_items": true,
+                "strict_training_rules": true,
+                "rooms": [
+                  {"label": "bridge", "base_id": 11001, "design": "bridge"},
+                  {"label": "academy", "base_id": 11002, "design": "academy_l2"}
+                ],
+                "researches": [{"design": "fitness_101"}],
+                "crew": [
+                  {"label": "fixer", "base_id": 10001, "name": "Fixer Synthetic", "design": "cadet", "room": "academy", "stats": {"Repair": 30}},
+                  {"label": "gunner", "base_id": 10002, "name": "Gunner Synthetic", "design": "cadet", "room": "bridge", "stats": {"Weapon": 30}}
+                ]
+              }
+            }
+          ],
+          "steps": [
+            {"id": "provision", "kind": "provision"},
+            {"id": "dry", "kind": "dry-run"},
+            {"id": "exec1", "kind": "execute", "crash": {"route": "POST /TrainingService/AddTraining", "apply": false}},
+            {"id": "move", "kind": "mutate", "set": [{"crew": "gunner", "to_room": "academy"}]},
+            {"id": "dry2", "kind": "dry-run"},
+            {"id": "exec2", "kind": "execute", "blocked_after_unresolved": true}
+          ],
+          "expected": {
+            "provision": {"exit": 0, "mutations": {}, "other_mutations": 0, "store": {"alpha": "present"}},
+            "dry": {
+              "exit": 0,
+              "mutations": {},
+              "other_mutations": 0,
+              "journal_planned": [{"alias": "alpha", "action": "add_training", "crew": "fixer", "course": "eng_manual"}]
+            },
+            "exec1": {
+              "exit": "crashed",
+              "mutations": {
+                "POST /TrainingService/AddTraining": [{"alias": "alpha", "crew": "fixer", "course": "eng_manual"}]
+              },
+              "applied": {"POST /TrainingService/AddTraining": 0},
+              "other_mutations": 0,
+              "resource_delta": {"alpha": {"mineral": 0, "gas": 0, "starbux": 0}},
+              "timer": {}
+            },
+            "dry2": {"exit": 0, "mutations": {}, "other_mutations": 0},
+            "exec2": {
+              "mutations": {"POST /TrainingService/AddTraining": []},
+              "other_mutations": 0,
+              "resource_delta": {"alpha": {"mineral": 0, "gas": 0, "starbux": 0}},
+              "timer": {},
+              "skips": [{"alias": "alpha", "code": "unresolved_attempt"}]
+            }
+          },
+          "witnesses": ["exec1:crash"]
+        },
+        {
+          "id": "intent-write-fails",
+          "courses": ["eng_manual", "weapon_drill"],
+          "accounts": [
+            {
+              "alias": "alpha",
+              "user_id": "700100501",
+              "refresh_token": "RT-synthetic-wf-alpha-0001",
+              "secret": "TWB_ALPHA",
+              "registry": {"policy_id": "training-v2"},
+              "authorization": {"actions": ["add_training"], "caps": {"minerals": 1000, "gas": 1000}},
+              "world": {
+                "resources": {"mineral": 2000, "gas": 0},
+                "typed_resource_items": true,
+                "strict_training_rules": true,
+                "rooms": [
+                  {"label": "bridge", "base_id": 11001, "design": "bridge"},
+                  {"label": "academy", "base_id": 11002, "design": "academy_l2"}
+                ],
+                "researches": [{"design": "fitness_101"}],
+                "crew": [
+                  {"label": "fixer", "base_id": 10001, "name": "Fixer Synthetic", "design": "cadet", "room": "academy", "stats": {"Repair": 30}},
+                  {"label": "gunner", "base_id": 10002, "name": "Gunner Synthetic", "design": "cadet", "room": "bridge", "stats": {"Weapon": 30}}
+                ]
+              }
+            }
+          ],
+          "steps": [
+            {"id": "provision", "kind": "provision"},
+            {"id": "dry", "kind": "dry-run"},
+            {"id": "exec1", "kind": "execute"},
+            {"id": "move", "kind": "mutate", "set": [{"crew": "gunner", "to_room": "academy"}]},
+            {"id": "dry2", "kind": "dry-run"},
+            {"id": "exec2", "kind": "execute", "pre": {"fail_intent_write": true}}
+          ],
+          "expected": {
+            "provision": {"exit": 0, "mutations": {}, "other_mutations": 0, "store": {"alpha": "present"}},
+            "dry": {
+              "exit": 0,
+              "mutations": {},
+              "other_mutations": 0,
+              "journal_planned": [{"alias": "alpha", "action": "add_training", "crew": "fixer", "course": "eng_manual"}]
+            },
+            "exec1": {
+              "exit": 0,
+              "mutations": {
+                "POST /TrainingService/AddTraining": [{"alias": "alpha", "crew": "fixer", "course": "eng_manual"}]
+              },
+              "applied": {"POST /TrainingService/AddTraining": 1},
+              "other_mutations": 0,
+              "resource_delta": {"alpha": {"mineral": -500, "gas": 0, "starbux": 0}},
+              "timer": {"fixer": {"course": "eng_manual", "duration_s": 3600}},
+              "journal": [
+                {"alias": "alpha", "action": "add_training", "outcome": "verified", "attempted": true, "crew": "fixer", "course": "eng_manual", "cost": {"minerals": 500, "gas": 0}}
+              ]
+            },
+            "dry2": {"exit": 0, "mutations": {}, "other_mutations": 0},
+            "exec2": {
+              "mutations": {"POST /TrainingService/AddTraining": []},
+              "other_mutations": 0,
+              "resource_delta": {"alpha": {"mineral": 0, "gas": 0, "starbux": 0}},
+              "timer": {},
+              "journal": [],
+              "skips": [{"alias": "alpha", "crew": "gunner", "code": "intent_not_persisted"}]
+            }
+          },
+          "witnesses": ["exec2:intent_write_failed"]
+        },
+        {
+          "id": "lost-reply-failed-post-read",
+          "courses": ["eng_manual", "weapon_drill"],
+          "accounts": [
+            {
+              "alias": "alpha",
+              "user_id": "700100501",
+              "refresh_token": "RT-synthetic-wf-alpha-0001",
+              "secret": "TWB_ALPHA",
+              "registry": {"policy_id": "training-v2"},
+              "authorization": {"actions": ["add_training"], "caps": {"minerals": 1000, "gas": 1000}},
+              "world": {
+                "resources": {"mineral": 2000, "gas": 0},
+                "typed_resource_items": true,
+                "strict_training_rules": true,
+                "rooms": [
+                  {"label": "bridge", "base_id": 11001, "design": "bridge"},
+                  {"label": "academy", "base_id": 11002, "design": "academy_l2"}
+                ],
+                "researches": [{"design": "fitness_101"}],
+                "crew": [
+                  {"label": "fixer", "base_id": 10001, "name": "Fixer Synthetic", "design": "cadet", "room": "academy", "stats": {"Repair": 30}},
+                  {"label": "gunner", "base_id": 10002, "name": "Gunner Synthetic", "design": "cadet", "room": "bridge", "stats": {"Weapon": 30}}
+                ]
+              }
+            }
+          ],
+          "steps": [
+            {"id": "provision", "kind": "provision"},
+            {"id": "dry", "kind": "dry-run"},
+            {
+              "id": "exec1",
+              "kind": "execute",
+              "faults": [
+                {"route": "POST /TrainingService/AddTraining", "status": 404, "times": 1, "apply": true},
+                {"route": "GET /CharacterService/ListAllCharactersOfUser", "after_route": "POST /TrainingService/AddTraining", "status": 404, "times": 99}
+              ]
+            },
+            {"id": "move", "kind": "mutate", "set": [{"crew": "gunner", "to_room": "academy"}]},
+            {"id": "dry2", "kind": "dry-run"},
+            {"id": "exec2", "kind": "execute", "blocked_after_unresolved": true}
+          ],
+          "expected": {
+            "provision": {"exit": 0, "mutations": {}, "other_mutations": 0, "store": {"alpha": "present"}},
+            "dry": {
+              "exit": 0,
+              "mutations": {},
+              "other_mutations": 0,
+              "journal_planned": [{"alias": "alpha", "action": "add_training", "crew": "fixer", "course": "eng_manual"}]
+            },
+            "exec1": {
+              "mutations": {
+                "POST /TrainingService/AddTraining": [{"alias": "alpha", "crew": "fixer", "course": "eng_manual"}]
+              },
+              "applied": {"POST /TrainingService/AddTraining": 1},
+              "other_mutations": 0,
+              "resource_delta": {"alpha": {"mineral": -500, "gas": 0, "starbux": 0}},
+              "timer": {"fixer": {"course": "eng_manual", "duration_s": 3600}},
+              "journal": [
+                {"alias": "alpha", "action": "add_training", "outcome": "unknown", "attempted": true, "crew": "fixer", "course": "eng_manual"}
+              ],
+              "store": {"alpha": "present"}
+            },
+            "dry2": {"exit": 0, "mutations": {}, "other_mutations": 0},
+            "exec2": {
+              "mutations": {"POST /TrainingService/AddTraining": []},
+              "other_mutations": 0,
+              "resource_delta": {"alpha": {"mineral": 0, "gas": 0, "starbux": 0}},
+              "timer": {},
+              "skips": [{"alias": "alpha", "code": "unresolved_attempt"}],
+              "store": {"alpha": "present"}
+            }
+          },
+          "witnesses": ["exec1:fault:0", "exec1:fault:1"]
+        },
+        {
+          "id": "settle-write-fails",
+          "courses": ["eng_manual", "weapon_drill"],
+          "accounts": [
+            {
+              "alias": "alpha",
+              "user_id": "700100501",
+              "refresh_token": "RT-synthetic-wf-alpha-0001",
+              "secret": "TWB_ALPHA",
+              "registry": {"policy_id": "training-v2"},
+              "authorization": {"actions": ["add_training"], "caps": {"minerals": 1000, "gas": 1000}},
+              "world": {
+                "resources": {"mineral": 2000, "gas": 0},
+                "typed_resource_items": true,
+                "strict_training_rules": true,
+                "rooms": [
+                  {"label": "bridge", "base_id": 11001, "design": "bridge"},
+                  {"label": "academy", "base_id": 11002, "design": "academy_l2"}
+                ],
+                "researches": [{"design": "fitness_101"}],
+                "crew": [
+                  {"label": "fixer", "base_id": 10001, "name": "Fixer Synthetic", "design": "cadet", "room": "academy", "stats": {"Repair": 30}},
+                  {"label": "gunner", "base_id": 10002, "name": "Gunner Synthetic", "design": "cadet", "room": "bridge", "stats": {"Weapon": 30}}
+                ]
+              }
+            }
+          ],
+          "steps": [
+            {"id": "provision", "kind": "provision"},
+            {"id": "dry", "kind": "dry-run"},
+            {"id": "exec1", "kind": "execute", "pre": {"fail_settle_write": true}},
+            {"id": "move", "kind": "mutate", "set": [{"crew": "gunner", "to_room": "academy"}]},
+            {"id": "dry2", "kind": "dry-run"},
+            {"id": "exec2", "kind": "execute", "blocked_after_unresolved": true}
+          ],
+          "expected": {
+            "provision": {"exit": 0, "mutations": {}, "other_mutations": 0, "store": {"alpha": "present"}},
+            "dry": {
+              "exit": 0,
+              "mutations": {},
+              "other_mutations": 0,
+              "journal_planned": [{"alias": "alpha", "action": "add_training", "crew": "fixer", "course": "eng_manual"}]
+            },
+            "exec1": {
+              "mutations": {
+                "POST /TrainingService/AddTraining": [{"alias": "alpha", "crew": "fixer", "course": "eng_manual"}]
+              },
+              "applied": {"POST /TrainingService/AddTraining": 1},
+              "other_mutations": 0,
+              "resource_delta": {"alpha": {"mineral": -500, "gas": 0, "starbux": 0}},
+              "timer": {"fixer": {"course": "eng_manual", "duration_s": 3600}},
+              "store": {"alpha": "present"}
+            },
+            "dry2": {"exit": 0, "mutations": {}, "other_mutations": 0},
+            "exec2": {
+              "mutations": {"POST /TrainingService/AddTraining": []},
+              "other_mutations": 0,
+              "resource_delta": {"alpha": {"mineral": 0, "gas": 0, "starbux": 0}},
+              "timer": {},
+              "skips": [{"alias": "alpha", "code": "unresolved_attempt"}],
+              "store": {"alpha": "present"}
+            }
+          },
+          "witnesses": ["exec1:settle_write_failed"]
+        }
+      ],
+      "control": {
+        "policy_id": "training-v1",
+        "scenarios": [
+          {
+            "id": "v1-restart-after-verified",
+            "courses": ["v1_weapon_theory"],
+            "accounts": [
+              {
+                "alias": "alpha",
+                "user_id": "700100501",
+                "refresh_token": "RT-synthetic-wf-alpha-0001",
+                "secret": "TWB_ALPHA",
+                "registry": {"policy_id": "training-v1"},
+                "authorization": {"actions": ["add_training"], "caps": {"minerals": 1000, "gas": 1000}},
+                "world": {
+                  "resources": {"mineral": 1000, "gas": 0},
+                  "typed_resource_items": true,
+                  "strict_training_rules": true,
+                  "rooms": [
+                    {"label": "bridge", "base_id": 11001, "design": "bridge"},
+                    {"label": "academy", "base_id": 11002, "design": "academy_l1"}
+                  ],
+                  "researches": [{"design": "fitness_101"}],
+                  "crew": [
+                    {"label": "delish", "base_id": 10101, "name": "Delish", "design": "veteran", "room": "academy", "stats": {"Weapon": 40}}
+                  ]
+                }
+              }
+            ],
+            "steps": [
+              {"id": "dry", "kind": "dry-run"},
+              {"id": "exec1", "kind": "execute"},
+              {"id": "exec2", "kind": "execute"}
+            ],
+            "expected": {
+              "dry": {
+                "exit": 0,
+                "mutations": {},
+                "other_mutations": 0,
+                "journal_planned": [
+                  {"alias": "alpha", "action": "add_training", "crew": "delish", "course": "v1_weapon_theory"}
+                ]
+              },
+              "exec1": {
+                "exit": 0,
+                "mutations": {
+                  "POST /TrainingService/AddTraining": [
+                    {"alias": "alpha", "crew": "delish", "course": "v1_weapon_theory"}
+                  ]
+                },
+                "applied": {"POST /TrainingService/AddTraining": 1},
+                "other_mutations": 0,
+                "resource_delta": {"alpha": {"mineral": 0, "gas": 0, "starbux": 0}},
+                "timer": {"delish": {"course": "v1_weapon_theory", "duration_s": 3600}},
+                "journal": [
+                  {"alias": "alpha", "action": "add_training", "outcome": "verified", "attempted": true, "crew": "delish", "course": "v1_weapon_theory", "cost": {"minerals": 0, "gas": 0}}
+                ]
+              },
+              "exec2": {
+                "exit": 0,
+                "mutations": {"POST /TrainingService/AddTraining": []},
+                "other_mutations": 0,
+                "timer": {},
+                "journal": [],
+                "skips": [{"alias": "alpha", "crew": "delish", "code": "training_in_progress"}]
+              }
+            },
+            "witnesses": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "overlapping-dispatch",
+      "requirements": ["S14-R5", "S14-R6"],
+      "acceptance": ["S14-AC4", "S14-AC6"],
+      "summary": "Two execute dispatches for the same account overlap behind a barrier at login. The holder of the account's dispatch lock sends at most one start; the other sends no account write at all, although a different crew member is eligible.",
+      "red": {"expected_cause": "registry refuses training-v2 before login (exit 2); --fleet-provision-training is not implemented (exit 2): no dispatch logs in, so the barrier and hold witnesses are missing"},
+      "scenarios": [
+        {
+          "id": "threads",
+          "courses": ["eng_manual", "weapon_drill"],
+          "accounts": [
+            {
+              "alias": "alpha",
+              "user_id": "700100501",
+              "refresh_token": "RT-synthetic-wf-alpha-0001",
+              "secret": "TWB_ALPHA",
+              "registry": {"policy_id": "training-v2"},
+              "authorization": {"actions": ["add_training"], "caps": {"minerals": 1000, "gas": 1000}},
+              "world": {
+                "resources": {"mineral": 1000, "gas": 0},
+                "concurrent_sessions": true,
+                "typed_resource_items": true,
+                "strict_training_rules": true,
+                "rooms": [
+                  {"label": "bridge", "base_id": 11001, "design": "bridge"},
+                  {"label": "academy", "base_id": 11002, "design": "academy_l2"}
+                ],
+                "researches": [{"design": "fitness_101"}],
+                "crew": [
+                  {"label": "fixer", "base_id": 10001, "name": "Fixer Synthetic", "design": "cadet", "room": "academy", "stats": {"Repair": 30}},
+                  {"label": "gunner", "base_id": 10002, "name": "Gunner Synthetic", "design": "cadet", "room": "academy", "stats": {"Weapon": 30}}
+                ]
+              }
+            }
+          ],
+          "steps": [
+            {"id": "provision", "kind": "provision"},
+            {"id": "dry", "kind": "dry-run"},
+            {
+              "id": "overlap",
+              "kind": "overlap",
+              "mode": "threads",
+              "dispatches": 2,
+              "barrier": {"route": "POST /UserService/DeviceLogin17", "parties": 2, "timeout_s": 30},
+              "hold": {"route": "POST /TrainingService/AddTraining", "timeout_s": 30}
+            }
+          ],
+          "expected": {
+            "provision": {"exit": 0, "mutations": {}, "other_mutations": 0, "store": {"alpha": "present"}},
+            "dry": {"exit": 0, "mutations": {}, "other_mutations": 0},
+            "overlap": {
+              "dispatches": [
+                [{"alias": "alpha", "result": "started", "add_training": 1, "candidate_one_of": ["fixer", "gunner"]}],
+                [{"alias": "alpha", "result": "skipped", "code": "locked", "mutations": 0}]
+              ]
+            }
+          },
+          "witnesses": ["overlap:barrier", "overlap:hold_overlap"]
+        },
+        {
+          "id": "processes",
+          "courses": ["eng_manual", "weapon_drill"],
+          "accounts": [
+            {
+              "alias": "alpha",
+              "user_id": "700100501",
+              "refresh_token": "RT-synthetic-wf-alpha-0001",
+              "secret": "TWB_ALPHA",
+              "registry": {"policy_id": "training-v2"},
+              "authorization": {"actions": ["add_training"], "caps": {"minerals": 1000, "gas": 1000}},
+              "world": {
+                "resources": {"mineral": 1000, "gas": 0},
+                "typed_resource_items": true,
+                "strict_training_rules": true,
+                "rooms": [
+                  {"label": "bridge", "base_id": 11001, "design": "bridge"},
+                  {"label": "academy", "base_id": 11002, "design": "academy_l2"}
+                ],
+                "researches": [{"design": "fitness_101"}],
+                "crew": [
+                  {"label": "fixer", "base_id": 10001, "name": "Fixer Synthetic", "design": "cadet", "room": "academy", "stats": {"Repair": 30}},
+                  {"label": "gunner", "base_id": 10002, "name": "Gunner Synthetic", "design": "cadet", "room": "academy", "stats": {"Weapon": 30}}
+                ]
+              }
+            }
+          ],
+          "steps": [
+            {"id": "provision", "kind": "provision"},
+            {"id": "dry", "kind": "dry-run"},
+            {
+              "id": "overlap",
+              "kind": "overlap",
+              "mode": "processes",
+              "dispatches": 2,
+              "barrier": {"route": "POST /UserService/DeviceLogin17", "parties": 2, "timeout_s": 30},
+              "hold": {"route": "POST /TrainingService/AddTraining", "timeout_s": 30}
+            }
+          ],
+          "expected": {
+            "provision": {"exit": 0, "mutations": {}, "other_mutations": 0, "store": {"alpha": "present"}},
+            "dry": {"exit": 0, "mutations": {}, "other_mutations": 0},
+            "overlap": {
+              "dispatches": [
+                [{"alias": "alpha", "result": "started", "add_training": 1, "candidate_one_of": ["fixer", "gunner"]}],
+                [{"alias": "alpha", "result": "skipped", "code": "locked", "mutations": 0}]
+              ]
+            }
+          },
+          "witnesses": ["overlap:barrier", "overlap:hold_overlap"]
+        }
+      ],
+      "control": {
+        "policy_id": "training-v1",
+        "scenarios": [
+          {
+            "id": "v1-sequential-dispatches",
+            "courses": ["v1_weapon_theory"],
+            "accounts": [
+              {
+                "alias": "alpha",
+                "user_id": "700100501",
+                "refresh_token": "RT-synthetic-wf-alpha-0001",
+                "secret": "TWB_ALPHA",
+                "registry": {"policy_id": "training-v1"},
+                "authorization": {"actions": ["add_training"], "caps": {"minerals": 1000, "gas": 1000}},
+                "world": {
+                  "resources": {"mineral": 1000, "gas": 0},
+                  "typed_resource_items": true,
+                  "strict_training_rules": true,
+                  "rooms": [
+                    {"label": "bridge", "base_id": 11001, "design": "bridge"},
+                    {"label": "academy", "base_id": 11002, "design": "academy_l1"}
+                  ],
+                  "researches": [{"design": "fitness_101"}],
+                  "crew": [
+                    {"label": "delish", "base_id": 10101, "name": "Delish", "design": "veteran", "room": "academy", "stats": {"Weapon": 40}},
+                    {"label": "maiden", "base_id": 10102, "name": "Galactic Snow Maiden", "design": "veteran", "room": "bridge", "stats": {"Weapon": 40}}
+                  ]
+                }
+              }
+            ],
+            "steps": [
+              {"id": "dry", "kind": "dry-run"},
+              {"id": "exec1", "kind": "execute"},
+              {"id": "move", "kind": "mutate", "set": [{"crew": "maiden", "to_room": "academy"}]},
+              {"id": "exec2", "kind": "execute"}
+            ],
+            "expected": {
+              "dry": {
+                "exit": 0,
+                "mutations": {},
+                "other_mutations": 0,
+                "journal_planned": [
+                  {"alias": "alpha", "action": "add_training", "crew": "delish", "course": "v1_weapon_theory"}
+                ]
+              },
+              "exec1": {
+                "exit": 0,
+                "mutations": {
+                  "POST /TrainingService/AddTraining": [
+                    {"alias": "alpha", "crew": "delish", "course": "v1_weapon_theory"}
+                  ]
+                },
+                "applied": {"POST /TrainingService/AddTraining": 1},
+                "other_mutations": 0
+              },
+              "exec2": {
+                "mutations": {
+                  "POST /TrainingService/AddTraining": [
+                    {"alias": "alpha", "crew": "maiden", "course": "v1_weapon_theory"}
+                  ]
+                },
+                "applied": {"POST /TrainingService/AddTraining": 1},
+                "other_mutations": 0,
+                "resource_delta": {"alpha": {"mineral": 0, "gas": 0, "starbux": 0}},
+                "timer": {"maiden": {"course": "v1_weapon_theory", "duration_s": 3600}},
+                "journal": [
+                  {"alias": "alpha", "action": "add_training", "outcome": "verified", "attempted": true, "crew": "maiden", "course": "v1_weapon_theory", "cost": {"minerals": 0, "gas": 0}}
+                ]
+              }
+            },
+            "witnesses": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "distinct-accounts",
+      "requirements": ["S14-R4", "S14-R6"],
+      "acceptance": ["S14-AC4", "S14-AC6"],
+      "summary": "One dispatch holds alpha's lock at its paid start while a second dispatch of the same two-account registry skips alpha as locked and still makes bravo's paid start in bravo's own world; every request and journal entry stays with its own account.",
+      "red": {"expected_cause": "registry refuses training-v2 before login (exit 2); --fleet-provision-training is not implemented (exit 2): no dispatch logs in, so the barrier and hold witnesses are missing"},
+      "scenarios": [
+        {
+          "id": "alpha-held",
+          "courses": ["eng_manual"],
+          "accounts": [
+            {
+              "alias": "alpha",
+              "user_id": "700100501",
+              "refresh_token": "RT-synthetic-wf-alpha-0001",
+              "secret": "TWB_ALPHA",
+              "registry": {"policy_id": "training-v2"},
+              "authorization": {"actions": ["add_training"], "caps": {"minerals": 1000, "gas": 1000}},
+              "world": {
+                "resources": {"mineral": 1000, "gas": 0},
+                "concurrent_sessions": true,
+                "typed_resource_items": true,
+                "strict_training_rules": true,
+                "rooms": [
+                  {"label": "bridge", "base_id": 11001, "design": "bridge"},
+                  {"label": "academy", "base_id": 11002, "design": "academy_l2"}
+                ],
+                "researches": [{"design": "fitness_101"}],
+                "crew": [
+                  {"label": "fixer", "base_id": 10001, "name": "Fixer Synthetic", "design": "cadet", "room": "academy", "stats": {"Repair": 30}}
+                ]
+              }
+            },
+            {
+              "alias": "bravo",
+              "user_id": "700200502",
+              "refresh_token": "RT-synthetic-wf-bravo-0002",
+              "secret": "TWB_BRAVO",
+              "registry": {"policy_id": "training-v2"},
+              "authorization": {"actions": ["add_training"], "caps": {"minerals": 1000, "gas": 1000}},
+              "world": {
+                "resources": {"mineral": 1000, "gas": 0},
+                "concurrent_sessions": true,
+                "typed_resource_items": true,
+                "strict_training_rules": true,
+                "rooms": [
+                  {"label": "bridge_b", "base_id": 21001, "design": "bridge"},
+                  {"label": "academy_b", "base_id": 21002, "design": "academy_l2"}
+                ],
+                "researches": [{"design": "fitness_101"}],
+                "crew": [
+                  {"label": "fixer_b", "base_id": 20001, "name": "Fixer B Synthetic", "design": "cadet", "room": "academy_b", "stats": {"Repair": 30}}
+                ]
+              }
+            }
+          ],
+          "steps": [
+            {"id": "provision", "kind": "provision"},
+            {"id": "dry", "kind": "dry-run"},
+            {
+              "id": "overlap",
+              "kind": "overlap",
+              "mode": "threads",
+              "dispatches": 2,
+              "barrier": {"route": "POST /UserService/DeviceLogin17", "alias": "alpha", "parties": 2, "timeout_s": 30},
+              "hold": {"route": "POST /TrainingService/AddTraining", "alias": "alpha", "timeout_s": 30}
+            }
+          ],
+          "expected": {
+            "provision": {"exit": 0, "mutations": {}, "other_mutations": 0, "store": {"alpha": "present", "bravo": "present"}},
+            "dry": {
+              "exit": 0,
+              "mutations": {},
+              "other_mutations": 0,
+              "journal_planned": [
+                {"alias": "alpha", "action": "add_training", "crew": "fixer", "course": "eng_manual"},
+                {"alias": "bravo", "action": "add_training", "crew": "fixer_b", "course": "eng_manual"}
+              ]
+            },
+            "overlap": {
+              "resource_delta": {"alpha": {"mineral": -500, "gas": 0, "starbux": 0}, "bravo": {"mineral": -500, "gas": 0, "starbux": 0}},
+              "dispatches": [
+                [
+                  {"alias": "alpha", "result": "started", "add_training": 1, "candidate_one_of": ["fixer"]},
+                  {"alias": "bravo", "result": "skipped", "add_training": 0, "code": "training_in_progress"}
+                ],
+                [
+                  {"alias": "alpha", "result": "skipped", "code": "locked", "mutations": 0},
+                  {"alias": "bravo", "result": "started", "add_training": 1, "candidate_one_of": ["fixer_b"]}
+                ]
+              ]
+            }
+          },
+          "witnesses": ["overlap:barrier", "overlap:hold_overlap"]
+        }
+      ],
+      "control": {
+        "policy_id": "training-v1",
+        "scenarios": [
+          {
+            "id": "v1-two-accounts",
+            "courses": ["v1_weapon_theory"],
+            "accounts": [
+              {
+                "alias": "alpha",
+                "user_id": "700100501",
+                "refresh_token": "RT-synthetic-wf-alpha-0001",
+                "secret": "TWB_ALPHA",
+                "registry": {"policy_id": "training-v1"},
+                "authorization": {"actions": ["add_training"], "caps": {"minerals": 1000, "gas": 1000}},
+                "world": {
+                  "resources": {"mineral": 1000, "gas": 0},
+                  "typed_resource_items": true,
+                  "strict_training_rules": true,
+                  "rooms": [
+                    {"label": "bridge", "base_id": 11001, "design": "bridge"},
+                    {"label": "academy", "base_id": 11002, "design": "academy_l1"}
+                  ],
+                  "researches": [{"design": "fitness_101"}],
+                  "crew": [
+                    {"label": "delish", "base_id": 10101, "name": "Delish", "design": "veteran", "room": "academy", "stats": {"Weapon": 40}}
+                  ]
+                }
+              },
+              {
+                "alias": "bravo",
+                "user_id": "700200502",
+                "refresh_token": "RT-synthetic-wf-bravo-0002",
+                "secret": "TWB_BRAVO",
+                "registry": {"policy_id": "training-v1"},
+                "authorization": {"actions": ["add_training"], "caps": {"minerals": 1000, "gas": 1000}},
+                "world": {
+                  "resources": {"mineral": 1000, "gas": 0},
+                  "typed_resource_items": true,
+                  "strict_training_rules": true,
+                  "rooms": [
+                    {"label": "bridge_b", "base_id": 21001, "design": "bridge"},
+                    {"label": "academy_b", "base_id": 21002, "design": "academy_l1"}
+                  ],
+                  "researches": [{"design": "fitness_101"}],
+                  "crew": [
+                    {"label": "delish_b", "base_id": 20101, "name": "Delish", "design": "veteran", "room": "academy_b", "stats": {"Weapon": 40}}
+                  ]
+                }
+              }
+            ],
+            "steps": [{"id": "dry", "kind": "dry-run"}, {"id": "exec", "kind": "execute"}],
+            "expected": {
+              "dry": {
+                "exit": 0,
+                "mutations": {},
+                "other_mutations": 0,
+                "journal_planned": [
+                  {"alias": "alpha", "action": "add_training", "crew": "delish", "course": "v1_weapon_theory"},
+                  {"alias": "bravo", "action": "add_training", "crew": "delish_b", "course": "v1_weapon_theory"}
+                ]
+              },
+              "exec": {
+                "exit": 0,
+                "mutations": {
+                  "POST /TrainingService/AddTraining": [
+                    {"alias": "alpha", "crew": "delish", "course": "v1_weapon_theory"},
+                    {"alias": "bravo", "crew": "delish_b", "course": "v1_weapon_theory"}
+                  ]
+                },
+                "applied": {"POST /TrainingService/AddTraining": 2},
+                "other_mutations": 0,
+                "resource_delta": {"alpha": {"mineral": 0, "gas": 0, "starbux": 0}, "bravo": {"mineral": 0, "gas": 0, "starbux": 0}},
+                "timer": {"delish": {"course": "v1_weapon_theory", "duration_s": 3600}, "delish_b": {"course": "v1_weapon_theory", "duration_s": 3600}},
+                "journal": [
+                  {"alias": "alpha", "action": "add_training", "outcome": "verified", "attempted": true, "crew": "delish", "course": "v1_weapon_theory"},
+                  {"alias": "bravo", "action": "add_training", "outcome": "verified", "attempted": true, "crew": "delish_b", "course": "v1_weapon_theory"}
+                ]
+              }
+            },
+            "witnesses": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "store-stop-controls",
+      "requirements": ["S14-R5", "S14-R6"],
+      "acceptance": ["S14-AC4", "S14-AC6"],
+      "summary": "The fleet stop file refuses before login. A removed or unreadable established attempt store stops execution instead of being recreated as a fresh account. A legacy-run account that is only serialized, not skipped, is refused. The stop scenarios first show training-v2 accepted; a stop file created during the run stops the account; an execute before explicit provisioning refuses (state_missing) and creates no store.",
+      "red": {
+        "expected_cause": "registry refuses training-v2 before login (exit 2); --fleet-provision-training is not implemented (exit 2); no scenario passes: each stop scenario first needs an accepted training-v2 dry run"
+      },
+      "scenarios": [
+        {
+          "id": "stop",
+          "courses": ["eng_manual"],
+          "accounts": [
+            {
+              "alias": "alpha",
+              "user_id": "700100501",
+              "refresh_token": "RT-synthetic-wf-alpha-0001",
+              "secret": "TWB_ALPHA",
+              "registry": {"policy_id": "training-v2"},
+              "authorization": {"actions": ["add_training"], "caps": {"minerals": 1000, "gas": 1000}},
+              "world": {
+                "resources": {"mineral": 1000, "gas": 0},
+                "typed_resource_items": true,
+                "strict_training_rules": true,
+                "rooms": [
+                  {"label": "bridge", "base_id": 11001, "design": "bridge"},
+                  {"label": "academy", "base_id": 11002, "design": "academy_l2"}
+                ],
+                "researches": [{"design": "fitness_101"}],
+                "crew": [
+                  {"label": "fixer", "base_id": 10001, "name": "Fixer Synthetic", "design": "cadet", "room": "academy", "stats": {"Repair": 30}}
+                ]
+              }
+            }
+          ],
+          "steps": [
+            {"id": "provision", "kind": "provision"},
+            {"id": "dry", "kind": "dry-run"},
+            {"id": "exec", "kind": "execute", "pre": {"stop_file": true}}
+          ],
+          "expected": {
+            "provision": {"exit": 0, "mutations": {}, "other_mutations": 0, "store": {"alpha": "present"}},
+            "dry": {
+              "exit": 0,
+              "mutations": {},
+              "other_mutations": 0,
+              "journal_planned": [{"alias": "alpha", "action": "add_training", "crew": "fixer", "course": "eng_manual"}]
+            },
+            "exec": {
+              "exit": 2,
+              "requests": {"alpha": 0},
+              "mutations": {"POST /TrainingService/AddTraining": []},
+              "other_mutations": 0
+            }
+          },
+          "witnesses": ["exec:stop_file"]
+        },
+        {
+          "id": "missing-state",
+          "courses": ["eng_manual", "weapon_drill"],
+          "accounts": [
+            {
+              "alias": "alpha",
+              "user_id": "700100501",
+              "refresh_token": "RT-synthetic-wf-alpha-0001",
+              "secret": "TWB_ALPHA",
+              "registry": {"policy_id": "training-v2"},
+              "authorization": {"actions": ["add_training"], "caps": {"minerals": 1000, "gas": 1000}},
+              "world": {
+                "resources": {"mineral": 2000, "gas": 0},
+                "typed_resource_items": true,
+                "strict_training_rules": true,
+                "rooms": [
+                  {"label": "bridge", "base_id": 11001, "design": "bridge"},
+                  {"label": "academy", "base_id": 11002, "design": "academy_l2"}
+                ],
+                "researches": [{"design": "fitness_101"}],
+                "crew": [
+                  {"label": "fixer", "base_id": 10001, "name": "Fixer Synthetic", "design": "cadet", "room": "academy", "stats": {"Repair": 30}},
+                  {"label": "gunner", "base_id": 10002, "name": "Gunner Synthetic", "design": "cadet", "room": "bridge", "stats": {"Weapon": 30}}
+                ]
+              }
+            }
+          ],
+          "steps": [
+            {"id": "provision", "kind": "provision"},
+            {"id": "dry", "kind": "dry-run"},
+            {"id": "exec1", "kind": "execute"},
+            {"id": "move", "kind": "mutate", "set": [{"crew": "gunner", "to_room": "academy"}]},
+            {"id": "dry2", "kind": "dry-run"},
+            {"id": "exec2", "kind": "execute", "pre": {"remove_state": true}}
+          ],
+          "expected": {
+            "provision": {"exit": 0, "mutations": {}, "other_mutations": 0, "store": {"alpha": "present"}},
+            "dry": {
+              "exit": 0,
+              "mutations": {},
+              "other_mutations": 0,
+              "journal_planned": [{"alias": "alpha", "action": "add_training", "crew": "fixer", "course": "eng_manual"}]
+            },
+            "exec1": {
+              "exit": 0,
+              "mutations": {
+                "POST /TrainingService/AddTraining": [{"alias": "alpha", "crew": "fixer", "course": "eng_manual"}]
+              },
+              "applied": {"POST /TrainingService/AddTraining": 1},
+              "other_mutations": 0,
+              "resource_delta": {"alpha": {"mineral": -500, "gas": 0, "starbux": 0}},
+              "timer": {"fixer": {"course": "eng_manual", "duration_s": 3600}},
+              "journal": [
+                {"alias": "alpha", "action": "add_training", "outcome": "verified", "attempted": true, "crew": "fixer", "course": "eng_manual", "cost": {"minerals": 500, "gas": 0}}
+              ]
+            },
+            "dry2": {"exit": 0, "mutations": {}, "other_mutations": 0},
+            "exec2": {
+              "exit": "nonzero",
+              "mutations": {"POST /TrainingService/AddTraining": []},
+              "other_mutations": 0,
+              "resource_delta": {"alpha": {"mineral": 0, "gas": 0, "starbux": 0}},
+              "timer": {},
+              "skips": [{"alias": "alpha", "code": "state_missing"}],
+              "store": {"alpha": "absent"}
+            }
+          },
+          "witnesses": ["exec2:store_artifacts"]
+        },
+        {
+          "id": "unreadable-state",
+          "courses": ["eng_manual", "weapon_drill"],
+          "accounts": [
+            {
+              "alias": "alpha",
+              "user_id": "700100501",
+              "refresh_token": "RT-synthetic-wf-alpha-0001",
+              "secret": "TWB_ALPHA",
+              "registry": {"policy_id": "training-v2"},
+              "authorization": {"actions": ["add_training"], "caps": {"minerals": 1000, "gas": 1000}},
+              "world": {
+                "resources": {"mineral": 2000, "gas": 0},
+                "typed_resource_items": true,
+                "strict_training_rules": true,
+                "rooms": [
+                  {"label": "bridge", "base_id": 11001, "design": "bridge"},
+                  {"label": "academy", "base_id": 11002, "design": "academy_l2"}
+                ],
+                "researches": [{"design": "fitness_101"}],
+                "crew": [
+                  {"label": "fixer", "base_id": 10001, "name": "Fixer Synthetic", "design": "cadet", "room": "academy", "stats": {"Repair": 30}},
+                  {"label": "gunner", "base_id": 10002, "name": "Gunner Synthetic", "design": "cadet", "room": "bridge", "stats": {"Weapon": 30}}
+                ]
+              }
+            }
+          ],
+          "steps": [
+            {"id": "provision", "kind": "provision"},
+            {"id": "dry", "kind": "dry-run"},
+            {"id": "exec1", "kind": "execute"},
+            {"id": "move", "kind": "mutate", "set": [{"crew": "gunner", "to_room": "academy"}]},
+            {"id": "dry2", "kind": "dry-run"},
+            {"id": "exec2", "kind": "execute", "pre": {"corrupt_state": true}}
+          ],
+          "expected": {
+            "provision": {"exit": 0, "mutations": {}, "other_mutations": 0, "store": {"alpha": "present"}},
+            "dry": {
+              "exit": 0,
+              "mutations": {},
+              "other_mutations": 0,
+              "journal_planned": [{"alias": "alpha", "action": "add_training", "crew": "fixer", "course": "eng_manual"}]
+            },
+            "exec1": {
+              "exit": 0,
+              "mutations": {
+                "POST /TrainingService/AddTraining": [{"alias": "alpha", "crew": "fixer", "course": "eng_manual"}]
+              },
+              "applied": {"POST /TrainingService/AddTraining": 1},
+              "other_mutations": 0,
+              "resource_delta": {"alpha": {"mineral": -500, "gas": 0, "starbux": 0}},
+              "timer": {"fixer": {"course": "eng_manual", "duration_s": 3600}},
+              "journal": [
+                {"alias": "alpha", "action": "add_training", "outcome": "verified", "attempted": true, "crew": "fixer", "course": "eng_manual", "cost": {"minerals": 500, "gas": 0}}
+              ]
+            },
+            "dry2": {"exit": 0, "mutations": {}, "other_mutations": 0},
+            "exec2": {
+              "exit": "nonzero",
+              "mutations": {"POST /TrainingService/AddTraining": []},
+              "other_mutations": 0,
+              "resource_delta": {"alpha": {"mineral": 0, "gas": 0, "starbux": 0}},
+              "timer": {},
+              "skips": [{"alias": "alpha", "code": "state_unreadable"}]
+            }
+          },
+          "witnesses": ["exec2:store_artifacts"]
+        },
+        {
+          "id": "legacy-serialized",
+          "courses": ["eng_manual"],
+          "accounts": [
+            {
+              "alias": "alpha",
+              "user_id": "700100501",
+              "refresh_token": "RT-synthetic-wf-alpha-0001",
+              "secret": "TWB_ALPHA",
+              "registry": {"policy_id": "training-v2", "legacy_run_account": 3},
+              "authorization": {"actions": ["add_training"], "caps": {"minerals": 1000, "gas": 1000}, "legacy_run_serialized": [3]},
+              "world": {
+                "resources": {"mineral": 1000, "gas": 0},
+                "typed_resource_items": true,
+                "strict_training_rules": true,
+                "rooms": [
+                  {"label": "bridge", "base_id": 11001, "design": "bridge"},
+                  {"label": "academy", "base_id": 11002, "design": "academy_l2"}
+                ],
+                "researches": [{"design": "fitness_101"}],
+                "crew": [
+                  {"label": "fixer", "base_id": 10001, "name": "Fixer Synthetic", "design": "cadet", "room": "academy", "stats": {"Repair": 30}}
+                ]
+              }
+            }
+          ],
+          "steps": [
+            {"id": "provision", "kind": "provision"},
+            {"id": "dry", "kind": "dry-run"},
+            {"id": "exec", "kind": "execute"}
+          ],
+          "expected": {
+            "provision": {"exit": 0, "mutations": {}, "other_mutations": 0, "store": {"alpha": "present"}},
+            "dry": {"exit": 0, "mutations": {}, "other_mutations": 0},
+            "exec": {
+              "exit": "nonzero",
+              "mutations": {"POST /TrainingService/AddTraining": []},
+              "other_mutations": 0,
+              "resource_delta": {"alpha": {"mineral": 0, "gas": 0, "starbux": 0}},
+              "skips": [{"alias": "alpha", "code": "legacy_run_not_skipped"}]
+            }
+          },
+          "witnesses": []
+        },
+        {
+          "id": "stop-mid-run",
+          "courses": ["eng_manual"],
+          "accounts": [
+            {
+              "alias": "alpha",
+              "user_id": "700100501",
+              "refresh_token": "RT-synthetic-wf-alpha-0001",
+              "secret": "TWB_ALPHA",
+              "registry": {"policy_id": "training-v2"},
+              "authorization": {"actions": ["add_training"], "caps": {"minerals": 1000, "gas": 1000}},
+              "world": {
+                "resources": {"mineral": 1000, "gas": 0},
+                "typed_resource_items": true,
+                "strict_training_rules": true,
+                "rooms": [
+                  {"label": "bridge", "base_id": 11001, "design": "bridge"},
+                  {"label": "academy", "base_id": 11002, "design": "academy_l2"}
+                ],
+                "researches": [{"design": "fitness_101"}],
+                "crew": [
+                  {"label": "fixer", "base_id": 10001, "name": "Fixer Synthetic", "design": "cadet", "room": "academy", "stats": {"Repair": 30}}
+                ]
+              }
+            }
+          ],
+          "steps": [
+            {"id": "provision", "kind": "provision"},
+            {"id": "dry", "kind": "dry-run"},
+            {
+              "id": "exec",
+              "kind": "execute",
+              "triggers": [
+                {
+                  "route": "GET /CharacterService/ListAllCharactersOfUser",
+                  "after_nth": 1,
+                  "apply": [{"stop_file": true}]
+                }
+              ]
+            }
+          ],
+          "expected": {
+            "provision": {"exit": 0, "mutations": {}, "other_mutations": 0, "store": {"alpha": "present"}},
+            "dry": {
+              "exit": 0,
+              "mutations": {},
+              "other_mutations": 0,
+              "journal_planned": [{"alias": "alpha", "action": "add_training", "crew": "fixer", "course": "eng_manual"}]
+            },
+            "exec": {
+              "mutations": {"POST /TrainingService/AddTraining": []},
+              "other_mutations": 0,
+              "resource_delta": {"alpha": {"mineral": 0, "gas": 0, "starbux": 0}},
+              "timer": {},
+              "journal": [],
+              "skips": [{"alias": "alpha", "code": "stopped"}]
+            }
+          },
+          "witnesses": ["exec:trigger:0"]
+        },
+        {
+          "id": "unprovisioned",
+          "courses": ["eng_manual"],
+          "accounts": [
+            {
+              "alias": "alpha",
+              "user_id": "700100501",
+              "refresh_token": "RT-synthetic-wf-alpha-0001",
+              "secret": "TWB_ALPHA",
+              "registry": {"policy_id": "training-v2"},
+              "authorization": {"actions": ["add_training"], "caps": {"minerals": 1000, "gas": 1000}},
+              "world": {
+                "resources": {"mineral": 1000, "gas": 0},
+                "typed_resource_items": true,
+                "strict_training_rules": true,
+                "rooms": [
+                  {"label": "bridge", "base_id": 11001, "design": "bridge"},
+                  {"label": "academy", "base_id": 11002, "design": "academy_l2"}
+                ],
+                "researches": [{"design": "fitness_101"}],
+                "crew": [
+                  {"label": "fixer", "base_id": 10001, "name": "Fixer Synthetic", "design": "cadet", "room": "academy", "stats": {"Repair": 30}}
+                ]
+              }
+            }
+          ],
+          "steps": [{"id": "dry", "kind": "dry-run"}, {"id": "exec", "kind": "execute"}],
+          "expected": {
+            "dry": {
+              "exit": 0,
+              "mutations": {},
+              "other_mutations": 0,
+              "journal_planned": [{"alias": "alpha", "action": "add_training", "crew": "fixer", "course": "eng_manual"}]
+            },
+            "exec": {
+              "mutations": {"POST /TrainingService/AddTraining": []},
+              "other_mutations": 0,
+              "resource_delta": {"alpha": {"mineral": 0, "gas": 0, "starbux": 0}},
+              "timer": {},
+              "journal": [],
+              "skips": [{"alias": "alpha", "code": "state_missing"}],
+              "store": {"alpha": "absent"}
+            }
+          },
+          "witnesses": []
+        }
+      ],
+      "control": {
+        "policy_id": "training-v1",
+        "scenarios": [
+          {
+            "id": "v1-stop",
+            "courses": ["v1_weapon_theory"],
+            "accounts": [
+              {
+                "alias": "alpha",
+                "user_id": "700100501",
+                "refresh_token": "RT-synthetic-wf-alpha-0001",
+                "secret": "TWB_ALPHA",
+                "registry": {"policy_id": "training-v1"},
+                "authorization": {"actions": ["add_training"], "caps": {"minerals": 1000, "gas": 1000}},
+                "world": {
+                  "resources": {"mineral": 1000, "gas": 0},
+                  "typed_resource_items": true,
+                  "strict_training_rules": true,
+                  "rooms": [
+                    {"label": "bridge", "base_id": 11001, "design": "bridge"},
+                    {"label": "academy", "base_id": 11002, "design": "academy_l1"}
+                  ],
+                  "researches": [{"design": "fitness_101"}],
+                  "crew": [
+                    {"label": "delish", "base_id": 10101, "name": "Delish", "design": "veteran", "room": "academy", "stats": {"Weapon": 40}}
+                  ]
+                }
+              }
+            ],
+            "steps": [{"id": "dry", "kind": "dry-run"}, {"id": "exec", "kind": "execute", "pre": {"stop_file": true}}],
+            "expected": {
+              "dry": {"exit": 0, "mutations": {}, "other_mutations": 0},
+              "exec": {
+                "exit": 2,
+                "requests": {"alpha": 0},
+                "mutations": {"POST /TrainingService/AddTraining": []},
+                "other_mutations": 0
+              }
+            },
+            "witnesses": ["exec:stop_file"]
+          },
+          {
+            "id": "v1-legacy-serialized",
+            "courses": ["v1_weapon_theory"],
+            "accounts": [
+              {
+                "alias": "alpha",
+                "user_id": "700100501",
+                "refresh_token": "RT-synthetic-wf-alpha-0001",
+                "secret": "TWB_ALPHA",
+                "registry": {"policy_id": "training-v1", "legacy_run_account": 3},
+                "authorization": {"actions": ["add_training"], "caps": {"minerals": 1000, "gas": 1000}, "legacy_run_serialized": [3]},
+                "world": {
+                  "resources": {"mineral": 1000, "gas": 0},
+                  "typed_resource_items": true,
+                  "strict_training_rules": true,
+                  "rooms": [
+                    {"label": "bridge", "base_id": 11001, "design": "bridge"},
+                    {"label": "academy", "base_id": 11002, "design": "academy_l1"}
+                  ],
+                  "researches": [{"design": "fitness_101"}],
+                  "crew": [
+                    {"label": "delish", "base_id": 10101, "name": "Delish", "design": "veteran", "room": "academy", "stats": {"Weapon": 40}}
+                  ]
+                }
+              }
+            ],
+            "steps": [{"id": "dry", "kind": "dry-run"}, {"id": "exec", "kind": "execute"}],
+            "expected": {
+              "dry": {"exit": 0, "mutations": {}, "other_mutations": 0},
+              "exec": {
+                "exit": 0,
+                "mutations": {
+                  "POST /TrainingService/AddTraining": [
+                    {"alias": "alpha", "crew": "delish", "course": "v1_weapon_theory"}
+                  ]
+                },
+                "applied": {"POST /TrainingService/AddTraining": 1},
+                "other_mutations": 0,
+                "journal": [
+                  {"alias": "alpha", "action": "add_training", "outcome": "verified", "attempted": true, "crew": "delish", "course": "v1_weapon_theory"}
+                ]
+              }
+            },
+            "witnesses": []
+          }
+        ]
+      }
+    }
+  ]
+}
