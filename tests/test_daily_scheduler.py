@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from sdk.execution import ActionRunner
+from sdk.execution.runner import AttemptSettlementError
 from sdk.journal import GameplayEvent, GameplayJournal
 from sdk.policy import ActionRequest, DesignData, Plan, PolicyConfig, get_policy
 from sdk.scheduler import DailyScheduler, SchedulerConfig
@@ -189,6 +190,36 @@ class SchedulerTests(unittest.TestCase):
         report = self.scheduler().run(execute=True)
         self.assertIn("runner refused add_research", report.stop_reason)
         self.assertEqual(self.game.calls, [])
+        self.assertEqual(report.results, ())  # nothing was sent, so there is no result to keep
+
+    # Verifies: S14-R5
+    def test_a_settlement_failure_stops_the_run_and_keeps_its_result(self):
+        class SettlementFailingRunner(ActionRunner):
+            def run(self, action_id, params=None, **options):
+                result = super().run(action_id, params, **options)
+                raise AttemptSettlementError("unresolved_attempt: the outcome could not be recorded", result)
+
+        self.runner = SettlementFailingRunner("alpha", self.game, self.game.snapshot, self.journal, clock=self.clock)
+        report = self.scheduler().run(execute=True)
+        self.assertEqual([result.action_id for result in report.results], ["add_research"])
+        self.assertEqual(report.results[0].outcome, "verified")
+        self.assertTrue(report.stop_reason.startswith("runner refused add_research: unresolved_attempt: "),
+                        report.stop_reason)
+        self.assertEqual(self.game.calls, ["addResearch"])
+
+    def test_a_stop_file_created_while_planning_stops_before_any_request(self):
+        stop = Path(self.tmp.name) / "STOP"
+        snapshot = self.game.snapshot
+
+        def planning_snapshot():
+            stop.touch()  # the operator stops the run after the account was read
+            return snapshot()
+
+        self.runner.snapshot_provider = planning_snapshot
+        report = self.scheduler(stop_file=stop).run(execute=True)
+        self.assertEqual(self.game.calls, [])
+        self.assertEqual(report.results, ())
+        self.assertEqual(report.stop_reason, f"operator stop file present: {stop}")
 
     def test_snapshot_for_another_account_is_refused(self):
         self.game.alias = "bravo"
