@@ -2382,12 +2382,30 @@ class TrainingStartTests(TrainingStartCase):
         self.assertEqual(seen, [None, None])  # held during the earlier action and during the start
         self.assert_lock_released()
 
+    # Verifies: S14-R5
+    def test_skipped_starts_are_printed_one_code_per_line(self):
+        self.ready()
+        self.assertEqual(self.execute()[0], 0)  # Cora starts her course
+        self.assertEqual(self.dry_run()[0], 0)
+        mark = self.mark()
+        code, out, err = self.execute()
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.starts_since(mark), [])  # an active course cannot trigger a new start
+        self.assertIn("## Training starts", out)
+        self.assertIn("| alpha | training 1001 | training_in_progress |", out.splitlines())
+        section = out.split("## Training starts", 1)[1].split("\n## ", 1)[0]
+        rows = [line for line in section.splitlines() if line.startswith("| alpha |")]
+        self.assertTrue(rows)
+        for row in rows:
+            self.assertEqual(len(codes_in(row)), 1, row)
+
     def test_training_v1_execute_needs_no_store_and_creates_none(self):
         self.policy_id = "training-v1"
         self.write_registry()
         self.assertEqual(self.dry_run()[0], 0)
         code, out, err = self.execute()
         self.assertNotIn("training attempt", out + err)
+        self.assertNotIn("## Training starts", out)
         self.assertFalse(self.store_root.exists())
 
 

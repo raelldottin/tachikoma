@@ -1155,7 +1155,8 @@ def run_fleet_execute(registry_path, authorization_path, mode=None, journal_dir=
         placement_refusal_reason,
         training_authorization_refusals,
     )
-    from sdk.fleet.attempts import DRY_RUN_STALE, TrainingAttempts, guarded_training
+    from sdk.fleet.attempts import DRY_RUN_STALE, EXECUTION_SKIP_CODES, TrainingAttempts, guarded_training
+    from sdk.training.strategy import CREW_SKIP_CODES
     from sdk.fleet.factory import (
         DEFAULT_HALT_SHARE,
         EXECUTE_SOURCE,
@@ -1257,6 +1258,7 @@ def run_fleet_execute(registry_path, authorization_path, mode=None, journal_dir=
     guarded = {profile.alias for profile in enabled
                if mode == "full" and guarded_training(get_policy(profile.policy_id))}
     reasons += training_authorization_refusals(authorization, registry, sorted(guarded), mode)
+    skip_codes = CREW_SKIP_CODES | EXECUTION_SKIP_CODES
     for profile in enabled:
         if profile.alias in guarded:
             why = attempts.preflight(profile.alias, profile.expected_game_identity)
@@ -1481,6 +1483,19 @@ def run_fleet_execute(registry_path, authorization_path, mode=None, journal_dir=
         for result in entry["results"]:
             lines.append(f"| {entry['alias']} | {result['action_id']} | {'yes' if result['attempted'] else 'no'} | "
                          f"{result['outcome']} | {_md_cell(result['reason'])} |")
+    # training-v2 (SPEC-14): why each crew member or role started no course, one skip code per line (no free text).
+    training_rows = []
+    for entry in record_accounts:
+        if entry["alias"] not in guarded:
+            continue
+        for item in entry["rejected"]:
+            candidate, reason = item["candidate"], item["reason"] or ""
+            code = reason.split(":", 1)[0].strip()
+            if (candidate == "training" or candidate.startswith(("training ", "add_training "))) and code in skip_codes:
+                training_rows.append(f"| {entry['alias']} | {_md_cell(candidate)} | {code} |")
+    if training_rows:
+        lines += ["", "## Training starts", "", "| Account | Candidate | Skip |", "| --- | --- | --- |",
+                  *training_rows]
     if evaluated:  # alert text is scrubbed like the record and the e-mail (S11-R4)
         lines += [scrub_text(line) for line in _fleet_report_sections(registry, journals, fleet_run, None, evaluated)]
     lines += ["", "## After the run", "",
