@@ -681,8 +681,9 @@ class TestResearchLevel(EndpointCase):
         self.assertEqual(self.client.getResearchLevel("Fitness"), 0)
         self.assertFalse(hasattr(self.client, "allResearches"))
         self.assertFalse(hasattr(self.client, "allResearchDesigns"))
+        self.client.request = MagicMock(return_value=None)
         self.assertIs(self.client.speedUpResearchUsingBoostGauge("1", "900"), False)
-        self.assertEqual(self.client.listAllResearchDesigns2.call_count, 2)
+        self.assertEqual(self.client.listAllResearchDesigns2.call_count, 1)
 
     def test_lists_already_loaded_are_used_without_fetching(self):
         self.client.allResearches = researches(("1", "900", "Completed"))

@@ -183,6 +183,15 @@ ROUTES = {
                                                      optional="clientDateTime"),
     ("GET", "/ShipService/GetShipByUserId"): _route("ship", "ShipService", "GetShipByUserId", "account", "userId",
                                                     "clientDateTime"),
+    ("POST", "/ShipService/SpeedUpShipConstructionUsingBoostGauge"): _route(
+        "speed_up_ship_construction", "ShipService", "SpeedUpShipConstructionUsingBoostGauge", "account", "shipId",
+        "clientDateTime", mutating=True),
+    ("POST", "/ResearchService/SpeedUpResearchUsingBoostGauge"): _route(
+        "speed_up_research", "ResearchService", "SpeedUpResearchUsingBoostGauge", "account", "researchId",
+        "clientDateTime", mutating=True),
+    ("POST", "/RoomService/SpeedUpRoomConstructionUsingBoostGauge"): _route(
+        "speed_up_room_construction", "RoomService", "SpeedUpRoomConstructionUsingBoostGauge", "account", "roomId",
+        "clientDateTime", mutating=True),
     ("GET", "/GalaxyService/ListStarSystemMarkersAndUserMarkers"): _route(
         "markers", "GalaxyService", "ListStarSystemMarkersAndUserMarkers", "account"),
     ("GET", "/MessageService/ListActiveMarketplaceMessages5"): _route(
@@ -1164,6 +1173,18 @@ class FakePss:
         if state.ship_omits_researches:  # opt-in: research unobserved
             return envelope("ShipService", "GetShipByUserId", el("Ship", attrs, rooms))
         return envelope("ShipService", "GetShipByUserId", el("Ship", attrs, rooms, researches))
+
+    def _h_speed_up_ship_construction(self, p: dict) -> str:
+        self._check_user(p)
+        return envelope("ShipService", "SpeedUpShipConstructionUsingBoostGauge", result="Success")
+
+    def _h_speed_up_research(self, p: dict) -> str:
+        self._check_user(p)
+        return envelope("ResearchService", "SpeedUpResearchUsingBoostGauge", result="Success")
+
+    def _h_speed_up_room_construction(self, p: dict) -> str:
+        self._check_user(p)
+        return envelope("RoomService", "SpeedUpRoomConstructionUsingBoostGauge", result="Success")
 
     def _h_rooms(self, p: dict) -> str:
         rows = [el("Room", self._room_attrs(r)) for r in self._order(self.state.rooms)]

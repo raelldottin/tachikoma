@@ -575,6 +575,13 @@
       "tests": []
     },
     {
+      "name": "speedUpShipConstructionUsingBoostGauge",
+      "pillar": "B",
+      "kind": "mutating",
+      "evidence": "untested",
+      "tests": []
+    },
+    {
       "name": "rushResearchOrConstruction",
       "pillar": "B",
       "kind": "mutating",
