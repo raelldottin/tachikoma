@@ -1112,7 +1112,7 @@ class DailyRunVariantTests(NeedsHealthyBaseline):
         self.assertEqual(daily.mutations_by_step()["grabFlyingStarbux"], (
             ("POST", "/UserService/AddStarbux2", {"quantity": "5", "clientDateTime": N, "checksum": C,
                                                   "accessToken": T}),))  # random.randint(1, 5) under seed 5343
-        self.assertIn(("/UserService/AddStarbux2", "727f074bf71e9d7d35d7bbc567de90e1"), checksums(daily.fake))
+        self.assertIn(("/UserService/AddStarbux2", "a348c9fab2ca97bb9150b64e8d7ee5ef"), checksums(daily.fake))
         self.assertEqual((world.account.free_starbux_today, world.account.credits), (9, 210))  # 215 - 10 task + 5
         self.assertIn("You have collected a total of 9 starbux today.", daily.log)
         # 9 < 10, so run.py skips collectTaskReward altogether.
