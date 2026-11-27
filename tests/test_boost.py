@@ -286,6 +286,22 @@ class SpeedUpBoostGaugeTests(ClientCase):
                                               (ROOM_URL.format("106"), "POST"), (SHIP_URL, "POST")])
         self.assertEqual(len(logs.records), 2)
 
+    def test_a_raising_call_logs_no_access_token(self):
+        self.use_ship(ALL_UNDER_WAY)
+        leak = RuntimeError(f"failed: {RESEARCH_URL}")
+        request = self.serve(leak, SUCCESS)
+        with self.assertLogs(level="WARNING") as logs:
+            self.assertIs(self.client.speedUpBoostGauge(), True)
+        self.assertEqual(self.sent(request), [(RESEARCH_URL, "POST"), (ROOM_URL.format("104"), "POST")])
+        self.assertNotIn(TOKEN, "\n".join(logs.output))
+
+    def test_a_raising_ship_read_logs_no_access_token(self):
+        request = self.serve(RuntimeError(f"failed: {SHIP_READ_URL}"))
+        with self.assertLogs(level="WARNING") as logs:
+            self.assertIsNone(self.client.speedUpBoostGauge())
+        self.assertEqual(self.sent(request), [(SHIP_READ_URL, "GET")])
+        self.assertNotIn(TOKEN, "\n".join(logs.output))
+
     def test_every_call_failing_tries_each_candidate_once_and_returns_none(self):
         self.use_ship(ALL_UNDER_WAY)
         request = self.serve(REFUSED, REFUSED, http_error(), RuntimeError("boom"))
