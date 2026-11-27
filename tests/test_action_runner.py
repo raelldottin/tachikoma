@@ -724,7 +724,8 @@ class TrainingStartGuardTests(unittest.TestCase):
         fresh = TrainingGuard(self.store, "alpha", IDENTITY, None, self.clock)
         self.assertEqual(self.runner(guard=fresh).run("add_training", START, expected_cost=COST).outcome, "verified")
 
-    # Verifies: S14-R5 (regression C1/D2)
+    # Regression C1/D2
+    # Verifies: S14-R5
     def test_a_dry_run_without_a_guard_uses_the_journal_reconciled_view(self):
         self.world.fail_after_snapshot = True
         first = self.runner().run("add_training", START, expected_cost=COST)

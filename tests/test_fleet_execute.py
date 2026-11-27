@@ -2110,7 +2110,8 @@ class TrainingProvisionTests(TrainingExecutionCase):
         self.assertFalse(self.store_path.exists())  # established state is never recreated
         self.assertEqual(self.requests_since(mark), [])
 
-    # Verifies: S14-R6 (regression C4/D3)
+    # Regression C4/D3
+    # Verifies: S14-R6
     def test_a_removed_store_directory_is_never_recreated(self):
         import shutil
 
@@ -2133,7 +2134,8 @@ class TrainingProvisionTests(TrainingExecutionCase):
         self.assertEqual(self.requests_since(mark), [])
         self.assertFalse(self.store_path.exists())
 
-    # Verifies: S14-R6 (regression C4: the account journal is a second witness)
+    # Regression C4: the account journal is a second witness
+    # Verifies: S14-R6
     def test_a_journal_that_records_a_training_v2_start_is_never_provisioned_fresh(self):
         import shutil
 
@@ -2162,7 +2164,8 @@ class TrainingProvisionTests(TrainingExecutionCase):
         self.assertEqual(code, 0, err)
         self.assertTrue(self.store_path.exists())
 
-    # Verifies: S14-R6 (regression C5)
+    # Regression C5
+    # Verifies: S14-R6
     def test_provision_rewrites_a_missing_marker_only_beside_a_readable_store(self):
         self.assertEqual(self.provision()[0], 0)
         self.marker_path.unlink()
@@ -2263,7 +2266,8 @@ class TrainingPreloginTests(TrainingExecutionCase):
         self.assertIn("never recreated", line)
         self.assertFalse(self.store_path.exists())
 
-    # Verifies: S14-R6 (C7: --plan-only makes the live run's pre-login store checks, read-only and without the lock)
+    # C7: --plan-only makes the live run's pre-login store checks, read-only and without the lock
+    # Verifies: S14-R6
     def test_plan_only_refuses_a_store_the_live_run_would_refuse(self):
         self.assertEqual(self.dry_run()[0], 0)
         mark = self.mark()
@@ -2435,7 +2439,8 @@ class TrainingStartTests(TrainingStartCase):
         self.assertIsNone(record["stop_reason"])
         self.assertEqual(self.store()["attempts"], [])
 
-    # Verifies: S14-R6 (regression C3: every execute mode of a training-v2 account takes the lock)
+    # Regression C3: every execute mode of a training-v2 account takes the lock
+    # Verifies: S14-R6
     def test_every_execute_mode_of_a_locked_training_v2_account_sends_no_writes(self):
         from sdk.fleet.attempts import FileAccountLock
 
@@ -2552,7 +2557,8 @@ class TrainingStartTests(TrainingStartCase):
         section = out.split("## Training starts", 1)[1].split("\n## ", 1)[0]
         return [line for line in section.splitlines() if line.startswith("| alpha |")]
 
-    # Verifies: S14-R4 (regression C8: run-time skips are printed under "Training starts" too)
+    # Regression C8: run-time skips are printed under "Training starts" too
+    # Verifies: S14-R4
     def test_run_time_skips_are_printed_under_training_starts(self):
         from sdk.fleet.attempts import FileAccountLock
 
@@ -2660,7 +2666,8 @@ class TrainingStartTests(TrainingStartCase):
     def attempted_events(self, since=0):
         return [event for event in self.executed_events(since) if event.attempted]
 
-    # Verifies: S14-R5 (regression C2/D1: a resolution links an attempt its settlement never linked)
+    # Regression C2/D1: a resolution links an attempt its settlement never linked
+    # Verifies: S14-R5
     def test_a_resolution_lifts_an_unsettled_unknown_start_of_the_same_course(self):
         for failure in (OSError("synthetic settle-write failure"), SimulatedCrash("crash after the journal write")):
             with self.subTest(failure=type(failure).__name__):
@@ -2693,7 +2700,8 @@ class TrainingStartTests(TrainingStartCase):
                 self.assertEqual([(entry.params["characterId"], entry.params["trainingDesignId"], entry.applied)
                                   for entry in self.starts_since(mark)], [("1001", "41", True)])
 
-    # Verifies: S14-R5 (regression C1/D2: the dry run honours an operator's resolution)
+    # Regression C1/D2: the dry run honours an operator's resolution
+    # Verifies: S14-R5
     def test_a_not_running_resolution_lets_the_dry_run_and_execute_start_the_same_course(self):
         self.ready()
         heal = self.lose_the_reply(apply=False)
@@ -2719,7 +2727,8 @@ class TrainingStartTests(TrainingStartCase):
         self.assertEqual([(item.params["character_id"], item.outcome) for item in self.attempted_events(since)],
                          [("1001", "verified")])
 
-    # Verifies: S14-R5 (regression C6/D6: the evidence is read under the lock)
+    # Regression C6/D6: the evidence is read under the lock
+    # Verifies: S14-R5
     def test_resolve_reads_the_roster_under_the_lock(self):
         from sdk.fleet.attempts import FileAccountLock
 

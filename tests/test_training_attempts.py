@@ -158,7 +158,8 @@ class PureCoreTests(unittest.TestCase):
         with self.assertRaises(ValueError):  # only a blocking attempt is resolved
             resolved(after, {"0" * 32: evidence}, T0)
 
-    # Verifies: S14-R5 (regression C2/D1)
+    # Regression C2/D1
+    # Verifies: S14-R5
     def test_a_resolution_links_an_unsettled_attempt_to_its_journal_event(self):
         from sdk.journal import GameplayEvent
 
@@ -202,7 +203,8 @@ class PureCoreTests(unittest.TestCase):
         training.store._data["alpha"] = dump_store(resolved(state, {"0" * 32: {"verdict": "not_running"}}, T0))
         self.assertEqual(training.reconciled("alpha"), frozenset({"j1"}))
 
-    # Verifies: S14-R5 (regression C6/D6: evidence must be newer than the attempt)
+    # Regression C6/D6: evidence must be newer than the attempt
+    # Verifies: S14-R5
     def test_classify_resolution_needs_a_read_newer_than_the_attempt(self):
         attempt = intent(cid="101", course="5010", now=T0)
         second = timedelta(seconds=1)
@@ -224,7 +226,8 @@ class PureCoreTests(unittest.TestCase):
                                                                   observed_at=T0 + 6 * second))
         self.assertEqual(evidence["verdict"], "not_running")
 
-    # Verifies: S14-R5 (regression C6: a running session without a course is no evidence)
+    # Regression C6: a running session without a course is no evidence
+    # Verifies: S14-R5
     def test_a_running_session_without_a_course_id_is_no_evidence(self):
         attempt = intent(cid="101", course="5010", now=T0 - timedelta(minutes=1))
         running = tf.crew("101", training="0", end=tf.server_time(T0 + timedelta(hours=1)))
@@ -369,7 +372,8 @@ class FileStoreTests(StoreContract, TempDirCase):
         self.assertEqual(stat.S_IMODE(os.stat(self.root / "alpha.json").st_mode), 0o600)
         self.assertEqual(store.location("alpha"), str(self.root / "alpha.json"))
 
-    # Verifies: S14-R6 (regression C4/D3: the marker lives outside the directory it protects)
+    # Regression C4/D3: the marker lives outside the directory it protects
+    # Verifies: S14-R6
     def test_the_establishment_marker_lives_beside_the_store_directory(self):
         store = self.make_store()
         store.provision("alpha", ID_A, T0)
@@ -641,7 +645,8 @@ class DispatchTests(TempDirCase):
             with service.dispatch("alpha", ID_A) as dispatch:
                 self.assertEqual(codes_in(dispatch.refusal), {"state_unreadable"})
 
-    # Verifies: S14-R6 (regression C3)
+    # Regression C3
+    # Verifies: S14-R6
     def test_hold_takes_only_the_lock(self):
         service = self.attempts_service()
         with patch.object(service.store, "load", side_effect=AssertionError("the store is not read")):
@@ -658,7 +663,8 @@ class DispatchTests(TempDirCase):
         with service.hold("alpha", None) as dispatch:
             self.assertEqual(codes_in(dispatch.refusal), {"state_unreadable"})
 
-    # Verifies: S14-R5 (regression C6/D6)
+    # Regression C6/D6
+    # Verifies: S14-R5
     def test_resolve_reads_its_evidence_under_the_lock(self):
         service = self.attempts_service()
         service.provision("alpha", ID_A, T0)
@@ -703,7 +709,8 @@ class DispatchTests(TempDirCase):
         self.assertEqual(codes_in(why), {"state_missing"})
         self.assertIn("never recreated", why)
 
-    # Verifies: S14-R6 (regression C4/D3)
+    # Regression C4/D3
+    # Verifies: S14-R6
     def test_a_removed_store_directory_is_established_state_missing(self):
         import shutil
 
@@ -721,7 +728,8 @@ class DispatchTests(TempDirCase):
         self.assertTrue(caught.exception.established)
         self.assertFalse((self.root / "alpha.json").exists())
 
-    # Verifies: S14-R6 (regression C4: the account journal is a second witness)
+    # Regression C4: the account journal is a second witness
+    # Verifies: S14-R6
     def test_a_journal_with_a_training_v2_start_is_never_provisioned_fresh(self):
         from sdk.fleet.factory import DRY_RUN_POLICY
         from sdk.journal import GameplayEvent

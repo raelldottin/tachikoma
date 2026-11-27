@@ -1361,7 +1361,8 @@ class TrainingV2ExecuteGateTests(unittest.TestCase):
         two = self.plan("training-v2", gate, snapshot=rich, data=data, max_requests=2)
         self.assertEqual([request.action_id for request in two.requests], ["upgrade_room", "add_training"])
 
-    # Verifies: S14-R4 (regression D5: the pre-send recheck counts the action slots this run already used)
+    # Regression D5: the pre-send recheck counts the action slots this run already used
+    # Verifies: S14-R4
     def test_the_pre_send_recheck_counts_the_slots_this_run_used(self):
         import tempfile
         from types import SimpleNamespace
