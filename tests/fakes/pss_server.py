@@ -1181,7 +1181,18 @@ class FakePss:
             raise _Reject(f"Ship {p.get('shipId')!r} not found", violation=True)
         if ship.upgrade_design_id in ("", "0"):
             raise _Reject("Ship is not under construction")
-        return envelope("ShipService", "SpeedUpShipConstructionUsingBoostGauge", result="Success")
+        # Live capture (PR #296) returns the full upgraded ship under
+        # ShipService/SpeedUpShipConstructionUsingBoostGauge/Ship, not a
+        # "Success" envelope, so mirror the ship read's shape.
+        ship, state = self.state.ship, self.state
+        rooms = el("Rooms", None, *(el("Room", self._room_attrs(r)) for r in self._order(state.rooms)))
+        researches = el("Researches", None, *(el("Research", self._research_attrs(r)) for r in state.researches))
+        attrs = {"ShipId": ship.ship_id, "UserId": state.account.user_id, "ShipName": ship.name,
+                 "ShipLevel": ship.level, "ShipDesignId": ship.design_id, "StarSystemId": ship.star_system_id,
+                 "UpgradeShipDesignId": ship.upgrade_design_id}
+        if state.ship_omits_researches:
+            return envelope("ShipService", "SpeedUpShipConstructionUsingBoostGauge", el("Ship", attrs, rooms))
+        return envelope("ShipService", "SpeedUpShipConstructionUsingBoostGauge", el("Ship", attrs, rooms, researches))
 
     def _h_speed_up_research(self, p: dict) -> str:
         research = next((r for r in self.state.researches if r.id is not None and r.id == p.get("researchId")), None)

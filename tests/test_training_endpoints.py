@@ -925,13 +925,13 @@ class CrewPlanWorkflowTests(unittest.TestCase):
         cls.suites = [wb.load_suite(wb.FIXTURES["required"]), wb.load_suite(wb.FIXTURES["holdout"])]
 
     def scenarios(self):
-        for suite in self.suites:
+        for suite in cls.suites:
             for item in suite["cases"]:
                 for entry in item["scenarios"]:
                     yield suite, item["id"], entry
 
     def run_one(self, suite, case_id, entry):
-        return self.wb.run_scenario(suite["suite"], case_id, entry, suite["catalog"], suite["seeds"][0],
+        return cls.wb.run_scenario(suite["suite"], case_id, entry, suite["catalog"], suite["seeds"][0],
                                     suite["vocabulary"]["skip_codes"])
 
     # Verifies: S14-R1, S14-R2, S14-R3
@@ -963,6 +963,23 @@ class CrewPlanWorkflowTests(unittest.TestCase):
                                   if any(text.startswith(step) for step in steps)], [])
                 ran += 1
         self.assertGreater(ran, 20)
+
+
+class TestShipBoost(EndpointCase):
+    def test_speedUpShipConstructionUsingBoostGauge_returns_true_on_success(self):
+        self.serve(reply("<ShipService><SpeedUpShipConstructionUsingBoostGauge><Ship ShipId='800000501'/></SpeedUpShipConstructionUsingBoostGauge></ShipService>"))
+        self.assertIs(self.client.speedUpShipConstructionUsingBoostGauge("800000501"), True)
+
+    def test_speedUpShipConstructionUsingBoostGauge_returns_false_on_error(self):
+        self.serve(reply("<ShipService><SpeedUpShipConstructionUsingBoostGauge errorMessage='boom'/></SpeedUpShipConstructionUsingBoostGauge></ShipService>"))
+        self.assertIs(self.client.speedUpShipConstructionUsingBoostGauge("800000501"), False)
+
+    def test_speedUpShipConstructionUsingBoostGauge_returns_false_on_no_response(self):
+        self.client.request = MagicMock(return_value=None)
+        patcher = patch.object(self.client, "request", self.client.request)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.assertIs(self.client.speedUpShipConstructionUsingBoostGauge("800000501"), False)
 
 
 if __name__ == "__main__":
