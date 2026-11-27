@@ -2772,7 +2772,7 @@
     {
       "slice_id": "spec14-workflow-red",
       "title": "Freeze crew training workflow fixtures and reproduce missing behavior",
-      "status": "queued",
+      "status": "done",
       "priority": 500,
       "domain": "crew-training",
       "allowed_paths": [
@@ -2791,6 +2791,36 @@
       "depends_on": [],
       "max_files_changed": 6,
       "notes": "Implements S14-R1, S14-R2, S14-R3, S14-R4, S14-R5, S14-R6, S14-R7 (SPEC-14). Read docs/specs/SPEC-14-automated-crew-training.md and docs/specs/README.md. Freeze fixture inputs, independent expected traces and the holdout before changing production. Exercise the real CLI with mocked game traffic and capture named behavioral failures on unchanged production paired with passing legacy controls. Keep default test discovery green and record the explicit red gate separately from passing validations. Do not change production, live workflows or game accounts."
+    },
+
+    {
+      "slice_id": "spec14-training-observations",
+      "title": "Observe course prices, room levels and training timers from fresh account reads",
+      "status": "queued",
+      "priority": 500,
+      "domain": "crew-training",
+      "allowed_paths": [
+        "sdk/state/snapshot.py",
+        "sdk/state/client_provider.py",
+        "sdk/state/baseline.py",
+        "sdk/training/model.py",
+        "sdk/training/parse.py",
+        "sdk/actions/catalog.py",
+        "tests/test_account_snapshot.py",
+        "tests/test_client_snapshot_provider.py",
+        "tests/test_training_parse.py",
+        "tests/test_training_actions.py"
+      ],
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ],
+      "depends_on": [
+        "spec14-workflow-red"
+      ],
+      "max_files_changed": 10,
+      "notes": "Implements S14-R2, S14-R5 (SPEC-14). Read docs/specs/SPEC-14-automated-crew-training.md and the wire-field assumptions in scripts/training_workflow_benchmark.py (item 5: CostString, RequiredRoomType, RequiredRoomLevel, RequiredResearchDesignId, Rank, <Stat>Chance; room design Level and Capacity; Mineral and Gas items; PrestigeCharacterTo). Parse them into pure observations that keep an observed zero and mark missing data unknown, expose them through the snapshot provider, and give add_training a verified postcondition on course ID and running timer. Keep training-v1, baseline-v1 and the legacy daily workflow behavior unchanged and the existing benchmark and mutation gates green. Do not change run.py, the fleet path, live workflows or game accounts."
     }
   ]
 }
