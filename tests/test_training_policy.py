@@ -1346,6 +1346,25 @@ class TrainingV2ExecuteGateTests(unittest.TestCase):
         # Regression QA2-R37: the block is recorded even when no start was planned
         self.assertIn("training", reasons(nothing_planned), "a block with no planned start recorded no rejection")
         self.assertEqual(reasons(nothing_planned)["training"], block)
+        # Regression QA3-S31: the block rejects every planned start, not only the first one
+        from dataclasses import replace as dc_replace
+        from sdk.fleet.factory import AuthorizedPolicy
+
+        second = ActionRequest("add_training", {"training_design_id": "40002", "character_id": "102"}, "second",
+                               {"minerals": 500})
+        real = AuthorizedPolicy._guarded_plan
+
+        def two_starts(policy, *args):
+            plan = real(policy, *args)
+            return dc_replace(plan, requests=plan.requests + (second,))
+
+        with patch.object(AuthorizedPolicy, "_guarded_plan", two_starts):
+            both = self.plan("training-v2", execute_gate(), training_block=block)
+        self.assertEqual(training_requests(both), [], "a later planned start passed the block")
+        self.assertEqual([(rejection.candidate, rejection.reason) for rejection in both.rejected
+                          if rejection.reason == block],
+                         [("add_training 40001 101", block), ("add_training 40002 102", block)])
+        self.assertNotIn("training", reasons(both))
         # a policy without the attribute ignores a block
         v1 = self.plan("training-v1", execute_gate(), training_block=block)
         self.assertEqual([request.action_id for request in training_requests(v1)], ["add_training"])

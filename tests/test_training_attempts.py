@@ -176,6 +176,16 @@ class PureCoreTests(unittest.TestCase):
                                                   "settled_at": T0.isoformat()})
                 self.assertEqual(after.attempts[0].state, UNRESOLVED)
                 self.assertEqual(after.blocking().intent_id, "0" * 32)
+        # Regression QA3-S2: the settlement records the journaled outcome and reason, and both survive the store
+        unresolved = settled(state, "0" * 32, {"outcome": "not_observed", "reason": "r1", "journal_attempt_id": "j1",
+                                               "settled_at": T0.isoformat()})
+        [settled_attempt] = unresolved.attempts
+        self.assertEqual((settled_attempt.state, settled_attempt.outcome, settled_attempt.reason,
+                          settled_attempt.journal_attempt_id, settled_attempt.settled_at),
+                         (UNRESOLVED, "not_observed", "r1", "j1", T0.isoformat()))
+        stored = json.loads(dump_store(unresolved))["attempts"][0]
+        self.assertEqual((stored["outcome"], stored["reason"]), ("not_observed", "r1"))
+        self.assertEqual(parse_store(dump_store(unresolved), "alpha").attempts[0].reason, "r1")
         with self.assertRaises(ValueError):  # an unknown intent
             settled(state, "1" * 32, {"outcome": "verified", "settled_at": T0.isoformat()})
         with self.assertRaises(ValueError):  # not pending any more
@@ -190,6 +200,14 @@ class PureCoreTests(unittest.TestCase):
         self.assertTrue(reason.startswith("unresolved_attempt: "))
         self.assertEqual(codes_in(reason), {"unresolved_attempt"})
         self.assertIsNone(block_reason(virgin_store("alpha", ID_A, T0)))
+        # Regression QA3-S9: the reason names the attempt's actual state, pending before and unresolved after a
+        # non-verified settlement
+        tail = "record a reconciliation with --fleet-resolve-training before another training start"
+        self.assertEqual(reason, "unresolved_attempt: training attempt 00000000 (character 1001, course 41) is "
+                                 f"pending; {tail}")
+        after = settled(state, "0" * 32, {"outcome": "unknown", "reason": "r", "settled_at": T0.isoformat()})
+        self.assertEqual(block_reason(after), "unresolved_attempt: training attempt 00000000 (character 1001, "
+                                              f"course 41) is unresolved; {tail}")
 
     def test_resolution_lifts_the_block_and_records_its_evidence(self):
         state = with_intent(virgin_store("alpha", ID_A, T0), intent())
@@ -198,11 +216,21 @@ class PureCoreTests(unittest.TestCase):
         after = resolved(state, {"0" * 32: evidence}, T0)
         self.assertIsNone(after.blocking())
         self.assertEqual(after.attempts[0].state, RESOLVED)
-        self.assertEqual(after.attempts[0].resolution["verdict"], "started")
-        self.assertEqual(after.attempts[0].resolution["previous_state"], PENDING)
+        # Regression QA3-S4: the whole reconciliation record, the observed end time included
+        self.assertEqual(after.attempts[0].resolution, {"resolved_at": T0.isoformat(), "previous_state": PENDING,
+                                                        **evidence})
         self.assertEqual(parse_store(dump_store(after), "alpha"), after)
+        self.assertEqual(json.loads(dump_store(after))["attempts"][0]["resolution"]["observed_end"],
+                         evidence["observed_end"])
         with self.assertRaises(ValueError):  # only a blocking attempt is resolved
             resolved(after, {"0" * 32: evidence}, T0)
+        # Regression QA3-S5: a resolution without a known verdict is refused and changes nothing
+        for verdict in ("maybe", None, "STARTED"):
+            with self.subTest(verdict=verdict):
+                with self.assertRaises(ValueError, msg=f"a resolution with verdict {verdict!r} was recorded"):
+                    resolved(state, {"0" * 32: dict(evidence, verdict=verdict)}, T0)
+                self.assertEqual(state.attempts[0].state, PENDING)
+                self.assertIsNone(state.attempts[0].resolution)
 
     # Regression C2/D1
     # Verifies: S14-R5
@@ -243,6 +271,11 @@ class PureCoreTests(unittest.TestCase):
                          "a request finishing at the instant its intent was written was not linked")
         self.assertEqual(attempts.journal_attempt_link(pending, [event("at-resolution", T0 + second)], T0 + second),
                          "at-resolution")
+        # Regression QA3-S8: of two matching requests inside the window, the first one is the link
+        both = [event("first", T0 + second), event("second", T0 + 1.5 * second)]
+        self.assertEqual(attempts.journal_attempt_link(pending, both, T0 + 2 * second), "first")
+        self.assertEqual(resolved(state, {"0" * 32: evidence}, T0 + 2 * second, both).attempts[0].journal_attempt_id,
+                         "first")
 
     def test_reconciled_never_raises_and_covers_nothing_without_a_readable_store(self):
         training = TrainingAttempts(MemoryAttemptStore(), MemoryAccountLock())
@@ -294,15 +327,19 @@ class PureCoreTests(unittest.TestCase):
     def test_classify_resolution_table(self):
         attempt = intent(cid="101", course="5010", now=T0 - timedelta(minutes=1))
         hour = timedelta(hours=1)
+        ends, ended = (T0 + hour).isoformat(), (T0 - timedelta(seconds=30)).isoformat()
+        # Regression QA3-S7: the evidence names the course actually observed, never the requested one
         rows = [
-            ("running requested", [tf.ended("101", ago=-hour, design_id="5010")], "started", None),
-            ("running other", [tf.ended("101", ago=-hour, design_id="5011")], "other_course", None),
+            ("running requested", [tf.ended("101", ago=-hour, design_id="5010")],
+             ("started", "running", 5010, ends), None),
+            ("running other", [tf.ended("101", ago=-hour, design_id="5011")],
+             ("other_course", "running", 5011, ends), None),
             # Regression QA2-R12: a course that started and already ended (not yet claimed) did run
-            ("ended unclaimed requested", [tf.ended("101", ago=timedelta(seconds=30), design_id="5010")], "started",
-             None),
-            ("ended unclaimed other", [tf.ended("101", ago=timedelta(seconds=30), design_id="5011")], "other_course",
-             None),
-            ("idle", [tf.crew("101")], "not_running", None),
+            ("ended unclaimed requested", [tf.ended("101", ago=timedelta(seconds=30), design_id="5010")],
+             ("started", "ended_unclaimed", 5010, ended), None),
+            ("ended unclaimed other", [tf.ended("101", ago=timedelta(seconds=30), design_id="5011")],
+             ("other_course", "ended_unclaimed", 5011, ended), None),
+            ("idle", [tf.crew("101")], ("not_running", "none", None, None), None),
             ("member absent", [tf.crew("102")], None, "not on the roster"),
             ("roster unread", None, None, "not complete"),
         ]
@@ -314,7 +351,8 @@ class PureCoreTests(unittest.TestCase):
                     self.assertIn(refusal, why)
                 else:
                     self.assertIsNone(why)
-                    self.assertEqual(evidence["verdict"], verdict)
+                    self.assertEqual(evidence, dict(zip(("verdict", "observed_phase", "observed_course_id",
+                                                         "observed_end"), verdict)))
 
     def test_messages_hold_exactly_one_code(self):
         state = with_intent(virgin_store("alpha", ID_A, T0), intent())
@@ -331,6 +369,24 @@ class PureCoreTests(unittest.TestCase):
         for text in texts:
             with self.subTest(text):
                 self.assertEqual(len(codes_in(text)), 1, text)
+
+    # Regression QA3-S10: each missing-store cause has its own operator text; a journal witness wins over the marker
+    def test_state_missing_names_its_cause(self):
+        location = "journals/training-attempts/alpha.json"
+        witness = ("state_missing: the account journal records a training-v2 training start, so the training attempt "
+                   f"store {location} was established; it is missing and is never recreated")
+        established = (f"state_missing: the established training attempt store {location} is missing and is never "
+                       "recreated")
+        rows = [
+            (StoreMissing("x", journal_witness=True), witness),
+            (StoreMissing("x", established=True, journal_witness=True), witness),
+            (StoreMissing("x", established=True), established),
+            (StoreMissing("x"), f"state_missing: no training attempt store at {location}; provision it with "
+                                "--fleet-provision-training"),
+        ]
+        for error, text in rows:
+            with self.subTest(text=text, established=error.established):
+                self.assertEqual(attempts.state_reason(location, error), text)
 
 
 def preview(requests=(), decisions=(), rejected=()):
@@ -721,6 +777,17 @@ class FileLockTests(LockContract, TempDirCase):
         self.root.mkdir()
         return FileAccountLock(self.root)
 
+    # Regression QA3-S16: the lock file is private (0600), like the store and its marker
+    def test_the_lock_file_is_private(self):
+        lock = self.make_lock()
+        previous = os.umask(0o022)
+        try:
+            handle = lock.try_acquire(ID_A)
+        finally:
+            os.umask(previous)
+        self.addCleanup(handle.release)
+        self.assertEqual(stat.S_IMODE(os.stat(self.root / f"{ID_A}.lock").st_mode), 0o600)
+
     def test_nothing_is_created_outside_the_root(self):
         lock = self.make_lock()
         with self.assertRaises(ValueError):
@@ -1003,6 +1070,25 @@ class GuardTests(TempDirCase):
         reason, stop = fresh.before_send(before, params(), {})
         self.assertEqual((codes_in(reason), stop), ({"state_missing"}, True))
         self.assertEqual(recheck.call_count, 2)
+
+    # Regression QA3-S18: once this run sent its start, a second start is skipped (one start per run) without
+    # stopping the account, even though the first start's settlement (not observed) now blocks the store
+    def test_a_second_start_after_an_unresolved_one_is_skipped_without_stopping_the_account(self):
+        store = FileAttemptStore(self.journal_dir)
+        store.provision("alpha", ID_A, T0)
+        recheck = Mock(return_value=None)
+        guard = attempts.TrainingGuard(store, "alpha", ID_A, recheck, lambda: T0)
+        before = tf.snap()
+        self.assertIsNone(guard.before_send(before, params(), {"minerals": 500}))
+        first = intent()
+        store.write_intent("alpha", first)
+        guard.mark_sent(first)
+        store.settle("alpha", first.intent_id, {"outcome": "not_observed", "reason": "r", "journal_attempt_id": "j1",
+                                                "settled_at": T0.isoformat()})
+        self.assertIsNotNone(block_reason(store.load("alpha", identity=ID_A)))
+        self.assertEqual(guard.before_send(before, params(cid="1002"), {"minerals": 500}),
+                         (attempts.ONE_START_REASON, False))
+        self.assertEqual(recheck.call_count, 1)
 
     # Regression QA2-R29: a settlement is dated by the clock when it is written, not by its request's start, so a
     # roster read taken between the request and its settlement is never newer than the settlement

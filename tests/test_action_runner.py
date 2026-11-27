@@ -11,6 +11,7 @@ from sdk.actions import CATALOG, get_spec
 from sdk.actions.catalog import ROOM_FILL_EMPTY_NOTE, ROOM_FILL_UNREAD_REASON, training_start_verified
 from sdk.execution import ActionRunner, UncertainPriorAttemptError, call_arguments
 from sdk.execution import runner as runner_module
+from sdk.fleet import attempts as attempts_module
 from sdk.fleet.attempts import PENDING, RESOLVED, UNRESOLVED, VERIFIED, MemoryAttemptStore, TrainingGuard
 from sdk.journal import GameplayJournal, summarize
 from sdk.state import AccountMismatchError, build_snapshot
@@ -657,15 +658,29 @@ class TrainingStartGuardTests(unittest.TestCase):
         self.recheck.assert_called_once()
 
     # Verifies: S14-R5
+    # Regression QA3-S26: any failure of the intent write, not only an OSError, sends nothing and is reported as
+    # intent_not_persisted
     def test_intent_failure_sends_nothing(self):
-        with patch.object(runner_module, "write_training_intent", side_effect=OSError("disk full")):
-            with self.assertRaises(runner_module.IntentNotPersistedError):
-                self.runner().run("add_training", START, expected_cost=COST)
-        self.assertEqual(self.world.calls, [])
-        [event] = self.journal.read()
-        self.assertEqual((event.outcome, event.attempted, dict(event.params)), ("skipped", False, START))
-        self.assertTrue(event.reason.startswith("intent_not_persisted: "), event.reason)
-        self.assertEqual(self.store.load("alpha").attempts, ())
+        for index, error in enumerate((OSError("disk full"), ValueError("bad intent"), RuntimeError("boom"),
+                                       PermissionError("read-only"))):
+            with self.subTest(error=type(error).__name__):
+                self.journal = GameplayJournal(Path(self.tmp.name) / f"events-{index}.jsonl")
+                raised = None
+                with patch.object(runner_module, "write_training_intent", side_effect=error):
+                    try:
+                        self.runner().run("add_training", START, expected_cost=COST)
+                    except Exception as escaped:  # noqa: BLE001 - the type is the assertion
+                        raised = escaped
+                self.assertIsInstance(raised, runner_module.IntentNotPersistedError,
+                                      f"a {type(error).__name__} from the intent write escaped as {raised!r}")
+                self.assertEqual(self.world.calls, [])
+                [event] = self.journal.read()
+                self.assertEqual((event.outcome, event.attempted, dict(event.params), event.error_class),
+                                 ("skipped", False, START, "IntentNotPersistedError"))
+                self.assertEqual(event.reason, attempts_module.intent_failure_reason(error))
+                self.assertEqual(str(raised), event.reason)
+                self.assertTrue(event.reason.startswith("intent_not_persisted: "), event.reason)
+                self.assertEqual(self.store.load("alpha").attempts, ())
 
     def test_settle_runs_after_the_outcome_is_journaled(self):
         seen = []

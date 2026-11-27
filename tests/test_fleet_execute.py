@@ -602,6 +602,18 @@ class CanaryTests(FleetExecuteTestCase):
         self.assertEqual(ExecClient.executed, [])
         self.assertIn("| alpha | none | no | n/a | no action ran |", out)
 
+    # Regression QA3-S38: a disabled training-v2 account is neither preflighted nor checked against the authorization
+    def test_a_disabled_training_v2_account_without_a_store_does_not_stop_a_full_run(self):
+        self.write_registry(charlie={"policy_id": "training-v2",
+                                     "expected_game_identity": game_identity_fingerprint("3003", SALT)})
+        self.dry_run()
+        code, out, err = self.execute("--mode", "full")
+        self.assertEqual(code, 0, err + out)
+        self.assertNotIn("charlie", err)
+        self.assertEqual(sorted(name for uid, name in ExecClient.executed if uid == "1001"),
+                         ["collectAllResources", "collectDailyReward"])
+        self.assertFalse((self.journal_dir / "training-attempts" / "charlie.json").exists())
+
     # Verifies: S05-R4, S05-R10
     def test_full_mode_executes_only_authorized_actions(self):
         self.dry_run()
@@ -1341,6 +1353,20 @@ class PlaceModeTests(FleetExecuteTestCase):
         self.assertNotIn("room-instance-7000", (self.journal_dir / "alpha.log").read_text(encoding="utf-8"))
         self.assertFalse(any(call == "collectAllResources" for _, call in ExecClient.executed))
 
+    # Regression QA3-S29: place mode takes only the account lock of a training-v2 account, never its store
+    def test_a_training_v2_account_places_without_a_training_attempt_store(self):
+        self.write_registry(alpha={"policy_id": "training-v2"}, bravo={"enabled": False})
+        code, out, err = self.place()
+        self.assertEqual(code, 0, err + out)
+        self.assertNotIn("state_missing", out + err)
+        self.assertEqual(ExecClient.executed, [("1001", "placeRoom")])
+        (record,) = self.records()
+        self.assertEqual([(account["alias"], account["status"]) for account in record["accounts"]],
+                         [("alpha", "completed"), ("bravo", "disabled"), ("charlie", "disabled")])
+        (event,) = self.attempted("alpha")
+        self.assertEqual((event.action_id, event.outcome), ("place_room", "verified"))
+        self.assertFalse((self.journal_dir / "training-attempts" / "alpha.json").exists())
+
     # Verifies: S13-R7
     def test_place_mode_needs_no_dry_run_but_still_checks_identity(self):
         code, out, err = self.place()  # no --fleet-dry-run first
@@ -1567,6 +1593,18 @@ class UpgradeShipModeTests(FleetExecuteTestCase):
         self.assertEqual((record["mode"], record["hull_upgrade"], record["placement"]),
                          ("upgrade-ship", {"ship_design_id": 3}, None))
         self.assertFalse(any(call == "collectAllResources" for _, call in ExecClient.executed))
+
+    # Regression QA3-S29: upgrade-ship mode takes only the account lock of a training-v2 account, never its store
+    def test_a_training_v2_account_upgrades_without_a_training_attempt_store(self):
+        self.write_registry(alpha={"policy_id": "training-v2"}, bravo={"enabled": False})
+        code, out, err = self.upgrade()
+        self.assertEqual(code, 0, err + out)
+        self.assertNotIn("state_missing", out + err)
+        self.assertEqual(ExecClient.executed, [("1001", "upgradeShip")])
+        (record,) = self.records()
+        self.assertEqual([(account["alias"], account["status"]) for account in record["accounts"]],
+                         [("alpha", "completed"), ("bravo", "disabled"), ("charlie", "disabled")])
+        self.assertFalse((self.journal_dir / "training-attempts" / "alpha.json").exists())
 
     def test_an_instant_hull_change_is_verified_too(self):
         def instant(client, design_id):
@@ -2148,7 +2186,9 @@ class TrainingProvisionTests(TrainingExecutionCase):
         self.assertEqual(self.mutations_since(mark), [])  # login and reads only
         self.assertEqual(self.store()["game_identity"], self.identity)
         self.assertEqual(self.store()["attempts"], [])
-        self.assertIn("Provisioned the training attempt store of account 'alpha'", out)
+        # Regression QA3-S45: the whole success line, the store location included
+        self.assertEqual(out.splitlines(), [f"Provisioned the training attempt store of account 'alpha' (game identity "
+                                            f"{self.identity}): journals/training-attempts/alpha.json"])
         self.assertEqual(sorted(path.name for path in self.store_root.iterdir()),
                          sorted(["alpha.json", f"{self.identity}.lock"]))
         self.assertTrue(self.marker_path.is_file())  # outside the directory it protects
@@ -2683,6 +2723,11 @@ class TrainingStartTests(TrainingStartCase):
             finally:
                 held.release()
 
+        def intent_failure_after_progression():
+            self.write_authorization(actions=["add_training", "collect_daily_reward"])
+            return intent_failure()
+
+        plan_rows = ["| alpha | training shields | role_uncovered |", "| alpha | training weapons | role_uncovered |"]
         for name, run_it, row in (("recheck", price_change, "| alpha | add_training 1001 | price_unavailable |"),
                                   ("intent", intent_failure, "| alpha | add_training 1001 | intent_not_persisted |"),
                                   ("locked", locked, "| alpha | training | locked |")):
@@ -2694,6 +2739,60 @@ class TrainingStartTests(TrainingStartCase):
                 self.assertIn(row, rows, out + err)
                 for line in rows:
                     self.assertEqual(len(codes_in(line)), 1, line)
+                # Regression QA3-S39: the exact rows in order, the plan's skips before the run's
+                self.assertEqual(rows, [row] if name == "locked" else plan_rows + [row], out + err)
+        # Regression QA3-S41: the stop row names the planned start's crew member, even after a progression action
+        self.setUp()
+        self.ready()
+        mark = self.mark()
+        _, out, err = intent_failure_after_progression()
+        self.assertEqual([entry.path for entry in self.mutations_since(mark)], ["/UserService/CollectDailyReward2"])
+        self.assertEqual(self.training_rows(out),
+                         plan_rows + ["| alpha | add_training 1001 | intent_not_persisted |"], out + err)
+
+    # Regression QA3-S40, QA3-S46: a block with no planned start still gets its "training" row, and the operator's
+    # resolution prints the evidence it recorded, the observed end time included
+    def test_a_block_without_a_planned_start_is_printed_and_its_resolution_names_the_evidence(self):
+        self.ready()
+        heal = self.lose_the_reply()
+        self.execute()
+        heal()
+        self.assertEqual(self.store()["attempts"][0]["state"], "unresolved")
+        self.assertEqual(self.dry_run()[0], 0)
+        mark = self.mark()
+        _, out, err = self.execute()  # Cora is running the course: nothing is planned, the block is still shown
+        self.assertEqual(self.starts_since(mark), [])
+        self.assertEqual(self.training_rows(out), [
+            "| alpha | training 1001 | training_in_progress |", "| alpha | training shields | role_uncovered |",
+            "| alpha | training weapons | role_uncovered |", "| alpha | training | unresolved_attempt |"], out + err)
+        code, out, err = self.resolve()
+        self.assertEqual(code, 0, out + err)
+        [attempt] = self.store()["attempts"]
+        resolution = attempt["resolution"]
+        self.assertEqual((resolution["verdict"], resolution["observed_phase"], resolution["observed_course_id"]),
+                         ("started", "running", 41))
+        self.assertIsNotNone(resolution["observed_end"])
+        self.assertEqual(out.splitlines(), [
+            f"Resolved training attempt {attempt['intent_id'][:8]} of account 'alpha': character 1001, course 41: "
+            f"started (observed running, course 41, ends {resolution['observed_end']})"])
+
+    # Regression QA3-S42: a training-v2 run with nothing skipped prints no "Training starts" section
+    def test_a_run_with_nothing_skipped_prints_no_training_starts_section(self):
+        from dataclasses import replace as dc_replace
+
+        from sdk.policy import TrainingV2
+        from sdk.training.strategy import DEFAULT_CREW_POLICY
+
+        repair_only = dc_replace(DEFAULT_CREW_POLICY, roles=DEFAULT_CREW_POLICY.roles[:1])
+        with patch.object(TrainingV2, "crew_policy", repair_only):  # Cora covers the only role: nothing is skipped
+            self.ready()
+            mark = self.mark()
+            code, out, err = self.execute()
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual([entry.params["characterId"] for entry in self.starts_since(mark)], ["1001"])
+        self.assertEqual(self.store()["attempts"][0]["state"], "verified")
+        self.assertNotIn("## Training starts", out)
+        self.assertNotIn("| Account | Candidate | Skip |", out)
 
     def lose_the_reply(self, apply=True):
         """The next AddTraining's reply is lost (applied or not) and every roster read after it fails."""
