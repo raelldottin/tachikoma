@@ -387,10 +387,16 @@ def classify_resolution(attempt: Attempt, snapshot: AccountSnapshot) -> tuple[Op
     """The reconciliation evidence for ``attempt`` from a fresh, complete roster read, or why there is none.
 
     The requested course running or ended but unclaimed -> ``started``; another course -> ``other_course``; no
-    course -> ``not_running``. A roster read that is not complete, a member not on it or an unknown training phase
-    gives no evidence: nothing is resolved.
+    course -> ``not_running``. A read not newer than the attempt (its intent and, when settled, its settlement), a
+    roster read that is not complete, a member not on it, an unknown training phase, or a running or unclaimed course
+    whose id is unknown gives no evidence: nothing is resolved.
     """
     character_id = attempt.character_id
+    observed = snapshot.observed_at if snapshot.observed_at.utcoffset() is not None else None
+    for label, text in (("intent", attempt.written_at), ("settlement", attempt.settled_at)):
+        moment = _moment(text) if text is not None else None
+        if text is not None and (moment is None or observed is None or observed <= moment):
+            return None, f"the roster read is not newer than the attempt's {label}; nothing resolved"
     if snapshot.section("crew") is not Completeness.COMPLETE:
         return None, "the roster read was not complete; nothing resolved"
     if snapshot.crew_member(character_id) is None:
@@ -399,6 +405,8 @@ def classify_resolution(attempt: Attempt, snapshot: AccountSnapshot) -> tuple[Op
     if session is None or session.phase == SESSION_UNKNOWN:
         return None, f"the training state of character {character_id} is unknown; nothing resolved"
     if session.phase in (SESSION_RUNNING, SESSION_ENDED_UNCLAIMED):
+        if session.course_id is None:
+            return None, f"the course character {character_id} is training is unknown; nothing resolved"
         verdict = "started" if str(session.course_id) == attempt.training_design_id.strip() else "other_course"
     else:
         verdict = "not_running"
@@ -968,11 +976,18 @@ class TrainingAttempts:
         finally:
             handle.release()
 
-    def resolve(self, alias: str, identity: str, snapshot: AccountSnapshot, now: datetime,
-                events: Callable[[], Iterable[Any]] = tuple) -> list[tuple[Attempt, dict]]:
-        """Under the lock, record a reconciliation for every blocking attempt from ``snapshot``: all or nothing.
+    def resolve(self, alias: str, identity: str, observe: Callable[[], AccountSnapshot],
+                clock: Callable[[], datetime], events: Callable[[], Iterable[Any]] = tuple
+                ) -> list[tuple[Attempt, dict]]:
+        """Under the lock of the declared ``identity``, record a reconciliation for every blocking attempt: all or
+        nothing.
 
-        Raises ``AccountLocked``, ``TrainingStateError`` or ``ResolutionRefused`` (nothing persisted).
+        The lock is taken first; only then is the evidence read (``observe``: a fresh, read-only roster read of the
+        account, which must be ``identity``'s), so no dispatch can send or settle an attempt between the read and the
+        record, and each attempt's evidence must be newer than it (``classify_resolution``). The account journal
+        (``events``) is read under the lock too, to link an attempt its settlement never linked. Raises
+        ``AccountLocked``, ``TrainingStateError`` or ``ResolutionRefused`` (nothing persisted); ``observe`` may raise
+        too. Returns ``[]`` when nothing blocks any more.
         """
         _check_identity(identity)
         handle = self.lock.try_acquire(identity)
@@ -983,14 +998,18 @@ class TrainingAttempts:
             if state.game_identity != identity:
                 raise StoreUnreadable("identity", other_identity=True)
             blocking = [attempt for attempt in state.attempts if attempt.state in BLOCKING]
+            if not blocking:
+                return []
+            snapshot = observe()
+            if snapshot.game_identity != identity:
+                raise ResolutionRefused("the roster read is of another game identity; nothing resolved")
             resolutions: dict[str, dict] = {}
             for attempt in blocking:
                 evidence, why = classify_resolution(attempt, snapshot)
                 if evidence is None:
                     raise ResolutionRefused(why)
                 resolutions[attempt.intent_id] = evidence
-            if resolutions:  # the journal is read under the lock, so the attempt's own event is in it
-                self.store.resolve(alias, resolutions, now, tuple(events()))
+            self.store.resolve(alias, resolutions, clock(), tuple(events()))
             return [(attempt, resolutions[attempt.intent_id]) for attempt in blocking]
         finally:
             handle.release()

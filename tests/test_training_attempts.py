@@ -202,8 +202,41 @@ class PureCoreTests(unittest.TestCase):
         training.store._data["alpha"] = dump_store(resolved(state, {"0" * 32: {"verdict": "not_running"}}, T0))
         self.assertEqual(training.reconciled("alpha"), frozenset({"j1"}))
 
+    # Verifies: S14-R5 (regression C6/D6: evidence must be newer than the attempt)
+    def test_classify_resolution_needs_a_read_newer_than_the_attempt(self):
+        attempt = intent(cid="101", course="5010", now=T0)
+        second = timedelta(seconds=1)
+        for observed in (T0 - second, T0):
+            with self.subTest(observed=observed):
+                evidence, why = classify_resolution(attempt, tf.snap(crew_records=[tf.crew("101")],
+                                                                      observed_at=observed))
+                self.assertIsNone(evidence)
+                self.assertIn("not newer than", why)
+        evidence, why = classify_resolution(attempt, tf.snap(crew_records=[tf.crew("101")], observed_at=T0 + second))
+        self.assertEqual((evidence["verdict"], why), ("not_running", None))
+        settled_later = settled(with_intent(virgin_store("alpha", ID_A, T0), attempt), attempt.intent_id,
+                                {"outcome": "unknown", "settled_at": (T0 + 5 * second).isoformat()}).attempts[0]
+        evidence, why = classify_resolution(settled_later, tf.snap(crew_records=[tf.crew("101")],
+                                                                    observed_at=T0 + 2 * second))
+        self.assertIsNone(evidence)
+        self.assertIn("not newer than", why)
+        evidence, _ = classify_resolution(settled_later, tf.snap(crew_records=[tf.crew("101")],
+                                                                  observed_at=T0 + 6 * second))
+        self.assertEqual(evidence["verdict"], "not_running")
+
+    # Verifies: S14-R5 (regression C6: a running session without a course is no evidence)
+    def test_a_running_session_without_a_course_id_is_no_evidence(self):
+        attempt = intent(cid="101", course="5010", now=T0 - timedelta(minutes=1))
+        running = tf.crew("101", training="0", end=tf.server_time(T0 + timedelta(hours=1)))
+        snapshot = tf.snap(crew_records=[running])
+        self.assertEqual(snapshot.training_session("101").phase, "running")
+        self.assertIsNone(snapshot.training_session("101").course_id)
+        evidence, why = classify_resolution(attempt, snapshot)
+        self.assertIsNone(evidence)
+        self.assertIn("unknown", why)
+
     def test_classify_resolution_table(self):
-        attempt = intent(cid="101", course="5010")
+        attempt = intent(cid="101", course="5010", now=T0 - timedelta(minutes=1))
         hour = timedelta(hours=1)
         rows = [
             ("running requested", [tf.ended("101", ago=-hour, design_id="5010")], "started", None),
@@ -602,6 +635,31 @@ class DispatchTests(TempDirCase):
         self.assertEqual(store_artifacts(self.root, "alpha"), [])  # no store is created by holding the lock
         with service.hold("alpha", None) as dispatch:
             self.assertEqual(codes_in(dispatch.refusal), {"state_unreadable"})
+
+    # Verifies: S14-R5 (regression C6/D6)
+    def test_resolve_reads_its_evidence_under_the_lock(self):
+        service = self.attempts_service()
+        service.provision("alpha", ID_A, T0)
+        observe = Mock(side_effect=AssertionError("nothing blocks: no read"))
+        self.assertEqual(service.resolve("alpha", ID_A, observe, lambda: T0), [])
+        service.store.write_intent("alpha", intent(cid="101", course="5010", now=T0))
+        held = []
+
+        def read():
+            held.append(service.lock.try_acquire(ID_A))
+            return tf.snap(crew_records=[tf.crew("101")], observed_at=T0 + timedelta(seconds=1), game_identity=ID_A)
+
+        [(attempt, evidence)] = service.resolve("alpha", ID_A, read, lambda: T0 + timedelta(seconds=2))
+        self.assertEqual(held, [None])  # the read happened under the lock
+        self.assertEqual((attempt.character_id, evidence["verdict"]), ("101", "not_running"))
+        self.assertEqual(service.store.load("alpha").attempts[0].state, RESOLVED)
+        # another identity's read resolves nothing
+        service.store.write_intent("alpha", intent("1" * 32, cid="101", course="5010", now=T0 + timedelta(seconds=3)))
+        foreign = Mock(return_value=tf.snap(crew_records=[tf.crew("101")], observed_at=T0 + timedelta(seconds=9),
+                                            game_identity=ID_B))
+        with self.assertRaises(attempts.ResolutionRefused):
+            service.resolve("alpha", ID_A, foreign, lambda: T0 + timedelta(seconds=9))
+        self.assertEqual(service.store.load("alpha").blocking().intent_id, "1" * 32)
 
     def test_dispatch_block_reason(self):
         service = self.attempts_service()

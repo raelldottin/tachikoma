@@ -543,13 +543,14 @@ def run_fleet_resolve_training(registry_path, alias, journal_dir=None, identity_
     """Record the operator's reconciliation of a training-v2 account's pending or unresolved attempts (SPEC-14).
 
     Before any login (exit 2 on failure) the shared checks of ``_training_store_setup`` run. A missing, unreadable
-    or foreign store exits 1; a store with nothing pending or unresolved exits 0 without logging in. Otherwise the
-    account logs in and takes one read-only snapshot (no mutating request); its game identity must be the declared
-    one. Under the account lock, each blocking attempt is classified from that roster read
-    (``sdk.fleet.attempts.classify_resolution``: started, other course or not running) and all of them are
-    persisted together; without authoritative evidence for every one (a roster read that is not complete, a member
-    missing, an unknown training state) nothing is persisted and the command exits 1. Nothing is journaled: the
-    attempt's journal outcome stays as it was observed.
+    or foreign store exits 1; a store with nothing pending or unresolved exits 0 without logging in. Otherwise it
+    takes the account lock of the declared identity (``locked`` exits 1 before any login), then logs in and takes one
+    read-only snapshot (no mutating request); its game identity must be the declared one. Each blocking attempt is
+    classified from that roster read (``sdk.fleet.attempts.classify_resolution``: started, other course or not
+    running) and all of them are persisted together, linked to their journal events; without authoritative evidence
+    for every one (a read not newer than the attempt, a roster read that is not complete, a member missing, an unknown
+    training state or course) nothing is persisted and the command exits 1. Nothing is journaled: the attempt's
+    journal outcome stays as it was observed.
     """
     from datetime import datetime, timezone
 
@@ -587,17 +588,21 @@ def run_fleet_resolve_training(registry_path, alias, journal_dir=None, identity_
         journal_dir, client_cls=client_cls or Client, environ=environ, client_settings=CLIENT_CHECKSUM_SETTINGS,
         identity_salt=identity_salt, log_scrubber=scrubber, source=RESOLVE_SOURCE, **factory_options,
     )
-    try:
+    def observe():
+        """The fresh roster read, taken under the account lock: read-only calls only, the declared identity's."""
         with scrubber.installed():
-            snapshot = factory.open_preview(profile).snapshot_provider()  # read-only calls only
+            snapshot = factory.open_preview(profile, clock=clock).snapshot_provider()
         refusal = game_identity_refusal(alias, profile.expected_game_identity, snapshot.game_identity, {},
                                         registry.declared_identities())
         if refusal is None and snapshot.game_identity is None:
             refusal = "its game identity was not observed"
         if refusal is not None:
-            return _training_store_failure(command, alias, f"{refusal}; nothing resolved")
-        resolutions = attempts.resolve(alias, snapshot.game_identity, snapshot, clock(),
-                                       events=lambda: read_events(Path(journal_dir) / f"{alias}.log"))
+            raise ResolutionRefused(f"{refusal}; nothing resolved")
+        return snapshot
+
+    try:
+        resolutions = attempts.resolve(alias, profile.expected_game_identity, observe, clock,
+                                       events=lambda: read_events(journal_dir / f"{alias}.log"))
     except TrainingStateError as error:
         return _training_store_failure(command, alias, state_reason(location, error))
     except ResolutionRefused as error:
@@ -605,6 +610,9 @@ def run_fleet_resolve_training(registry_path, alias, journal_dir=None, identity_
     except Exception as error:  # a login or file system failure: nothing was resolved
         return _training_store_failure(command, alias,
                                        f"{scrubber.scrub(error_reason(error), names=False)}; nothing resolved")
+    if not resolutions:
+        out.write(f"No unresolved training attempt for account {alias!r}; nothing changed\n")
+        return 0
     for attempt, evidence in resolutions:
         observed = [f"observed {evidence['observed_phase']}"]
         if evidence["observed_course_id"] is not None:

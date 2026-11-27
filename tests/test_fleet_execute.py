@@ -2655,6 +2655,37 @@ class TrainingStartTests(TrainingStartCase):
         self.assertEqual([(item.params["character_id"], item.outcome) for item in self.attempted_events(since)],
                          [("1001", "verified")])
 
+    # Verifies: S14-R5 (regression C6/D6: the evidence is read under the lock)
+    def test_resolve_reads_the_roster_under_the_lock(self):
+        from sdk.fleet.attempts import FileAccountLock
+
+        self.ready()
+        heal = self.lose_the_reply()
+        self.execute()
+        heal()
+        held = FileAccountLock(self.store_root).try_acquire(self.identity)
+        try:
+            mark = self.mark()
+            code, _, err = self.resolve()
+        finally:
+            held.release()
+        self.assertEqual((code, [codes_in(line) for line in self.refusal_lines(err)]), (1, [{"locked"}]))
+        self.assertEqual(self.requests_since(mark), [])  # refused before the login and the roster read
+        seen = []
+
+        def try_the_lock(fake, exchange):
+            handle = FileAccountLock(self.store_root).try_acquire(self.identity)
+            seen.append(handle)
+            if handle is not None:
+                handle.release()
+
+        self.fake.on_reply("GET " + ROSTER, try_the_lock)
+        code, out, err = self.resolve()
+        self.assertEqual(code, 0, out + err)
+        self.assertTrue(seen)
+        self.assertEqual(seen, [None] * len(seen))  # every roster read happened while resolve held the lock
+        self.assertEqual(self.store()["attempts"][0]["resolution"]["verdict"], "started")
+
     def test_resolve_refuses_without_an_authoritative_read(self):
         self.ready()
         heal = self.lose_the_reply()
