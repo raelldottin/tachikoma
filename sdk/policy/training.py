@@ -26,7 +26,7 @@ Pure, like every policy: no I/O, and the clock is ``snapshot.observed_at`` (neve
 from __future__ import annotations
 
 import re
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from types import MappingProxyType
 from typing import Mapping, Optional
 
@@ -40,6 +40,7 @@ from sdk.policy.progression import (
     ResearchDesign,
     _cap_requests,
     _unmet_preconditions,
+    remaining_budget,
 )
 from sdk.state import AccountSnapshot, Completeness
 from sdk.state.snapshot import TRAINING_STAT_ATTRIBUTES, CrewMember
@@ -54,6 +55,18 @@ from sdk.training import (
     with_consumables,
 )
 from sdk.training.actions import action_for
+from sdk.training.model import PrestigeRecipe
+from sdk.training.parse import parse_prestige_recipes
+from sdk.training.planner import (
+    CrewDecision,
+    CrewObservation,
+    CrewPlan,
+    RoomObservation,
+    TrainingInputs,
+    plan_crew,
+)
+from sdk.training.prestige import PrestigeCandidate, ingredient_eligible, prestige_routes, prestige_targets
+from sdk.training.strategy import DEFAULT_CREW_POLICY, CrewPolicy
 
 # Actions whose only cost is an inventory item (use_consumable) or a crew member's training slot (add_training): no
 # mineral or gas price exists. Defined once, here: the execute gate (sdk.fleet.factory) imports it and runs these
@@ -216,9 +229,293 @@ class TrainingV1(FleetV1):
     def plan(self, snapshot: AccountSnapshot, design: DesignData, config: PolicyConfig) -> Plan:
         base = super().plan(snapshot, design, replace(config, max_requests=None))
         try:
-            requests, rejected = training_plan(snapshot, design, self.strategy)
+            requests, rejected = self.training_block(snapshot, design, config, base)
         except ValueError as error:  # sdk.training validation; it must not cost the account fleet-v1's plan
-            requests, rejected = (), (Rejection("training", f"training not planned: {type(error).__name__}: {error}"),)
+            requests, rejected = (), (_not_planned(error),)
         kept, refused = _cap_requests(list(base.requests) + list(requests), list(base.rejected) + list(rejected),
                                       config.max_requests)
         return replace(base, requests=tuple(kept), rejected=tuple(refused))
+
+    def training_block(self, snapshot: AccountSnapshot, design: DesignData, config: PolicyConfig,
+                       base: Plan) -> tuple[tuple[ActionRequest, ...], tuple[Rejection, ...]]:
+        """The training requests and rejections that follow ``base`` (fleet-v1's uncapped plan)."""
+        return training_plan(snapshot, design, self.strategy)
+
+
+def _not_planned(error: ValueError) -> Rejection:
+    return Rejection("training", f"training not planned: {type(error).__name__}: {error}")
+
+
+# --- training-v2 (SPEC-14 step 3: S14-R1 to S14-R4) ----------------------------------------------------------------
+# training-v2 is training-v1's shape (fleet-v1's plan, then a training block, then ``max_requests``) with its own
+# block: ``sdk.training.planner.plan_crew`` over fresh observations instead of ``sdk.training.plan_training``.
+#
+# - Observations (``crew_inputs``). Crew, rooms (with their design's name, type, level and capacity), the courses
+#   (``snapshot.courses``, from the factory's design reader) and research come from the snapshot; training capacity
+#   from the CharacterDesign records. Each crew's training session is judged at ``snapshot.observed_at``. None stays
+#   unknown: a missing stat is never 0 (v1's parser would read it as 0), research is None unless the section was
+#   completely observed, and a room's running sessions are None unless every crew phase in it is known. A crew
+#   section that is not completely observed (missing or partial) leaves the roster unknown: nothing is planned.
+# - Money. The block runs after the progression block, so fleet-v1's planned spend counts first: funds are the
+#   balance above the reserve less every earlier request's mineral and gas cost, and the spend caps shrink the same
+#   way (``progression.remaining_budget``: cost kinds read through ``runner.COST_KINDS``; an unknown kind plans no
+#   training). ``max_requests`` leaves ``max_requests - len(base requests)`` slots.
+# - Output. At most one ``add_training`` (the crew plan's start), costed at the course's price (TRAINING_ZERO_COST
+#   for a free course), still checked against the catalog's preconditions. Every skip is a ``training <id>`` (or
+#   ``training <role>`` for an uncovered role) rejection "<code>: <detail>". No ``finish_training`` and no
+#   ``use_consumable``: training-v2 never claims a course, uses an item, moves crew or spends a Prestige ingredient.
+# - Previews. ``crew_plan`` is the whole block as one value (``CrewPreview``: inputs, final decisions, requests and
+#   rejections); the plan takes its requests and rejections and ``run.py --crew-plan`` prints its inputs and
+#   decisions, so both previews show the same start or skip. The dry run journals the plan.
+
+TRAINING_V2 = "training-v2"
+_WHOLE = re.compile(r"[0-9]+")
+
+
+def _positive_id(value: Optional[str]) -> Optional[int]:
+    return int(value) if value is not None and _POSITIVE_ID.fullmatch(value) else None
+
+
+def _capacities(design: DesignData) -> dict[int, int]:
+    """CharacterDesign id -> @TrainingCapacity, for records where both are whole numbers (the id positive)."""
+    capacities = {}
+    for record in design.character_designs:
+        attributes = record.as_dict()
+        design_id = _positive_id(attributes.get("@CharacterDesignId"))
+        capacity = attributes.get("@TrainingCapacity", "")
+        if design_id is not None and _WHOLE.fullmatch(capacity):
+            capacities[design_id] = int(capacity)
+    return capacities
+
+
+def _crew_observation(snapshot: AccountSnapshot, member: CrewMember) -> CrewObservation:
+    values = [getattr(member, field_name) for field_name, _ in TRAINING_STAT_ATTRIBUTES]
+    stats = None if None in values else {
+        attribute.removeprefix("@"): value for (_, attribute), value in zip(TRAINING_STAT_ATTRIBUTES, values)}
+    return CrewObservation(int(member.character_id), _positive_id(member.design_id), stats, member.fatigue,
+                           member.room_id, snapshot.training_session(member.character_id))
+
+
+def _roster_unknown(snapshot: AccountSnapshot) -> Optional[Rejection]:
+    """Why the roster is unknown (the crew section not completely observed), or None."""
+    section = snapshot.section("crew")
+    if section is Completeness.MISSING:
+        return Rejection("training", "crew section not observed")
+    if section is not Completeness.COMPLETE:
+        return Rejection("training", f"crew section {section.value}: the roster is unknown")
+    return None
+
+
+def crew_inputs(snapshot: AccountSnapshot, design: DesignData, *, funds: Mapping[str, Optional[int]],
+                spend_caps: Mapping[str, Optional[int]],
+                action_slots: Optional[int]) -> tuple[Optional[TrainingInputs], tuple[Rejection, ...]]:
+    """``plan_crew``'s inputs from the snapshot and design data (see the section comment), and the crew left out.
+
+    A crew section that is not completely observed (missing, or partial: a record without an id) leaves the roster
+    unknown, so nothing is planned (None and why).
+    """
+    unknown = _roster_unknown(snapshot)
+    if unknown is not None:
+        return None, (unknown,)
+    crew, rejected = [], []
+    for member in snapshot.crew:
+        if _POSITIVE_ID.fullmatch(member.character_id):
+            crew.append(_crew_observation(snapshot, member))
+        else:
+            rejected.append(Rejection(f"training {member.character_id}",
+                                      f"character id {member.character_id!r} is not a positive whole number"))
+    rooms = {room.room_id: RoomObservation(room.room_id, room.design_name, room.room_type, room.level, room.capacity,
+                                           room.status, snapshot.running_sessions(room.room_id))
+             for room in snapshot.rooms}
+    research = None
+    if snapshot.section("research") is Completeness.COMPLETE:
+        research = {int(entry.design_id): entry.state for entry in snapshot.research
+                    if _POSITIVE_ID.fullmatch(entry.design_id)}
+    inputs = TrainingInputs(tuple(crew), rooms, snapshot.courses, research, _capacities(design), funds, spend_caps,
+                            action_slots)
+    return inputs, tuple(rejected)
+
+
+@dataclass(frozen=True)
+class CrewPreview:
+    """training-v2's block as one value, read by the plan (``training_block``) and by ``--crew-plan`` alike.
+
+    ``base`` is fleet-v1's uncapped plan, ``inputs`` the observations the planner used and ``plan`` the planner's crew
+    plan (both None when nothing could be planned). ``decisions`` are the final crew decisions: the plan's, except a
+    start that failed the catalog's preconditions, which becomes a ``training_in_progress`` skip (the safety net; the
+    add_training preconditions all concern the member's presence and idle training state). ``requests`` holds the
+    start, if any, as an ``add_training`` request; ``rejected`` holds the crew left out (or why nothing was planned),
+    then every skip as a ``training <id>`` (``training <role>``) rejection, a failed precondition as an
+    ``add_training <id>`` rejection with the catalog's reasons."""
+
+    base: Plan
+    inputs: Optional[TrainingInputs]
+    plan: Optional[CrewPlan]
+    decisions: tuple[CrewDecision, ...]
+    requests: tuple[ActionRequest, ...]
+    rejected: tuple[Rejection, ...]
+
+
+def _final_decisions(plan: CrewPlan, snapshot: AccountSnapshot, excluded: tuple[Rejection, ...],
+                     ) -> tuple[tuple[CrewDecision, ...], tuple[ActionRequest, ...], tuple[Rejection, ...]]:
+    """The decisions after the precondition safety net, the start as a request, and every rejection (CrewPreview)."""
+    decisions: list[CrewDecision] = []
+    requests: list[ActionRequest] = []
+    rejected = list(excluded)
+    for decision in plan.decisions:
+        if decision.course is None:
+            owner = decision.role if decision.character_id is None else decision.character_id
+            rejected.append(Rejection(f"training {owner}", f"{decision.code}: {decision.detail}"))
+            decisions.append(decision)
+            continue
+        params = {"training_design_id": str(decision.course.design_id), "character_id": str(decision.character_id)}
+        unmet = _unmet_preconditions("add_training", snapshot, params)
+        if unmet:
+            rejected.append(Rejection(f"add_training {decision.character_id}", unmet))
+            decisions.append(CrewDecision(decision.role, decision.character_id, None, "training_in_progress",
+                                          f"preconditions failed: {unmet}"))
+            continue
+        price = decision.course.price
+        cost = {kind: price.amount if price.currency == currency else 0
+                for kind, currency in (("minerals", "mineral"), ("gas", "gas"))}
+        requests.append(ActionRequest("add_training", params, f"{decision.role} specialist: {decision.course.name}",
+                                      cost))
+        decisions.append(decision)
+    return tuple(decisions), tuple(requests), tuple(rejected)
+
+
+class TrainingV2(TrainingV1):
+    """training-v1's shape with SPEC-14's crew policy as its training block (see the section comment above).
+
+    ``reads_course_designs`` asks the fleet factory for a snapshot design reader, so ``snapshot.courses`` and the
+    rooms' design facts are observed fresh on every snapshot. ``holds_paid_training`` tells the execute gate to hold
+    every ``add_training`` until SPEC-14 step 4 adds paid execution.
+    """
+
+    name = TRAINING_V2
+    reads_course_designs = True
+    holds_paid_training = True
+    crew_policy: CrewPolicy = DEFAULT_CREW_POLICY
+
+    def crew_plan(self, snapshot: AccountSnapshot, design: DesignData, config: PolicyConfig,
+                  base: Optional[Plan] = None) -> CrewPreview:
+        """The crew plan after ``base`` (fleet-v1's uncapped plan, computed when not given)."""
+        if base is None:
+            base = FleetV1.plan(self, snapshot, design, replace(config, max_requests=None))
+        slots = None if config.max_requests is None else config.max_requests - len(base.requests)
+        try:
+            funds, spend_caps = remaining_budget(snapshot, config, base.requests)
+            inputs, excluded = crew_inputs(snapshot, design, funds=funds, spend_caps=spend_caps, action_slots=slots)
+            crew = None if inputs is None else plan_crew(inputs, self.crew_policy)
+        except ValueError as error:  # sdk.training validation or an unreadable earlier cost: keep fleet-v1's plan
+            return CrewPreview(base, None, None, (), (), (_not_planned(error),))
+        if crew is None:
+            return CrewPreview(base, None, None, (), (), excluded)
+        return CrewPreview(base, inputs, crew, *_final_decisions(crew, snapshot, excluded))
+
+    def training_block(self, snapshot: AccountSnapshot, design: DesignData, config: PolicyConfig,
+                       base: Plan) -> tuple[tuple[ActionRequest, ...], tuple[Rejection, ...]]:
+        preview = self.crew_plan(snapshot, design, config, base)
+        return preview.requests, preview.rejected
+
+
+# --- the crew plan preview (run.py --crew-plan) --------------------------------------------------------------------
+# Pure: the caller reads the Prestige recipes (``Client.prestigeCharacterTo``, None when a read failed) and prints the
+# lines. One line per fact; crew and role lines carry no free text, so a skip line holds exactly one skip code.
+
+
+def character_design_names(design: DesignData) -> dict[int, str]:
+    """CharacterDesign id -> @CharacterDesignName, for records with a positive whole id and a name."""
+    names = {}
+    for record in design.character_designs:
+        attributes = record.as_dict()
+        design_id = _positive_id(attributes.get("@CharacterDesignId"))
+        if design_id is not None and attributes.get("@CharacterDesignName"):
+            names[design_id] = attributes["@CharacterDesignName"]
+    return names
+
+
+def prestige_target_ids(design: DesignData, crew_policy: CrewPolicy = DEFAULT_CREW_POLICY) -> tuple[int, ...]:
+    """The character designs named as the policy's original Prestige targets, ordered by (name, id)."""
+    return prestige_targets(character_design_names(design), crew_policy.prestige_targets)
+
+
+def prestige_roster(snapshot: AccountSnapshot) -> Optional[tuple[PrestigeCandidate, ...]]:
+    """Every crew member with a positive whole id as a possible ingredient; None when the roster is unknown (the crew
+    section not completely observed)."""
+    if _roster_unknown(snapshot) is not None:
+        return None
+    return tuple(PrestigeCandidate(int(member.character_id), _positive_id(member.design_id),
+                                   ingredient_eligible(snapshot.training_session(member.character_id)))
+                 for member in snapshot.crew if _POSITIVE_ID.fullmatch(member.character_id))
+
+
+def _shown(value: object) -> object:
+    return "unknown" if value is None else value
+
+
+def _decision_line(decision: CrewDecision) -> str:
+    """One crew or role line; a skip whose check lacked data ends ", eligibility unknown" (no skip code words)."""
+    outcome = decision.course.name if decision.course is not None else f"skip {decision.code}"
+    if decision.unknown:
+        outcome += ", eligibility unknown"
+    if decision.character_id is None:
+        return f"  role {decision.role}: {outcome}"
+    if decision.role is None:
+        return f"  crew {decision.character_id}: {outcome}"
+    return f"  crew {decision.character_id} {decision.role}: {outcome}"
+
+
+def _prestige_lines(snapshot: AccountSnapshot, design: DesignData, crew_policy: CrewPolicy,
+                    replies: Mapping[int, object]) -> list[str]:
+    names = character_design_names(design)
+    targets = prestige_target_ids(design, crew_policy)
+    recipes = {target: tuple(sorted(parse_prestige_recipes(reply), key=_recipe_order))
+               for target, reply in replies.items() if reply is not None}
+    routes = prestige_routes(targets, recipes, prestige_roster(snapshot))
+    lines = []
+    for target in targets:
+        name = names[target]
+        mine = [route for route in routes if route.target_design_id == target]
+        if replies.get(target) is None:
+            lines.append(f"  prestige {name}: recipes unavailable")
+        elif not mine:
+            lines.append(f"  prestige {name}: no recipe")
+        for route in mine:
+            first, second = (names.get(design_id, f"design {design_id}") for design_id in route.ingredient_design_ids)
+            unknown = f", eligibility unknown for {route.unknown}" if route.unknown else ""
+            lines.append(f"  prestige {name} <- {first} + {second}: missing {_shown(route.missing)}{unknown}")
+    return lines
+
+
+def _recipe_order(recipe: PrestigeRecipe) -> tuple[int, int]:
+    return tuple(sorted((recipe.first_design_id, recipe.second_design_id)))
+
+
+def crew_plan_lines(alias: str, policy: TrainingV2, snapshot: AccountSnapshot, design: DesignData,
+                    preview: CrewPreview, replies: Mapping[int, object]) -> tuple[str, ...]:
+    """The ``--crew-plan`` lines for one account (README "Crew plan" lists every format).
+
+    The facility, research and crew lines render the preview's own ``inputs`` and final ``decisions``, so they show
+    exactly what the plan used. The preview has no journal, so the header says that spend journaled earlier in the
+    budget period is not counted.
+    """
+    crew_policy = policy.crew_policy
+    lines = [f"Crew plan for account '{alias}' ({policy.name}, observed {snapshot.observed_at.isoformat()}; spend "
+             "journaled earlier this period is not counted)"]
+    inputs = preview.inputs
+    if inputs is not None:
+        for room in sorted(inputs.rooms.values(), key=lambda entry: entry.room_id):
+            if room.room_type == crew_policy.training_room_type:
+                lines.append(f"  facility {room.room_id} {_shown(room.design_name)} level {_shown(room.level)}: "
+                             f"status {_shown(room.status)}, training {_shown(room.running)}/{_shown(room.capacity)}")
+        for research in sorted({course.required_research_design_id for course in inputs.courses or ()
+                                if course.required_research_design_id}):
+            state = None if inputs.research is None else inputs.research.get(research) or "not started"
+            lines.append(f"  research {research}: {_shown(state)}")
+    if preview.plan is None:
+        lines.append("  crew: not planned")
+    else:
+        lines.extend(_decision_line(decision) for decision in preview.decisions)
+    lines.extend(_prestige_lines(snapshot, design, crew_policy, replies))
+    return tuple(lines)

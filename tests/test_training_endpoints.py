@@ -237,6 +237,89 @@ def error_variants(service, element):
     return failures
 
 
+PRESTIGE_REPLY = (b'<CharacterService><PrestigeCharacterTo><Prestiges><Prestige CharacterDesignId1="30001" '
+                  b'CharacterDesignId2="30001" ToCharacterDesignId="30002"/></Prestiges></PrestigeCharacterTo>'
+                  b"</CharacterService>")
+
+
+class TestPrestigeCharacterTo(EndpointCase):
+    # Verifies: S14-R3
+    def test_request_shape(self):
+        self.serve(reply(PRESTIGE_REPLY))
+        self.client.prestigeCharacterTo("30002")
+        self.assertEqual(self.request.call_count, 1)
+        self.assertEqual(self.sent(), ((BASE.scheme, BASE.netloc), "/CharacterService/PrestigeCharacterTo",
+                                       [("characterDesignId", "30002"), ("languageKey", "en")], "GET"))
+        self.assertNotIn("accessToken", self.calls[0][0])
+        self.assertNotIn(TOKEN, self.calls[0][0])
+
+    def test_success_returns_the_parsed_reply(self):
+        from sdk.training.model import PrestigeRecipe
+        from sdk.training.parse import parse_prestige_recipes
+
+        self.serve(reply(PRESTIGE_REPLY))
+        result = self.client.prestigeCharacterTo("30002")
+        self.assertEqual(result, xmltodict.parse(PRESTIGE_REPLY, xml_attribs=True))
+        self.assertEqual(parse_prestige_recipes(result), (PrestigeRecipe(30001, 30001, 30002),))
+
+    def test_empty_list_is_success(self):
+        from sdk.training.parse import parse_prestige_recipes
+
+        for body in (b"<CharacterService><PrestigeCharacterTo><Prestiges/></PrestigeCharacterTo></CharacterService>",
+                     b"<CharacterService><PrestigeCharacterTo/></CharacterService>"):
+            with self.subTest(body=body):
+                self.serve(reply(body))
+                result = self.client.prestigeCharacterTo("30002")
+                self.assertIsNotNone(result)
+                self.assertEqual(parse_prestige_recipes(result), ())
+
+    def test_failures_are_none(self):
+        for name, make in error_variants("CharacterService", "PrestigeCharacterTo").items():
+            with self.subTest(name):
+                self.serve(make())
+                self.assertIsNone(self.client.prestigeCharacterTo("30002"))
+
+    def test_refuses_invalid_ids_without_a_request(self):
+        request = self.refuse_requests()
+        for value in (None, "0", "-1", "x", True, 1.5, 0):
+            with self.subTest(value=value):
+                self.assertIsNone(self.client.prestigeCharacterTo(value))
+        request.assert_not_called()
+
+    def test_a_transport_error_propagates(self):
+        self.request = MagicMock(side_effect=requests.ConnectionError("down"))
+        with patch.object(self.client, "request", self.request), self.assertRaises(requests.ConnectionError):
+            self.client.prestigeCharacterTo("30002")
+        self.assertEqual(self.request.call_count, 1)
+
+    def test_accepts_int_id(self):
+        self.serve(reply(PRESTIGE_REPLY))
+        self.assertIsNotNone(self.client.prestigeCharacterTo(30002))
+        self.assertEqual(self.sent()[2][0], ("characterDesignId", "30002"))
+
+    def test_fake_server_sees_no_token(self):
+        from run import CLIENT_CHECKSUM_SETTINGS
+        from sdk.training.model import PrestigeRecipe
+        from sdk.training.parse import parse_prestige_recipes
+
+        world = default_world()
+        world.prestige_recipes = [("502", "502", "501"), ("503", "504", "505")]
+        fake = FakePss(world)
+        with tempfile.TemporaryDirectory(prefix="tachikoma-prestige-") as tmp:
+            cwd = os.getcwd()
+            os.chdir(tmp)  # Device() reads and writes ./.device
+            self.addCleanup(os.chdir, cwd)
+            with self.assertLogs(level="INFO"), fake.install():
+                client = Client(Device(language="en"), {"allow_email_password_login": True,
+                                                        **CLIENT_CHECKSUM_SETTINGS})
+                self.assertTrue(client.login(SYNTHETIC_EMAIL, FAKE_PASSWORD))
+                result = client.prestigeCharacterTo("501")
+            os.chdir(cwd)
+        self.assertEqual((fake.violations, fake.unknown), ([], []))
+        self.assertEqual(parse_prestige_recipes(result), (PrestigeRecipe(502, 502, 501),))
+        self.assertEqual(fake.mutations(), [])
+
+
 class TestFinishTraining(EndpointCase):
     def test_request_shape(self):
         self.serve(reply(FINISHED))
@@ -821,6 +904,64 @@ class TestDeadWrappersAndInventory(unittest.TestCase):
                      "getResearchLevel", "hasResearch", "listAllCharactersOfUser", "manageTraining"):
             with self.subTest(name):
                 self.assertEqual(entries[name]["evidence"], "mocked-test")
+
+
+class CrewPlanWorkflowTests(unittest.TestCase):
+    """The SPEC-14 workflow benchmark's preview steps, through the real run.main under FakePss (no network).
+
+    Each preview case (crew plan and dry run only) must match its frozen trace, and every other case's dry-run and
+    crew-plan steps must have no unmet assertion. The provision, execute and resolve steps belong to SPEC-14 step 4.
+    """
+
+    PREVIEW_CASES = ("role-coverage", "preview-prestige", "tie-break-instance-id", "observed-zero-stat",
+                     "two-copy-recipe")
+
+    @classmethod
+    def setUpClass(cls):
+        from scripts import training_workflow_benchmark as wb
+
+        cls.wb = wb
+        cls.suites = [wb.load_suite(wb.FIXTURES["required"]), wb.load_suite(wb.FIXTURES["holdout"])]
+
+    def scenarios(self):
+        for suite in self.suites:
+            for item in suite["cases"]:
+                for entry in item["scenarios"]:
+                    yield suite, item["id"], entry
+
+    def run_one(self, suite, case_id, entry):
+        return self.wb.run_scenario(suite["suite"], case_id, entry, suite["catalog"], suite["seeds"][0],
+                                    suite["vocabulary"]["skip_codes"])
+
+    # Verifies: S14-R1, S14-R2, S14-R3
+    def test_preview_cases_pass_their_frozen_traces(self):
+        ran = 0
+        for suite, case_id, entry in self.scenarios():
+            if case_id not in self.PREVIEW_CASES:
+                continue
+            with self.subTest(case=case_id, scenario=entry["id"]):
+                result = self.run_one(suite, case_id, entry)
+                self.assertTrue(result.passed, json.dumps(result.to_dict(), indent=1))
+                ran += 1
+        self.assertEqual(ran, 7)
+
+    # Verifies: S14-R1, S14-R2, S14-R4
+    def test_dry_and_crew_plan_steps_of_every_other_case(self):
+        preview_kinds = ("dry-run", "crew-plan")
+        ran = 0
+        for suite, case_id, entry in self.scenarios():
+            if case_id in self.PREVIEW_CASES:
+                continue
+            steps = {step["id"] for step in entry["steps"] if step["kind"] in preview_kinds}
+            if not steps:
+                continue
+            with self.subTest(case=case_id, scenario=entry["id"]):
+                result = self.run_one(suite, case_id, entry)
+                self.assertEqual([row for row in result.unmet if row["step"] in steps], [])
+                self.assertEqual([text for text in result.hard_violations
+                                  if any(text.startswith(step) for step in steps)], [])
+                ran += 1
+        self.assertGreater(ran, 20)
 
 
 if __name__ == "__main__":

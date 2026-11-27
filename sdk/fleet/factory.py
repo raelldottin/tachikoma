@@ -431,6 +431,18 @@ def read_design_data(client: Any, *, training: bool = False) -> tuple[DesignData
     return design, tuple(notes)
 
 
+def course_design_reader(client: Any) -> Callable[[], tuple[Any, Any]]:
+    """A ``ClientSnapshotProvider`` design reader (S14-R2): the TrainingDesign and RoomDesign lists, read fresh on each
+    call with ``listAllTrainingDesigns2`` and ``listRoomDesigns2`` (read-only GETs). Each payload is the client's
+    attribute only after its read reported success (a failed read can leave an earlier reply there), else None."""
+
+    def read() -> tuple[Any, Any]:
+        training = getattr(client, "trainingDesigns", None) if client.listAllTrainingDesigns2() else None
+        rooms = getattr(client, "roomDesigns", None) if client.listRoomDesigns2() else None
+        return training, rooms
+
+    return read
+
 
 EMAIL_FORM_NOTE = ("e-mail login: fresh device, guest DeviceLogin17 and unverified UserEmailPasswordAuthorize4 "
                    "on every run; prefer the auth-string form")
@@ -532,14 +544,14 @@ class EnvironmentAccountFactory:
             self.log_scrubber.add_secrets(credentials.values())
         if credentials.email:
             self._note(profile.alias, [EMAIL_FORM_NOTE])
-        design, notes, resource_kinds = None, (), None
+        design, notes, resource_kinds, policy = None, (), None, None
         try:
             client = self._login(credentials)
             with self._lock:
                 self._game_versions[profile.alias] = server_game_version(client)
             if read_designs:
-                design, notes = read_design_data(
-                    client, training=getattr(get_policy(profile.policy_id), "models_training", False))
+                policy = get_policy(profile.policy_id)
+                design, notes = read_design_data(client, training=getattr(policy, "models_training", False))
                 # Live ship items carry no type, so minerals and gas are told apart by their item designs.
                 resource_kinds = item_resource_kinds(
                     _extract_collection(getattr(client, "itemDesigns", None), "ItemDesign"))
@@ -555,6 +567,8 @@ class EnvironmentAccountFactory:
             options["profile_observation"] = ProfileObservation(record, profile_observed_at)
         if resource_kinds is not None:
             options["resource_item_designs"] = resource_kinds
+        if getattr(policy, "reads_course_designs", False):  # training-v2 only: courses and room design facts
+            options["design_reader"] = course_design_reader(client)
         provider = ClientSnapshotProvider(client, profile.alias, source=self.source,
                                           identity_salt=self._identity_salt, **options)
         return client, provider, design
@@ -595,6 +609,17 @@ class EnvironmentAccountFactory:
             except SnapshotInputError:  # unknown id: identity stays unobserved
                 identity = None
         return ReadSession(client, identity, server_game_version(client))
+
+    def open_preview(self, profile: AccountProfile, *,
+                     clock: Optional[Callable[[], datetime]] = None) -> "PreviewSession":
+        """Log ``profile`` in and read its design data, as the dry run does, but open no journal (``--crew-plan``).
+
+        The snapshot provider is the dry run's (with training-v2's design reader); ``clock``, when given, is its clock,
+        so it sets each snapshot's ``observed_at`` and every training phase judged at it. Errors are raised as for
+        ``__call__``.
+        """
+        client, provider, design = self._open(profile, read_designs=True, clock=clock)
+        return PreviewSession(client, provider, design, server_game_version(client))
 
     def _journal(self, profile: AccountProfile) -> GameplayJournal:
         path = self.journal_path(profile.alias)
@@ -638,6 +663,16 @@ class ReadSession:
 
     client: Any
     game_identity: Optional[str]
+    game_version: Optional[str]
+
+
+@dataclass(frozen=True)
+class PreviewSession:
+    """A logged-in client, its snapshot provider, its design data and the server's game version (``--crew-plan``)."""
+
+    client: Any
+    snapshot_provider: ClientSnapshotProvider
+    design: DesignData
     game_version: Optional[str]
 
 
@@ -979,9 +1014,20 @@ def _canary_refusal(action_id: str) -> str:
     return CANARY_NOT_CANARY_SAFE if _safe_to_retry(action_id) else CANARY_NOT_SAFE
 
 
+# training-v2's paid start is held under --fleet-execute until SPEC-14 step 4 (spec14-training-execution) replaces this
+# hold with real paid execution: the account lock, the attempt store and the strict start verdict. The dry run and
+# ``run.py --crew-plan`` never build an AuthorizedPolicy, so they still show the start. The code is a stable name, and
+# not a workflow-benchmark skip code.
+TRAINING_V2_EXECUTE_HOLD = "training_v2_execute_hold"
+TRAINING_V2_EXECUTE_HOLD_REASON = (f"{TRAINING_V2_EXECUTE_HOLD}: training-v2 starts no paid course under "
+                                   "--fleet-execute until SPEC-14 step 4")
+
+
 class AuthorizedPolicy:
     """A progression policy whose plan keeps only what the gate allows.
 
+    An ``add_training`` of a policy that sets ``holds_paid_training`` (training-v2) is rejected first, whatever the
+    authorization says (``TRAINING_V2_EXECUTE_HOLD``).
     Requests the authorization does not allow, and any request with a planned
     starbux cost, move to ``rejected``. In canary mode only the first
     remaining canary-safe request is kept; when none remains and the policy
@@ -1004,6 +1050,9 @@ class AuthorizedPolicy:
         events = self.journal.read if self.journal is not None else None
         for request in plan.requests:
             label = _candidate(request.action_id, request.params)
+            if getattr(self.policy, "holds_paid_training", False) and request.action_id == "add_training":
+                rejected.append(Rejection(label, TRAINING_V2_EXECUTE_HOLD_REASON))
+                continue
             refusal = self.gate.refusal(snapshot.account_alias, request.action_id, events)
             if refusal is not None:
                 rejected.append(Rejection(label, f"not authorized: {refusal}"))

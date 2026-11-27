@@ -649,5 +649,699 @@ class RegistryImportTests(unittest.TestCase):
         self.assertEqual((done.returncode, done.stdout.strip()), (0, "ok"), done.stderr)
 
 
+# --- training-v2 (SPEC-14 step 3) ---------------------------------------------------------------------------------
+
+V2_COURSE = {"@TrainingDesignId": "40001", "@TrainingName": "Study Expert Engineering Manual", "@RepairChance": "100",
+             "@Rank": "1", "@RequiredRoomType": "Academy", "@RequiredRoomLevel": "2",
+             "@RequiredResearchDesignId": "610", "@CostString": "mineral:500"}
+V2_ROOM_DESIGNS = {"RoomService": {"ListRoomDesigns": {"RoomDesigns": {"RoomDesign": [
+    {"@RoomDesignId": "300", "@RoomName": "GYM", "@RoomType": "Training", "@Level": "1", "@Capacity": "2"},
+    {"@RoomDesignId": "400", "@RoomName": "Academy", "@RoomType": "Training", "@Level": "2", "@Capacity": "2"},
+    {"@RoomDesignId": "500", "@RoomName": "Bridge", "@RoomType": "Bridge", "@Level": "1"},
+    {"@RoomDesignId": "600", "@RoomName": "Storage", "@RoomType": "Storage", "@Level": "1"},
+]}}}}
+STORAGE_ROOMS = ROOMS + [{"@RoomId": "14", "@RoomDesignId": "600", "@RoomStatus": "Normal"}]
+STORAGE_DESIGNS = ROOM_DESIGNS + [{"@RoomDesignId": "600", "@RoomName": "Storage"},
+                                  {"@RoomDesignId": "601", "@RoomName": "Storage Lv2",
+                                   "@UpgradeFromRoomDesignId": "600", "@PriceString": "mineral:600"}]
+
+
+def courses_payload(*records):
+    return {"TrainingService": {"ListAllTrainingDesigns": {"TrainingDesigns": {"TrainingDesign": list(records)}}}}
+
+
+def fixer(cid="101", name="Fixer", room="12", **kwargs):
+    """An idle repair crew (Repair 30, design 7003: capacity 100) in the level 2 Academy (room 12)."""
+    return crew(cid, name, design_id="7003", room=room, **{"Repair": 30, **kwargs})
+
+
+def v2_snap(records=(), course_records=(V2_COURSE,), **overrides):
+    """A training-v2 snapshot: ``records`` () is the one canonical fixer; None leaves the crew unobserved."""
+    return snap([fixer()] if records == () else records, training_designs=courses_payload(*course_records),
+                room_designs=V2_ROOM_DESIGNS, **overrides)
+
+
+def v2_plan(snapshot=None, design_data=None, **config):
+    return plan(snapshot or v2_snap(), design_data, policy="training-v2", **config)
+
+
+V2_START = ("add_training", {"training_design_id": "40001", "character_id": "101"})
+
+
+class CrewInputsTests(unittest.TestCase):
+    # Verifies: S14-R1, S14-R2
+    def inputs(self, snapshot=None, data=None, **options):
+        from sdk.policy.training import crew_inputs
+
+        values = {"funds": {"mineral": 1000, "gas": 2000}, "spend_caps": {"mineral": None, "gas": None},
+                  "action_slots": None, **options}
+        return crew_inputs(snapshot or v2_snap(), data or design(), **values)
+
+    def test_observed_crew_rooms_research_and_capacities(self):
+        from sdk.training.model import TrainingSession
+        from sdk.training.planner import RoomObservation
+
+        inputs, rejected = self.inputs()
+        self.assertEqual(rejected, ())
+        (member,) = inputs.crew
+        self.assertEqual((member.character_id, member.design_id, member.fatigue, member.room_id),
+                         (101, 7003, 0, "12"))
+        self.assertEqual(dict(member.stats), {**{f"{stat}Improvement": 0 for stat in STATS_NAMES},
+                                              "RepairImprovement": 30})
+        self.assertEqual(member.session, TrainingSession(None, None, "none"))
+        self.assertEqual(inputs.rooms["12"], RoomObservation("12", "Academy", "Training", 2, 2, "Normal", 0))
+        self.assertEqual(inputs.rooms["13"], RoomObservation("13", "Bridge", "Bridge", 1, None, "Normal", 0))
+        self.assertEqual(set(inputs.rooms), {"11", "12", "13"})
+        self.assertEqual(dict(inputs.research), {610: "Completed"})
+        self.assertEqual(dict(inputs.capacities), {7001: 20, 7002: 10, 7003: 100})
+        self.assertEqual([course.design_id for course in inputs.courses], [40001])
+        self.assertEqual((dict(inputs.funds), dict(inputs.spend_caps), inputs.action_slots),
+                         ({"mineral": 1000, "gas": 2000}, {"mineral": None, "gas": None}, None))
+        self.assertEqual(self.inputs(action_slots=3)[0].action_slots, 3)
+
+    def test_a_missing_stat_is_unknown_and_an_observed_zero_stays(self):
+        record = fixer()
+        del record["@AttackImprovement"]
+        inputs, _ = self.inputs(v2_snap([record, fixer("102", Attack=0)]))
+        self.assertIsNone(inputs.crew[0].stats)
+        self.assertEqual(inputs.crew[1].stats["AttackImprovement"], 0)
+
+    def test_running_sessions_and_unknowns(self):
+        running = fixer("102", training="5010", end=server_time(T0 + timedelta(hours=1)))
+        snapshot = v2_snap([fixer(), running])
+        inputs, _ = self.inputs(snapshot)
+        self.assertEqual(inputs.rooms["12"].running, snapshot.running_sessions("12"))
+        self.assertEqual(inputs.rooms["12"].running, 1)
+        self.assertEqual(inputs.crew[1].session.phase, "running")
+        unknown = fixer()
+        del unknown["@TrainingEndDate"]
+        inputs, _ = self.inputs(v2_snap([unknown]))
+        self.assertIsNone(inputs.rooms["12"].running)
+        self.assertEqual(inputs.crew[0].session.phase, "unknown")
+
+    def test_research_is_none_unless_completely_observed(self):
+        from sdk.state import Completeness
+
+        self.assertIsNone(self.inputs(v2_snap(research=None))[0].research)
+        # A non-numeric id still parses as a complete section; crew_inputs drops only the bad entry.
+        complete = v2_snap(research=[{"@ResearchDesignId": "610", "@ResearchState": "Completed"},
+                                     {"@ResearchDesignId": "x"}])
+        self.assertIs(complete.section("research"), Completeness.COMPLETE)
+        self.assertEqual(dict(self.inputs(complete)[0].research), {610: "Completed"})
+
+    def test_partial_research_section_is_unknown(self):
+        # QA survivor M08: a PARTIAL research section must not be read as observed research.
+        from sdk.state import Completeness
+        from sdk.training.planner import plan_crew
+
+        partial = v2_snap(research=[{"@ResearchDesignId": "610", "@ResearchState": "Completed"},
+                                    {"@ResearchState": "Completed"}],
+                          course_records=(dict(V2_COURSE, **{"@RequiredResearchDesignId": "611"}),))
+        self.assertIs(partial.section("research"), Completeness.PARTIAL)
+        inputs, _ = self.inputs(partial)
+        self.assertIsNone(inputs.research)
+        (decision,) = [entry for entry in plan_crew(inputs).decisions if entry.character_id == 101]
+        self.assertEqual((decision.code, decision.unknown), ("research_unknown", True))
+
+    def test_ids_that_are_not_whole_numbers(self):
+        inputs, rejected = self.inputs(v2_snap([fixer("c1"), fixer("102"), crew("103", design_id="x7", room="12")]))
+        self.assertEqual([member.character_id for member in inputs.crew], [102, 103])
+        self.assertIsNone(inputs.crew[1].design_id)
+        self.assertEqual(rejected, (Rejection("training c1", "character id 'c1' is not a positive whole number"),))
+        data = design(character_designs=[{"@CharacterDesignId": "7003", "@TrainingCapacity": "lots"},
+                                         {"@CharacterDesignId": "abc", "@TrainingCapacity": "5"},
+                                         {"@CharacterDesignId": "7001", "@TrainingCapacity": "0"}])
+        self.assertEqual(dict(self.inputs(data=data)[0].capacities), {7001: 0})
+        research = v2_snap(research=[{"@ResearchDesignId": "r9", "@ResearchState": "Completed"}] + RESEARCH)
+        self.assertEqual(dict(self.inputs(research)[0].research), {610: "Completed"})
+
+    def test_no_crew_section_plans_nothing(self):
+        inputs, rejected = self.inputs(v2_snap(None))
+        self.assertIsNone(inputs)
+        self.assertEqual(rejected, (Rejection("training", "crew section not observed"),))
+
+    def test_a_partial_crew_section_is_an_unknown_roster(self):
+        inputs, rejected = self.inputs(v2_snap([fixer(), {"@CharacterName": "No Id"}]))
+        self.assertIsNone(inputs)
+        self.assertEqual(rejected, (Rejection("training", "crew section partial: the roster is unknown"),))
+        self.assertIsNotNone(self.inputs()[0])  # control: a complete section
+
+    def test_courses_unobserved_stay_none(self):
+        self.assertIsNone(self.inputs(snap([fixer()], room_designs=V2_ROOM_DESIGNS))[0].courses)
+
+
+STATS_NAMES = ("Hp", "Pilot", "Repair", "Weapon", "Science", "Engine", "Attack", "Ability", "Stamina")
+
+
+class TrainingV2PlanTests(unittest.TestCase):
+    # Verifies: S14-R1, S14-R2, S14-R3, S14-R4
+    def test_registered_only_as_training_v2(self):
+        from sdk.policy import POLICIES, TrainingV2, get_policy
+
+        policy = get_policy("training-v2")
+        self.assertIsInstance(policy, TrainingV2)
+        self.assertIsInstance(policy, TrainingV1)
+        self.assertEqual((policy.name, policy.models_training, policy.reads_course_designs),
+                         ("training-v2", True, True))
+        self.assertEqual(list(POLICIES)[0], "baseline-v1")
+        self.assertEqual(list(POLICIES)[-1], "training-v2")
+        self.assertFalse(getattr(get_policy("training-v1"), "reads_course_designs", False))
+        self.assertEqual(v2_plan().policy, "training-v2")
+
+    def test_training_after_the_progression_block(self):
+        from sdk.policy import get_policy
+
+        result = v2_plan()
+        base = get_policy("fleet-v1").plan(v2_snap(), design(), PolicyConfig())
+        self.assertEqual(result.requests[:-1], base.requests)
+        self.assertGreater(len(base.requests), 0)
+        self.assertEqual(result.requests[-1], ActionRequest(
+            "add_training", {"training_design_id": "40001", "character_id": "101"},
+            "repair specialist: Study Expert Engineering Manual", {"minerals": 500, "gas": 0}))
+        self.assertNotIn("add_training", reasons(result))  # training is modelled: no "not modelled" rejection
+
+    def test_earlier_spend_counts(self):
+        data = design(room_designs=STORAGE_DESIGNS)
+        for minerals, planned in (("900", False), ("1100", True)):
+            with self.subTest(minerals=minerals):
+                snapshot = v2_snap(rooms=STORAGE_ROOMS, resources={"minerals": minerals, "gas": "0"})
+                result = v2_plan(snapshot, data)
+                self.assertIn("upgrade_room", [request.action_id for request in result.requests])
+                self.assertEqual(V2_START in training_ids(result), planned)
+                if not planned:
+                    self.assertEqual(reasons(result)["training 101"],
+                                     "insufficient_funds: course 40001 costs 500 mineral, 300 spendable")
+
+    def test_reserves_count(self):
+        self.assertIn(V2_START, training_ids(v2_plan(mineral_reserve=500)))
+        self.assertTrue(reasons(v2_plan(mineral_reserve=501))["training 101"].startswith("insufficient_funds: "))
+
+    def test_spend_cap_counts(self):
+        self.assertIn(V2_START, training_ids(v2_plan(max_mineral_spend=500)))
+        self.assertEqual(reasons(v2_plan(max_mineral_spend=400))["training 101"],
+                         "cap_exceeded: course 40001 costs 500 mineral, 400 left under the cap")
+        data = design(room_designs=STORAGE_DESIGNS)
+        snapshot = v2_snap(rooms=STORAGE_ROOMS, resources={"minerals": "5000", "gas": "0"})
+        self.assertTrue(reasons(v2_plan(snapshot, data, max_mineral_spend=1000))["training 101"].startswith(
+            "cap_exceeded: "))
+        self.assertIn(V2_START, training_ids(v2_plan(snapshot, data, max_mineral_spend=1100)))
+
+    def test_max_requests_counts(self):
+        from sdk.policy import get_policy
+
+        base = len(get_policy("fleet-v1").plan(v2_snap(), design(), PolicyConfig()).requests)
+        capped = v2_plan(max_requests=base)
+        self.assertEqual(len(capped.requests), base)
+        self.assertEqual(reasons(capped)["training 101"],
+                         "action_cap_reached: course 40001 waits: 0 requests left under max_requests")
+        self.assertIn(V2_START, training_ids(v2_plan(max_requests=base + 1)))
+        self.assertEqual(len(v2_plan(max_requests=1).requests), 1)
+
+    def test_one_add_training_and_never_finish_or_consumable(self):
+        weapon = {**V2_COURSE, "@TrainingDesignId": "40002", "@TrainingName": "Drills", "@WeaponChance": "100",
+                  "@RepairChance": "0", "@RequiredRoomLevel": "1", "@RequiredResearchDesignId": "0"}
+        science = {**weapon, "@TrainingDesignId": "40003", "@TrainingName": "Primer", "@ScienceChance": "100",
+                   "@WeaponChance": "0"}
+        records = [ended(name="Fixer", room="12", Repair=50), fixer("102", Repair=0, Weapon=40),
+                   fixer("103", Repair=0, Science=20)]
+        result = v2_plan(v2_snap(records, course_records=(V2_COURSE, weapon, science), inventory=[item()]))
+        self.assertEqual(training_ids(result), [("add_training", {"training_design_id": "40003",
+                                                                  "character_id": "103"})])
+        self.assertEqual(reasons(result)["training 101"].split(":")[0], "unclaimed_course")
+        self.assertEqual(reasons(result)["training 102"].split(":")[0], "action_cap_reached")
+
+    def test_expected_cost(self):
+        from sdk.policy.training import TRAINING_ZERO_COST
+
+        for price, cost in (("mineral:500", {"minerals": 500, "gas": 0}), ("gas:300", {"minerals": 0, "gas": 300}),
+                            ("mineral:0", dict(TRAINING_ZERO_COST))):
+            with self.subTest(price=price):
+                result = v2_plan(v2_snap(course_records=({**V2_COURSE, "@CostString": price},)))
+                self.assertEqual(dict(result.requests[-1].expected_cost), cost)
+
+    def test_plan_and_crew_plan_agree(self):
+        from sdk.policy import get_policy
+
+        snapshot = v2_snap([fixer(), fixer("102", room="13", Weapon=9), fixer("103", Science=5, room="11")])
+        policy = get_policy("training-v2")
+        preview = policy.crew_plan(snapshot, design(), PolicyConfig())
+        result = policy.plan(snapshot, design(), PolicyConfig())
+        start = preview.plan.start
+        self.assertEqual(result.requests[-1].params, {"training_design_id": str(start.course.design_id),
+                                                      "character_id": str(start.character_id)})
+        self.assertEqual(preview.base, get_policy("training-v2").crew_plan(snapshot, design(), PolicyConfig()).base)
+        for decision in preview.plan.decisions:
+            if decision.code is not None:
+                self.assertEqual(reasons(result)[f"training {decision.character_id}"],
+                                 f"{decision.code}: {decision.detail}")
+        # One result: the plan's training block is the preview's requests and rejections.
+        self.assertEqual(preview.decisions, preview.plan.decisions)
+        self.assertEqual(result.requests[len(preview.base.requests):], preview.requests)
+        self.assertEqual(result.rejected[len(preview.base.rejected):], preview.rejected)
+        self.assertEqual(policy.training_block(snapshot, design(), PolicyConfig(), preview.base),
+                         (preview.requests, preview.rejected))
+
+    def test_uncovered_roles_are_rejections_by_role(self):
+        result = v2_plan()
+        self.assertEqual(reasons(result)["training shields"],
+                         "role_uncovered: no observed crew for the ScienceImprovement slot")
+        self.assertTrue(reasons(result)["training weapons"].startswith("role_uncovered: "))
+
+    def test_a_failed_precondition_is_a_rejection(self):
+        with patch("sdk.policy.training._unmet_preconditions", return_value="crew member busy"):
+            result = v2_plan()
+        self.assertNotIn(V2_START, training_ids(result))
+        self.assertEqual(reasons(result)["add_training 101"], "crew member busy")
+
+    def test_a_failed_precondition_is_the_same_skip_in_both_previews(self):
+        from sdk.policy import get_policy
+        from sdk.policy.training import crew_plan_lines
+        from sdk.training.planner import CrewDecision
+
+        policy, snapshot, data = get_policy("training-v2"), v2_snap(), design()
+        control = policy.crew_plan(snapshot, data, PolicyConfig())
+        self.assertEqual(control.requests[0].params, V2_START[1])  # control: the start is planned
+        self.assertIn("  crew 101 repair: Study Expert Engineering Manual",
+                      crew_plan_lines("alpha", policy, snapshot, data, control, {}))
+        with patch("sdk.policy.training._unmet_preconditions", return_value="crew member busy") as unmet:
+            preview = policy.crew_plan(snapshot, data, PolicyConfig())
+            block = policy.training_block(snapshot, data, PolicyConfig(), preview.base)
+        unmet.assert_called_with("add_training", snapshot, V2_START[1])
+        self.assertEqual(preview.requests, ())
+        self.assertEqual(preview.plan.start.character_id, 101)  # the planner chose it; the safety net refused it
+        self.assertEqual(preview.decisions[0], CrewDecision("repair", 101, None, "training_in_progress",
+                                                            "preconditions failed: crew member busy"))
+        self.assertEqual(preview.decisions[1:], preview.plan.decisions[1:])
+        self.assertIn(Rejection("add_training 101", "crew member busy"), preview.rejected)
+        self.assertNotIn("training 101", [rejection.candidate for rejection in preview.rejected])
+        self.assertEqual(block, (preview.requests, preview.rejected))
+        lines = crew_plan_lines("alpha", policy, snapshot, data, preview, {})
+        self.assertIn("  crew 101 repair: skip training_in_progress", lines)
+        self.assertNotIn("  crew 101 repair: Study Expert Engineering Manual", lines)
+
+    def test_room_names_map_through_the_policys_room_types(self):
+        renamed = copy.deepcopy(V2_ROOM_DESIGNS)
+        records = renamed["RoomService"]["ListRoomDesigns"]["RoomDesigns"]["RoomDesign"]
+        for name, planned in (("Lunar College", True), ("ACADEMY", True), ("Academy", True), ("GYM", False),
+                              ("Moon Library", False)):
+            with self.subTest(name=name):
+                records[1]["@RoomName"] = name
+                result = v2_plan(snap([fixer()], training_designs=courses_payload(V2_COURSE), room_designs=renamed))
+                self.assertEqual(V2_START in training_ids(result), planned)
+                if not planned:
+                    self.assertTrue(reasons(result)["training 101"].startswith("not_in_training_room: "))
+
+    def test_earlier_costs_count_under_every_spelling(self):
+        from sdk.policy import Plan, get_policy
+
+        policy, snapshot = get_policy("training-v2"), v2_snap()
+        for kind, planned in (("minerals", False), ("mineral", False), ("Minerals", False), ("gas", True),
+                              ("starbux", True)):
+            with self.subTest(kind=kind):
+                base = Plan("training-v2", "alpha", "", (ActionRequest("upgrade_room", {}, "r", {kind: 600}),), ())
+                preview = policy.crew_plan(snapshot, design(), PolicyConfig(), base)
+                self.assertEqual(bool(preview.requests), planned)
+                if not planned:
+                    self.assertEqual(dict(preview.inputs.funds), {"mineral": 400, "gas": 2000})
+                    self.assertIn(Rejection("training 101", "insufficient_funds: course 40001 costs 500 mineral, "
+                                                            "400 spendable"), preview.rejected)
+
+    def test_an_unknown_earlier_cost_kind_plans_no_training(self):
+        from sdk.policy import Plan, get_policy
+
+        base = Plan("training-v2", "alpha", "", (ActionRequest("upgrade_room", {}, "r", {"crystals": 1}),), ())
+        preview = get_policy("training-v2").crew_plan(v2_snap(), design(), PolicyConfig(), base)
+        self.assertEqual((preview.plan, preview.inputs, preview.requests, preview.decisions), (None, None, (), ()))
+        self.assertEqual(preview.rejected, (Rejection("training", "training not planned: ValueError: unknown cost "
+                                                                  "kind 'crystals' in a planned request"),))
+
+    def test_a_partial_crew_section_plans_nothing(self):
+        from sdk.policy import get_policy
+
+        partial = v2_snap([fixer(), {"@CharacterName": "No Id"}])
+        self.assertEqual(partial.section("crew").value, "partial")
+        preview = get_policy("training-v2").crew_plan(partial, design(), PolicyConfig())
+        self.assertEqual((preview.plan, preview.inputs, preview.requests), (None, None, ()))
+        self.assertEqual(preview.rejected, (Rejection("training", "crew section partial: the roster is unknown"),))
+        result = v2_plan(partial)
+        self.assertEqual(training_requests(result), [])
+        self.assertEqual(reasons(result)["training"], "crew section partial: the roster is unknown")
+        self.assertIn(V2_START, training_ids(v2_plan()))  # control
+
+    def test_v1_and_baseline_unchanged(self):
+        records = [ended(), crew("102", "Delish", room="12"), CPU]
+        with_designs = snap(records, inventory=[item()], training_designs=courses_payload(V2_COURSE),
+                            room_designs=V2_ROOM_DESIGNS)
+        without = snap(records, inventory=[item()])
+        for policy in ("training-v1", "baseline-v1", "fleet-v1"):
+            with self.subTest(policy=policy):
+                self.assertEqual(plan(with_designs, policy=policy), plan(without, policy=policy))
+
+    def test_a_validation_error_keeps_the_fleet_plan(self):
+        from sdk.policy import get_policy
+
+        base = get_policy("fleet-v1").plan(v2_snap(), design(), PolicyConfig())
+        with patch("sdk.policy.training.plan_crew", side_effect=ValueError("boom")):
+            result = v2_plan()
+            preview = get_policy("training-v2").crew_plan(v2_snap(), design(), PolicyConfig())
+        self.assertEqual(result.requests, base.requests)
+        self.assertIn(Rejection("training", "training not planned: ValueError: boom"), result.rejected)
+        self.assertIsNone(preview.plan)
+        self.assertEqual((preview.decisions, preview.requests), ((), ()))
+        self.assertEqual(preview.rejected, (Rejection("training", "training not planned: ValueError: boom"),))
+
+    def test_unobserved_crew_section_keeps_the_fleet_plan(self):
+        result = v2_plan(v2_snap(None))
+        self.assertEqual(training_requests(result), [])
+        self.assertEqual(reasons(result)["training"], "crew section not observed")
+
+    def test_earlier_gas_spend_counts(self):
+        gas_course = {**V2_COURSE, "@CostString": "gas:300"}
+        research = design(research_designs=RESEARCH_DESIGNS + [
+            {"@ResearchDesignId": "620", "@RootResearchDesignId": "620", "@ResearchName": "Fitness 201",
+             "@GasCost": "1800", "@StarbuxCost": "0"}])
+        result = v2_plan(v2_snap(course_records=(gas_course,)), research)
+        self.assertIn("add_research", [request.action_id for request in result.requests])
+        self.assertEqual(reasons(result)["training 101"],
+                         "insufficient_funds: course 40001 costs 300 gas, 200 spendable")
+        self.assertIn(V2_START, training_ids(v2_plan(v2_snap(course_records=(gas_course,)))))  # control
+
+    def test_preview_is_frozen_and_uses_the_default_crew_policy(self):
+        import dataclasses
+
+        from sdk.policy import get_policy
+        from sdk.training.strategy import DEFAULT_CREW_POLICY
+
+        policy = get_policy("training-v2")
+        self.assertIs(policy.crew_policy, DEFAULT_CREW_POLICY)
+        self.assertIs(policy.strategy, DEFAULT_STRATEGY)
+        preview = policy.crew_plan(v2_snap(), design(), PolicyConfig())
+        with self.assertRaises(dataclasses.FrozenInstanceError):
+            preview.plan = None
+
+
+TARGET_DESIGNS = CHARACTER_DESIGNS + [
+    {"@CharacterDesignId": "7101", "@CharacterDesignName": "Galactic Succubus", "@TrainingCapacity": "80"},
+    {"@CharacterDesignId": "7102", "@CharacterDesignName": "Delish", "@TrainingCapacity": "80"},
+    {"@CharacterDesignId": "x7", "@CharacterDesignName": "Galactic Snow Maiden", "@TrainingCapacity": "80"},
+]
+
+
+def recipes_reply(*rows):
+    return {"CharacterService": {"PrestigeCharacterTo": {"Prestiges": {"Prestige": [
+        {"@CharacterDesignId1": first, "@CharacterDesignId2": second, "@ToCharacterDesignId": to}
+        for first, second, to in rows]}}}}
+
+
+class CrewPlanLinesTests(unittest.TestCase):
+    # Verifies: S14-R3
+    def lines(self, snapshot, replies, preview=None, data=None):
+        from sdk.policy import get_policy
+        from sdk.policy.training import crew_plan_lines
+
+        data = data or design(character_designs=[*TARGET_DESIGNS, {**CHARACTER_DESIGNS[2],
+                                                                   "@CharacterDesignName": "Synthetic Cadet"}])
+        policy = get_policy("training-v2")
+        preview = preview or policy.crew_plan(snapshot, data, PolicyConfig())
+        return list(crew_plan_lines("alpha", policy, snapshot, data, preview, replies))
+
+    def test_every_line(self):
+        replies = {7101: recipes_reply(("7102", "7003", "7101"), ("7003", "7003", "7101"), ("7003", "7003", "7102")),
+                   7102: recipes_reply()}
+        self.assertEqual(self.lines(v2_snap(), replies), [
+            "Crew plan for account 'alpha' (training-v2, observed 2026-11-10T12:00:00+00:00; spend journaled earlier "
+            "this period is not counted)",
+            "  facility 11 GYM level 1: status Normal, training 0/2",
+            "  facility 12 Academy level 2: status Normal, training 0/2",
+            "  research 610: Completed",
+            "  crew 101 repair: Study Expert Engineering Manual",
+            "  role shields: skip role_uncovered",
+            "  role weapons: skip role_uncovered",
+            "  prestige Delish: no recipe",
+            "  prestige Galactic Succubus <- Synthetic Cadet + Synthetic Cadet: missing 1",
+            "  prestige Galactic Succubus <- Synthetic Cadet + Delish: missing 1",
+        ])
+
+    def test_unknowns(self):
+        unknown = fixer(Weapon=5)
+        del unknown["@TrainingEndDate"]
+        snapshot = v2_snap([unknown, fixer("102", room="13")], research=[])
+        replies = {7101: recipes_reply(("7003", "7003", "7101"), ("7003", "7999", "7101")), 7102: None}
+        self.assertEqual(self.lines(snapshot, replies)[1:], [
+            "  facility 11 GYM level 1: status Normal, training 0/2",
+            "  facility 12 Academy level 2: status Normal, training unknown/2",
+            "  research 610: not started",
+            "  crew 102 repair: skip not_in_training_room",
+            "  role shields: skip role_uncovered",
+            "  crew 101 weapons: skip training_in_progress, eligibility unknown",
+            "  prestige Delish: recipes unavailable",
+            "  prestige Galactic Succubus <- Synthetic Cadet + Synthetic Cadet: missing 1, eligibility unknown for 1",
+            "  prestige Galactic Succubus <- Synthetic Cadet + design 7999: missing 1",
+        ])
+        research_unobserved = self.lines(v2_snap(research=None), {})
+        self.assertIn("  research 610: unknown", research_unobserved)
+        self.assertIn("  crew 101 repair: skip research_unknown, eligibility unknown", research_unobserved)
+        unobserved = self.lines(v2_snap(None), {7101: recipes_reply(("7003", "7003", "7101"))})
+        self.assertEqual(unobserved[1:], [
+            "  crew: not planned",
+            "  prestige Delish: recipes unavailable",
+            "  prestige Galactic Succubus <- Synthetic Cadet + Synthetic Cadet: missing unknown",
+        ])
+
+    def test_a_partial_roster_is_unknown_to_prestige(self):
+        from sdk.policy.training import prestige_roster
+
+        partial = v2_snap([fixer(), {"@CharacterName": "No Id"}])
+        self.assertIsNone(prestige_roster(partial))
+        self.assertIsNone(prestige_roster(v2_snap(None)))
+        self.assertEqual([entry.character_id for entry in prestige_roster(v2_snap())], [101])  # control
+        lines = self.lines(partial, {7101: recipes_reply(("7003", "7003", "7101"))})
+        self.assertEqual(lines[1:], [
+            "  crew: not planned",
+            "  prestige Delish: recipes unavailable",
+            "  prestige Galactic Succubus <- Synthetic Cadet + Synthetic Cadet: missing unknown",
+        ])
+
+    def test_eligibility_unknown_lines_hold_one_skip_code(self):
+        import json
+        import re
+
+        with open(os.path.join(REPO_ROOT, "tests/fixtures/training/workflow_benchmark.json"), encoding="utf-8") as fh:
+            vocabulary = json.load(fh)["vocabulary"]["skip_codes"]
+        tired = fixer()
+        del tired["@Fatigue"]
+        lines = self.lines(v2_snap([tired]), {})
+        self.assertIn("  crew 101 repair: skip fatigued, eligibility unknown", lines)
+        self.assertIn("  crew 101 repair: skip fatigued", self.lines(v2_snap([fixer(fatigue="100")]), {}))  # known
+        line = next(entry for entry in lines if entry.startswith("  crew 101"))
+        found = [code for code in vocabulary if re.search(rf"(?<![A-Za-z0-9_]){code}(?![A-Za-z0-9_])", line)]
+        self.assertEqual(found, ["fatigued"])
+        self.assertNotIn("eligibility", vocabulary)
+        self.assertNotIn("unknown", vocabulary)
+
+    def test_facility_and_research_lines_come_from_the_planners_inputs(self):
+        import dataclasses
+
+        from sdk.policy import get_policy
+        from sdk.training.planner import RoomObservation
+
+        snapshot = v2_snap()
+        preview = get_policy("training-v2").crew_plan(snapshot, design(), PolicyConfig())
+        rooms = {**preview.inputs.rooms, "12": RoomObservation("12", "Lunar College", "Training", 3, 4, "Upgrading", 1)}
+        changed = dataclasses.replace(preview, inputs=dataclasses.replace(preview.inputs, rooms=rooms, research={}))
+        lines = self.lines(snapshot, {}, changed)
+        self.assertIn("  facility 12 Lunar College level 3: status Upgrading, training 1/4", lines)
+        self.assertIn("  research 610: not started", lines)
+        self.assertNotIn("  facility 12 Academy level 2: status Normal, training 0/2", lines)
+        self.assertIn("  facility 12 Academy level 2: status Normal, training 0/2", self.lines(snapshot, {}, preview))
+
+    def test_header_says_period_spend_is_not_counted(self):
+        import json
+
+        header = self.lines(v2_snap(), {})[0]
+        self.assertEqual(header, "Crew plan for account 'alpha' (training-v2, observed 2026-11-10T12:00:00+00:00; "
+                                 "spend journaled earlier this period is not counted)")
+        with open(os.path.join(REPO_ROOT, "tests/fixtures/training/workflow_benchmark.json"), encoding="utf-8") as fh:
+            vocabulary = json.load(fh)["vocabulary"]["skip_codes"]
+        self.assertEqual([code for code in vocabulary if code in header], [])
+
+    def test_skip_lines_and_design_names(self):
+        from sdk.policy.training import character_design_names, prestige_target_ids
+
+        lines = self.lines(v2_snap([fixer(fatigue="100"), fixer("102", Science=4, Repair=0, room="13"),
+                                    crew("c3", room="12")]), {})
+        self.assertIn("  crew 101 repair: skip fatigued", lines)
+        self.assertIn("  crew 102 shields: skip not_in_training_room", lines)
+        data = design(character_designs=TARGET_DESIGNS)
+        self.assertEqual(character_design_names(data), {7001: "Recruit", 7101: "Galactic Succubus", 7102: "Delish"})
+        self.assertEqual(prestige_target_ids(data), (7102, 7101))
+
+
+class CrewDesignReaderTests(unittest.TestCase):
+    # Verifies: S14-R2
+    def test_reader_returns_each_payload_only_after_a_good_read(self):
+        from sdk.fleet.factory import course_design_reader
+
+        class Reads:
+            def __init__(self, training_ok, rooms_ok):
+                self.training_ok, self.rooms_ok, self.calls = training_ok, rooms_ok, []
+                self.trainingDesigns, self.roomDesigns = "stale training", "stale rooms"
+
+            def listAllTrainingDesigns2(self):
+                self.calls.append("training")
+                return self.training_ok
+
+            def listRoomDesigns2(self):
+                self.calls.append("rooms")
+                return self.rooms_ok
+
+        for training_ok, rooms_ok, expected in ((True, True, ("stale training", "stale rooms")),
+                                                (False, True, (None, "stale rooms")),
+                                                (True, False, ("stale training", None)),
+                                                (None, None, (None, None))):
+            with self.subTest(training_ok=training_ok, rooms_ok=rooms_ok):
+                client = Reads(training_ok, rooms_ok)
+                read = course_design_reader(client)
+                self.assertEqual(client.calls, [])
+                self.assertEqual(read(), expected)
+                self.assertEqual(client.calls, ["training", "rooms"])
+                read()
+                self.assertEqual(len(client.calls), 4)
+
+    def test_only_training_v2_snapshots_get_the_reader(self):
+        import tempfile
+        import types
+
+        from sdk.fleet.accounts import AccountProfile
+        from sdk.fleet.factory import EnvironmentAccountFactory
+
+        class DesignListsClient:
+            """Logs in and serves the design lists the factory reads; nothing else."""
+
+            def __init__(self, device=None, settings=None):
+                self.calls = []
+
+            def login(self, email=None, password=None):
+                self.user = types.SimpleNamespace(id="1001", name=None)
+                return True
+
+            def listAllDesigns4(self):
+                return False
+
+            def listRoomDesigns2(self):
+                self.calls.append("listRoomDesigns2")
+                self.roomDesigns = V2_ROOM_DESIGNS
+                return True
+
+            def listAllResearchDesigns2(self):
+                self.allResearchDesigns = {"ResearchDesigns": {"ResearchDesign": RESEARCH_DESIGNS}}
+
+            def listAllTrainingDesigns2(self):
+                self.calls.append("listAllTrainingDesigns2")
+                self.trainingDesigns = courses_payload(V2_COURSE)
+                return True
+
+            def listAllCharacterDesigns2(self):
+                self.allCharacterDesigns = {"CharacterDesigns": {"CharacterDesign": CHARACTER_DESIGNS}}
+                return True
+
+        environ = {"BRAVO_EMAIL": "synthetic@example.invalid", "BRAVO_PASSWORD": "synthetic-password-0001"}
+        for policy_id, reads in (("training-v2", True), ("training-v1", False), ("fleet-v1", False),
+                                 ("baseline-v1", False)):
+            with self.subTest(policy_id=policy_id), tempfile.TemporaryDirectory() as tmp, \
+                    patch("sdk.fleet.factory.ClientSnapshotProvider") as provider:
+                factory = EnvironmentAccountFactory(tmp, client_cls=DesignListsClient, environ=environ)
+                context = factory(AccountProfile(alias="bravo", objective="grow", policy_id=policy_id,
+                                                 credentials_secret="BRAVO"))
+                options = provider.call_args.kwargs
+                self.assertEqual("design_reader" in options, reads)
+                if reads:
+                    del context.client.calls[:]
+                    self.assertEqual(options["design_reader"](), (courses_payload(V2_COURSE), V2_ROOM_DESIGNS))
+                    self.assertEqual(context.client.calls, ["listAllTrainingDesigns2", "listRoomDesigns2"])
+
+
+def execute_gate(actions=("add_training", "finish_training", "use_consumable", "upgrade_room",
+                          "collect_all_resources", "collect_daily_reward"), mode="full"):
+    """An --fleet-execute gate for the fixtures' account "alpha" (an authorization that allows ``actions``)."""
+    from sdk.fleet.accounts import registry_from_dict
+    from sdk.fleet.authorization import authorization_from_dict
+    from sdk.fleet.factory import ExecutionGate
+
+    now = datetime.now(timezone.utc)
+
+    def utc(moment):
+        return moment.isoformat().replace("+00:00", "Z")
+
+    authorization = authorization_from_dict({
+        "version": 1, "owner": "owner", "purpose": "offline execute test", "accounts": ["alpha"],
+        "actions": list(actions), "not_before": utc(now - timedelta(hours=1)), "expires": utc(now + timedelta(days=7)),
+        "caps": {"alpha": {"minerals": 1000, "gas": 1000}}, "modes": ["canary", "full"]})
+    registry = registry_from_dict({"version": 1, "accounts": [
+        {"alias": "alpha", "objective": "grow", "policy_id": "training-v2", "credentials_secret": "ALPHA"}]})
+    return ExecutionGate(authorization, registry, mode, lambda: now)
+
+
+class ExecuteHoldTests(unittest.TestCase):
+    # Verifies: S14-R4
+    def plan(self, policy_id, gate):
+        from sdk.fleet.factory import AuthorizedPolicy
+        from sdk.policy import get_policy
+
+        snapshot = v2_snap() if policy_id == "training-v2" else snap([crew("102", "Delish", room="12")])
+        return AuthorizedPolicy(get_policy(policy_id), gate).plan(snapshot, design(), PolicyConfig())
+
+    def test_training_v2_add_training_is_held_under_execute(self):
+        self.assertIn(V2_START, training_ids(v2_plan()))  # control: the plain policy (dry run) plans it
+        result = self.plan("training-v2", execute_gate())
+        self.assertEqual(training_requests(result), [])
+        self.assertEqual(reasons(result)["add_training 40001 101"],
+                         "training_v2_execute_hold: training-v2 starts no paid course under --fleet-execute until "
+                         "SPEC-14 step 4")
+        self.assertTrue(result.requests)  # the progression block still runs
+
+    def test_hold_comes_before_authorization_and_canary(self):
+        for gate in (execute_gate(mode="canary"), execute_gate(actions=["collect_daily_reward"])):
+            with self.subTest(mode=gate.canary):
+                result = self.plan("training-v2", gate)
+                self.assertTrue(reasons(result)["add_training 40001 101"].startswith("training_v2_execute_hold: "))
+
+    def test_training_v1_add_training_unchanged(self):
+        result = self.plan("training-v1", execute_gate())
+        self.assertEqual([(request.action_id, dict(request.params), dict(request.expected_cost))
+                          for request in training_requests(result)],
+                         [("add_training", {"training_design_id": "5030", "character_id": "102"},
+                           {"minerals": 0, "gas": 0})])
+
+    def test_hold_follows_the_policy_attribute_not_its_name(self):
+        from sdk.fleet.factory import AuthorizedPolicy
+        from sdk.policy import TrainingV2, get_policy
+
+        class RenamedV2(TrainingV2):
+            name = "training-v2-renamed"
+
+        self.assertIs(TrainingV2.holds_paid_training, True)
+        self.assertFalse(hasattr(get_policy("training-v1"), "holds_paid_training"))
+        result = AuthorizedPolicy(RenamedV2(), execute_gate()).plan(v2_snap(), design(), PolicyConfig())
+        self.assertEqual(training_requests(result), [])
+        self.assertTrue(reasons(result)["add_training 40001 101"].startswith("training_v2_execute_hold: "))
+
+        class Unheld(TrainingV2):
+            holds_paid_training = False
+
+        released = AuthorizedPolicy(Unheld(), execute_gate()).plan(v2_snap(), design(), PolicyConfig())
+        self.assertEqual([request.action_id for request in training_requests(released)], ["add_training"])
+
+    def test_hold_code_is_stable(self):
+        import json
+
+        from sdk.fleet import factory
+
+        self.assertEqual(factory.TRAINING_V2_EXECUTE_HOLD, "training_v2_execute_hold")
+        with open(os.path.join(REPO_ROOT, "tests/fixtures/training/workflow_benchmark.json"), encoding="utf-8") as fh:
+            vocabulary = json.load(fh)["vocabulary"]["skip_codes"]
+        self.assertNotIn(factory.TRAINING_V2_EXECUTE_HOLD, vocabulary)
+
+
 if __name__ == "__main__":
     unittest.main()

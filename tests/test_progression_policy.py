@@ -179,7 +179,7 @@ class BaselineV1Tests(unittest.TestCase):
         from sdk.fleet import registry_from_dict
         from sdk.policy import POLICIES, TrainingV1
 
-        self.assertEqual(sorted(POLICIES), ["baseline-v1", "fleet-v1", "hull-reserve-v1", "training-v1"])
+        self.assertEqual(sorted(POLICIES), ["baseline-v1", "fleet-v1", "hull-reserve-v1", "training-v1", "training-v2"])
         self.assertIsInstance(get_policy("training-v1"), TrainingV1)
         registry = registry_from_dict({"version": 1, "accounts": [
             {"alias": "alpha", "objective": "grow", "policy_id": "training-v1", "credentials_secret": "ALPHA_AUTH"}]})
@@ -208,6 +208,60 @@ class HullDesignRaceTests(unittest.TestCase):
             with self.subTest(policy=name):
                 planned = policy.plan(rich, hull_design, PolicyConfig())
                 self.assertNotIn("upgrade_ship", [request.action_id for request in planned.requests])
+
+
+class RemainingBudgetTests(unittest.TestCase):
+    # Verifies: S14-R2
+    def remaining(self, *costs, snapshot=None, **config):
+        """``remaining_budget`` after requests costing ``costs`` (training-v2 replays fleet-v1's costs this way)."""
+        from sdk.policy import ActionRequest
+        from sdk.policy.progression import remaining_budget
+
+        settings = {"mineral_reserve": 100, "max_mineral_spend": 900, **config}
+        requests = [ActionRequest("upgrade_room", {}, "r", cost) for cost in costs]
+        return remaining_budget(snapshot or snap(), PolicyConfig(**settings), requests)
+
+    def test_no_requests_leaves_the_balance_above_the_reserve_and_the_caps(self):
+        self.assertEqual(self.remaining(), ({"mineral": 900, "gas": 2000}, {"mineral": 900, "gas": None}))
+
+    def test_every_spelling_of_a_cost_kind_counts(self):
+        for kind in ("mineral", "minerals", "Minerals", "MINERAL"):
+            with self.subTest(kind=kind):
+                self.assertEqual(self.remaining({kind: 300}), ({"mineral": 600, "gas": 2000},
+                                                               {"mineral": 600, "gas": None}))
+        self.assertEqual(self.remaining({"gas": 50}, {"Gas": 25}, max_gas_spend=100),
+                         ({"mineral": 900, "gas": 1925}, {"mineral": 900, "gas": 25}))
+        self.assertEqual(self.remaining({"minerals": 300}, {"mineral": 200}),
+                         ({"mineral": 400, "gas": 2000}, {"mineral": 400, "gas": None}))
+
+    def test_starbux_and_zero_change_nothing_and_an_unknown_balance_stays_unknown(self):
+        unchanged = ({"mineral": 900, "gas": 2000}, {"mineral": 900, "gas": None})
+        for cost in ({"starbux": 5}, {"mineral": 0}, {"gas": 0}, {}):
+            with self.subTest(cost=cost):
+                self.assertEqual(self.remaining(cost), unchanged)
+        unobserved = snap(resources={"starbux": "5"})
+        self.assertEqual(self.remaining({"mineral": 300}, snapshot=unobserved),
+                         ({"mineral": None, "gas": None}, {"mineral": 600, "gas": None}))
+
+    def test_a_negative_cost_changes_nothing(self):
+        unchanged = ({"mineral": 900, "gas": 2000}, {"mineral": 900, "gas": 100})
+        for cost in ({"mineral": -300}, {"gas": -50}):
+            with self.subTest(cost=cost):
+                self.assertEqual(self.remaining(cost, max_gas_spend=100), unchanged)
+        self.assertEqual(self.remaining({"minerals": -1, "gas": 25}, max_gas_spend=100),
+                         ({"mineral": 900, "gas": 1975}, {"mineral": 900, "gas": 75}))
+
+    def test_an_unknown_kind_or_amount_fails_closed(self):
+        for cost, message in (({"crystals": 1}, "unknown cost kind 'crystals'"), ({"": 1}, "unknown cost kind ''"),
+                              ({"mineral": True}, "not a whole number"), ({"mineral": "300"}, "not a whole number"),
+                              ({"mineral": 1.5}, "not a whole number")):
+            with self.subTest(cost=cost), self.assertRaisesRegex(ValueError, message):
+                self.remaining(cost)
+
+    def test_results_are_fresh(self):
+        funds, caps = self.remaining()
+        funds["mineral"] = 0
+        self.assertEqual(self.remaining()[0]["mineral"], 900)
 
 
 if __name__ == "__main__":
