@@ -2,14 +2,19 @@
 
 import tempfile
 import unittest
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import Mock, patch
 
-from sdk.actions import CATALOG
-from sdk.actions.catalog import ROOM_FILL_EMPTY_NOTE, ROOM_FILL_UNREAD_REASON
+from sdk.actions import CATALOG, get_spec
+from sdk.actions.catalog import ROOM_FILL_EMPTY_NOTE, ROOM_FILL_UNREAD_REASON, training_start_verified
 from sdk.execution import ActionRunner, UncertainPriorAttemptError, call_arguments
+from sdk.execution import runner as runner_module
+from sdk.fleet.attempts import PENDING, RESOLVED, UNRESOLVED, VERIFIED, MemoryAttemptStore, TrainingGuard
 from sdk.journal import GameplayJournal, summarize
 from sdk.state import AccountMismatchError, build_snapshot
+from tests import training_fixtures
 from tests.test_action_catalog import DUE, STATS
 
 T0 = datetime(2026, 11, 10, 12, 0, tzinfo=timezone.utc)
@@ -529,6 +534,195 @@ class CollectionRoomFillTests(unittest.TestCase):
         group = self.collect(client).event.evidence["room_fill"][0]
         self.assertEqual((group["design_id"], group["name"], group["room_type"], group["fill_before"]),
                          ("41", None, None, 120))
+
+
+IDENTITY = "gid1-" + "c" * 32
+START = {"training_design_id": "5010", "character_id": "101"}
+COST = {"minerals": 500, "gas": 0}
+STRICT_ADD_TRAINING = replace(get_spec("add_training"), postcondition=training_start_verified)
+
+
+class Crash(BaseException):
+    """A process that dies inside the request."""
+
+
+class TrainingStartGuardTests(unittest.TestCase):
+    """The intent before the request and the settlement after it (SPEC-14 safety invariants), through the module
+    hooks ``write_training_intent`` and ``settle_training_intent`` (looked up at call time)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.journal = GameplayJournal(Path(self.tmp.name) / "events.jsonl")
+        self.clock = FakeClock()
+        self.world = FakeWorld(self.clock)
+        self.world.state["crew"] = [training_fixtures.crew("101")]
+        self.world.effect = self.start
+        self.store = MemoryAttemptStore()
+        self.store.provision("alpha", IDENTITY, T0)
+        self.recheck = Mock(return_value=None)
+        self.guard = TrainingGuard(self.store, "alpha", IDENTITY, self.recheck, self.clock)
+
+    def start(self, state):
+        end = training_fixtures.server_time(self.clock.now + timedelta(hours=1))
+        state["crew"] = [training_fixtures.crew("101", training="5010", end=end)]
+
+    def runner(self, guard="default", specs="strict"):
+        return ActionRunner("alpha", self.world, self.world.snapshot, self.journal, clock=self.clock,
+                            specs={"add_training": STRICT_ADD_TRAINING} if specs == "strict" else specs,
+                            attempt_guard=self.guard if guard == "default" else guard)
+
+    def attempt(self):
+        [attempt] = self.store.load("alpha").attempts
+        return attempt
+
+    def test_spec_override_is_used_for_the_verdict(self):
+        spy = Mock(side_effect=training_start_verified)
+        runner = self.runner(specs={"add_training": replace(STRICT_ADD_TRAINING, postcondition=spy)})
+        self.assertEqual(runner.run("add_training", START, expected_cost=COST).outcome, "verified")
+        spy.assert_called_once()
+        self.assertIs(self.runner().spec_for("add_training"), STRICT_ADD_TRAINING)
+        self.assertIs(ActionRunner("alpha", self.world, self.world.snapshot, self.journal).spec_for("add_training"),
+                      get_spec("add_training"))
+
+    def test_no_guard_no_specs_is_unchanged(self):
+        with patch.object(runner_module, "write_training_intent") as write, \
+                patch.object(runner_module, "settle_training_intent") as settle:
+            result = ActionRunner("alpha", self.world, self.world.snapshot, self.journal,
+                                  clock=self.clock).run("add_training", START, expected_cost=COST)
+        self.assertEqual(result.outcome, "verified")
+        write.assert_not_called()
+        settle.assert_not_called()
+
+    # Verifies: S14-R5
+    def test_intent_is_written_through_the_module_hook_before_the_call(self):
+        order = []
+        real = runner_module.write_training_intent
+
+        def write(store, alias, intent):
+            order.append(("intent", alias, intent.character_id, intent.training_design_id, dict(intent.planned_cost),
+                          len(self.world.calls)))
+            real(store, alias, intent)
+
+        with patch.object(runner_module, "write_training_intent", write):
+            result = self.runner().run("add_training", START, expected_cost=COST)
+        self.assertEqual(order, [("intent", "alpha", "101", "5010", {"minerals": 500}, 0)])
+        self.assertEqual(self.world.calls, [("addTraining", ("5010", "101"))])
+        self.assertEqual(result.outcome, "verified")
+        self.assertEqual(self.attempt().state, VERIFIED)
+        self.assertEqual(self.attempt().journal_attempt_id, result.event.attempt_id)
+        self.recheck.assert_called_once()
+
+    # Verifies: S14-R5
+    def test_intent_failure_sends_nothing(self):
+        with patch.object(runner_module, "write_training_intent", side_effect=OSError("disk full")):
+            with self.assertRaises(runner_module.IntentNotPersistedError):
+                self.runner().run("add_training", START, expected_cost=COST)
+        self.assertEqual(self.world.calls, [])
+        [event] = self.journal.read()
+        self.assertEqual((event.outcome, event.attempted, dict(event.params)), ("skipped", False, START))
+        self.assertTrue(event.reason.startswith("intent_not_persisted: "), event.reason)
+        self.assertEqual(self.store.load("alpha").attempts, ())
+
+    def test_settle_runs_after_the_outcome_is_journaled(self):
+        seen = []
+        real = runner_module.settle_training_intent
+
+        def settle(store, alias, intent_id, settlement):
+            seen.append(([event.attempt_id for event in self.journal.read()], dict(settlement)))
+            real(store, alias, intent_id, settlement)
+
+        with patch.object(runner_module, "settle_training_intent", settle):
+            result = self.runner().run("add_training", START, expected_cost=COST)
+        [(journaled, settlement)] = seen
+        self.assertEqual(journaled, [result.event.attempt_id])
+        self.assertEqual((settlement["outcome"], settlement["journal_attempt_id"]),
+                         ("verified", result.event.attempt_id))
+
+    # Verifies: S14-R5
+    def test_settle_failure_keeps_the_result_and_raises(self):
+        with patch.object(runner_module, "settle_training_intent", side_effect=OSError("disk full")):
+            with self.assertRaises(runner_module.AttemptSettlementError) as caught:
+                self.runner().run("add_training", START, expected_cost=COST)
+        self.assertEqual(caught.exception.result.outcome, "verified")
+        self.assertEqual([event.attempt_id for event in self.journal.read()], [caught.exception.result.event.attempt_id])
+        self.assertTrue(str(caught.exception).startswith("unresolved_attempt: "))
+        self.assertEqual(self.attempt().state, PENDING)  # still blocking
+        self.assertIsInstance(caught.exception, UncertainPriorAttemptError)  # the scheduler stops the account
+
+    def test_crash_during_the_call_propagates_without_settling(self):
+        self.world.raise_on_call = Crash()
+        with patch.object(runner_module, "settle_training_intent") as settle:
+            with self.assertRaises(Crash):
+                self.runner().run("add_training", START, expected_cost=COST)
+        settle.assert_not_called()
+        self.assertEqual(self.attempt().state, PENDING)
+
+    def test_guard_refusals_send_nothing(self):
+        self.store.write_intent("alpha", self.guard.intent({"training_design_id": "1", "character_id": "9"}, {}))
+        with patch.object(runner_module, "write_training_intent") as write:
+            with self.assertRaises(runner_module.TrainingStartRefusedError):
+                self.runner().run("add_training", START, expected_cost=COST)
+        write.assert_not_called()
+        self.assertEqual(self.world.calls, [])
+        event = self.journal.read()[-1]
+        self.assertTrue(event.reason.startswith("unresolved_attempt: "), event.reason)
+        # a recheck refusal skips the start without stopping the account
+        store = MemoryAttemptStore()
+        store.provision("alpha", IDENTITY, T0)
+        guard = TrainingGuard(store, "alpha", IDENTITY, Mock(return_value="price_unavailable: changed"), self.clock)
+        result = self.runner(guard=guard).run("add_training", START, expected_cost=COST)
+        self.assertEqual((result.outcome, result.attempted), ("skipped", False))
+        self.assertEqual(result.reason, "price_unavailable: changed")
+        self.assertEqual(self.world.calls, [])
+
+    def test_a_second_start_in_one_run_is_skipped(self):
+        runner = self.runner()
+        self.assertEqual(runner.run("add_training", START, expected_cost=COST).outcome, "verified")
+        self.world.state["crew"].append(training_fixtures.crew("102", name="Delish"))
+        other = {"training_design_id": "5010", "character_id": "102"}
+        result = runner.run("add_training", other, expected_cost=COST)
+        self.assertEqual((result.outcome, result.attempted), ("skipped", False))
+        self.assertEqual(len(self.world.calls), 1)
+
+    def test_guard_covers_only_its_actions(self):
+        self.world.effect = gain_minerals
+        with patch.object(runner_module, "write_training_intent") as write:
+            result = self.runner().run("collect_all_resources", expected_cost={})
+        write.assert_not_called()
+        self.assertEqual(result.outcome, "verified")
+
+    def test_after_snapshot_failure_settles_unknown(self):
+        self.world.fail_after_snapshot = True
+        result = self.runner().run("add_training", START, expected_cost=COST)
+        self.assertEqual(result.outcome, "unknown")
+        self.assertEqual((self.attempt().state, self.attempt().outcome), (UNRESOLVED, "unknown"))
+
+    def test_account_mismatch_after_send_settles_and_reraises(self):
+        def other_account(state):
+            self.start(state)
+            self.world.alias = "bravo"
+
+        self.world.effect = other_account
+        with self.assertRaises(AccountMismatchError):
+            self.runner().run("add_training", START, expected_cost=COST)
+        self.assertEqual(self.attempt().state, UNRESOLVED)
+
+    def test_a_reconciled_attempt_no_longer_blocks_the_same_params(self):
+        self.world.fail_after_snapshot = True
+        first = self.runner().run("add_training", START, expected_cost=COST)
+        self.assertEqual(first.outcome, "unknown")
+        self.world.fail_after_snapshot = False
+        self.world.state["crew"] = [training_fixtures.crew("101")]
+        fresh = TrainingGuard(self.store, "alpha", IDENTITY, None, self.clock)
+        with self.assertRaises(UncertainPriorAttemptError):  # the journal's per-params uncertainty
+            self.runner(guard=fresh).run("add_training", START, expected_cost=COST)
+        intent_id = self.attempt().intent_id
+        self.store.resolve("alpha", {intent_id: {"verdict": "not_running", "observed_phase": "none",
+                                                 "observed_course_id": None, "observed_end": None}}, T0)
+        self.assertEqual(self.attempt().state, RESOLVED)
+        fresh = TrainingGuard(self.store, "alpha", IDENTITY, None, self.clock)
+        self.assertEqual(self.runner(guard=fresh).run("add_training", START, expected_cost=COST).outcome, "verified")
 
 
 if __name__ == "__main__":

@@ -23,13 +23,21 @@ planned ``expected_cost`` and a resource's delta was not observed (including
 when the ``after`` snapshot failed), the planned amount is also journaled as
 ``<kind>_uncertain``: an amount that may have been spent, kept apart from
 observed spend so budgets can charge it without reports counting it.
+
+A runner can be given per-action ``specs`` overrides (training-v2's strict
+start verdict) and an ``attempt_guard`` (SPEC-14 step 4): before a guarded
+request is sent the guard rechecks it, then its intent is written durably
+through ``write_training_intent``; nothing is sent when either refuses or the
+write fails. Once the outcome is journaled it is settled through
+``settle_training_intent``; a settlement that cannot be written keeps the
+result and raises ``AttemptSettlementError``.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Callable, Mapping, Optional
+from typing import Any, Callable, Mapping, Optional, Protocol
 
 from sdk.actions import (
     ActionSpec,
@@ -61,6 +69,56 @@ COST_KINDS = {"mineral": "minerals", "minerals": "minerals", "gas": "gas", "star
 
 class UncertainPriorAttemptError(RuntimeError):
     """Raised when a non-idempotent action's last attempt is still uncertain."""
+
+
+# --- guarded starts (SPEC-14 step 4) ---------------------------------------------------------------------------------
+# A runner given an ``attempt_guard`` brackets each request of the guard's actions with a durable record: the intent is
+# written before the request is sent (nothing is sent when it cannot be written) and settled once the outcome is
+# journaled. Both go through these module-level hooks, looked up when they are called, so a test (or the offline
+# workflow benchmark) can make either write fail. The store is the guard's (``sdk.fleet.attempts``); this module
+# never imports it.
+
+def write_training_intent(store: Any, alias: str, intent: Any) -> None:
+    """Durably record a training attempt's intent before its request is sent."""
+    store.write_intent(alias, intent)
+
+
+def settle_training_intent(store: Any, alias: str, intent_id: str, settlement: Mapping[str, Any]) -> None:
+    """Durably record a sent training attempt's outcome once it is journaled."""
+    store.settle(alias, intent_id, settlement)
+
+
+class AttemptGuard(Protocol):
+    """What the runner needs from a guard (``sdk.fleet.attempts.TrainingGuard``)."""
+
+    actions: frozenset
+    store: Any
+
+    def before_send(self, before: AccountSnapshot, params: Mapping[str, Any],
+                    expected_cost: Optional[Mapping[str, Any]]) -> Optional[tuple[str, bool]]: ...
+    def intent(self, params: Mapping[str, Any], planned: Mapping[str, int]) -> Any: ...
+    def mark_sent(self, intent: Any) -> None: ...
+    def settlement(self, event: GameplayEvent) -> Mapping[str, Any]: ...
+    def reconciled(self) -> frozenset: ...
+    def intent_failure_reason(self, error: BaseException) -> str: ...
+    def settle_failure_reason(self, intent: Any, error: BaseException) -> str: ...
+
+
+class TrainingStartRefusedError(UncertainPriorAttemptError):
+    """The guard refused a start before anything was written or sent; the account stops."""
+
+
+class IntentNotPersistedError(UncertainPriorAttemptError):
+    """The intent could not be written durably, so nothing was sent; the account stops."""
+
+
+class AttemptSettlementError(UncertainPriorAttemptError):
+    """The request was sent and journaled, but its outcome could not be written to the store (the intent stays
+    pending and blocks later starts). ``result`` is the journaled result; the account stops."""
+
+    def __init__(self, message: str, result: "RunResult") -> None:
+        super().__init__(message)
+        self.result = result
 
 
 @dataclass(frozen=True)
@@ -127,12 +185,24 @@ class ActionRunner:
         snapshot_provider: SnapshotProvider,
         journal: GameplayJournal,
         clock: Clock = _utc_now,
+        *,
+        specs: Optional[Mapping[str, ActionSpec]] = None,
+        attempt_guard: Optional[AttemptGuard] = None,
     ) -> None:
+        """``specs`` overrides catalog specs by action id (training-v2's strict start verdict); ``attempt_guard``
+        brackets each request of its actions with a durable intent and settlement. Neither changes anything else."""
         self.account_alias = account_alias
         self.client = client
         self.snapshot_provider = snapshot_provider
         self.journal = journal
         self.clock = clock
+        self.specs = dict(specs or {})
+        self.attempt_guard = attempt_guard
+
+    def spec_for(self, action_id: str) -> ActionSpec:
+        """The spec this runner uses for ``action_id``: an override from ``specs``, else the catalog's."""
+        override = self.specs.get(action_id)
+        return override if override is not None else get_spec(action_id)
 
     # -- helpers ---------------------------------------------------------------------
 
@@ -157,9 +227,16 @@ class ActionRunner:
             )
         return snapshot
 
+    def _guard_for(self, spec: ActionSpec) -> Optional[AttemptGuard]:
+        guard = self.attempt_guard
+        return guard if guard is not None and spec.action_id in guard.actions else None
+
     def _last_attempt_uncertain(self, spec: ActionSpec, params: Mapping[str, Any]) -> bool:
         key = params_key(params)
         account_wide = spec.action_id in ACCOUNT_WIDE_UNCERTAINTY
+        guard = self._guard_for(spec)
+        # An attempt the guard's store records as reconciled by an operator is no longer uncertain.
+        reconciled = guard.reconciled() if guard is not None else frozenset()
         attempts = [
             event
             for event in self.journal.read()
@@ -167,8 +244,17 @@ class ActionRunner:
             and event.action_id == spec.action_id
             and event.attempted
             and (account_wide or params_key(event.params) == key)
+            and event.attempt_id not in reconciled
         ]
         return bool(attempts) and attempts[-1].outcome == ReconciliationStatus.UNKNOWN.value
+
+    def _settle(self, guard: AttemptGuard, intent: Any, result: "RunResult") -> "RunResult":
+        """Record the journaled outcome of a guarded request in the guard's store."""
+        try:
+            settle_training_intent(guard.store, self.account_alias, intent.intent_id, guard.settlement(result.event))
+        except Exception as error:  # the intent stays pending, which blocks later starts just the same
+            raise AttemptSettlementError(guard.settle_failure_reason(intent, error), result) from None
+        return result
 
     # -- public API ------------------------------------------------------------------
 
@@ -181,7 +267,7 @@ class ActionRunner:
         allow_after_uncertain: bool = False,
         expected_cost: Optional[Mapping[str, Any]] = None,
     ) -> RunResult:
-        spec = get_spec(action_id)
+        spec = self.spec_for(action_id)
         params = dict(params or {})
         planned = planned_cost(expected_cost)
         started = self.clock()
@@ -217,6 +303,27 @@ class ActionRunner:
                                 reason=f"dry run: would call Client.{spec.client_method}", attempted=False,
                                 dry_run=True)
 
+        guard = self._guard_for(spec)
+        intent = None
+        if guard is not None:
+            verdict = guard.before_send(before, params, expected_cost)
+            if verdict is not None:
+                reason, stop = verdict
+                result = self._record(spec, started, params, outcome="skipped", reason=reason, attempted=False,
+                                      error_class="TrainingStartRefusedError" if stop else None)
+                if stop:
+                    raise TrainingStartRefusedError(reason)
+                return result
+            intent = guard.intent(params, planned)
+            try:
+                write_training_intent(guard.store, self.account_alias, intent)  # durable before anything is sent
+            except Exception as error:
+                reason = guard.intent_failure_reason(error)
+                self._record(spec, started, params, outcome="skipped", reason=reason, attempted=False,
+                             error_class="IntentNotPersistedError")
+                raise IntentNotPersistedError(reason) from None
+            guard.mark_sent(intent)
+
         method = getattr(self.client, spec.client_method)
         probe_before = spec.evidence_probe(self.client) if spec.evidence_probe else None
 
@@ -235,16 +342,23 @@ class ActionRunner:
         try:
             after = self._observe()
         except AccountMismatchError as error:
-            self._record(spec, started, params, outcome="unknown", reason=str(error), attempted=True,
-                         response_ok=response_ok, error_class="AccountMismatchError",
-                         cost=with_uncertain_cost({}, planned), evidence=evidence(ReconciliationStatus.UNKNOWN))
+            mismatch = self._record(spec, started, params, outcome="unknown", reason=str(error), attempted=True,
+                                    response_ok=response_ok, error_class="AccountMismatchError",
+                                    cost=with_uncertain_cost({}, planned),
+                                    evidence=evidence(ReconciliationStatus.UNKNOWN))
+            if guard is not None:
+                try:
+                    self._settle(guard, intent, mismatch)
+                except AttemptSettlementError:  # still pending: it blocks just the same
+                    pass
             raise
         except Exception as error:
-            return self._record(spec, started, params, outcome="unknown",
-                                reason="after-snapshot failed; effect cannot be reconciled", attempted=True,
-                                response_ok=response_ok, error_class=error_class or type(error).__name__,
-                                cost=with_uncertain_cost({}, planned),
-                                evidence=evidence(ReconciliationStatus.UNKNOWN))
+            failed = self._record(spec, started, params, outcome="unknown",
+                                  reason="after-snapshot failed; effect cannot be reconciled", attempted=True,
+                                  response_ok=response_ok, error_class=error_class or type(error).__name__,
+                                  cost=with_uncertain_cost({}, planned),
+                                  evidence=evidence(ReconciliationStatus.UNKNOWN))
+            return self._settle(guard, intent, failed) if guard is not None else failed
 
         result = reconcile(spec, before, after, params, response_ok=response_ok)
         outcome, reason = result.status, result.reason
@@ -267,6 +381,7 @@ class ActionRunner:
         # in which case the planned amount (if any) is kept apart as possibly spent.
         cost = with_uncertain_cost(
             {"minerals_delta": delta.minerals, "gas_delta": delta.gas, "starbux_delta": delta.starbux}, planned)
-        return self._record(spec, started, params, outcome=outcome.value, reason=reason, attempted=True,
-                            response_ok=response_ok, error_class=error_class, cost=cost,
-                            evidence=observed)
+        result = self._record(spec, started, params, outcome=outcome.value, reason=reason, attempted=True,
+                              response_ok=response_ok, error_class=error_class, cost=cost,
+                              evidence=observed)
+        return self._settle(guard, intent, result) if guard is not None else result
