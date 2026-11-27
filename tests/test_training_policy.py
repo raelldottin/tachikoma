@@ -1339,13 +1339,38 @@ class TrainingV2ExecuteGateTests(unittest.TestCase):
         block = "unresolved_attempt: training attempt 0123abcd (character 9, course 1) is pending"
         result = self.plan("training-v2", execute_gate(), training_block=block)
         self.assertEqual(training_requests(result), [])
+        self.assertIn("add_training 40001 101", reasons(result))
         self.assertEqual(reasons(result)["add_training 40001 101"], block)
         self.assertTrue(result.requests)  # the progression block still runs
         nothing_planned = self.plan("training-v2", execute_gate(), snapshot=v2_snap([]), training_block=block)
+        # Regression QA2-R37: the block is recorded even when no start was planned
+        self.assertIn("training", reasons(nothing_planned), "a block with no planned start recorded no rejection")
         self.assertEqual(reasons(nothing_planned)["training"], block)
         # a policy without the attribute ignores a block
         v1 = self.plan("training-v1", execute_gate(), training_block=block)
         self.assertEqual([request.action_id for request in training_requests(v1)], ["add_training"])
+
+    # Regression QA2-R39: authorization is checked before the price, so an unauthorized starbux-priced start reads
+    # not_authorized (the starbux refusal is only for a start the authorization allows)
+    def test_an_unauthorized_starbux_start_names_not_authorized(self):
+        from sdk.fleet.factory import AuthorizedPolicy
+        from sdk.policy import get_policy
+
+        snapshot = v2_snap()
+        starbux = {"starbux": 5, "minerals": 0, "gas": 0}
+        start = ActionRequest("add_training", dict(V2_START[1]), "a starbux course", starbux)
+        upgrade = ActionRequest("upgrade_room", {"room_id": "1"}, "a starbux upgrade", starbux)
+
+        def refusal(gate, request):
+            return AuthorizedPolicy(get_policy("training-v2"), gate)._refusal(snapshot, request, True, None)
+
+        unauthorized = execute_gate(actions=["collect_daily_reward"])
+        self.assertTrue(refusal(unauthorized, start).startswith("not_authorized: action 'add_training'"),
+                        refusal(unauthorized, start))
+        self.assertTrue(refusal(unauthorized, upgrade).startswith("not authorized: action 'upgrade_room'"),
+                        refusal(unauthorized, upgrade))
+        self.assertTrue(refusal(execute_gate(), start).startswith("premium_currency: "), refusal(execute_gate(), start))
+        self.assertEqual(refusal(execute_gate(), upgrade), "starbux spending is disabled in execute runs")
 
     def test_canary_still_keeps_no_training_start(self):
         result = self.plan("training-v2", execute_gate(mode="canary"))

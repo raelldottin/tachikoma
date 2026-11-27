@@ -65,6 +65,38 @@ def codes_in(text):
     return {code for code in VOCABULARY if re.search(rf"(?<![A-Za-z0-9_]){re.escape(code)}(?![A-Za-z0-9_])", text)}
 
 
+CONTENDED_TIMEOUT = 10.0  # seconds; a contended acquisition must return at once, so this only bounds a failure
+
+
+def without_waiting(test, call, release=None, what="a contended acquisition of the account lock"):
+    """``call()`` run in a daemon thread: its value is returned, its exception raised again.
+
+    Regression QA1-Q16: a call still running after ``CONTENDED_TIMEOUT`` (a blocking lock waiting for its holder)
+    fails ``test`` instead of hanging the module. ``release`` (the holder's release, when the test owns it) is called
+    first, so the waiting thread can finish.
+    """
+    outcome = []
+
+    def target():
+        try:
+            outcome.append((True, call()))
+        except BaseException as error:  # handed back to the test's thread
+            outcome.append((False, error))
+
+    thread = threading.Thread(target=target, name="contended-acquisition", daemon=True)
+    thread.start()
+    thread.join(CONTENDED_TIMEOUT)
+    if thread.is_alive():
+        if release is not None:
+            release()
+            thread.join(CONTENDED_TIMEOUT)
+        test.fail(f"{what} waited for the holder instead of returning at once")
+    ok, value = outcome[0]
+    if not ok:
+        raise value
+    return value
+
+
 def params(cid="1001", course="41"):
     return {"training_design_id": course, "character_id": cid}
 
@@ -115,10 +147,20 @@ class PureCoreTests(unittest.TestCase):
             "missing key": json.dumps({**good, "attempts": [{k: v for k, v in good["attempts"][0].items()
                                                             if k != "character_id"}]}).encode(),
             "extra key": json.dumps({**good, "attempts": [{**good["attempts"][0], "note": "x"}]}).encode(),
+            # Regression QA2-R2: an older version is not version 1 either
+            "old version": json.dumps({**good, "version": 0}).encode(),
+            # Regression QA2-R3: a resolution is recorded when, and only when, the attempt is resolved
+            "resolved without evidence": json.dumps({**good, "attempts": [{**good["attempts"][0], "state": RESOLVED,
+                                                                          "resolution": None}]}).encode(),
+            "blocking with evidence": json.dumps({**good, "attempts": [{**good["attempts"][0], "resolution": {
+                "verdict": "started", "previous_state": PENDING}}]}).encode(),
+            # Regression QA2-R4: a boolean is not an amount
+            "boolean amount": json.dumps({**good, "attempts": [{**good["attempts"][0],
+                                                                "planned_cost": {"minerals": True}}]}).encode(),
         }
         for name, raw in cases.items():
             with self.subTest(name):
-                with self.assertRaises(StoreUnreadable) as caught:
+                with self.assertRaises(StoreUnreadable, msg=f"a store with {name} was read as fresh") as caught:
                     parse_store(raw, "alpha")
                 self.assertEqual(caught.exception.code, "state_unreadable")
 
@@ -194,6 +236,13 @@ class PureCoreTests(unittest.TestCase):
         linked = settled(state, "0" * 32, {"outcome": "unknown", "journal_attempt_id": "j1",
                                            "settled_at": T0.isoformat()})
         self.assertEqual(resolved(linked, {"0" * 32: evidence}, T0, events).attempts[0].journal_attempt_id, "j1")
+        # Regression QA2-R10: both ends of the window are inclusive; under frozen clocks the request finishes at the
+        # very instant its intent was written
+        [pending] = state.attempts
+        self.assertEqual(attempts.journal_attempt_link(pending, [event("same-instant", T0)]), "same-instant",
+                         "a request finishing at the instant its intent was written was not linked")
+        self.assertEqual(attempts.journal_attempt_link(pending, [event("at-resolution", T0 + second)], T0 + second),
+                         "at-resolution")
 
     def test_reconciled_never_raises_and_covers_nothing_without_a_readable_store(self):
         training = TrainingAttempts(MemoryAttemptStore(), MemoryAccountLock())
@@ -248,6 +297,11 @@ class PureCoreTests(unittest.TestCase):
         rows = [
             ("running requested", [tf.ended("101", ago=-hour, design_id="5010")], "started", None),
             ("running other", [tf.ended("101", ago=-hour, design_id="5011")], "other_course", None),
+            # Regression QA2-R12: a course that started and already ended (not yet claimed) did run
+            ("ended unclaimed requested", [tf.ended("101", ago=timedelta(seconds=30), design_id="5010")], "started",
+             None),
+            ("ended unclaimed other", [tf.ended("101", ago=timedelta(seconds=30), design_id="5011")], "other_course",
+             None),
             ("idle", [tf.crew("101")], "not_running", None),
             ("member absent", [tf.crew("102")], None, "not on the roster"),
             ("roster unread", None, None, "not complete"),
@@ -321,6 +375,31 @@ class StartRefusalTests(unittest.TestCase):
                 reason = start_refusal(preview([start_request(minerals=500)]), params(), planned)
                 self.assertIsNotNone(reason, "a free plan skipped the price recheck")
                 self.assertTrue(reason.startswith("price_unavailable: "), reason)
+
+    # Regression QA2-R13: an explicit zero is no cost, on either side
+    def test_an_explicit_zero_equals_no_cost(self):
+        for planned, minerals in (({}, 0), ({"minerals": 0}, 0), ({"minerals": 0, "gas": 0}, 0),
+                                  ({"minerals": 500, "gas": 0}, 500)):
+            with self.subTest(planned=planned, minerals=minerals):
+                self.assertIsNone(start_refusal(preview([start_request(minerals=minerals)]), params(), planned),
+                                  "an explicit zero amount was taken for a price change")
+
+    # Regression QA2-R14: resource names are compared in the journal's spelling (mineral and minerals are one)
+    def test_resource_names_are_normalised_before_comparing(self):
+        for planned in ({"mineral": 500}, {"Minerals": 500}, {"MINERAL": 500, "Gas": 0}):
+            with self.subTest(planned=planned):
+                self.assertIsNone(start_refusal(preview([start_request()]), params(), planned),
+                                  f"{planned} was taken for another price than 500 minerals")
+
+    # Regression QA2-R15: the fresh read planning another course for the same member is refused, whatever its price
+    def test_another_course_on_the_fresh_read_is_refused(self):
+        for minerals in (500, 600):
+            with self.subTest(minerals=minerals):
+                reason = start_refusal(preview([start_request(course="42", minerals=minerals)]), params(course="41"),
+                                       {"minerals": 500})
+                self.assertIsNotNone(reason, "the stale planned course passed the recheck")
+                self.assertTrue(reason.startswith("the fresh read plans course 42 for character 1001 instead"), reason)
+                self.assertEqual(codes_in(reason), set(), reason)  # no skip code: refused without one
 
     def test_a_crew_skip_on_the_fresh_read_names_its_code(self):
         for code in ("insufficient_funds", "room_not_ready", "premium_currency", "training_in_progress"):
@@ -421,15 +500,46 @@ class FileStoreTests(StoreContract, TempDirCase):
         self.assertTrue(caught.exception.established)
         self.assertFalse((self.root / "alpha.json").exists())
 
+    # Regression QA2-R19: the store is published before its marker, so a crash between the two never leaves an
+    # established marker without a store (an account wedged in state_missing for ever)
     def test_a_crash_between_the_store_and_its_marker_leaves_a_usable_store(self):
         store = self.make_store()
         with patch.object(FileAttemptStore, "_mark", side_effect=OSError("crash before the marker")):
             with self.assertRaises(OSError):
                 store.provision("alpha", ID_A, T0)
+        self.assertTrue((self.root / "alpha.json").exists(), "a crash before the marker left no store")
+        self.assertFalse(store.established(ID_A), "a crash between the writes left a marker")
         self.assertEqual(store.load("alpha").game_identity, ID_A)  # the store first ...
         self.assertFalse(store.established(ID_A))  # ... then its marker
         self.assertFalse(store.provision("alpha", ID_A, T0))  # provisioning again only writes the marker
         self.assertTrue(store.established(ID_A))
+
+    # Regression QA2-R19: the marker is written only once the store it protects is on disk
+    def test_the_marker_is_written_after_the_store(self):
+        store = self.make_store()
+        mark = FileAttemptStore._mark
+        seen = []
+
+        def mark_and_look(this, alias, identity, now):
+            seen.append((self.root / "alpha.json").exists())
+            return mark(this, alias, identity, now)
+
+        with patch.object(FileAttemptStore, "_mark", mark_and_look):
+            self.assertTrue(store.provision("alpha", ID_A, T0))
+        self.assertEqual(seen, [True], "the establishment marker was written before its store")
+
+    # Regression QA2-R20: a provision that lost the race to another never overwrites the winner's store
+    def test_a_racing_provision_never_overwrites_the_winners_store(self):
+        store = self.make_store()
+        store.ensure_root()
+        winner = dump_store(with_intent(virgin_store("alpha", ID_A, T0), intent()))  # already holds an intent
+        (self.root / "alpha.json").write_bytes(winner)
+        # the loser read no store (before the winner published it) and has no marker to stop it
+        with patch.object(store, "_read", return_value=None):
+            with self.assertRaises(FileExistsError, msg="a racing provision replaced the winner's store"):
+                store.provision("alpha", ID_A, T0 + timedelta(seconds=1))
+        self.assertEqual((self.root / "alpha.json").read_bytes(), winner)
+        self.assertEqual(sorted(path.name for path in self.root.iterdir()), ["alpha.json"])  # no temporary left
 
     def test_provision_refuses_to_recreate_established_state(self):
         store = self.make_store()
@@ -561,13 +671,17 @@ class LockContract:
         lock = self.make_lock()
         first = lock.try_acquire(ID_A)
         self.assertIsNotNone(first)
-        self.assertIsNone(lock.try_acquire(ID_A))  # same thread, a new open file description
+        # same thread, a new open file description (still a thread of its own, so a blocking lock fails, not hangs)
+        self.assertIsNone(without_waiting(self, lambda: lock.try_acquire(ID_A), first.release))
         other = lock.try_acquire(ID_B)  # another identity is independent
         self.assertIsNotNone(other)
         seen = []
-        thread = threading.Thread(target=lambda: seen.append(lock.try_acquire(ID_A)))
+        thread = threading.Thread(target=lambda: seen.append(lock.try_acquire(ID_A)), daemon=True)
         thread.start()
-        thread.join()
+        thread.join(CONTENDED_TIMEOUT)
+        if thread.is_alive():
+            first.release()
+            self.fail("another thread's acquisition waited for the holder instead of returning at once")
         self.assertEqual(seen, [None])  # another thread never blocks and never gets it
         first.release()
         first.release()  # idempotent
@@ -634,7 +748,7 @@ class FileLockTests(LockContract, TempDirCase):
                 self.assertLess(time.monotonic(), deadline)
                 time.sleep(0.05)
             started = time.monotonic()
-            self.assertIsNone(lock.try_acquire(ID_A))
+            self.assertIsNone(without_waiting(self, lambda: lock.try_acquire(ID_A), child.kill))
             self.assertLess(time.monotonic() - started, 5)  # non-blocking
         finally:
             child.kill()  # a crash: the OS releases the flock
@@ -665,7 +779,7 @@ class DispatchTests(TempDirCase):
             self.assertFalse(dispatch.locked)
             self.assertIsNone(dispatch.refusal)
             self.assertEqual(dispatch.state.game_identity, ID_A)
-            self.assertIsNone(service.lock.try_acquire(ID_A))  # held for the whole dispatch
+            self.assertIsNone(without_waiting(self, lambda: service.lock.try_acquire(ID_A)))  # held for the dispatch
         handle = service.lock.try_acquire(ID_A)
         self.assertIsNotNone(handle)
         handle.release()
@@ -731,10 +845,15 @@ class DispatchTests(TempDirCase):
         with patch.object(service.store, "load", side_effect=AssertionError("the store is not read")):
             with service.hold("alpha", ID_A) as dispatch:  # unprovisioned: the lock alone, its directory created
                 self.assertEqual((dispatch.locked, dispatch.refusal, dispatch.state), (False, None, None))
-                self.assertIsNone(service.lock.try_acquire(ID_A))
-                with service.hold("alpha", ID_A) as overlapping:
-                    self.assertTrue(overlapping.locked)
-                    self.assertEqual(codes_in(overlapping.refusal), {"locked"})
+                self.assertIsNone(without_waiting(self, lambda: service.lock.try_acquire(ID_A)))
+
+                def overlap():
+                    with service.hold("alpha", ID_A) as overlapping:
+                        return overlapping.locked, overlapping.refusal
+
+                locked, refusal = without_waiting(self, overlap, what="an overlapping hold")
+                self.assertTrue(locked)
+                self.assertEqual(codes_in(refusal), {"locked"})
         handle = service.lock.try_acquire(ID_A)
         self.assertIsNotNone(handle)
         handle.release()
@@ -750,14 +869,28 @@ class DispatchTests(TempDirCase):
         observe = Mock(side_effect=AssertionError("nothing blocks: no read"))
         self.assertEqual(service.resolve("alpha", ID_A, observe, lambda: T0), [])
         service.store.write_intent("alpha", intent(cid="101", course="5010", now=T0))
-        held = []
+        held, at_write = [], []
+
+        def try_the_lock():
+            return without_waiting(self, lambda: service.lock.try_acquire(ID_A))
 
         def read():
-            held.append(service.lock.try_acquire(ID_A))
+            held.append(try_the_lock())
             return tf.snap(crew_records=[tf.crew("101")], observed_at=T0 + timedelta(seconds=1), game_identity=ID_A)
 
-        [(attempt, evidence)] = service.resolve("alpha", ID_A, read, lambda: T0 + timedelta(seconds=2))
+        write = service.store.resolve
+
+        def write_and_look(*args, **kwargs):
+            at_write.append(try_the_lock())
+            if at_write[-1] is not None:
+                at_write[-1].release()
+            return write(*args, **kwargs)
+
+        with patch.object(service.store, "resolve", side_effect=write_and_look):
+            [(attempt, evidence)] = service.resolve("alpha", ID_A, read, lambda: T0 + timedelta(seconds=2))
         self.assertEqual(held, [None])  # the read happened under the lock
+        # Regression QA2-R24: and so did the write of the reconciliation
+        self.assertEqual(at_write, [None], "the reconciliation was written after the account lock was released")
         self.assertEqual((attempt.character_id, evidence["verdict"]), ("101", "not_running"))
         self.assertEqual(service.store.load("alpha").attempts[0].state, RESOLVED)
         # another identity's read resolves nothing
@@ -844,7 +977,7 @@ class DispatchTests(TempDirCase):
         self.assertTrue(service.provision("alpha", ID_A, T0))
         held = service.lock.try_acquire(ID_A)
         with self.assertRaises(attempts.AccountLocked):
-            service.provision("alpha", ID_A, T0)
+            without_waiting(self, lambda: service.provision("alpha", ID_A, T0), held.release, "a locked provision")
         held.release()
         self.assertFalse(service.provision("alpha", ID_A, T0))
 
@@ -870,6 +1003,25 @@ class GuardTests(TempDirCase):
         reason, stop = fresh.before_send(before, params(), {})
         self.assertEqual((codes_in(reason), stop), ({"state_missing"}, True))
         self.assertEqual(recheck.call_count, 2)
+
+    # Regression QA2-R29: a settlement is dated by the clock when it is written, not by its request's start, so a
+    # roster read taken between the request and its settlement is never newer than the settlement
+    def test_a_settlement_is_dated_when_it_is_written(self):
+        from sdk.journal import GameplayEvent
+
+        settled_at = T0 + timedelta(seconds=30)
+        guard = attempts.TrainingGuard(FileAttemptStore(self.journal_dir), "alpha", ID_A, None, lambda: settled_at)
+        event = GameplayEvent.create(account_alias="alpha", action_id="add_training", started_at=T0,
+                                     finished_at=T0 + timedelta(seconds=5), outcome="unknown", reason="r",
+                                     attempted=True, attempt_id="j1", params=params())
+        self.assertEqual(guard.settlement(event), {"outcome": "unknown", "reason": "r", "journal_attempt_id": "j1",
+                                                   "settled_at": settled_at.isoformat()})
+        attempt = settled(with_intent(virgin_store("alpha", ID_A, T0), intent(now=T0)), "0" * 32,
+                          guard.settlement(event)).attempts[0]
+        evidence, why = classify_resolution(attempt, tf.snap(crew_records=[tf.crew("1001")],
+                                                             observed_at=T0 + timedelta(seconds=10)))
+        self.assertIsNone(evidence)
+        self.assertIn("not newer than the attempt's settlement", why)
 
     def test_factory_imports_the_attempt_module_at_its_top_level(self):
         # FakePss swaps the clocks of the sdk modules loaded before it is installed (tests/fakes/pss_server.py).

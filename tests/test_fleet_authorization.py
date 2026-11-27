@@ -454,6 +454,11 @@ class TrainingV2AuthorizationTests(unittest.TestCase):
         unauthorized = authorization_from_dict(payload(accounts=["bravo"], caps={"bravo": {"minerals": 0, "gas": 0}},
                                                        modes=["full"]))
         self.assertEqual(training_authorization_refusals(unauthorized, reg, ["alpha"], "full"), [])  # said already
+        # Regression QA2-R43: a disabled training-v2 account never runs, so it needs no add_training
+        disabled = registry_from_dict({"version": 1, "accounts": [
+            {"alias": "alpha", "objective": "grow", "policy_id": "training-v2",
+             "credentials_secret": "TACHIKOMA_ALPHA_AUTH", "enabled": False}]})
+        self.assertEqual(training_authorization_refusals(without, disabled, ["alpha"], "full"), [])
 
 
 LIVE_DIR = Path(os.path.abspath(__file__)).parents[1] / "docs" / "experiments" / "live"

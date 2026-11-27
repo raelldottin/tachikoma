@@ -536,6 +536,32 @@ class DryRunRequirementTests(FleetExecuteTestCase):
         self.assertEqual(second.evidence[DRY_RUN_REGISTRY], "0123456789abcdef")
         self.assertRegex(second.evidence[DRY_RUN_ID], r"^[0-9a-f]{32}$")
 
+    # Regression QA2-R40, QA2-R41: a dry run finished exactly now, or exactly 24 hours ago, still qualifies
+    def test_the_dry_run_age_limits_are_inclusive(self):
+        from sdk.fleet.factory import DRY_RUN_MAX_AGE, latest_dry_run
+
+        now = datetime(2026, 11, 10, 12, 0, tzinfo=timezone.utc)
+        profile = AccountProfile(alias="alpha", objective="grow", policy_id="training-v2",
+                                 credentials_secret="ALPHA")
+        second = timedelta(seconds=1)
+
+        def finished(at):
+            return [GameplayEvent.create(account_alias="alpha", action_id="add_training", started_at=at,
+                                         finished_at=at, outcome="skipped", reason="dry run", attempted=False,
+                                         dry_run=True, evidence={DRY_RUN_ID: "0" * 32, DRY_RUN_POLICY: "training-v2",
+                                                                 DRY_RUN_REGISTRY: "0123456789abcdef"})]
+
+        self.assertEqual(DRY_RUN_MAX_AGE, timedelta(hours=24))
+        for age, why in ((-second, "its latest dry run is dated in the future"), (timedelta(0), None),
+                         (DRY_RUN_MAX_AGE, None), (DRY_RUN_MAX_AGE + second, "its latest dry run is older than 24 "
+                                                                            "hours")):
+            with self.subTest(age=age):
+                plan, reason = latest_dry_run(finished(now - age), profile, "0123456789abcdef", now)
+                self.assertEqual(reason, why)
+                self.assertEqual(plan is None, why is not None)
+                if plan is not None:
+                    self.assertEqual(plan.finished_at, now - age)
+
     # Verifies: S05-R3
     def test_the_fleet_dry_run_stamps_its_plan_with_the_registry_and_policy(self):
         self.dry_run()
@@ -1981,6 +2007,32 @@ def training_world(*, crew=("cora",), mineral=1000, gas=0, **options):
     return world
 
 
+class NonBlockingLockWatch:
+    """Stands in for ``fcntl`` inside ``sdk.fleet.attempts``: an account-lock ``flock`` that would wait for its holder
+    (no ``LOCK_NB``) is recorded and made non-blocking, so it fails the test instead of hanging the module.
+
+    Regression QA1-Q16: these runs contend for a lock the test (or another dispatch) holds. A blocking lock would park
+    the run until the holder lets go: a hook acquiring inside the run that holds the lock never returns, and a run left
+    waiting in a thread would carry on after the fake server is uninstalled. The watch keeps every run bounded.
+    """
+
+    def __init__(self):
+        import fcntl
+
+        self._fcntl = fcntl
+        self.waiting = []
+
+    def __getattr__(self, name):
+        return getattr(self._fcntl, name)
+
+    def flock(self, fd, operation):
+        fcntl = self._fcntl
+        if operation & (fcntl.LOCK_EX | fcntl.LOCK_SH) and not operation & fcntl.LOCK_NB:
+            self.waiting.append(operation)
+            operation |= fcntl.LOCK_NB
+        return fcntl.flock(fd, operation)
+
+
 class TrainingExecutionCase(unittest.TestCase):
     """A scratch directory holding a training-v2 registry for 'alpha' and an owner authorization for it."""
 
@@ -1988,7 +2040,26 @@ class TrainingExecutionCase(unittest.TestCase):
     actions = ("add_training",)
     policy_id = "training-v2"
 
+    def watch_the_lock(self):
+        """Every account-lock acquisition of this test must return at once (``NonBlockingLockWatch``)."""
+        if "lock_watch" not in vars(self):  # once per test: subtests call setUp() again
+            from sdk.fleet import attempts
+
+            self.lock_watch = NonBlockingLockWatch()
+            watching = patch.object(attempts, "fcntl", self.lock_watch)
+            watching.start()
+            self.addCleanup(watching.stop)
+
+    def assert_no_lock_waited(self):
+        waiting, self.lock_watch.waiting[:] = list(self.lock_watch.waiting), []  # each wait is reported once
+        self.assertEqual(waiting, [], "an account-lock acquisition would wait for its holder instead of returning "
+                                      "at once")
+
+    def tearDown(self):
+        self.assert_no_lock_waited()
+
     def setUp(self):
+        self.watch_the_lock()
         tmp = tempfile.TemporaryDirectory(prefix="tachikoma-training-exec-")
         self.addCleanup(tmp.cleanup)
         cwd = os.getcwd()
@@ -2033,6 +2104,7 @@ class TrainingExecutionCase(unittest.TestCase):
                 code = run.main()
             except SystemExit as stop:
                 code = stop.code
+        self.assert_no_lock_waited()
         return code, out.getvalue(), err.getvalue()
 
     def provision(self, alias="alpha"):
@@ -2433,6 +2505,9 @@ class TrainingStartTests(TrainingStartCase):
         self.assertEqual([(item["action_id"], item["outcome"]) for item in account["results"]],
                          [("add_training", "verified")])
         self.assertIn("unresolved_attempt", codes_in(account["reason"]))
+        # Regression QA2-R50: a start that was sent is never printed as a skipped one
+        self.assertEqual([row for row in self.training_rows(out) if row.startswith("| alpha | add_training ")], [],
+                         out)
         self.assert_lock_released()
         # the next run (Cora is busy now, so the planner would pick Gina if she were there) starts nothing
         self.fake.state.characters.append(crew_plan_tests.Character("1002", "Gina", "31", "11",
@@ -2504,6 +2579,9 @@ class TrainingStartTests(TrainingStartCase):
         self.store_path.write_bytes(HARNESS_CORRUPTION)  # only full mode reads the store
         code, out, err = self.main("--fleet-execute", "--authorization", "authorization.json", "--mode", "canary",
                                    *COMMON_TRAINING_ARGS)
+        # Regression QA2-R48: only a full run preflights the store before login
+        self.assertNotIn("state_unreadable", out + err)
+        self.assertEqual(code, 0, out + err)
         [account] = self.latest_record()["accounts"]
         self.assertNotEqual(account["status"], "locked", out + err)
         self.assertNotIn("state_unreadable", out + err)
@@ -2869,6 +2947,13 @@ class TrainingStartTests(TrainingStartCase):
                 self.assertEqual(self.starts_since(mark), [])
                 self.assertIn("unresolved_attempt",
                               set().union(*(codes_in(text) for text in self.record_texts(self.latest_record()))))
+                # Regression QA2-R36: the block reaches the plan, so no start is planned (and then refused at send
+                # time, which would stop the account): the account completes its other work
+                [account] = self.latest_record()["accounts"]
+                self.assertEqual(account["status"], "completed", self.record_texts(self.latest_record()))
+                self.assertEqual([item for item in account["results"] if item["action_id"] == "add_training"], [])
+                self.assertIn({"unresolved_attempt"}, [codes_in(item["reason"]) for item in account["rejected"]
+                                                       if item["candidate"].startswith(("training", "add_training"))])
 
     # Verifies: S14-R6
     def test_a_stop_file_created_mid_run_sends_nothing(self):
@@ -3129,6 +3214,7 @@ class TrainingDistinctAccountsTests(TrainingStartCase):
                 code = run.main()
             except SystemExit as stop:
                 code = stop.code
+        self.assert_no_lock_waited()
         return code, out.getvalue(), err.getvalue()
 
     # Verifies: S14-R6
