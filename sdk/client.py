@@ -25,6 +25,7 @@ from .dotnet import DotNet
 from .redaction import redact_secrets, safe_log_message  # noqa: F401
 from .execution.training import run_training
 from .training.parse import parse_research_family_levels, research_course
+from .boost import plan_boost_gauge
 
 
 def lowercase_urlencode(params: dict) -> str:
@@ -719,8 +720,20 @@ class Client(object):
         An empty ``<ShipService/>`` or ``<GetShipByUserId/>`` parses to None rather than a mapping.
         """
         node = getattr(self, "shipByUserId", None)
-        for key in ("ShipService", "GetShipByUserId", "Ship"):
+        for key in ("ShipService",):
             node = node.get(key) if isinstance(node, dict) else None
+        if not isinstance(node, dict):
+            return None
+        # The ship read (GetShipByUserId) and the ship boost reply
+        # (SpeedUpShipConstructionUsingBoostGauge) both carry a Ship under
+        # ShipService; accept either wrapper.
+        for wrapper in ("GetShipByUserId", "SpeedUpShipConstructionUsingBoostGauge"):
+            if wrapper in node:
+                node = node.get(wrapper)
+                break
+        else:
+            return None
+        node = node.get("Ship") if isinstance(node, dict) else None
         return node if isinstance(node, dict) else None
 
     def getShipByUserId(self, userId=0):
@@ -1927,74 +1940,73 @@ class Client(object):
 
         return {}
 
-    # Determine the boost gauge before attempting to speed up a room
-    def speedUpResearchUsingBoostGauge(self, researchId, researchDesignId):
-        if not hasattr(self, "allResearchDesigns"):
-            if not self.listAllResearchDesigns2():
-                return False
+    def _speedUpUsingBoostGauge(self, what, url):
+        """POST one boost-gauge speedup; True on a reply without an error message."""
+        r = self.request(url, "POST")
+        if not r or "errorMessage" in r.text:
+            logging.info(f"[{self.info['@Name']}] Failed to speed up {what} with the boost gauge.")
+            return False
+        logging.info(f"[{self.info['@Name']}] Sped up {what} with the boost gauge.")
+        return True
 
-        for i in self.allResearchDesigns["ResearchService"]["ListAllResearchDesigns"][
-            "ResearchDesigns"
-        ]["ResearchDesign"]:
-            if i["@ResearchDesignId"] == researchDesignId:
-                url = f"https://api.pixelstarships.com/ResearchService/SpeedUpResearchUsingBoostGauge?researchId={researchId}&accessToken={self.accessToken}&clientDateTime={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}"
-                r = self.request(url, "POST")
-                if r and "@errorMessage" in r.text:
-                    logging.info(
-                        f"[{self.info['@Name']}] Failed to speed up research for {''.join(i['@ResearchName'])}."
-                    )
-                    return False
-                logging.info(
-                    f"[{self.info['@Name']}] Speeding up research for {''.join(i['@ResearchName'])}."
-                )
-                return True
-        return False
+    def speedUpResearchUsingBoostGauge(self, researchId):
+        """``researchId`` is the in-progress research's ``@ResearchId``, not its ``@ResearchDesignId``."""
+        url = f"https://api.pixelstarships.com/ResearchService/SpeedUpResearchUsingBoostGauge?researchId={researchId}&accessToken={self.accessToken}&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
+        return self._speedUpUsingBoostGauge("research", url)
 
-    # Determine the boost gauge before attempting to speed up a room
-    def speedUpRoomConstructionUsingBoostGauge(self, roomId, roomDesignId):
-        if not hasattr(self, "roomDesigns"):
-            if not self.listRoomDesigns2():
-                return False
+    def speedUpRoomConstructionUsingBoostGauge(self, roomId):
+        url = f"https://api.pixelstarships.com/RoomService/SpeedUpRoomConstructionUsingBoostGauge?roomId={roomId}&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}&accessToken={self.accessToken}"
+        return self._speedUpUsingBoostGauge("room construction", url)
 
-        room_designs = _extract_collection(getattr(self, "roomDesigns", None), "RoomDesign")
-        for i in room_designs:
-            if i.get("@RoomDesignId") == roomDesignId:
-                url = f"https://api.pixelstarships.com/RoomService/SpeedUpRoomConstructionUsingBoostGauge?roomId={roomId}&clientDateTime={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}&accessToken={self.accessToken}"
-                r = self.request(url, "POST")
-                if r and "errorMessage" in r.text:
-                    logging.info(
-                        f"[{self.info['@Name']}] Failed to speed contruction for {''.join(i['@RoomName'])}."
-                    )
-                    return False
-                logging.info(
-                    f"[{self.info['@Name']}] Speeding up contruction for {''.join(i['@RoomName'])}."
-                )
-                return True
-        return False
+    def speedUpShipConstructionUsingBoostGauge(self, shipId, shipDesignId=None):
+        """Speeds up a ship upgrade too: the live game sends ship upgrades to this construction endpoint.
+        Live capture returns the full upgraded ship; parse it like a ship read
+        so callers see the updated state without an extra GetShipByUserId."""
+        url = f"https://api.pixelstarships.com/ShipService/SpeedUpShipConstructionUsingBoostGauge?shipId={shipId}&clientDateTime={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}&accessToken={self.accessToken}"
+        r = self.request(url, "POST")
+        if not r or "errorMessage" in r.text or "@errorMessage" in r.text:
+            logging.info(f"[{self.info['@Name']}] Failed to speed up ship construction.")
+            return False
+        try:
+            parsed = xmltodict.parse(r.content, xml_attribs=True)
+            if isinstance(parsed, dict) and "ShipService" in parsed:
+                self.shipByUserId = parsed
+                ship = self._shipRecord()
+                if isinstance(ship, dict):
+                    self.rooms = (ship.get("Rooms") or {}).get("Room") or []
+                    self.researches = (ship.get("Researches") or {}).get("Research") or []
+        except Exception:
+            logging.exception(f"[{self.info['@Name']}] Failed to parse ship boost reply.")
+        logging.info(f"[{self.info['@Name']}] Speeding up ship construction.")
+        return True
 
-    def rushResearchOrConstruction(self):
-        if not hasattr(self, "shipByUserId"):
-            self.getShipByUserId()
+    def speedUpBoostGauge(self):
+        """Spend the boost gauge on at most one in-progress item per run.
 
-        if "ShipService" in self.shipByUserId:
-            for i in self.shipByUserId["ShipService"]["GetShipByUserId"]["Ship"][
-                "Researches"
-            ]["Research"]:
-                if i["@ResearchState"] == "Researching":
-                    return self.speedUpResearchUsingBoostGauge(
-                        i["@ResearchId"], i["@ResearchDesignId"]
-                    )
-                for i in self.shipByUserId["ShipService"]["GetShipByUserId"]["Ship"][
-                    "Rooms"
-                ]["Room"]:
-                    if i["@RoomStatus"] == "Upgrading":
-                        return self.speedUpRoomConstructionUsingBoostGauge(
-                            i["@RoomId"], i["@RoomDesignId"]
-                        )
-        logging.debug(
-            f'[{self.info["@Name"]}] There are no rooms or research to speed up.'
-        )
-        return False
+        Tries ``sdk.boost.plan_boost_gauge``'s candidates (research, then rooms, then the ship upgrade) in order
+        and stops after the first success; a failed or raising call moves on to the next. Returns True after a
+        success and None when nothing was sped up (no candidate, or every call failed, as with an empty gauge).
+        Never raises.
+        """
+        try:
+            if self._shipRecord() is None:
+                self.getShipByUserId()
+            decisions = plan_boost_gauge(self._shipRecord())
+        except Exception as e:
+            logging.warning(f"[{self.info['@Name']}] Boost gauge: ship not read: {redact_secrets(str(e))}")
+            return None
+        speedups = {"research": self.speedUpResearchUsingBoostGauge,
+                    "room": self.speedUpRoomConstructionUsingBoostGauge,
+                    "ship": self.speedUpShipConstructionUsingBoostGauge}
+        for decision in decisions:
+            try:
+                if speedups[decision.kind](decision.id):
+                    return True
+            except Exception as e:
+                logging.warning(
+                    f"[{self.info['@Name']}] Boost gauge: {decision.kind} speedup failed: {redact_secrets(str(e))}")
+        logging.debug(f"[{self.info['@Name']}] Boost gauge: nothing sped up ({len(decisions)} candidates).")
+        return None
 
     def upgradeResearches(self):
         self.listAllResearches()
@@ -2063,7 +2075,7 @@ class Client(object):
         """Research family (line) -> highest completed course, by ``sdk.training.parse``'s contract.
 
         Each list is fetched at most once per client. A failed fetch leaves its attribute absent (never a None
-        placeholder), so readers that fetch on a missing attribute, like speedUpResearchUsingBoostGauge, still do.
+        placeholder), so readers that fetch on a missing attribute still do.
         """
         attempted = self.__dict__.setdefault("_researchFetchAttempted", set())
         for attribute, fetch in (("allResearches", self.listAllResearches),

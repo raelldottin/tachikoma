@@ -126,7 +126,7 @@ KNOWN_DEFECTS = {
 # Client methods run.main() calls on the daily path, in run.py's order (run.py ~L1745-1876).
 DAILY_STEPS = (
     "heartbeat", "purchaseScorchedPodIfAffordable", "grabFlyingStarbux", "collectTaskReward", "getCrewInfo",
-    "upgradeResearches", "upgradeRooms", "collectDailyReward", "collectAvailableMarkers",
+    "upgradeResearches", "upgradeRooms", "speedUpBoostGauge", "collectDailyReward", "collectAvailableMarkers",
     "collectMiningDronesWithTravel", "listActiveMarketplaceMessages", "getMessages", "infoBux", "manageTraining",
     "analyzeShipLayout", "getResourceTotals", "upgradeCharacters",
 )
@@ -452,6 +452,8 @@ EXPECTED_STEP_PATHS = {  # manageTraining is owned by EXPECTED_TRAINING_PATHS
                      "POST /RoomService/UpgradeRoom2",  # room 104 -> design 51
                      "POST /RoomService/CollectAllResources",
                      "GET /ShipService/GetShipByUserId"),  # pass 2 requests nothing -> break
+    # One boost per run: the research upgradeResearches started wins over the upgrading rooms and the ship upgrade.
+    "speedUpBoostGauge": ("POST /ResearchService/SpeedUpResearchUsingBoostGauge",),
     "collectDailyReward": ("POST /UserService/CollectDailyReward2",),
     "collectAvailableMarkers": ("GET /GalaxyService/ListStarSystemMarkersAndUserMarkers",
                                 "POST /GalaxyService/CollectMarker2"),  # user marker 9004 (M1 fixed in #276)
@@ -489,6 +491,10 @@ EXPECTED_STEP_MUTATIONS = {  # manageTraining is owned by EXPECTED_TRAINING
     "upgradeRooms": (
         ("POST", "/RoomService/UpgradeRoom2", {"roomId": "104", "upgradeRoomDesignId": "51", "accessToken": T}),
         COLLECT),
+    "speedUpBoostGauge": (
+        # @ResearchId of the research AddResearch started, never its design id "10"
+        ("POST", "/ResearchService/SpeedUpResearchUsingBoostGauge", {"researchId": "700004", "accessToken": T,
+                                                                     "clientDateTime": N}),),
     "collectDailyReward": (
         ("POST", "/UserService/CollectDailyReward2", {"dailyRewardStatus": "Box", "argument": "3", "accessToken": T}),),
     "collectAvailableMarkers": (
@@ -777,6 +783,8 @@ FATAL_STEP_FAULTS: tuple[tuple[str, str, dict[str, Any], str], ...] = (
 # Later steps whose requests legitimately differ from the baseline after a fault (state or cache the fault changed).
 DIFFERS_AFTER_FAULT = {
     "getCrewInfo": {"manageTraining"},  # refetches the characters getCrewInfo failed to load
+    "upgradeResearches": {"speedUpBoostGauge"},  # no research started, so the boost goes to a room
+    "upgradeRooms": {"speedUpBoostGauge"},  # the unparsed ship is read again before boosting
 }
 
 
@@ -798,6 +806,43 @@ class DailyRunFailureContinuationTests(NeedsHealthyBaseline):
                     if later_step not in DIFFERS_AFTER_FAULT.get(step, set()):
                         self.assertEqual(actual[later_step], expected[later_step], later_step)
                 self.assertTrue(daily.log.endswith("INFO [SyntheticCaptain] Finished...\n"), daily.log[-500:])
+                assert_protocol_clean(self, fake)
+
+    def test_failed_boosts_move_on_to_the_next_candidate_without_failing_the_run(self):
+        research = ("POST", "/ResearchService/SpeedUpResearchUsingBoostGauge",
+                    {"researchId": "700004", "clientDateTime": N, "accessToken": T})
+        room_104 = ("POST", "/RoomService/SpeedUpRoomConstructionUsingBoostGauge",
+                    {"roomId": "104", "clientDateTime": N, "accessToken": T})
+        room_105 = ("POST", "/RoomService/SpeedUpRoomConstructionUsingBoostGauge",
+                    {"roomId": "105", "clientDateTime": N, "accessToken": T})
+        ship = ("POST", "/ShipService/SpeedUpShipConstructionUsingBoostGauge",
+                {"shipId": "800000501", "clientDateTime": N, "accessToken": T})
+        rows = (
+            ("an errorMessage moves on to the first upgrading room",
+             (("/ResearchService/SpeedUpResearchUsingBoostGauge", {"error": "Boost gauge is not full"}),),
+             (research, room_104)),
+            ("a network failure moves on as well (urllib3 sends the research boost 11 times first)",
+             (("/ResearchService/SpeedUpResearchUsingBoostGauge", {"raises": requests.ConnectionError, "times": 11}),),
+             (research,) * 11 + (room_104,)),
+            ("every call failing (an empty gauge) tries each candidate once, in order",
+             (("/ResearchService/SpeedUpResearchUsingBoostGauge", {"error": "Boost gauge is not full"}),
+              ("/RoomService/SpeedUpRoomConstructionUsingBoostGauge", {"error": "Boost gauge is not full", "times": 2}),
+              ("/ShipService/SpeedUpShipConstructionUsingBoostGauge", {"error": "Boost gauge is not full"})),
+             (research, room_104, room_105, ship)),
+        )
+        expected = baseline().traffic_by_step()
+        for why, faults, boosts in rows:
+            with self.subTest(why=why):
+                fake = FakePss(default_world())
+                for path, kwargs in faults:
+                    fake.fail(path, **kwargs)
+                daily = run_daily(fake)
+                self.assertEqual(daily.code, 0, daily.log[-2000:])
+                self.assertEqual(daily.mutations_by_step()["speedUpBoostGauge"], boosts)
+                assert_every_step_ran(self, daily)
+                actual = daily.traffic_by_step()
+                for later_step in steps_after("speedUpBoostGauge"):
+                    self.assertEqual(actual[later_step], expected[later_step], later_step)
                 assert_protocol_clean(self, fake)
 
     def test_manage_training_exception_exits_1_and_later_steps_still_run(self):
@@ -1067,7 +1112,7 @@ class DailyRunVariantTests(NeedsHealthyBaseline):
         self.assertEqual(daily.mutations_by_step()["grabFlyingStarbux"], (
             ("POST", "/UserService/AddStarbux2", {"quantity": "5", "clientDateTime": N, "checksum": C,
                                                   "accessToken": T}),))  # random.randint(1, 5) under seed 5343
-        self.assertIn(("/UserService/AddStarbux2", "727f074bf71e9d7d35d7bbc567de90e1"), checksums(daily.fake))
+        self.assertIn(("/UserService/AddStarbux2", "a348c9fab2ca97bb9150b64e8d7ee5ef"), checksums(daily.fake))
         self.assertEqual((world.account.free_starbux_today, world.account.credits), (9, 210))  # 215 - 10 task + 5
         self.assertIn("You have collected a total of 9 starbux today.", daily.log)
         # 9 < 10, so run.py skips collectTaskReward altogether.
@@ -1283,7 +1328,10 @@ class MinimalWorldTests(NeedsHealthyBaseline):
     def test_minimal_world_run_exits_zero_and_only_collects_resources(self):
         daily = run_daily(FakePss(minimal_world()))
         self.assertEqual(daily.code, 0, daily.log[-2000:])
-        self.assertEqual(daily.mutations_by_step(), {"upgradeResearches": (COLLECT,)})  # sent before any research
+        self.assertEqual(daily.mutations_by_step(), {
+            "upgradeResearches": (COLLECT,),
+            "speedUpBoostGauge": (("POST", "/ShipService/SpeedUpShipConstructionUsingBoostGauge",
+                                   {"shipId": "800000501", "clientDateTime": N, "accessToken": T}),)})
         assert_every_step_ran(self, daily)
         assert_protocol_clean(self, daily.fake)
 
@@ -1325,9 +1373,13 @@ class MultiRunTests(NeedsHealthyBaseline):
 
         first = run_daily(fake)  # 72 / 100 = 72 %: S-T1, Bench Press (ungated), with no FinishTraining first (D3)
         self.assertEqual(training_of(first), [("AddTraining", crew.id, "3", None)])
-        self.assertEqual(first.mutations_by_step(), {"upgradeResearches": (COLLECT,), "manageTraining": (
-            ("POST", "/TrainingService/AddTraining", {"trainingDesignId": "3", "characterId": crew.id,
-                                                      "trainingStartDate": N, "accessToken": T}),)})
+        self.assertEqual(first.mutations_by_step(), {
+            "upgradeResearches": (COLLECT,),
+            "speedUpBoostGauge": (("POST", "/ShipService/SpeedUpShipConstructionUsingBoostGauge",
+                                   {"shipId": "800000501", "clientDateTime": N, "accessToken": T}),),
+            "manageTraining": (("POST", "/TrainingService/AddTraining",
+                                {"trainingDesignId": "3", "characterId": crew.id,
+                                 "trainingStartDate": N, "accessToken": T}),)})
         self.assertIn("] Starting training Bench Press for Galactic Succubus in Galaxy Gym with 72% training complete\n",
                       first.log)
         self.assertIn("training: started=1 finished=0 consumables=0 skipped=0 failed=0\n", first.log)

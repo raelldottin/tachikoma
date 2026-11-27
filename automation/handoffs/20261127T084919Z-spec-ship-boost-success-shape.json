@@ -1,0 +1,43 @@
+{
+  "slice_id": "spec-ship-boost-success-shape",
+  "status": "done",
+  "summary": "PR #296 (ship boost) completed using the mitmproxy capture of SpeedUpShipConstructionUsingBoostGauge. The endpoint POSTs shipId/clientDateTime/accessToken and replies with the full upgraded ship under ShipService/SpeedUpShipConstructionUsingBoostGauge/Ship (plus User), not a Success envelope. The fake server now returns that shape; the client parses the reply into shipByUserId/rooms/researches and _shipRecord accepts both GetShipByUserId and SpeedUpShipConstructionUsingBoostGauge wrappers. Capability inventory marks the ship boost and orchestrator methods as mocked-test.",
+  "files_touched": [
+    "sdk/client.py",
+    "tests/fakes/pss_server.py",
+    "tests/test_training_endpoints.py",
+    "docs/baseline/capability-inventory.json"
+  ],
+  "validations_passed": [],
+  "validations_failed": [],
+  "proof_level": "domain-tested",
+  "missing_proof_levels": [
+    "build-tested",
+    "running-app-smoke",
+    "flow-verified",
+    "screenshot-verified",
+    "device-verified",
+    "testflight-verified"
+  ],
+  "contract_status_changes": [
+    {
+      "contract": "Recognise the live ship boost reply",
+      "before": "fake returned a Success envelope; client ignored the reply body",
+      "after": "fake returns the full upgraded ship; client parses ShipService/SpeedUpShipConstructionUsingBoostGauge/Ship into ship state",
+      "proof": [
+        "tests/test_training_endpoints.py TestShipBoost",
+        "tests/test_capability_inventory.py"
+      ]
+    }
+  ],
+  "residual_risks": [
+    "The User element present in the live reply is not consumed by the fake or client; only Ship/Rooms/Researches are mirrored.",
+    "Auth material from the capture is not preserved in any artifact."
+  ],
+  "recommended_next_slice": "",
+  "recommended_next_reason": "",
+  "repo_clean_status": "clean",
+  "git_mirror_status": "mirrored",
+  "dirty_paths_outside_scope": [],
+  "timestamp": "2026-11-27T08:49:19Z"
+}

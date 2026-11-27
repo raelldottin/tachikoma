@@ -77,10 +77,21 @@ branch-protection setup.
 
 - Automated collection of resources and rewards.
 - Crew and room upgrades management.
+- Boost-gauge speedups for research, room upgrades and ship upgrades, one per run.
 - Marketplace and messages handling.
 - Optional email logging for monitoring script activities.
 - End-to-end ship battle flow (CreateBattle9 → AcceptBattle5 → FinaliseBattle15).
 - Crew stat formula integration from the Crew Planning and Training Guide.
+
+### Boost gauge
+
+After `upgradeRooms`, the daily run spends the boost gauge on at most one item that is under way. `sdk/boost.py` reads the ship record from `GetShipByUserId` and lists the candidates in a fixed order:
+
+1. Research being researched, by its `@ResearchId` (`ResearchService/SpeedUpResearchUsingBoostGauge`). The research instance id is sent, never `@ResearchDesignId`.
+2. Each upgrading room, in the ship record's order, by its `@RoomId` (`RoomService/SpeedUpRoomConstructionUsingBoostGauge`).
+3. A ship upgrade, when `@UpgradeShipDesignId` is not `""` or `"0"`, by its `@ShipId` (`ShipService/SpeedUpShipConstructionUsingBoostGauge`). The live game uses this construction endpoint for ship upgrades too.
+
+`Client.speedUpBoostGauge` tries the candidates in that order and stops after the first success. A refused or failed call, such as one with an empty gauge, moves on to the next candidate. A failed boost never fails the daily run, and the bot never spends starbux on a speedup.
 
 ### Progression dry run
 

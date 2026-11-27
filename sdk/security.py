@@ -461,14 +461,16 @@ def checksum_add_starbux2(
 
     URL: /UserService/AddStarbux2?quantity={0}&clientDateTime={1}&checksum={2}&accessToken={3}
 
-    Formula (inferred from IL2CPP template, not yet capture-verified):
-        preimage  = quantity + clientDateTime + accessToken + checksumKey
+    Formula (pattern-matched from verified MD5 endpoints GoTo and SpeedUpTravelling;
+    not yet capture-verified for AddStarbux2 specifically):
+        preimage  = clientDateTime + quantity + accessToken + checksumKey
         encrypted = preimage + savyChecksum
         checksum  = MD5(encrypted)
 
-    The IL2CPP template confirms this is a new-style MD5 endpoint (has checksum= param
-    in URL template with full param order). Previous code incorrectly used the old-style
-    numeric formula.
+    Verified endpoints GoTo and SpeedUpTravelling both place clientDateTime FIRST in the
+    preimage regardless of URL parameter order. This change aligns AddStarbux2 with that
+    pattern. The previous formula (quantity first) was inferred from IL2CPP template
+    but caused "An error occurred" responses from the live server.
 
     Args:
         quantity: Starbux quantity (e.g., "1")
@@ -489,7 +491,7 @@ def checksum_add_starbux2(
             "configuration values compatible with the installed game version."
         )
 
-    preimage = quantity + client_date_time + access_token + checksum_key
+    preimage = client_date_time + quantity + access_token + checksum_key
     encrypted = preimage + savy_checksum
     return hashlib.md5(encrypted.encode("utf-8")).hexdigest()
 

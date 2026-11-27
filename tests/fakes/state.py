@@ -140,6 +140,8 @@ class Research:
     # ListAllResearchDesigns2 instead (defect D1, fixed).
     name: str | None = None
     level: int | None = None
+    # The research instance's @ResearchId (what SpeedUpResearchUsingBoostGauge takes); emitted only when set.
+    id: str | None = None
 
 
 @dataclass

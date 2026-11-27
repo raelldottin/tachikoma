@@ -41,7 +41,7 @@ The offline PvP assessment library in `sdk/pvp/` (pillar C) is pure analysis cod
 
 ### R2: automated growth engine
 
-- Boost-gauge speed-ups, `rushResearchOrConstruction`, mining drones and marker collection are untested. The training, crew upgrade and consumable wrappers (`addTraining`, `finishTraining`, `upgradeCharacter`, `useConsumable`, `activateItem3`) have mocked tests in `tests/test_training_endpoints.py`, but no captured live success reply yet: the reply element names they accept are assumed.
+- Boost-gauge speed-ups (research, room and ship upgrades, `speedUpBoostGauge`) have mocked tests in `tests/test_boost.py`. Mining drones and marker collection are untested. The training, crew upgrade and consumable wrappers (`addTraining`, `finishTraining`, `upgradeCharacter`, `useConsumable`, `activateItem3`) have mocked tests in `tests/test_training_endpoints.py`, but no captured live success reply yet: the reply element names they accept are assumed.
 - `run.py` executes a fixed daily sequence. There is no policy that ranks actions against resources, cooldowns or PvP readiness.
 
 ### R3: PvP automation engine
