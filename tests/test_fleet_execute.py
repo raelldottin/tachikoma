@@ -2331,6 +2331,57 @@ class TrainingStartTests(TrainingStartCase):
         self.assertIsNone(record["stop_reason"])
         self.assertEqual(self.store()["attempts"], [])
 
+    def change_the_price_after_planning(self, price):
+        """The course's price changes after the planning read, before the runner's read under the lock (the 3rd
+        course list read of an execute run: claim snapshot, planning snapshot, then the runner's ``before``)."""
+        def raise_price(fake, exchange):
+            fake.state.training_design("41").price = price
+
+        return self.fake.on_reply("GET /TrainingService/ListAllTrainingDesigns2", raise_price, nth=3)
+
+    # Verifies: S14-R4
+    def test_a_price_change_before_sending_is_refused_under_the_lock(self):
+        for price, code in (("mineral:600", "price_unavailable"), ("mineral:1200", "insufficient_funds"),
+                            ("starbux:5", "premium_currency")):
+            with self.subTest(price=price):
+                self.setUp()
+                self.ready()
+                hook = self.change_the_price_after_planning(price)
+                mark = self.mark()
+                exit_code, out, err = self.execute()
+                self.assertEqual(hook.hits, 1)
+                self.assertEqual(self.starts_since(mark), [], out + err)
+                self.assertEqual(self.mutations_since(mark), [])
+                [event] = self.executed_events()
+                self.assertEqual((event.action_id, event.outcome, event.attempted), ("add_training", "skipped", False))
+                self.assertEqual(codes_in(event.reason), {code}, event.reason)
+                self.assertEqual(self.store()["attempts"], [])  # no intent: nothing was going to be sent
+                self.assertEqual(exit_code, 0, out + err)  # a skipped start does not stop the account
+
+    # Verifies: S14-R6
+    def test_the_lock_is_held_across_earlier_progression_actions(self):
+        from sdk.fleet.attempts import FileAccountLock
+
+        self.write_authorization(actions=["add_training", "collect_daily_reward"])
+        self.ready()
+        seen = []
+
+        def try_the_lock(fake, exchange):
+            handle = FileAccountLock(self.store_root).try_acquire(self.identity)
+            seen.append(handle)
+            if handle is not None:
+                handle.release()
+
+        self.fake.on_reply("POST /UserService/CollectDailyReward2", try_the_lock)
+        self.fake.on_reply("POST /TrainingService/AddTraining", try_the_lock)
+        mark = self.mark()
+        code, out, err = self.execute()
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual([entry.path for entry in self.mutations_since(mark)],
+                         ["/UserService/CollectDailyReward2", ADD_TRAINING])
+        self.assertEqual(seen, [None, None])  # held during the earlier action and during the start
+        self.assert_lock_released()
+
     def test_training_v1_execute_needs_no_store_and_creates_none(self):
         self.policy_id = "training-v1"
         self.write_registry()

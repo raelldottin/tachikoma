@@ -1405,8 +1405,22 @@ class _ExecuteGateMixin:
         # ... and released when the block exits, however it exits (never settled there)
 
     def _training_recheck(self, profile: AccountProfile, context: AccountContext, policy: ProgressionPolicy):
-        """The start's recheck on the runner's fresh read: the same start at the same price must still be planned."""
-        return None
+        """The start's recheck on the runner's fresh read: the same start at the same price must still be planned.
+
+        Pure over the runner's ``before`` snapshot (no extra request): the policy's crew plan is computed again from it,
+        with the caps less everything charged this period so far (earlier actions of this run included), and must
+        still start the same course for the same crew member at the same authoritative price and currency.
+        """
+        gated = self.gate.profile(profile)
+
+        def recheck(before: AccountSnapshot, params: Mapping[str, Any],
+                    expected_cost: Optional[Mapping[str, Any]]) -> Optional[str]:
+            spent_now = spent_in_period(context.journal, profile.alias, self.clock() - self.period)
+            config_now, _ = budgeted_policy_config(gated, spent_now, self.base_policy_config)
+            nothing = Plan(policy.name, profile.alias, before.observed_at.isoformat(), (), ())
+            return start_refusal(policy.crew_plan(before, context.design, config_now, nothing), params, expected_cost)
+
+        return recheck
 
     def _run_gated(self, profile: AccountProfile, context: AccountContext, execute: bool, started: float,
                    claims: Optional[FleetClaims] = None, dispatch: Any = None) -> AccountRun:
