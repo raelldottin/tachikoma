@@ -2399,6 +2399,110 @@ class TrainingStartTests(TrainingStartCase):
         for row in rows:
             self.assertEqual(len(codes_in(row)), 1, row)
 
+    def lose_the_reply(self, apply=True):
+        """The next AddTraining's reply is lost (applied or not) and every roster read after it fails."""
+        roster_faults = []
+        start_fault = self.fake.fail(ADD_TRAINING, status=404, apply=apply)
+
+        def fail_the_roster(fake, exchange):
+            roster_faults.append(fake.fail(ROSTER, times=99, status=404))
+
+        self.fake.on_reply("POST " + ADD_TRAINING, fail_the_roster)
+
+        def heal():
+            for fault in (start_fault, *roster_faults):
+                fault.times = fault.hits
+
+        return heal
+
+    def add_gina(self):
+        self.fake.state.characters.append(crew_plan_tests.Character("1002", "Gina", "31", "11",
+                                                                    stats=crew_plan_tests.stats(Weapon=20)))
+
+    # Verifies: S14-R5
+    def test_an_unresolved_start_blocks_every_start_until_a_resolution_lifts_it(self):
+        self.ready()
+        heal = self.lose_the_reply()
+        mark = self.mark()
+        self.execute()
+        heal()
+        self.assertEqual([entry.applied for entry in self.starts_since(mark)], [True])
+        [event] = [event for event in self.executed_events() if event.attempted]
+        self.assertEqual(event.outcome, "unknown")
+        self.assertEqual(self.store()["attempts"][0]["state"], "unresolved")
+        # another crew member, another course: still paused, across runs
+        self.add_gina()
+        self.assertEqual(self.dry_run()[0], 0)
+        mark = self.mark()
+        self.execute()
+        self.assertEqual(self.starts_since(mark), [])
+        self.assertIn("unresolved_attempt",
+                      set().union(*(codes_in(text) for text in self.record_texts(self.latest_record()))))
+        # the operator's resolution: a fresh read shows Cora running the requested course
+        journal_before = len(read_events(self.journals / "alpha.log"))
+        mark = self.mark()
+        code, out, err = self.resolve()
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.mutations_since(mark), [])
+        self.assertEqual(len(read_events(self.journals / "alpha.log")), journal_before)  # nothing journaled
+        [attempt] = self.store()["attempts"]
+        self.assertEqual((attempt["state"], attempt["resolution"]["verdict"], attempt["resolution"]["previous_state"]),
+                         ("resolved", "started", "unresolved"))
+        self.assertIn("started", out)
+        # resumed: Gina starts her course; the journal holds only that start
+        self.assertEqual(self.dry_run()[0], 0)
+        since = len(self.executed_events())
+        mark = self.mark()
+        code, out, err = self.execute()
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual([(entry.params["characterId"], entry.applied) for entry in self.starts_since(mark)],
+                         [("1002", True)])
+        self.assertEqual([(event.params["character_id"], event.outcome)
+                          for event in self.executed_events(since) if event.attempted], [("1002", "verified")])
+
+    def test_resolve_refuses_without_an_authoritative_read(self):
+        self.ready()
+        heal = self.lose_the_reply()
+        self.execute()
+        before = self.store_path.read_bytes()
+        code, out, err = self.resolve()  # the roster still fails
+        heal()
+        self.assertEqual(code, 1, out + err)
+        self.assertIn("nothing resolved", err)
+        self.assertEqual(self.store_path.read_bytes(), before)
+
+    def test_resolve_with_nothing_unresolved_is_a_no_op(self):
+        self.ready()
+        mark = self.mark()
+        code, out, _ = self.resolve()
+        self.assertEqual(code, 0)
+        self.assertIn("No unresolved training attempt for account 'alpha'", out)
+        self.assertEqual(self.requests_since(mark), [])
+
+    def test_resolve_refuses_while_locked_and_on_missing_or_unreadable_state(self):
+        from sdk.fleet.attempts import FileAccountLock
+
+        self.ready()
+        heal = self.lose_the_reply()
+        self.execute()
+        heal()
+        before = self.store_path.read_bytes()
+        held = FileAccountLock(self.store_root).try_acquire(self.identity)
+        try:
+            code, _, err = self.resolve()
+        finally:
+            held.release()
+        self.assertEqual(code, 1)
+        self.assertEqual([codes_in(line) for line in self.refusal_lines(err)], [{"locked"}])
+        self.assertEqual(self.store_path.read_bytes(), before)
+        self.store_path.write_bytes(HARNESS_CORRUPTION)
+        code, _, err = self.resolve()
+        self.assertEqual((code, [codes_in(line) for line in self.refusal_lines(err)]), (1, [{"state_unreadable"}]))
+        self.store_path.unlink()
+        code, _, err = self.resolve()
+        self.assertEqual((code, [codes_in(line) for line in self.refusal_lines(err)]), (1, [{"state_missing"}]))
+        self.assertFalse(self.store_path.exists())
+
     def test_training_v1_execute_needs_no_store_and_creates_none(self):
         self.policy_id = "training-v1"
         self.write_registry()

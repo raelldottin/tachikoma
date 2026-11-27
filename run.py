@@ -512,6 +512,83 @@ def run_fleet_provision_training(registry_path, alias, journal_dir=None, identit
     return 0
 
 
+def run_fleet_resolve_training(registry_path, alias, journal_dir=None, identity_salt_env=None, out=None,
+                               environ=None, client_cls=None, device_cls=None, clock=None):
+    """Record the operator's reconciliation of a training-v2 account's pending or unresolved attempts (SPEC-14).
+
+    Before any login (exit 2 on failure) the shared checks of ``_training_store_setup`` run. A missing, unreadable
+    or foreign store exits 1; a store with nothing pending or unresolved exits 0 without logging in. Otherwise the
+    account logs in and takes one read-only snapshot (no mutating request); its game identity must be the declared
+    one. Under the account lock, each blocking attempt is classified from that roster read
+    (``sdk.fleet.attempts.classify_resolution``: started, other course or not running) and all of them are
+    persisted together; without authoritative evidence for every one (a roster read that is not complete, a member
+    missing, an unknown training state) nothing is persisted and the command exits 1. Nothing is journaled: the
+    attempt's journal outcome stays as it was observed.
+    """
+    from datetime import datetime, timezone
+
+    from sdk.fleet.accounts import game_identity_refusal
+    from sdk.fleet.attempts import BLOCKING, ResolutionRefused, TrainingStateError, state_reason
+    from sdk.fleet.factory import EnvironmentAccountFactory, LogScrubber
+    from sdk.fleet.orchestrator import error_reason
+
+    command = "--fleet-resolve-training"
+    out = out or sys.stdout
+    environ = os.environ if environ is None else environ
+    clock = clock or (lambda: datetime.now(timezone.utc))
+    journal_dir = Path(journal_dir or FLEET_JOURNAL_DIR_DEFAULT)
+    setup = _training_store_setup(command, registry_path, alias, journal_dir, identity_salt_env, environ)
+    if isinstance(setup, int):
+        return setup
+    registry, profile, identity_salt, attempts = setup
+    location = attempts.location(alias)
+    reason = attempts.preflight(alias, profile.expected_game_identity)
+    if reason is not None:
+        return _training_store_failure(command, alias, reason)
+    try:
+        state = attempts.store.load(alias, identity=profile.expected_game_identity)
+    except TrainingStateError as error:
+        return _training_store_failure(command, alias, state_reason(location, error))
+    if not any(attempt.state in BLOCKING for attempt in state.attempts):
+        out.write(f"No unresolved training attempt for account {alias!r}; nothing changed\n")
+        return 0
+
+    scrubber = LogScrubber()
+    scrubber.add_secrets([identity_salt])
+    factory_options = {"device_cls": device_cls} if device_cls is not None else {}
+    factory = EnvironmentAccountFactory(
+        journal_dir, client_cls=client_cls or Client, environ=environ, client_settings=CLIENT_CHECKSUM_SETTINGS,
+        identity_salt=identity_salt, log_scrubber=scrubber, source=RESOLVE_SOURCE, **factory_options,
+    )
+    try:
+        with scrubber.installed():
+            snapshot = factory.open_preview(profile).snapshot_provider()  # read-only calls only
+        refusal = game_identity_refusal(alias, profile.expected_game_identity, snapshot.game_identity, {},
+                                        registry.declared_identities())
+        if refusal is None and snapshot.game_identity is None:
+            refusal = "its game identity was not observed"
+        if refusal is not None:
+            return _training_store_failure(command, alias, f"{refusal}; nothing resolved")
+        resolutions = attempts.resolve(alias, snapshot.game_identity, snapshot, clock())
+    except TrainingStateError as error:
+        return _training_store_failure(command, alias, state_reason(location, error))
+    except ResolutionRefused as error:
+        return _training_store_failure(command, alias, str(error))
+    except Exception as error:  # a login or file system failure: nothing was resolved
+        return _training_store_failure(command, alias,
+                                       f"{scrubber.scrub(error_reason(error), names=False)}; nothing resolved")
+    for attempt, evidence in resolutions:
+        observed = [f"observed {evidence['observed_phase']}"]
+        if evidence["observed_course_id"] is not None:
+            observed.append(f"course {evidence['observed_course_id']}")
+        if evidence["observed_end"] is not None:
+            observed.append(f"ends {evidence['observed_end']}")
+        out.write(f"Resolved training attempt {attempt.intent_id[:8]} of account {alias!r}: character "
+                  f"{attempt.character_id}, course {attempt.training_design_id}: {evidence['verdict']} "
+                  f"({', '.join(observed)})\n")
+    return 0
+
+
 BASELINE_SOURCE = "run.py --baseline"
 
 
