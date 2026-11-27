@@ -383,6 +383,135 @@ def run_crew_plan(registry_path, identity_salt_env=None, out=None, environ=None,
     return 1 if failed else 0
 
 
+PROVISION_SOURCE = "run.py --fleet-provision-training"
+RESOLVE_SOURCE = "run.py --fleet-resolve-training"
+
+
+def _training_store_setup(command, registry_path, alias, journal_dir, identity_salt_env, environ):
+    """The checks --fleet-provision-training and --fleet-resolve-training share, all before any login.
+
+    Returns ``(registry, profile, identity_salt, attempts)``, or the exit code 2 after printing why: the registry is
+    missing or invalid, ``alias`` is not in it, its policy keeps no training attempt store (only training-v2 does),
+    the identity salt is unset or too short, or the profile declares no ``expected_game_identity``. Authorization,
+    legacy daily run settings, ``enabled`` and dry runs are not checked: they govern execution, not the store.
+    """
+    from sdk.fleet.accounts import RegistryError, load_registry
+    from sdk.fleet.attempts import TrainingAttempts, guarded_training
+    from sdk.policy import get_policy
+    from sdk.state.snapshot import SnapshotInputError, identity_salt_key
+
+    def refuse(reason):
+        print(f"error: {command} refused before any login:", file=sys.stderr)
+        print(f"  - {reason}", file=sys.stderr)
+        return 2
+
+    if not Path(registry_path).is_file():
+        return refuse(f"registry not found: {registry_path}")
+    try:
+        registry = load_registry(registry_path)
+    except RegistryError as error:
+        return refuse(str(error))
+    if alias not in registry:
+        return refuse(f"account {alias!r} is not in the registry")
+    profile = registry.get(alias)
+    try:
+        policy = get_policy(profile.policy_id)
+    except Exception as error:  # an unknown policy id: no store either
+        return refuse(f"account {alias!r}: {type(error).__name__}: {error}")
+    if not guarded_training(policy):
+        return refuse(f"account {alias!r} uses policy {profile.policy_id}, which keeps no training attempt store")
+    if not identity_salt_env:
+        return refuse(f"--identity-salt-env NAME is required: {command} checks the account's game identity")
+    identity_salt = environ.get(identity_salt_env) or None
+    if identity_salt is None:
+        return refuse(f"identity salt variable {identity_salt_env} is not set")
+    try:
+        identity_salt_key(identity_salt)
+    except SnapshotInputError as error:  # the message never repeats the salt
+        return refuse(f"{identity_salt_env}: {error}")
+    if profile.expected_game_identity is None:
+        return refuse(f"account {alias!r} declares no expected_game_identity; the store is keyed by it")
+    return registry, profile, identity_salt, TrainingAttempts.for_journal_dir(journal_dir)
+
+
+def _training_store_failure(command, alias, reason):
+    print(f"error: {command} stopped for account {alias!r}:", file=sys.stderr)
+    print(f"  - account {alias!r}: {reason}", file=sys.stderr)
+    return 1
+
+
+def run_fleet_provision_training(registry_path, alias, journal_dir=None, identity_salt_env=None, out=None,
+                                 environ=None, client_cls=None, device_cls=None, clock=None):
+    """Provision the virgin training attempt store of one training-v2 account (SPEC-14 step 4).
+
+    Before any login (exit 2 on failure) the shared checks of ``_training_store_setup`` run. An existing readable
+    store of the declared identity is left as it is (exit 0, no login). An unreadable store, one of another identity
+    or an established store that is missing is refused (exit 1): established state is never recreated. Otherwise the
+    account logs in (no snapshot, no mutating request), its game identity must be the declared one, and the store is
+    created under the account's lock as ``<journal dir>/training-attempts/<alias>.json`` (exit 0); any failure there
+    exits 1.
+    """
+    from datetime import datetime, timezone
+
+    from sdk.fleet.accounts import game_identity_refusal
+    from sdk.fleet.attempts import StoreMissing, TrainingStateError, state_reason
+    from sdk.fleet.factory import EnvironmentAccountFactory, LogScrubber
+    from sdk.fleet.orchestrator import error_reason
+
+    command = "--fleet-provision-training"
+    out = out or sys.stdout
+    environ = os.environ if environ is None else environ
+    clock = clock or (lambda: datetime.now(timezone.utc))
+    journal_dir = Path(journal_dir or FLEET_JOURNAL_DIR_DEFAULT)
+    setup = _training_store_setup(command, registry_path, alias, journal_dir, identity_salt_env, environ)
+    if isinstance(setup, int):
+        return setup
+    registry, profile, identity_salt, attempts = setup
+    location = attempts.location(alias)
+    try:
+        state = attempts.store.load(alias, identity=profile.expected_game_identity)
+    except StoreMissing as error:
+        if error.established:
+            return _training_store_failure(command, alias, state_reason(location, error))
+        state = None
+    except TrainingStateError as error:
+        return _training_store_failure(command, alias, state_reason(location, error))
+    if state is not None:
+        reason = attempts.preflight(alias, profile.expected_game_identity)
+        if reason is not None:
+            return _training_store_failure(command, alias, reason)
+        out.write(f"Training attempt store of account {alias!r} already provisioned: {location}; nothing changed\n")
+        return 0
+
+    scrubber = LogScrubber()
+    scrubber.add_secrets([identity_salt])
+    factory_options = {"device_cls": device_cls} if device_cls is not None else {}
+    factory = EnvironmentAccountFactory(
+        journal_dir, client_cls=client_cls or Client, environ=environ, client_settings=CLIENT_CHECKSUM_SETTINGS,
+        identity_salt=identity_salt, log_scrubber=scrubber, source=PROVISION_SOURCE, **factory_options,
+    )
+    try:
+        with scrubber.installed():
+            session = factory.open_reads(profile)  # login only: no snapshot, no mutating request
+        refusal = game_identity_refusal(alias, profile.expected_game_identity, session.game_identity, {},
+                                        registry.declared_identities())
+        if refusal is None and session.game_identity is None:
+            refusal = "its game identity was not observed"
+        if refusal is not None:
+            return _training_store_failure(command, alias, f"{refusal}; nothing provisioned")
+        created = attempts.provision(alias, session.game_identity, clock())
+    except TrainingStateError as error:
+        return _training_store_failure(command, alias, state_reason(location, error))
+    except Exception as error:  # a login or file system failure: nothing was provisioned
+        return _training_store_failure(command, alias, scrubber.scrub(error_reason(error), names=False))
+    if not created:
+        out.write(f"Training attempt store of account {alias!r} already provisioned: {location}; nothing changed\n")
+        return 0
+    out.write(f"Provisioned the training attempt store of account {alias!r} (game identity {session.game_identity}): "
+              f"{location}\n")
+    return 0
+
+
 BASELINE_SOURCE = "run.py --baseline"
 
 
@@ -1724,8 +1853,35 @@ def main():
         dest="identity_salt_env",
         default=None,
         metavar="NAME",
-        help="with --fleet-dry-run, --baseline, --capture-reads, --crew-plan or --fleet-execute (required there): "
-        "environment variable holding the game identity salt",
+        help="with --fleet-dry-run, --baseline, --capture-reads, --crew-plan, --fleet-execute, "
+        "--fleet-provision-training or --fleet-resolve-training (required for the last three): environment variable "
+        "holding the game identity salt",
+    )
+    parser.add_argument(
+        "--fleet-provision-training",
+        dest="fleet_provision_training",
+        action="store_true",
+        default=False,
+        help="create the empty training attempt store of the training-v2 --registry account named by --account "
+        "(<--fleet-journal-dir>/training-attempts/<alias>.json) after logging in and checking its game identity; "
+        "needed once before its first --fleet-execute, never recreates a missing or unreadable store and never "
+        "changes the game account (SPEC-14)",
+    )
+    parser.add_argument(
+        "--fleet-resolve-training",
+        dest="fleet_resolve_training",
+        action="store_true",
+        default=False,
+        help="record the operator's reconciliation of the --account's pending or unresolved training attempt from a "
+        "fresh read-only roster read, under the account lock, so training starts resume; changes nothing without "
+        "authoritative evidence and never changes the game account (SPEC-14)",
+    )
+    parser.add_argument(
+        "--account",
+        dest="account",
+        default=None,
+        metavar="ALIAS",
+        help="with --fleet-provision-training or --fleet-resolve-training: the registry account alias",
     )
     args = parser.parse_args()
 
@@ -1742,6 +1898,28 @@ def main():
         ("--smtp-email", args.smtp_email), ("--smtp-password-file", args.smtp_password_file),
         ("--recipient", args.recipient),
     )
+    if args.fleet_provision_training or args.fleet_resolve_training:
+        # Operator commands for one training-v2 account's attempt store (SPEC-14 step 4): only --registry,
+        # --fleet-journal-dir, --identity-salt-env and --account apply.
+        command = "--fleet-provision-training" if args.fleet_provision_training else "--fleet-resolve-training"
+        other_flags = (
+            ("--fleet-provision-training", args.fleet_provision_training and args.fleet_resolve_training),
+            ("--crew-plan", args.crew_plan), ("--capture-reads", args.capture_reads), ("--baseline", args.baseline),
+            ("--baseline-summary", args.baseline_summary), ("--fleet-dry-run", args.fleet_dry_run),
+            ("--fleet-execute", args.fleet_execute), ("--authorization", args.authorization), ("--mode", args.mode),
+            ("--plan-only", args.plan_only), ("--place-room", args.place_room), ("--upgrade-ship", args.upgrade_ship),
+            ("--halt-share", args.halt_share is not None), ("--dashboard-out", args.dashboard_out),
+            ("--concurrent", args.concurrent is not None), *single_account_flags, *smtp_flags,
+        )
+        conflicting = [flag for flag, value in other_flags if value]
+        if conflicting:
+            parser.error(f"{command} cannot be combined with {', '.join(conflicting)}")
+        if not args.registry or not args.account:
+            parser.error(f"{command} needs --registry PATH and --account ALIAS")
+        handler = run_fleet_provision_training if args.fleet_provision_training else run_fleet_resolve_training
+        sys.exit(handler(args.registry, args.account, args.fleet_journal_dir, args.identity_salt_env))
+    if args.account is not None:
+        parser.error("--account is only used with --fleet-provision-training or --fleet-resolve-training")
     if args.crew_plan:
         # Read-only: only --registry and --identity-salt-env apply (SPEC-14, S14-R3).
         other_flags = (
@@ -1827,7 +2005,8 @@ def main():
     if args.concurrent is not None or args.fleet_journal_dir or args.identity_salt_env:
         parser.error("--concurrent, --fleet-journal-dir and --identity-salt-env are only used with --fleet-dry-run "
                      "or --fleet-execute (--concurrent and --identity-salt-env also with --baseline, "
-                     "--identity-salt-env also with --capture-reads and --crew-plan)")
+                     "--identity-salt-env also with --capture-reads and --crew-plan, --fleet-journal-dir and "
+                     "--identity-salt-env also with --fleet-provision-training and --fleet-resolve-training)")
 
     if args.training_journal_dir is not None and (args.report or args.progression_dry_run):
         parser.error("--training-journal-dir is only used by the daily run; it cannot be combined with --report or "

@@ -75,6 +75,12 @@ RECHECKED = "rechecked under the account lock before sending"
 RESOLUTION_VERDICTS = ("started", "other_course", "not_running")
 
 
+def guarded_training(policy: Any) -> bool:
+    """Whether ``policy``'s training starts run under the attempt store and account lock (training-v2 sets
+    ``holds_paid_training``; training-v1, fleet-v1 and baseline-v1 do not)."""
+    return getattr(policy, "holds_paid_training", False) is True
+
+
 class TrainingStateError(Exception):
     """The attempt store cannot be used; ``code`` is the workflow skip code."""
 

@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import random
+import re
 import socket
 import sys
 import tempfile
@@ -81,6 +82,8 @@ from tests.test_fleet_dry_run import (
 from tests.test_fleet_dry_run import ENV as CREDENTIALS
 from tests import test_room_placement as placement_tests  # a module import: its test cases are not rerun here
 from tests import training_fixtures as training_tests
+# A module import (its tests are not rerun here); it imports every sdk module before any FakePss.install().
+from tests import test_crew_plan as crew_plan_tests
 
 REPO_ROOT = Path(os.path.abspath(__file__)).parents[1]
 SALT_ENV = "FLEET_SALT"
@@ -1937,6 +1940,204 @@ class TrainingDesignReadTests(unittest.TestCase):
                                                  credentials_secret="BRAVO"))
                 self.assertEqual(len(context.design.training_designs), expected)
                 self.assertEqual("listAllTrainingDesigns2" in FakeClient.instances[-1].calls, bool(expected))
+
+
+# --- training-v2 execution (SPEC-14 step 4) against FakePss -----------------------------------------------------------
+# The real run.main: provision, dry run, execute and resolve through the CLI. Every Pixel Starships request goes to
+# FakePss (in process, no socket); its ledger records every mutating request independently of production's journal.
+
+TRAINING_SALT_ENV = "TWB_SALT"
+TRAINING_SALT = "synthetic-workflow-salt-0001"
+COMMON_TRAINING_ARGS = ("--registry", "registry.json", "--fleet-journal-dir", "journals",
+                        "--identity-salt-env", TRAINING_SALT_ENV)
+ADD_TRAINING = "/TrainingService/AddTraining"
+ROSTER = "/CharacterService/ListAllCharactersOfUser"
+HARNESS_CORRUPTION = b"\x00not-a-store\xff\n"
+TRAINING_CODES = json.loads((REPO_ROOT / "tests/fixtures/training/workflow_benchmark.json").read_text(
+    encoding="utf-8"))["vocabulary"]["skip_codes"]
+
+
+def codes_in(text):
+    """The workflow vocabulary codes ``text`` names as whole words."""
+    return {code for code in TRAINING_CODES
+            if re.search(rf"(?<![A-Za-z0-9_]){re.escape(code)}(?![A-Za-z0-9_])", text)}
+
+
+def training_world(*, crew=("cora",), mineral=1000, gas=0, **options):
+    """crew_plan_tests.preview_world (strict rules, level 2 Academy of capacity 2, 500-mineral Engineering Manual)
+    with ``crew`` idle in the Academy: Cora (Repair 20) and Gina (Weapon 20, a 400-mineral Weapon Drill)."""
+    fakes = crew_plan_tests
+    world = fakes.preview_world(prestige=False, **options)
+    world.resources = fakes.Resources(mineral=mineral, gas=gas)
+    members = {"cora": fakes.Character("1001", "Cora", "31", "11", stats=fakes.stats(Repair=20)),
+               "gina": fakes.Character("1002", "Gina", "31", "11", stats=fakes.stats(Weapon=20))}
+    world.characters = [members[name] for name in crew]
+    world.training_designs.append(fakes.TrainingDesign(
+        "42", "Weapon Drill", "WeaponImprovement", 2, 10, fakes.HOUR, price="mineral:400", rank=1,
+        required_room_type="Academy", required_room_level=2, required_research_id="61"))
+    return world
+
+
+class TrainingExecutionCase(unittest.TestCase):
+    """A scratch directory holding a training-v2 registry for 'alpha' and an owner authorization for it."""
+
+    crew = ("cora",)
+    actions = ("add_training",)
+    policy_id = "training-v2"
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory(prefix="tachikoma-training-exec-")
+        self.addCleanup(tmp.cleanup)
+        cwd = os.getcwd()
+        os.chdir(tmp.name)
+        self.addCleanup(os.chdir, cwd)
+        self.directory = Path(tmp.name)
+        self.journals = self.directory / "journals"
+        self.store_root = self.journals / "training-attempts"
+        self.store_path = self.store_root / "alpha.json"
+        epoch = datetime.now(timezone.utc).replace(tzinfo=None, microsecond=0)
+        self.fake = crew_plan_tests.FakePss(self.world(), epoch=epoch)
+        self.identity = game_identity_fingerprint(self.fake.state.account.user_id, TRAINING_SALT)
+        self.write_registry()
+        self.write_authorization()
+
+    def world(self):
+        return training_world(crew=self.crew)
+
+    def write_registry(self, **account):
+        entry = {"alias": "alpha", "objective": "grow", "policy_id": self.policy_id,
+                 "credentials_secret": "TWB_ALPHA", "expected_game_identity": self.identity, **account}
+        entry = {key: value for key, value in entry.items() if value is not None}
+        Path("registry.json").write_text(json.dumps({"version": 1, "accounts": [entry]}), encoding="utf-8")
+
+    def write_authorization(self, **overrides):
+        payload = authorization_payload(accounts=["alpha"], actions=list(self.actions),
+                                        caps={"alpha": {"minerals": 1000, "gas": 1000}}, modes=["full"])
+        payload.update(overrides)
+        Path("authorization.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    def env(self):
+        return {"TWB_ALPHA": f"fleet|{SYNTHETIC_DEVICE_KEY_IOS}|{self.fake.state.account.refresh_token}|en",
+                TRAINING_SALT_ENV: TRAINING_SALT}
+
+    def main(self, *argv):
+        out, err = io.StringIO(), io.StringIO()
+        with self.fake.install(), patch.dict(os.environ, self.env()), patch("sys.argv", ["run.py", *argv]), \
+                redirect_stdout(out), redirect_stderr(err):
+            try:
+                code = run.main()
+            except SystemExit as stop:
+                code = stop.code
+        return code, out.getvalue(), err.getvalue()
+
+    def provision(self, alias="alpha"):
+        return self.main("--fleet-provision-training", *COMMON_TRAINING_ARGS, "--account", alias)
+
+    def resolve(self, alias="alpha"):
+        return self.main("--fleet-resolve-training", *COMMON_TRAINING_ARGS, "--account", alias)
+
+    def dry_run(self):
+        return self.main("--fleet-dry-run", *COMMON_TRAINING_ARGS)
+
+    def execute(self, *extra):
+        return self.main("--fleet-execute", "--authorization", "authorization.json", "--mode", "full",
+                         *COMMON_TRAINING_ARGS, *extra)
+
+    def mark(self):
+        return len(self.fake.ledger), len(self.fake.exchanges)
+
+    def mutations_since(self, mark):
+        return self.fake.ledger[mark[0]:]
+
+    def requests_since(self, mark):
+        return self.fake.exchanges[mark[1]:]
+
+    def starts_since(self, mark):
+        return [entry for entry in self.mutations_since(mark) if entry.path == ADD_TRAINING]
+
+    def store(self):
+        return json.loads(self.store_path.read_bytes())
+
+    def refusal_lines(self, err):
+        return [line for line in err.splitlines() if re.match(r"^\s*-\s*account '([^']+)'(?=[\s:]|$)", line)]
+
+
+class TrainingProvisionTests(TrainingExecutionCase):
+    # Verifies: S14-R6
+    def test_provision_creates_the_store_for_the_verified_account(self):
+        mark = self.mark()
+        code, out, err = self.provision()
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self.mutations_since(mark), [])  # login and reads only
+        self.assertEqual(self.store()["game_identity"], self.identity)
+        self.assertEqual(self.store()["attempts"], [])
+        self.assertIn("Provisioned the training attempt store of account 'alpha'", out)
+        self.assertEqual(sorted(path.name for path in self.store_root.iterdir()),
+                         sorted(["alpha.json", f"{self.identity}.lock", f"{self.identity}.provisioned"]))
+
+    def test_provision_twice_is_a_no_op_without_login(self):
+        self.assertEqual(self.provision()[0], 0)
+        before = self.store_path.read_bytes()
+        mark = self.mark()
+        code, out, _ = self.provision()
+        self.assertEqual(code, 0)
+        self.assertIn("already provisioned", out)
+        self.assertEqual(self.requests_since(mark), [])
+        self.assertEqual(self.store_path.read_bytes(), before)
+
+    def test_provision_refuses_another_identity(self):
+        self.write_registry(expected_game_identity=game_identity_fingerprint("424242", TRAINING_SALT))
+        code, _, err = self.provision()
+        self.assertEqual(code, 1, err)
+        self.assertFalse(self.store_path.exists())
+
+    def test_provision_refuses_established_missing_and_unreadable_state(self):
+        self.assertEqual(self.provision()[0], 0)
+        self.store_path.write_bytes(HARNESS_CORRUPTION)
+        code, _, err = self.provision()
+        self.assertEqual(code, 1)
+        self.assertEqual([codes_in(line) for line in self.refusal_lines(err)], [{"state_unreadable"}])
+        self.assertEqual(self.store_path.read_bytes(), HARNESS_CORRUPTION)
+        self.store_path.unlink()
+        mark = self.mark()
+        code, _, err = self.provision()
+        self.assertEqual(code, 1)
+        self.assertEqual([codes_in(line) for line in self.refusal_lines(err)], [{"state_missing"}])
+        self.assertFalse(self.store_path.exists())  # established state is never recreated
+        self.assertEqual(self.requests_since(mark), [])
+
+    def test_provision_checks_policy_and_alias_but_not_authorization(self):
+        self.write_registry(policy_id="training-v1")
+        self.assertEqual(self.provision()[0], 2)
+        self.write_registry()
+        self.assertEqual(self.provision("bravo")[0], 2)
+        self.write_registry(legacy_run_account=3)
+        Path("authorization.json").unlink()
+        self.assertEqual(self.provision()[0], 0)
+        self.assertTrue(self.store_path.exists())
+
+    def test_provision_needs_the_identity_salt_and_an_expected_identity(self):
+        self.assertEqual(self.main("--fleet-provision-training", "--registry", "registry.json",
+                                   "--account", "alpha")[0], 2)
+        self.write_registry(expected_game_identity=None)
+        self.assertEqual(self.provision()[0], 2)
+        self.assertFalse(self.store_path.exists())
+
+    def test_new_flag_guards(self):
+        for argv in (
+            ("--account", "alpha"),
+            ("--fleet-provision-training", *COMMON_TRAINING_ARGS),
+            ("--fleet-provision-training", "--fleet-resolve-training", *COMMON_TRAINING_ARGS, "--account", "alpha"),
+            ("--fleet-provision-training", "--fleet-execute", *COMMON_TRAINING_ARGS, "--account", "alpha"),
+            ("--fleet-provision-training", *COMMON_TRAINING_ARGS, "--account", "alpha",
+             "--authorization", "authorization.json"),
+            ("--fleet-resolve-training", *COMMON_TRAINING_ARGS, "--account", "alpha", "--concurrent", "2"),
+            ("--fleet-dry-run", *COMMON_TRAINING_ARGS, "--account", "alpha"),
+        ):
+            with self.subTest(argv=argv):
+                code, _, err = self.main(*argv)
+                self.assertEqual(code, 2, err)
+        self.assertFalse(self.store_root.exists())
 
 
 if __name__ == "__main__":

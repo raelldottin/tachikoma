@@ -1172,6 +1172,33 @@
       ]
     },
     {
+      "flag": "--fleet-provision-training",
+      "pillar": "E",
+      "kind": "read-only",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_fleet_execute.py"
+      ]
+    },
+    {
+      "flag": "--fleet-resolve-training",
+      "pillar": "E",
+      "kind": "read-only",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_fleet_execute.py"
+      ]
+    },
+    {
+      "flag": "--account",
+      "pillar": "E",
+      "kind": "read-only",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_fleet_execute.py"
+      ]
+    },
+    {
       "flag": "--fleet-execute",
       "pillar": "E",
       "kind": "mutating",
