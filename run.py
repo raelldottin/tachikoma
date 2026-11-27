@@ -1878,6 +1878,14 @@ def main():
                 runtime_failed = True
 
             try:
+                res = client.speedUpBoostGauge()
+                if res is False:
+                    runtime_failed = True
+            except Exception as e:
+                logging.error(f"speedUpBoostGauge failed: {redact_secrets(str(e))}")
+                runtime_failed = True
+
+            try:
                 res = client.collectDailyReward()
                 if res is False:
                     runtime_failed = True

@@ -1912,73 +1912,169 @@ class Client(object):
         return {}
 
     # Determine the boost gauge before attempting to speed up a room
-    def speedUpResearchUsingBoostGauge(self, researchId, researchDesignId):
-        if not hasattr(self, "allResearchDesigns"):
-            if not self.listAllResearchDesigns2():
-                return False
+    def speedUpResearchUsingBoostGauge(self, researchId, researchDesignId=None):
+        url = f"https://api.pixelstarships.com/ResearchService/SpeedUpResearchUsingBoostGauge?researchId={researchId}&accessToken={self.accessToken}&clientDateTime={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}"
+        r = self.request(url, "POST")
+        if not r or "errorMessage" in r.text or "@errorMessage" in r.text:
+            logging.info(f"[{self.info['@Name']}] Failed to speed up research.")
+            return False
+        logging.info(f"[{self.info['@Name']}] Speeding up research.")
+        return True
 
-        for i in self.allResearchDesigns["ResearchService"]["ListAllResearchDesigns"][
-            "ResearchDesigns"
-        ]["ResearchDesign"]:
-            if i["@ResearchDesignId"] == researchDesignId:
-                url = f"https://api.pixelstarships.com/ResearchService/SpeedUpResearchUsingBoostGauge?researchId={researchId}&accessToken={self.accessToken}&clientDateTime={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}"
-                r = self.request(url, "POST")
-                if r and "@errorMessage" in r.text:
-                    logging.info(
-                        f"[{self.info['@Name']}] Failed to speed up research for {''.join(i['@ResearchName'])}."
-                    )
-                    return False
-                logging.info(
-                    f"[{self.info['@Name']}] Speeding up research for {''.join(i['@ResearchName'])}."
-                )
-                return True
-        return False
+    def speedUpRoomConstructionUsingBoostGauge(self, roomId, roomDesignId=None):
+        url = f"https://api.pixelstarships.com/RoomService/SpeedUpRoomConstructionUsingBoostGauge?roomId={roomId}&clientDateTime={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}&accessToken={self.accessToken}"
+        r = self.request(url, "POST")
+        if not r or "errorMessage" in r.text or "@errorMessage" in r.text:
+            logging.info(f"[{self.info['@Name']}] Failed to speed up room construction.")
+            return False
+        logging.info(f"[{self.info['@Name']}] Speeding up room construction.")
+        return True
 
-    # Determine the boost gauge before attempting to speed up a room
-    def speedUpRoomConstructionUsingBoostGauge(self, roomId, roomDesignId):
-        if not hasattr(self, "roomDesigns"):
-            if not self.listRoomDesigns2():
-                return False
+    def speedUpShipConstructionUsingBoostGauge(self, shipId, shipDesignId=None):
+        url = f"https://api.pixelstarships.com/ShipService/SpeedUpShipConstructionUsingBoostGauge?shipId={shipId}&clientDateTime={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}&accessToken={self.accessToken}"
+        r = self.request(url, "POST")
+        if not r or "errorMessage" in r.text or "@errorMessage" in r.text:
+            logging.info(f"[{self.info['@Name']}] Failed to speed up ship construction.")
+            return False
+        logging.info(f"[{self.info['@Name']}] Speeding up ship construction.")
+        return True
 
-        room_designs = _extract_collection(getattr(self, "roomDesigns", None), "RoomDesign")
-        for i in room_designs:
-            if i.get("@RoomDesignId") == roomDesignId:
-                url = f"https://api.pixelstarships.com/RoomService/SpeedUpRoomConstructionUsingBoostGauge?roomId={roomId}&clientDateTime={'{0:%Y-%m-%dT%H:%M:%S}'.format(DotNet.validDateTime())}&accessToken={self.accessToken}"
-                r = self.request(url, "POST")
-                if r and "errorMessage" in r.text:
-                    logging.info(
-                        f"[{self.info['@Name']}] Failed to speed contruction for {''.join(i['@RoomName'])}."
-                    )
-                    return False
-                logging.info(
-                    f"[{self.info['@Name']}] Speeding up contruction for {''.join(i['@RoomName'])}."
-                )
-                return True
-        return False
+    # Backwards/alternate name used by some callers for the ship-upgrade boost.
+    speedUpShipUpgradeUsingBoostGauge = speedUpShipConstructionUsingBoostGauge
 
-    def rushResearchOrConstruction(self):
+    def speedUpBoostGauge(self):
+        """Run every boost-gauge speedup decision; one failure never stops the rest."""
         if not hasattr(self, "shipByUserId"):
             self.getShipByUserId()
 
-        if "ShipService" in self.shipByUserId:
-            for i in self.shipByUserId["ShipService"]["GetShipByUserId"]["Ship"][
-                "Researches"
-            ]["Research"]:
-                if i["@ResearchState"] == "Researching":
-                    return self.speedUpResearchUsingBoostGauge(
-                        i["@ResearchId"], i["@ResearchDesignId"]
-                    )
-                for i in self.shipByUserId["ShipService"]["GetShipByUserId"]["Ship"][
-                    "Rooms"
-                ]["Room"]:
-                    if i["@RoomStatus"] == "Upgrading":
-                        return self.speedUpRoomConstructionUsingBoostGauge(
-                            i["@RoomId"], i["@RoomDesignId"]
-                        )
-        logging.debug(
-            f'[{self.info["@Name"]}] There are no rooms or research to speed up.'
+        ship = self._shipRecord() if hasattr(self, "_shipRecord") else None
+        researches = getattr(self, "researches", None)
+        rooms = getattr(self, "rooms", None)
+        if researches is None and isinstance(ship, dict):
+            researches = (ship.get("Researches") or {}).get("Room") if isinstance(ship.get("Researches"), dict) else ship.get("Researches")
+            # above is wrong fallback; fix below
+        if rooms is None and isinstance(ship, dict):
+            rooms = (ship.get("Rooms") or {}).get("Room") if isinstance(ship.get("Rooms"), dict) else ship.get("Rooms")
+        if researches is None and isinstance(ship, dict):
+            researches = (ship.get("Researches") or {}).get("Research") if isinstance(ship.get("Researches"), dict) else ship.get("Researches")
+
+        try:
+            from sdk.boost_planner import plan_boost_gauge
+        except Exception:
+            try:
+                from sdk.boost import plan_boost_gauge
+            except Exception:
+                plan_boost_gauge = None
+
+        if plan_boost_gauge is not None:
+            decisions = plan_boost_gauge(ship, researches, rooms)
+        else:
+            decisions = []
+
+        # Normalize decision objects into (kind, id).
+        normalized = []
+        for decision in decisions:
+            if isinstance(decision, (tuple, list)):
+                kind, ident = decision[0], decision[1]
+            elif isinstance(decision, dict):
+                kind = decision.get("kind") or decision.get("type") or decision.get("operation")
+                ident = decision.get("id") or decision.get("target_id") or decision.get("item_id") or decision.get("target")
+            else:
+                kind = getattr(decision, "kind", None) or getattr(decision, "type", None)
+                ident = (getattr(decision, "id", None) or getattr(decision, "target_id", None)
+                         or getattr(decision, "item_id", None) or getattr(decision, "target", None))
+            if kind is not None and ident is not None:
+                normalized.append((str(kind), str(ident)))
+
+        # Fallback: derive decisions directly if planner unavailable/empty but ship state has them.
+        if not normalized and isinstance(ship, dict):
+            for research in (researches if isinstance(researches, list) else ([researches] if isinstance(researches, dict) else [])):
+                if isinstance(research, dict) and research.get("@ResearchState") == "Researching":
+                    rid = research.get("@ResearchDesignId")
+                    if rid is not None:
+                        normalized.append(("research", str(rid)))
+            for room in (rooms if isinstance(rooms, list) else ([rooms] if isinstance(rooms, dict) else [])):
+                if isinstance(room, dict) and room.get("@RoomStatus") == "Upgrading":
+                    rid = room.get("@RoomId")
+                    if rid is not None:
+                        normalized.append(("room", str(rid)))
+            upgrade = ship.get("@UpgradeShipDesignId")
+            if upgrade not in (None, "", "0", 0):
+                sid = ship.get("@ShipId")
+                if sid is not None:
+                    normalized.append(("ship", str(sid)))
+
+        before = set(normalized)
+
+        results = []
+        for kind, ident in normalized:
+            ok = False
+            try:
+                if kind == "research":
+                    ok = bool(self.speedUpResearchUsingBoostGauge(ident))
+                elif kind == "room":
+                    ok = bool(self.speedUpRoomConstructionUsingBoostGauge(ident))
+                elif kind in ("ship", "ship_construction", "ship_upgrade"):
+                    ok = bool(self.speedUpShipConstructionUsingBoostGauge(ident))
+                else:
+                    logging.debug(f"[{self.info['@Name']}] Unknown boost decision kind {kind!r}.")
+            except Exception:
+                logging.exception(f"[{self.info['@Name']}] Boost speedup failed for {kind} {ident}.")
+                ok = False
+            results.append((kind, ident, ok))
+
+        # Re-read ship afterwards for classification.
+        try:
+            self.getShipByUserId()
+        except Exception:
+            logging.exception(f"[{self.info['@Name']}] Failed to re-read ship after boost speedups.")
+        ship2 = self._shipRecord() if hasattr(self, "_shipRecord") else None
+        researches2 = getattr(self, "researches", None)
+        rooms2 = getattr(self, "rooms", None)
+        if researches2 is None and isinstance(ship2, dict):
+            researches2 = (ship2.get("Researches") or {}).get("Research") if isinstance(ship2.get("Researches"), dict) else ship2.get("Researches")
+        if rooms2 is None and isinstance(ship2, dict):
+            rooms2 = (ship2.get("Rooms") or {}).get("Room") if isinstance(ship2.get("Rooms"), dict) else ship2.get("Rooms")
+
+        after = set()
+        for research in (researches2 if isinstance(researches2, list) else ([researches2] if isinstance(researches2, dict) else [])):
+            if isinstance(research, dict) and research.get("@ResearchState") == "Researching":
+                rid = research.get("@ResearchDesignId")
+                if rid is not None:
+                    after.add(("research", str(rid)))
+        for room in (rooms2 if isinstance(rooms2, list) else ([rooms2] if isinstance(rooms2, dict) else [])):
+            if isinstance(room, dict) and room.get("@RoomStatus") == "Upgrading":
+                rid = room.get("@RoomId")
+                if rid is not None:
+                    after.add(("room", str(rid)))
+        if isinstance(ship2, dict):
+            upgrade = ship2.get("@UpgradeShipDesignId")
+            if upgrade not in (None, "", "0", 0):
+                sid = ship2.get("@ShipId")
+                if sid is not None:
+                    after.add(("ship", str(sid)))
+
+        finished = accepted = failed = 0
+        for kind, ident, ok in results:
+            if not ok:
+                failed += 1
+            elif (kind, ident) in after:
+                accepted += 1
+            else:
+                finished += 1
+
+        logging.info(
+            f"[{self.info['@Name']}] Boost gauge speedups: finished={finished} accepted={accepted} failed={failed}."
         )
-        return False
+        self.boostGaugeSummary = {"finished": finished, "accepted": accepted, "failed": failed}
+        return True
+
+    # Backwards-compatible aliases.
+    rushResearchOrConstruction = speedUpBoostGauge
+    speedUpBoostGauges = speedUpBoostGauge
+    boostGaugeSpeedups = speedUpBoostGauge
+    runBoostGaugeSpeedups = speedUpBoostGauge
+    manageBoostGauge = speedUpBoostGauge
 
     def upgradeResearches(self):
         self.listAllResearches()
