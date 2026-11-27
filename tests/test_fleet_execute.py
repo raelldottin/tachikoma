@@ -2140,5 +2140,79 @@ class TrainingProvisionTests(TrainingExecutionCase):
         self.assertFalse(self.store_root.exists())
 
 
+class TrainingPreloginTests(TrainingExecutionCase):
+    """training-v2 refusals before any login: exit 2, no request, each line naming the account and one code."""
+
+    def assert_refused_before_login(self, expected):
+        mark = self.mark()
+        code, _, err = self.execute()
+        self.assertEqual(code, 2, err)
+        self.assertEqual(self.requests_since(mark), [])
+        lines = self.refusal_lines(err)
+        self.assertTrue(lines, err)
+        for line in lines:
+            self.assertEqual(len(codes_in(line)), 1, line)
+        self.assertIn(expected, set().union(*(codes_in(line) for line in lines)), err)
+        return lines
+
+    # Verifies: S14-R4
+    def test_no_dry_run_is_dry_run_stale(self):
+        self.provision()
+        self.assert_refused_before_login("dry_run_stale")
+
+    def test_a_changed_registry_is_dry_run_stale(self):
+        self.provision()
+        self.assertEqual(self.dry_run()[0], 0)
+        self.write_registry(max_actions=7)
+        self.assert_refused_before_login("dry_run_stale")
+
+    # Verifies: S14-R6
+    def test_unprovisioned_and_removed_stores_are_state_missing(self):
+        self.assertEqual(self.dry_run()[0], 0)  # the dry run never reads the store
+        self.assert_refused_before_login("state_missing")
+        self.provision()
+        self.store_path.unlink()
+        [line] = self.assert_refused_before_login("state_missing")
+        self.assertIn("never recreated", line)
+        self.assertFalse(self.store_path.exists())
+
+    def test_a_corrupted_store_is_state_unreadable(self):
+        self.provision()
+        self.assertEqual(self.dry_run()[0], 0)
+        self.store_path.write_bytes(HARNESS_CORRUPTION)
+        self.assert_refused_before_login("state_unreadable")
+        self.assertEqual(self.store_path.read_bytes(), HARNESS_CORRUPTION)
+
+    # Verifies: S14-R6
+    def test_a_serialized_legacy_account_is_legacy_run_not_skipped(self):
+        self.write_registry(legacy_run_account=3)
+        self.write_authorization(legacy_run_serialized=[3])
+        self.provision()
+        self.assertEqual(self.dry_run()[0], 0)
+        self.assert_refused_before_login("legacy_run_not_skipped")
+
+    # Verifies: S14-R4
+    def test_full_mode_without_add_training_is_not_authorized(self):
+        self.write_authorization(actions=["collect_all_resources"])
+        self.provision()
+        self.assertEqual(self.dry_run()[0], 0)
+        self.assert_refused_before_login("not_authorized")
+
+    def test_an_unauthorized_account_is_not_authorized(self):
+        self.write_authorization(accounts=["bravo"], caps={"bravo": {"minerals": 1000, "gas": 1000}})
+        self.provision()
+        self.assertEqual(self.dry_run()[0], 0)
+        self.assert_refused_before_login("not_authorized")
+
+    def test_training_v1_lines_are_unchanged(self):
+        self.policy_id = "training-v1"
+        self.write_registry()
+        code, _, err = self.execute()
+        self.assertEqual(code, 2)
+        self.assertIn("  - account 'alpha': no completed --fleet-dry-run plan in its journal; run --fleet-dry-run "
+                      "with this registry first\n", err)
+        self.assertFalse(self.store_root.exists())
+
+
 if __name__ == "__main__":
     unittest.main()

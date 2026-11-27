@@ -1153,7 +1153,9 @@ def run_fleet_execute(registry_path, authorization_path, mode=None, journal_dir=
         load_authorization,
         hull_upgrade_refusal_reason,
         placement_refusal_reason,
+        training_authorization_refusals,
     )
+    from sdk.fleet.attempts import DRY_RUN_STALE, TrainingAttempts, guarded_training
     from sdk.fleet.factory import (
         DEFAULT_HALT_SHARE,
         EXECUTE_SOURCE,
@@ -1168,6 +1170,7 @@ def run_fleet_execute(registry_path, authorization_path, mode=None, journal_dir=
         registry_stamp,
     )
     from sdk.journal import JournalError, read_events
+    from sdk.policy import get_policy
     from sdk.state.snapshot import SnapshotInputError, identity_salt_key
 
     out = out or sys.stdout
@@ -1247,7 +1250,18 @@ def run_fleet_execute(registry_path, authorization_path, mode=None, journal_dir=
                 reasons.append(why)
     stamp = registry_stamp(registry)
     plans, journal_events = {}, {}
+    # training-v2 (SPEC-14 step 4): in full mode each account's training attempt store must be readable and its own
+    # before any login, and every refusal line names one workflow code. The live dispatch checks it again under the
+    # account lock.
+    attempts = TrainingAttempts.for_journal_dir(journal_dir)
+    guarded = {profile.alias for profile in enabled
+               if mode == "full" and guarded_training(get_policy(profile.policy_id))}
+    reasons += training_authorization_refusals(authorization, registry, sorted(guarded), mode)
     for profile in enabled:
+        if profile.alias in guarded:
+            why = attempts.preflight(profile.alias, profile.expected_game_identity)
+            if why is not None:
+                reasons.append(f"account {profile.alias!r}: {why}")
         if profile.expected_game_identity is None:
             reasons.append(f"account {profile.alias!r} declares no expected_game_identity; "
                            "execute mode needs one for every enabled account")
@@ -1261,7 +1275,8 @@ def run_fleet_execute(registry_path, authorization_path, mode=None, journal_dir=
             continue  # a placement or hull upgrade is checked against the run's own fresh snapshot, not a dry run
         plan, why = latest_dry_run(events, profile, stamp, now)
         if plan is None:
-            reasons.append(f"account {profile.alias!r}: {why}; run --fleet-dry-run with this registry first")
+            reasons.append(f"account {profile.alias!r}: {why}; run --fleet-dry-run with this registry first"
+                           + (f" ({DRY_RUN_STALE})" if profile.alias in guarded else ""))
         else:
             plans[profile.alias] = plan
     stop_file = journal_dir / FLEET_STOP_FILE
