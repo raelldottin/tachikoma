@@ -39,7 +39,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, replace
 
 from sdk.crew_leveling import CAPTAIN_TP, EXCEPTIONAL_4STAR_NAMES, EXCEPTIONAL_4STAR_TP, TP_CAPS_BY_RARITY
-from sdk.training.model import frozen_mapping
+from sdk.training.model import CANONICAL_STATS, frozen_mapping
 
 SLOT_PRIMARY = "primary"
 SLOT_SECONDARY = "secondary"
@@ -326,3 +326,110 @@ DEFAULT_STRATEGY = TrainingStrategy(
 def with_consumables(strategy: TrainingStrategy, consumables: Mapping[tuple[str, str], int]) -> TrainingStrategy:
     """A copy of ``strategy`` using ``consumables`` ((stat_code, tier) -> item design id); validation re-runs."""
     return replace(strategy, consumables=consumables)
+
+
+# --- SPEC-14 training-v2 (S14-R1, S14-R2) ---------------------------------------------------------------------------
+# training-v2's crew policy is data too: the specialist roles it fills (each role word and the stat that measures it),
+# the room type and status a course needs, the research state that counts as done, the fatigue limit and the original
+# named Prestige targets. ``DEFAULT_ROLES`` / ``DEFAULT_STRATEGY`` above stay training-v1's (pinned) strategy.
+
+ROLE_REPAIR = "repair"
+ROLE_SHIELDS = "shields"
+ROLE_WEAPONS = "weapons"
+
+# Every skip code training-v2's planner reports. All but ``design_missing`` (no observed course trains the role's stat,
+# or the courses were not observed) are workflow benchmark vocabulary codes.
+CREW_SKIP_CODES: frozenset[str] = frozenset(
+    {
+        "not_in_training_room",
+        "training_in_progress",
+        "unclaimed_course",
+        "room_not_ready",
+        "room_level",
+        "room_capacity",
+        "research_missing",
+        "research_unknown",
+        "stats_unknown",
+        "price_unavailable",
+        "price_malformed",
+        "premium_currency",
+        "insufficient_funds",
+        "cap_exceeded",
+        "role_uncovered",
+        "fatigued",
+        "tp_cap_reached",
+        "action_cap_reached",
+        "design_missing",
+    }
+)
+
+
+# The role search tries every way to fill the slots from each slot's top candidates: (k + 1) ** k choices for k roles.
+MAX_CREW_ROLES = 6
+
+
+@dataclass(frozen=True)
+class CrewPolicy:
+    """training-v2's role and eligibility data.
+
+    ``roles`` is ``(role word, canonical stat)`` pairs (any sequence of pairs; stored as a tuple of tuples). Their order
+    is the report order and the last tie-break of the role assignment. ``prestige_targets`` holds exact character design
+    names (any iterable; stored as a frozenset). ``room_names`` maps a room design name to its room type word (stored
+    read-only); it defaults to training-v1's ``DEFAULT_STRATEGY.room_types`` (Academy and Lunar College are academy
+    rooms, GYM and Galaxy Gym gym rooms), and ``room_type_of`` reads it ignoring case. Role words must be distinct and
+    non-empty, at most ``MAX_CREW_ROLES``, each stat one of ``model.CANONICAL_STATS``, ``max_fatigue`` positive, and
+    every room name and type non-blank text, with no two names that differ only in case mapping to different types;
+    anything else raises ValueError.
+    """
+
+    roles: tuple[tuple[str, str], ...]
+    training_room_type: str
+    ready_status: str
+    completed_research: str
+    max_fatigue: int
+    prestige_targets: frozenset[str]
+    room_names: Mapping[str, str] = DEFAULT_STRATEGY.room_types
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "roles", tuple((word, stat) for word, stat in self.roles))
+        object.__setattr__(self, "prestige_targets", frozenset(self.prestige_targets))
+        object.__setattr__(self, "room_names", frozen_mapping(self.room_names))
+        words = [word for word, _ in self.roles]
+        if not all(words) or len(set(words)) != len(words):
+            raise ValueError(f"role words must be distinct and non-empty: {words!r}")
+        if len(words) > MAX_CREW_ROLES:
+            raise ValueError(f"at most {MAX_CREW_ROLES} roles, got {len(words)}")
+        unknown = sorted(stat for _, stat in self.roles if stat not in CANONICAL_STATS)
+        if unknown:
+            raise ValueError(f"role stats must be among CANONICAL_STATS, got {unknown}")
+        if self.max_fatigue <= 0:
+            raise ValueError(f"max_fatigue must be positive, got {self.max_fatigue!r}")
+        folded: dict[str, str] = {}
+        for name, kind in self.room_names.items():
+            if not (isinstance(name, str) and name.strip() and isinstance(kind, str) and kind.strip()):
+                raise ValueError(f"room names and types must be non-empty text, got {name!r}: {kind!r}")
+            key = name.strip().casefold()
+            if folded.setdefault(key, kind.casefold()) != kind.casefold():
+                raise ValueError(f"conflicting room types for {name!r}")
+
+    def room_type_of(self, name: str | None) -> str | None:
+        """The room type word (casefolded) of a room design name, ignoring case and outer blanks; None when unknown."""
+        if not name:
+            return None
+        key = name.strip().casefold()
+        return next((kind.casefold() for room, kind in self.room_names.items() if room.strip().casefold() == key), None)
+
+
+DEFAULT_CREW_POLICY = CrewPolicy(
+    roles=(
+        (ROLE_REPAIR, "RepairImprovement"),
+        (ROLE_SHIELDS, "ScienceImprovement"),
+        (ROLE_WEAPONS, "WeaponImprovement"),
+    ),
+    training_room_type="Training",
+    ready_status="Normal",
+    completed_research="Completed",
+    max_fatigue=DEFAULT_STRATEGY.max_training_fatigue,
+    prestige_targets=frozenset().union(*(role.characters for role in DEFAULT_ROLES)),
+    room_names=DEFAULT_STRATEGY.room_types,
+)

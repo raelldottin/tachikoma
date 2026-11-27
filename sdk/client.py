@@ -1103,6 +1103,22 @@ class Client(object):
                f"&trainingStartDate={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}&accessToken={self.accessToken}")
         return self._call(url, "POST", "TrainingService", ("AddTraining",))[1] is not None
 
+    def prestigeCharacterTo(self, characterDesignId) -> dict | None:
+        """GET CharacterService/PrestigeCharacterTo: the recipes that Prestige into a character design (read-only).
+
+        Returns the parsed reply (``sdk.training.parse.parse_prestige_recipes`` reads it) when it holds a
+        ``CharacterService/PrestigeCharacterTo`` element without an error, else None. Sends no access token. Refuses
+        (None, no request) an id that is not a positive integer. Transport errors propagate.
+        """
+        design_id = _game_id(characterDesignId)
+        if design_id is None:
+            logging.error("prestigeCharacterTo refused: the character design id is not a positive integer.")
+            return None
+        url = (f"{self.baseUrl}/CharacterService/PrestigeCharacterTo?characterDesignId={design_id}"
+               f"&languageKey={self.device.languageKey}")
+        reply, element = self._call(url, "GET", "CharacterService", ("PrestigeCharacterTo",))
+        return reply if element is not None else None
+
     def manageTraining(self) -> bool:
         """The daily training step: ``sdk.execution.training.run_training`` on this client.
 

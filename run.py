@@ -290,6 +290,99 @@ def run_fleet_dry_run(registry_path, journal_dir=None, concurrent=None, identity
     return 0
 
 
+CREW_PLAN_SOURCE = "run.py --crew-plan"
+
+
+def run_crew_plan(registry_path, identity_salt_env=None, out=None, environ=None, client_cls=None, device_cls=None,
+                  clock=None):
+    """Print training-v2's crew plan for every enabled registry account (SPEC-14, S14-R3); never changes an account.
+
+    Each account logs in as ``--fleet-dry-run`` does (credentials from the environment variable its
+    ``credentials_secret`` names, an ephemeral device), reads design data and one snapshot with read-only calls,
+    plans with its policy's ``crew_plan`` (the same decisions the dry run journals) and reads the Prestige recipes of
+    the original named targets (``Client.prestigeCharacterTo``). Nothing is journaled and no file is written. An
+    account whose policy plans no crew roles gets one line saying so. Spend journaled earlier in the budget period is
+    not counted (there is no journal; each header says so), and ``max_actions`` limits the requests as
+    ``max_requests``. ``clock`` (tests), when given, is every snapshot's clock: it sets ``observed_at`` and the training
+    phases judged at it. A failed recipe read prints ``recipes unavailable`` and logs a warning naming only the
+    character design id and the error type. Returns 0 when
+    every enabled account was planned, 1 when any account failed to log in, read or pass the game identity check,
+    and 2 when the registry or the identity salt is missing or invalid.
+    """
+    from sdk.fleet.accounts import RegistryError, game_identity_refusal, load_registry
+    from sdk.fleet.factory import EnvironmentAccountFactory, LogScrubber
+    from sdk.fleet.orchestrator import budgeted_policy_config, error_reason
+    from sdk.policy import PolicyConfig, get_policy
+    from sdk.policy.training import crew_plan_lines, prestige_target_ids
+    from sdk.state.snapshot import SnapshotInputError, identity_salt_key
+
+    out = out or sys.stdout
+    environ = os.environ if environ is None else environ
+    if not Path(registry_path).is_file():
+        print(f"error: registry not found: {registry_path}", file=sys.stderr)
+        return 2
+    try:
+        registry = load_registry(registry_path)
+    except RegistryError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 2
+    identity_salt = None
+    if identity_salt_env:
+        identity_salt = environ.get(identity_salt_env) or None
+        if identity_salt is None:
+            print(f"error: identity salt variable {identity_salt_env} is not set", file=sys.stderr)
+            return 2
+        try:
+            identity_salt_key(identity_salt)
+        except SnapshotInputError as error:  # the message never repeats the salt
+            print(f"error: {identity_salt_env}: {error}", file=sys.stderr)
+            return 2
+
+    scrubber = LogScrubber()
+    scrubber.add_secrets([identity_salt])
+    factory_options = {"device_cls": device_cls} if device_cls is not None else {}
+    factory = EnvironmentAccountFactory(
+        Path("."), client_cls=client_cls or Client, environ=environ, client_settings=CLIENT_CHECKSUM_SETTINGS,
+        identity_salt=identity_salt, log_scrubber=scrubber, source=CREW_PLAN_SOURCE, **factory_options,
+    )
+    lines, failed = [], False
+    seen = {}  # accepted game identity -> alias: accounts never mix
+    declared = registry.declared_identities()
+    with scrubber.installed():
+        for profile in registry.enabled():  # one at a time, in alias order
+            policy = get_policy(profile.policy_id)
+            if not hasattr(policy, "crew_plan"):
+                lines.append(f"Crew plan for account '{profile.alias}': policy {profile.policy_id} plans no crew roles")
+                continue
+            try:
+                session = factory.open_preview(profile, clock=clock)
+                snapshot = session.snapshot_provider()
+                refusal = game_identity_refusal(profile.alias, profile.expected_game_identity,
+                                                snapshot.game_identity, seen, declared)
+                if refusal is not None:
+                    raise PermissionError(refusal)
+                if snapshot.game_identity is not None:
+                    seen[snapshot.game_identity] = profile.alias
+                config, _ = budgeted_policy_config(profile, {}, PolicyConfig(max_requests=profile.max_actions))
+                preview = policy.crew_plan(snapshot, session.design, config)
+                replies = {}
+                for target in prestige_target_ids(session.design, policy.crew_policy):
+                    try:
+                        replies[target] = session.client.prestigeCharacterTo(target)
+                    except Exception as error:  # a failed read leaves the target's recipes unavailable
+                        logging.warning("Crew plan: the Prestige recipe read for character design %s failed (%s); "
+                                        "recipes unavailable.", target, type(error).__name__)
+                        replies[target] = None
+                lines.extend(crew_plan_lines(profile.alias, policy, snapshot, session.design, preview, replies))
+            except Exception as error:  # one account's failure must not stop the others
+                failed = True
+                lines.append((f"Crew plan for account '{profile.alias}': error: ", error_reason(error)))
+    # Reasons are scrubbed once the scrubber knows every account's credential values, as the dry run scrubs them.
+    out.write("".join(f"{line}\n" if isinstance(line, str) else f"{line[0]}{scrubber.scrub(line[1], names=False)}\n"
+                      for line in lines))
+    return 1 if failed else 0
+
+
 BASELINE_SOURCE = "run.py --baseline"
 
 
@@ -808,26 +901,41 @@ def _write_fleet_dashboard(registry, journals, path):
 
 
 def _write_run_record(directory, started_at, record):
-    """Write ``record`` as ``<directory>/<UTC time>.json`` without replacing an existing record."""
+    """Write ``record`` as ``<directory>/<UTC time>.json`` without replacing an existing record.
+
+    The name is claimed atomically (a hard link, or an exclusive create where links are unsupported), so two runs that
+    start in the same second get ``<stem>.json`` and ``<stem>-2.json`` instead of one replacing the other.
+    """
+    import errno
     import json
     import tempfile
     from datetime import datetime
 
     stem = datetime.fromisoformat(started_at).strftime("%Y%m%dT%H%M%SZ")
-    target, suffix = directory / f"{stem}.json", 1
-    while target.exists():
-        suffix += 1
-        target = directory / f"{stem}-{suffix}.json"
+    text = json.dumps(record, indent=2, sort_keys=True) + "\n"
     handle, temporary = tempfile.mkstemp(dir=directory, prefix=".run-", suffix=".tmp")
     try:
         with os.fdopen(handle, "w", encoding="utf-8") as stream:
-            json.dump(record, stream, indent=2, sort_keys=True)
-            stream.write("\n")
-        os.replace(temporary, target)
-    except BaseException:
+            stream.write(text)
+        link = getattr(os, "link", None)
+        suffix = 1
+        while True:
+            target = directory / (f"{stem}.json" if suffix == 1 else f"{stem}-{suffix}.json")
+            try:
+                if link is None:
+                    with open(target, "x", encoding="utf-8") as stream:
+                        stream.write(text)
+                else:
+                    link(temporary, target)
+                return target
+            except FileExistsError:
+                suffix += 1
+            except OSError as error:
+                if link is None or error.errno not in (errno.EPERM, errno.ENOTSUP, errno.EOPNOTSUPP, errno.EXDEV):
+                    raise
+                link = None
+    finally:
         Path(temporary).unlink(missing_ok=True)
-        raise
-    return target
 
 
 def parse_place_room(text):
@@ -1462,8 +1570,8 @@ def main():
         dest="registry",
         default=None,
         metavar="PATH",
-        help="account registry JSON: required by --fleet-dry-run, --fleet-execute, --baseline and "
-        "--capture-reads; adds the isolation audit to --report fleet",
+        help="account registry JSON: required by --fleet-dry-run, --fleet-execute, --baseline, --capture-reads "
+        "and --crew-plan; adds the isolation audit to --report fleet",
     )
     parser.add_argument(
         "--report-format",
@@ -1585,6 +1693,16 @@ def main():
         "(SPEC-03 captures)",
     )
     parser.add_argument(
+        "--crew-plan",
+        dest="crew_plan",
+        action="store_true",
+        default=False,
+        help="log in to every enabled --registry account (credentials from the environment variables its "
+        "credentials_secret names), read design data and one snapshot with read-only calls, print the training-v2 "
+        "crew plan (roles, facilities, course or skip code per crew, Prestige routes), then exit; journals nothing "
+        "and never changes an account (SPEC-14)",
+    )
+    parser.add_argument(
         "--concurrent",
         dest="concurrent",
         type=positive_int,
@@ -1606,8 +1724,8 @@ def main():
         dest="identity_salt_env",
         default=None,
         metavar="NAME",
-        help="with --fleet-dry-run, --baseline, --capture-reads or --fleet-execute (required there): environment "
-        "variable holding the game identity salt",
+        help="with --fleet-dry-run, --baseline, --capture-reads, --crew-plan or --fleet-execute (required there): "
+        "environment variable holding the game identity salt",
     )
     args = parser.parse_args()
 
@@ -1624,6 +1742,23 @@ def main():
         ("--smtp-email", args.smtp_email), ("--smtp-password-file", args.smtp_password_file),
         ("--recipient", args.recipient),
     )
+    if args.crew_plan:
+        # Read-only: only --registry and --identity-salt-env apply (SPEC-14, S14-R3).
+        other_flags = (
+            ("--capture-reads", args.capture_reads), ("--baseline", args.baseline),
+            ("--baseline-summary", args.baseline_summary), ("--fleet-dry-run", args.fleet_dry_run),
+            ("--fleet-execute", args.fleet_execute), ("--authorization", args.authorization), ("--mode", args.mode),
+            ("--plan-only", args.plan_only), ("--place-room", args.place_room), ("--upgrade-ship", args.upgrade_ship),
+            ("--halt-share", args.halt_share is not None), ("--dashboard-out", args.dashboard_out),
+            ("--fleet-journal-dir", args.fleet_journal_dir), ("--concurrent", args.concurrent is not None),
+            *single_account_flags, *smtp_flags,
+        )
+        conflicting = [flag for flag, value in other_flags if value]
+        if conflicting:
+            parser.error(f"--crew-plan cannot be combined with {', '.join(conflicting)}")
+        if not args.registry:
+            parser.error("--crew-plan needs --registry PATH")
+        sys.exit(run_crew_plan(args.registry, args.identity_salt_env))
     if args.capture_reads:
         # Read-only: only --registry, --output and --identity-salt-env apply (SPEC-03, S03-R1).
         other_flags = (
@@ -1692,7 +1827,7 @@ def main():
     if args.concurrent is not None or args.fleet_journal_dir or args.identity_salt_env:
         parser.error("--concurrent, --fleet-journal-dir and --identity-salt-env are only used with --fleet-dry-run "
                      "or --fleet-execute (--concurrent and --identity-salt-env also with --baseline, "
-                     "--identity-salt-env also with --capture-reads)")
+                     "--identity-salt-env also with --capture-reads and --crew-plan)")
 
     if args.training_journal_dir is not None and (args.report or args.progression_dry_run):
         parser.error("--training-journal-dir is only used by the daily run; it cannot be combined with --report or "

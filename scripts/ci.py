@@ -71,6 +71,7 @@ REQUIRED_BLOCKING_MUTATION_TARGETS = (
     "sdk/training/model.py",
     "sdk/training/parse.py",
     "sdk/training/planner.py",
+    "sdk/training/prestige.py",
     "sdk/training/strategy.py",
 )
 MIN_BLOCKING_MUTATION_SCORE = 0.90

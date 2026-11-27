@@ -333,6 +333,15 @@
       ]
     },
     {
+      "name": "prestigeCharacterTo",
+      "pillar": "B",
+      "kind": "read-only",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_training_endpoints.py"
+      ]
+    },
+    {
       "name": "manageTraining",
       "pillar": "B",
       "kind": "mutating",
@@ -1158,6 +1167,15 @@
       "evidence": "mocked-test",
       "tests": [
         "tests/test_capture_reads.py"
+      ]
+    },
+    {
+      "flag": "--crew-plan",
+      "pillar": "B",
+      "kind": "read-only",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_crew_plan.py"
       ]
     },
     {
