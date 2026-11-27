@@ -2263,6 +2263,23 @@ class TrainingPreloginTests(TrainingExecutionCase):
         self.assertIn("never recreated", line)
         self.assertFalse(self.store_path.exists())
 
+    # Verifies: S14-R6 (C7: --plan-only makes the live run's pre-login store checks, read-only and without the lock)
+    def test_plan_only_refuses_a_store_the_live_run_would_refuse(self):
+        self.assertEqual(self.dry_run()[0], 0)
+        mark = self.mark()
+        code, out, err = self.execute("--plan-only")
+        self.assertEqual(code, 2, out + err)
+        self.assertEqual([codes_in(line) for line in self.refusal_lines(err)], [{"state_missing"}])
+        self.assertEqual(self.requests_since(mark), [])
+        self.provision()
+        before = self.store_path.read_bytes()
+        mark = self.mark()
+        code, out, err = self.execute("--plan-only")
+        self.assertEqual(code, 0, out + err)
+        self.assertIn("Plan only: nothing was logged in", out)
+        self.assertEqual(self.store_path.read_bytes(), before)
+        self.assertEqual(self.requests_since(mark), [])
+
     def test_a_corrupted_store_is_state_unreadable(self):
         self.provision()
         self.assertEqual(self.dry_run()[0], 0)
@@ -2528,6 +2545,43 @@ class TrainingStartTests(TrainingStartCase):
         self.assertTrue(rows)
         for row in rows:
             self.assertEqual(len(codes_in(row)), 1, row)
+
+    def training_rows(self, out):
+        if "## Training starts" not in out:
+            return []
+        section = out.split("## Training starts", 1)[1].split("\n## ", 1)[0]
+        return [line for line in section.splitlines() if line.startswith("| alpha |")]
+
+    # Verifies: S14-R4 (regression C8: run-time skips are printed under "Training starts" too)
+    def test_run_time_skips_are_printed_under_training_starts(self):
+        from sdk.fleet.attempts import FileAccountLock
+
+        def price_change():
+            self.change_the_price_after_planning("mineral:600")
+            return self.execute()
+
+        def intent_failure():
+            with patch("sdk.execution.runner.write_training_intent", side_effect=OSError("synthetic")):
+                return self.execute()
+
+        def locked():
+            held = FileAccountLock(self.store_root).try_acquire(self.identity)
+            try:
+                return self.execute()
+            finally:
+                held.release()
+
+        for name, run_it, row in (("recheck", price_change, "| alpha | add_training 1001 | price_unavailable |"),
+                                  ("intent", intent_failure, "| alpha | add_training 1001 | intent_not_persisted |"),
+                                  ("locked", locked, "| alpha | training | locked |")):
+            with self.subTest(name):
+                self.setUp()
+                self.ready()
+                _, out, err = run_it()
+                rows = self.training_rows(out)
+                self.assertIn(row, rows, out + err)
+                for line in rows:
+                    self.assertEqual(len(codes_in(line)), 1, line)
 
     def lose_the_reply(self, apply=True):
         """The next AddTraining's reply is lost (applied or not) and every roster read after it fails."""

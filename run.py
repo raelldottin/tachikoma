@@ -1596,16 +1596,42 @@ def run_fleet_execute(registry_path, authorization_path, mode=None, journal_dir=
         for result in entry["results"]:
             lines.append(f"| {entry['alias']} | {result['action_id']} | {'yes' if result['attempted'] else 'no'} | "
                          f"{result['outcome']} | {_md_cell(result['reason'])} |")
-    # training-v2 (SPEC-14): why each crew member or role started no course, one skip code per line (no free text).
+    # training-v2 (SPEC-14): why each crew member or role started no course, one skip code per line (no free text):
+    # the plan's skips, then the starts the run skipped (the recheck under the lock, the intent write, the store), then
+    # an account the run never planned (locked, or its store unusable).
+    def leading_code(reason):
+        code = (reason or "").split(":", 1)[0].strip()
+        return code if code in skip_codes else None
+
     training_rows = []
     for entry in record_accounts:
-        if entry["alias"] not in guarded:
+        alias = entry["alias"]
+        if alias not in guarded:
             continue
+        rows = []
         for item in entry["rejected"]:
-            candidate, reason = item["candidate"], item["reason"] or ""
-            code = reason.split(":", 1)[0].strip()
-            if (candidate == "training" or candidate.startswith(("training ", "add_training "))) and code in skip_codes:
-                training_rows.append(f"| {entry['alias']} | {_md_cell(candidate)} | {code} |")
+            candidate, code = item["candidate"], leading_code(item["reason"])
+            if (candidate == "training" or candidate.startswith(("training ", "add_training "))) and code:
+                rows.append(f"| {alias} | {_md_cell(candidate)} | {code} |")
+        report = orchestrator.reports.get(alias)
+        for result in (report.results if report else ()):
+            code = leading_code(result.reason)
+            if result.action_id == "add_training" and not result.attempted and code:
+                character = (result.event.params or {}).get("character_id")
+                rows.append(f"| {alias} | {_md_cell(f'add_training {character}')} | {code} |")
+        # A start refused in a way that stops the account (the intent write failed, the store reread under the lock
+        # refused it) is not among the results; the scheduler's stop reason names it. A sent start is never a skip.
+        refused = "runner refused add_training: "
+        stop = report.stop_reason if report else None
+        sent = any(result.action_id == "add_training" and result.attempted for result in (report.results if report
+                                                                                           else ()))
+        if stop and stop.startswith(refused) and leading_code(stop[len(refused):]) and not sent:
+            planned = next((request for request in report.plan.requests if request.action_id == "add_training"), None)
+            character = planned.params.get("character_id") if planned is not None else None
+            rows.append(f"| {alias} | {_md_cell(f'add_training {character}')} | {leading_code(stop[len(refused):])} |")
+        if not rows and entry["status"] in ("locked", "error") and leading_code(entry["reason"]):
+            rows.append(f"| {alias} | training | {leading_code(entry['reason'])} |")
+        training_rows += rows
     if training_rows:
         lines += ["", "## Training starts", "", "| Account | Candidate | Skip |", "| --- | --- | --- |",
                   *training_rows]
