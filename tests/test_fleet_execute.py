@@ -84,6 +84,7 @@ from tests import test_room_placement as placement_tests  # a module import: its
 from tests import training_fixtures as training_tests
 # A module import (its tests are not rerun here); it imports every sdk module before any FakePss.install().
 from tests import test_crew_plan as crew_plan_tests
+from tests.fakes.pss_server import SimulatedCrash
 
 REPO_ROOT = Path(os.path.abspath(__file__)).parents[1]
 SALT_ENV = "FLEET_SALT"
@@ -2502,6 +2503,84 @@ class TrainingStartTests(TrainingStartCase):
         code, _, err = self.resolve()
         self.assertEqual((code, [codes_in(line) for line in self.refusal_lines(err)]), (1, [{"state_missing"}]))
         self.assertFalse(self.store_path.exists())
+
+    # Verifies: S14-R5
+    def test_a_misapplied_start_is_contradicted_and_blocks_another_crew_across_runs(self):
+        self.ready()
+        self.fake.misapply_training("42")
+        mark = self.mark()
+        self.execute()
+        [start] = self.starts_since(mark)
+        self.assertTrue(start.applied)
+        [event] = [event for event in self.executed_events() if event.attempted]
+        self.assertEqual(event.outcome, "contradicted")  # the strict verdict: another course is running
+        self.assertEqual(self.store()["attempts"][0]["state"], "unresolved")
+        self.add_gina()
+        self.assertEqual(self.dry_run()[0], 0)
+        mark = self.mark()
+        self.execute()
+        self.assertEqual(self.starts_since(mark), [])
+        self.assertEqual(self.mutations_since(mark), [])
+
+    # Verifies: S14-R5, S14-R6
+    def test_a_crash_leaves_a_pending_intent_that_pauses_the_restarted_account(self):
+        for apply in (True, False):
+            with self.subTest(apply=apply):
+                self.setUp()
+                self.ready()
+                self.fake.crash("POST " + ADD_TRAINING, apply=apply)
+                mark = self.mark()
+                with self.assertRaises(SimulatedCrash):
+                    self.execute()
+                self.assertEqual([entry.applied for entry in self.starts_since(mark)], [apply])
+                [attempt] = self.store()["attempts"]
+                self.assertEqual(attempt["state"], "pending")  # never settled by the unwinding
+                self.assert_lock_released()
+                self.add_gina()
+                self.assertEqual(self.dry_run()[0], 0)
+                mark = self.mark()
+                self.execute()  # a new process: new orchestrator, new store and lock objects
+                self.assertEqual(self.starts_since(mark), [])
+                self.assertIn("unresolved_attempt",
+                              set().union(*(codes_in(text) for text in self.record_texts(self.latest_record()))))
+
+    # Verifies: S14-R6
+    def test_a_stop_file_created_mid_run_sends_nothing(self):
+        self.ready()
+
+        def stop(fake, exchange):
+            (self.journals / "STOP").touch()
+
+        self.fake.on_reply("GET " + ROSTER, stop)  # after the claim's roster read, before the plan runs
+        mark = self.mark()
+        code, out, err = self.execute()
+        self.assertEqual(code, 1, out + err)
+        self.assertEqual(self.mutations_since(mark), [])
+        self.assertEqual(self.latest_record()["accounts"][0]["status"], "stopped")
+        self.assertEqual(self.store()["attempts"], [])
+
+    def test_forbidden_writes_never_happen(self):
+        self.ready()
+        self.execute()
+        heal = self.lose_the_reply()
+        self.add_gina()
+        self.dry_run()
+        self.execute()
+        heal()
+        self.resolve()
+        self.assertEqual({entry.path for entry in self.fake.ledger}, {ADD_TRAINING})
+        for exchange in self.fake.exchanges:
+            for word in ("UsingCredits", "Rush", "SpeedUp", "Prestige", "Move", "Assign"):
+                self.assertNotIn(word, exchange.path)
+        self.assertTrue(all(entry.delta.get("starbux", 0) == 0 for entry in self.fake.ledger))
+
+    def test_a_starbux_priced_course_is_never_started(self):
+        self.fake.state.training_design("41").price = "starbux:5"
+        self.ready()
+        mark = self.mark()
+        code, out, err = self.execute()
+        self.assertEqual(self.starts_since(mark), [])
+        self.assertIn("| alpha | training 1001 | premium_currency |", out.splitlines())
 
     def test_training_v1_execute_needs_no_store_and_creates_none(self):
         self.policy_id = "training-v1"
