@@ -925,13 +925,13 @@ class CrewPlanWorkflowTests(unittest.TestCase):
         cls.suites = [wb.load_suite(wb.FIXTURES["required"]), wb.load_suite(wb.FIXTURES["holdout"])]
 
     def scenarios(self):
-        for suite in cls.suites:
+        for suite in self.suites:
             for item in suite["cases"]:
                 for entry in item["scenarios"]:
                     yield suite, item["id"], entry
 
     def run_one(self, suite, case_id, entry):
-        return cls.wb.run_scenario(suite["suite"], case_id, entry, suite["catalog"], suite["seeds"][0],
+        return self.wb.run_scenario(suite["suite"], case_id, entry, suite["catalog"], suite["seeds"][0],
                                     suite["vocabulary"]["skip_codes"])
 
     # Verifies: S14-R1, S14-R2, S14-R3
