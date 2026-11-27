@@ -1563,15 +1563,16 @@ class Client(object):
             "{0:%Y-%m-%dT%H:%M:%S}".format(DotNet.validDateTime()),
             self.accessToken,
         )
+        r = self.request(url, "POST")
+        if not r or "errorMessage" in r.text or "@errorMessage" in r.text:
+            logging.error(f"[{self.info['@Name']}] Failed to collect resources.")
+            return False
         try:
-            r = self.request(url, "POST")
-            if not r or not r.content:
-                return False
             d = xmltodict.parse(r.content, xml_attribs=True)
-            if not isinstance(d, dict):
-                return False
         except Exception as e:
             logging.error(f"collectAllResources failed: {redact_secrets(str(e))}")
+            return False
+        if not isinstance(d, dict):
             return False
 
         items = _extract_collection(d, "Item")
@@ -1725,8 +1726,15 @@ class Client(object):
         checksum = checksum_add_starbux2(str(quantity), ts, self.accessToken)
         url = f"https://api.pixelstarships.com/UserService/AddStarbux2?quantity={quantity}&clientDateTime={ts}&checksum={checksum}&accessToken={self.accessToken}"
         r = self.request(url, "POST")
-        if r:
+        if not r or "errorMessage" in r.text or "@errorMessage" in r.text:
+            logging.error(f"[{self.info['@Name']}] AddStarbux2 failed.")
+            return False
+        try:
             self.starbux = xmltodict.parse(r.content, xml_attribs=True)
+        except Exception:
+            logging.error(f"[{self.info['@Name']}] AddStarbux2: failed to parse response.")
+            return False
+        return True
 
     def grabFlyingStarbux(self):
         if (
