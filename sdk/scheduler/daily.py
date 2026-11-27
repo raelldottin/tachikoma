@@ -125,6 +125,11 @@ class DailyScheduler:
                 result = self.runner.run(request.action_id, request.params, dry_run=not execute,
                                          expected_cost=request.expected_cost)
             except (UncertainPriorAttemptError, AccountMismatchError) as error:
+                # A refusal that comes after a sent and journaled request (a training start whose settlement could
+                # not be written, SPEC-14) carries that request's result: keep it in the report.
+                kept = getattr(error, "result", None)
+                if isinstance(kept, RunResult):
+                    results.append(kept)
                 stop_reason = f"runner refused {request.action_id}: {error}"
                 break
             results.append(result)

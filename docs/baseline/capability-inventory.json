@@ -1037,7 +1037,8 @@
       "kind": "read-only",
       "evidence": "mocked-test",
       "tests": [
-        "tests/test_progression_dry_run.py"
+        "tests/test_progression_dry_run.py",
+        "tests/test_fleet_execute.py"
       ]
     },
     {
@@ -1186,6 +1187,24 @@
       "evidence": "mocked-test",
       "tests": [
         "tests/test_crew_plan.py"
+      ]
+    },
+    {
+      "flag": "--fleet-provision-training",
+      "pillar": "E",
+      "kind": "read-only",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_fleet_execute.py"
+      ]
+    },
+    {
+      "flag": "--fleet-resolve-training",
+      "pillar": "E",
+      "kind": "read-only",
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_fleet_execute.py"
       ]
     },
     {

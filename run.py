@@ -383,6 +383,248 @@ def run_crew_plan(registry_path, identity_salt_env=None, out=None, environ=None,
     return 1 if failed else 0
 
 
+PROVISION_SOURCE = "run.py --fleet-provision-training"
+RESOLVE_SOURCE = "run.py --fleet-resolve-training"
+
+
+def _training_store_setup(command, registry_path, alias, journal_dir, identity_salt_env, environ):
+    """The checks --fleet-provision-training and --fleet-resolve-training share, all before any login.
+
+    Returns ``(registry, profile, identity_salt, attempts)``, or the exit code 2 after printing why: the registry is
+    missing or invalid, ``alias`` is not in it, its policy keeps no training attempt store (only training-v2 does),
+    the identity salt is unset or too short, or the profile declares no ``expected_game_identity``. Authorization,
+    legacy daily run settings, ``enabled`` and dry runs are not checked: they govern execution, not the store.
+    """
+    from sdk.fleet.accounts import RegistryError, load_registry
+    from sdk.fleet.attempts import TrainingAttempts, guarded_training
+    from sdk.policy import get_policy
+    from sdk.state.snapshot import SnapshotInputError, identity_salt_key
+
+    def refuse(reason):
+        print(f"error: {command} refused before any login:", file=sys.stderr)
+        print(f"  - {reason}", file=sys.stderr)
+        return 2
+
+    if not Path(registry_path).is_file():
+        return refuse(f"registry not found: {registry_path}")
+    try:
+        registry = load_registry(registry_path)
+    except RegistryError as error:
+        return refuse(str(error))
+    if alias not in registry:
+        return refuse(f"account {alias!r} is not in the registry")
+    profile = registry.get(alias)
+    try:
+        policy = get_policy(profile.policy_id)
+    except Exception as error:  # an unknown policy id: no store either
+        return refuse(f"account {alias!r}: {type(error).__name__}: {error}")
+    if not guarded_training(policy):
+        return refuse(f"account {alias!r} uses policy {profile.policy_id}, which keeps no training attempt store")
+    if not identity_salt_env:
+        return refuse(f"--identity-salt-env NAME is required: {command} checks the account's game identity")
+    identity_salt = environ.get(identity_salt_env) or None
+    if identity_salt is None:
+        return refuse(f"identity salt variable {identity_salt_env} is not set")
+    try:
+        identity_salt_key(identity_salt)
+    except SnapshotInputError as error:  # the message never repeats the salt
+        return refuse(f"{identity_salt_env}: {error}")
+    if profile.expected_game_identity is None:
+        return refuse(f"account {alias!r} declares no expected_game_identity; the store is keyed by it")
+    return registry, profile, identity_salt, TrainingAttempts.for_journal_dir(journal_dir)
+
+
+def _training_store_failure(command, alias, reason):
+    print(f"error: {command} stopped for account {alias!r}:", file=sys.stderr)
+    print(f"  - account {alias!r}: {reason}", file=sys.stderr)
+    return 1
+
+
+def run_fleet_provision_training(registry_path, alias, journal_dir=None, identity_salt_env=None, out=None,
+                                 environ=None, client_cls=None, device_cls=None, clock=None):
+    """Provision the virgin training attempt store of one training-v2 account (SPEC-14 step 4).
+
+    Before any login (exit 2 on failure) the shared checks of ``_training_store_setup`` run. An existing readable
+    store of the declared identity is left as it is (exit 0, no login). An unreadable store, one of another identity
+    or an established store that is missing is refused (exit 1): established state is never recreated. Otherwise the
+    account logs in (no snapshot, no mutating request), its game identity must be the declared one, and the store is
+    created under the account's lock as ``<journal dir>/training-attempts/<alias>.json`` (exit 0); any failure there
+    exits 1.
+    """
+    from datetime import datetime, timezone
+
+    from sdk.fleet.accounts import game_identity_refusal
+    from sdk.fleet.attempts import (STATE_UNREADABLE, StoreMissing, TrainingStateError, journal_witnesses_store,
+                                    state_reason)
+    from sdk.fleet.factory import EnvironmentAccountFactory, LogScrubber
+    from sdk.fleet.orchestrator import error_reason
+    from sdk.journal import JournalError, read_events
+
+    command = "--fleet-provision-training"
+    out = out or sys.stdout
+    environ = os.environ if environ is None else environ
+    clock = clock or (lambda: datetime.now(timezone.utc))
+    journal_dir = Path(journal_dir or FLEET_JOURNAL_DIR_DEFAULT)
+    setup = _training_store_setup(command, registry_path, alias, journal_dir, identity_salt_env, environ)
+    if isinstance(setup, int):
+        return setup
+    registry, profile, identity_salt, attempts = setup
+    location = attempts.location(alias)
+    try:
+        state = attempts.store.load(alias, identity=profile.expected_game_identity)
+    except StoreMissing as error:
+        if error.established:
+            return _training_store_failure(command, alias, state_reason(location, error))
+        state = None
+    except TrainingStateError as error:
+        return _training_store_failure(command, alias, state_reason(location, error))
+    if state is not None:
+        reason = attempts.preflight(alias, profile.expected_game_identity)
+        if reason is not None:
+            return _training_store_failure(command, alias, reason)
+        if attempts.store.established(profile.expected_game_identity):
+            out.write(f"Training attempt store of account {alias!r} already provisioned: {location}; nothing "
+                      "changed\n")
+            return 0
+        # A readable store of the declared identity whose establishment marker is missing (a crash between the two
+        # writes, say): the marker is written again under the lock. No login: the store already names the identity.
+        try:
+            attempts.provision(alias, profile.expected_game_identity, clock())
+        except TrainingStateError as error:
+            return _training_store_failure(command, alias, state_reason(location, error))
+        except OSError as error:
+            return _training_store_failure(command, alias, f"{type(error).__name__}: the establishment marker could "
+                                                           "not be written")
+        out.write(f"Training attempt store of account {alias!r} already provisioned: {location}; its missing "
+                  "establishment marker was written again\n")
+        return 0
+    journal_path = journal_dir / f"{alias}.log"
+    try:  # the account journal is a second witness: a start made under the store means it was established
+        witnessed = journal_witnesses_store(read_events(journal_path), alias, profile.policy_id)
+    except JournalError as error:
+        return _training_store_failure(command, alias, f"{STATE_UNREADABLE}: account journal {journal_path} "
+                                                       f"cannot be read ({error})")
+    if witnessed:
+        return _training_store_failure(command, alias, state_reason(location, StoreMissing("journal",
+                                                                                           journal_witness=True)))
+
+    scrubber = LogScrubber()
+    scrubber.add_secrets([identity_salt])
+    factory_options = {"device_cls": device_cls} if device_cls is not None else {}
+    factory = EnvironmentAccountFactory(
+        journal_dir, client_cls=client_cls or Client, environ=environ, client_settings=CLIENT_CHECKSUM_SETTINGS,
+        identity_salt=identity_salt, log_scrubber=scrubber, source=PROVISION_SOURCE, **factory_options,
+    )
+    try:
+        with scrubber.installed():
+            session = factory.open_reads(profile)  # login only: no snapshot, no mutating request
+        refusal = game_identity_refusal(alias, profile.expected_game_identity, session.game_identity, {},
+                                        registry.declared_identities())
+        if refusal is None and session.game_identity is None:
+            refusal = "its game identity was not observed"
+        if refusal is not None:
+            return _training_store_failure(command, alias, f"{refusal}; nothing provisioned")
+        created = attempts.provision(alias, session.game_identity, clock(), events=lambda: read_events(journal_path),
+                                     policy_id=profile.policy_id)
+    except TrainingStateError as error:
+        return _training_store_failure(command, alias, state_reason(location, error))
+    except Exception as error:  # a login or file system failure: nothing was provisioned
+        return _training_store_failure(command, alias, scrubber.scrub(error_reason(error), names=False))
+    if not created:
+        out.write(f"Training attempt store of account {alias!r} already provisioned: {location}; nothing changed\n")
+        return 0
+    out.write(f"Provisioned the training attempt store of account {alias!r} (game identity {session.game_identity}): "
+              f"{location}\n")
+    return 0
+
+
+def run_fleet_resolve_training(registry_path, alias, journal_dir=None, identity_salt_env=None, out=None,
+                               environ=None, client_cls=None, device_cls=None, clock=None):
+    """Record the operator's reconciliation of a training-v2 account's pending or unresolved attempts (SPEC-14).
+
+    Before any login (exit 2 on failure) the shared checks of ``_training_store_setup`` run. A missing, unreadable
+    or foreign store exits 1; a store with nothing pending or unresolved exits 0 without logging in. Otherwise it
+    takes the account lock of the declared identity (``locked`` exits 1 before any login), then logs in and takes one
+    read-only snapshot (no mutating request); its game identity must be the declared one. Each blocking attempt is
+    classified from that roster read (``sdk.fleet.attempts.classify_resolution``: started, other course or not
+    running) and all of them are persisted together, linked to their journal events; without authoritative evidence
+    for every one (a read not newer than the attempt, a roster read that is not complete, a member missing, an unknown
+    training state or course) nothing is persisted and the command exits 1. Nothing is journaled: the attempt's
+    journal outcome stays as it was observed.
+    """
+    from datetime import datetime, timezone
+
+    from sdk.fleet.accounts import game_identity_refusal
+    from sdk.fleet.attempts import BLOCKING, ResolutionRefused, TrainingStateError, state_reason
+    from sdk.fleet.factory import EnvironmentAccountFactory, LogScrubber
+    from sdk.fleet.orchestrator import error_reason
+    from sdk.journal import read_events
+
+    command = "--fleet-resolve-training"
+    out = out or sys.stdout
+    environ = os.environ if environ is None else environ
+    clock = clock or (lambda: datetime.now(timezone.utc))
+    journal_dir = Path(journal_dir or FLEET_JOURNAL_DIR_DEFAULT)
+    setup = _training_store_setup(command, registry_path, alias, journal_dir, identity_salt_env, environ)
+    if isinstance(setup, int):
+        return setup
+    registry, profile, identity_salt, attempts = setup
+    location = attempts.location(alias)
+    reason = attempts.preflight(alias, profile.expected_game_identity)
+    if reason is not None:
+        return _training_store_failure(command, alias, reason)
+    try:
+        state = attempts.store.load(alias, identity=profile.expected_game_identity)
+    except TrainingStateError as error:
+        return _training_store_failure(command, alias, state_reason(location, error))
+    if not any(attempt.state in BLOCKING for attempt in state.attempts):
+        out.write(f"No unresolved training attempt for account {alias!r}; nothing changed\n")
+        return 0
+
+    scrubber = LogScrubber()
+    scrubber.add_secrets([identity_salt])
+    factory_options = {"device_cls": device_cls} if device_cls is not None else {}
+    factory = EnvironmentAccountFactory(
+        journal_dir, client_cls=client_cls or Client, environ=environ, client_settings=CLIENT_CHECKSUM_SETTINGS,
+        identity_salt=identity_salt, log_scrubber=scrubber, source=RESOLVE_SOURCE, **factory_options,
+    )
+    def observe():
+        """The fresh roster read, taken under the account lock: read-only calls only, the declared identity's."""
+        with scrubber.installed():
+            snapshot = factory.open_preview(profile, clock=clock).snapshot_provider()
+        refusal = game_identity_refusal(alias, profile.expected_game_identity, snapshot.game_identity, {},
+                                        registry.declared_identities())
+        if refusal is None and snapshot.game_identity is None:
+            refusal = "its game identity was not observed"
+        if refusal is not None:
+            raise ResolutionRefused(f"{refusal}; nothing resolved")
+        return snapshot
+
+    try:
+        resolutions = attempts.resolve(alias, profile.expected_game_identity, observe, clock,
+                                       events=lambda: read_events(journal_dir / f"{alias}.log"))
+    except TrainingStateError as error:
+        return _training_store_failure(command, alias, state_reason(location, error))
+    except ResolutionRefused as error:
+        return _training_store_failure(command, alias, str(error))
+    except Exception as error:  # a login or file system failure: nothing was resolved
+        return _training_store_failure(command, alias,
+                                       f"{scrubber.scrub(error_reason(error), names=False)}; nothing resolved")
+    if not resolutions:
+        out.write(f"No unresolved training attempt for account {alias!r}; nothing changed\n")
+        return 0
+    for attempt, evidence in resolutions:
+        observed = [f"observed {evidence['observed_phase']}"]
+        if evidence["observed_course_id"] is not None:
+            observed.append(f"course {evidence['observed_course_id']}")
+        if evidence["observed_end"] is not None:
+            observed.append(f"ends {evidence['observed_end']}")
+        out.write(f"Resolved training attempt {attempt.intent_id[:8]} of account {alias!r}: character "
+                  f"{attempt.character_id}, course {attempt.training_design_id}: {evidence['verdict']} "
+                  f"({', '.join(observed)})\n")
+    return 0
+
+
 BASELINE_SOURCE = "run.py --baseline"
 
 
@@ -1024,7 +1266,10 @@ def run_fleet_execute(registry_path, authorization_path, mode=None, journal_dir=
         load_authorization,
         hull_upgrade_refusal_reason,
         placement_refusal_reason,
+        training_authorization_refusals,
     )
+    from sdk.fleet.attempts import DRY_RUN_STALE, EXECUTION_SKIP_CODES, TrainingAttempts, guarded_training
+    from sdk.training.strategy import CREW_SKIP_CODES
     from sdk.fleet.factory import (
         DEFAULT_HALT_SHARE,
         EXECUTE_SOURCE,
@@ -1039,6 +1284,7 @@ def run_fleet_execute(registry_path, authorization_path, mode=None, journal_dir=
         registry_stamp,
     )
     from sdk.journal import JournalError, read_events
+    from sdk.policy import get_policy
     from sdk.state.snapshot import SnapshotInputError, identity_salt_key
 
     out = out or sys.stdout
@@ -1118,7 +1364,19 @@ def run_fleet_execute(registry_path, authorization_path, mode=None, journal_dir=
                 reasons.append(why)
     stamp = registry_stamp(registry)
     plans, journal_events = {}, {}
+    # training-v2 (SPEC-14 step 4): in full mode each account's training attempt store must be readable and its own
+    # before any login, and every refusal line names one workflow code. The live dispatch checks it again under the
+    # account lock.
+    attempts = TrainingAttempts.for_journal_dir(journal_dir)
+    guarded = {profile.alias for profile in enabled
+               if mode == "full" and guarded_training(get_policy(profile.policy_id))}
+    reasons += training_authorization_refusals(authorization, registry, sorted(guarded), mode)
+    skip_codes = CREW_SKIP_CODES | EXECUTION_SKIP_CODES
     for profile in enabled:
+        if profile.alias in guarded:
+            why = attempts.preflight(profile.alias, profile.expected_game_identity)
+            if why is not None:
+                reasons.append(f"account {profile.alias!r}: {why}")
         if profile.expected_game_identity is None:
             reasons.append(f"account {profile.alias!r} declares no expected_game_identity; "
                            "execute mode needs one for every enabled account")
@@ -1132,7 +1390,8 @@ def run_fleet_execute(registry_path, authorization_path, mode=None, journal_dir=
             continue  # a placement or hull upgrade is checked against the run's own fresh snapshot, not a dry run
         plan, why = latest_dry_run(events, profile, stamp, now)
         if plan is None:
-            reasons.append(f"account {profile.alias!r}: {why}; run --fleet-dry-run with this registry first")
+            reasons.append(f"account {profile.alias!r}: {why}; run --fleet-dry-run with this registry first"
+                           + (f" ({DRY_RUN_STALE})" if profile.alias in guarded else ""))
         else:
             plans[profile.alias] = plan
     stop_file = journal_dir / FLEET_STOP_FILE
@@ -1219,7 +1478,7 @@ def run_fleet_execute(registry_path, authorization_path, mode=None, journal_dir=
         client_settings=CLIENT_CHECKSUM_SETTINGS, identity_salt=identity_salt, log_scrubber=scrubber,
         source=EXECUTE_SOURCE, **factory_options,
     )
-    options = {"gate": gate, "halt_share": halt_share, "stop_file": stop_file, "clock": clock}
+    options = {"gate": gate, "halt_share": halt_share, "stop_file": stop_file, "clock": clock, "attempts": attempts}
     if concurrent is not None:
         orchestrator = ConcurrentExecuteFleetOrchestrator(registry, factory, max_workers=concurrent, **options)
     else:
@@ -1337,6 +1596,45 @@ def run_fleet_execute(registry_path, authorization_path, mode=None, journal_dir=
         for result in entry["results"]:
             lines.append(f"| {entry['alias']} | {result['action_id']} | {'yes' if result['attempted'] else 'no'} | "
                          f"{result['outcome']} | {_md_cell(result['reason'])} |")
+    # training-v2 (SPEC-14): why each crew member or role started no course, one skip code per line (no free text):
+    # the plan's skips, then the starts the run skipped (the recheck under the lock, the intent write, the store), then
+    # an account the run never planned (locked, or its store unusable).
+    def leading_code(reason):
+        code = (reason or "").split(":", 1)[0].strip()
+        return code if code in skip_codes else None
+
+    training_rows = []
+    for entry in record_accounts:
+        alias = entry["alias"]
+        if alias not in guarded:
+            continue
+        rows = []
+        for item in entry["rejected"]:
+            candidate, code = item["candidate"], leading_code(item["reason"])
+            if (candidate == "training" or candidate.startswith(("training ", "add_training "))) and code:
+                rows.append(f"| {alias} | {_md_cell(candidate)} | {code} |")
+        report = orchestrator.reports.get(alias)
+        for result in (report.results if report else ()):
+            code = leading_code(result.reason)
+            if result.action_id == "add_training" and not result.attempted and code:
+                character = (result.event.params or {}).get("character_id")
+                rows.append(f"| {alias} | {_md_cell(f'add_training {character}')} | {code} |")
+        # A start refused in a way that stops the account (the intent write failed, the store reread under the lock
+        # refused it) is not among the results; the scheduler's stop reason names it. A sent start is never a skip.
+        refused = "runner refused add_training: "
+        stop = report.stop_reason if report else None
+        sent = any(result.action_id == "add_training" and result.attempted for result in (report.results if report
+                                                                                           else ()))
+        if stop and stop.startswith(refused) and leading_code(stop[len(refused):]) and not sent:
+            planned = next((request for request in report.plan.requests if request.action_id == "add_training"), None)
+            character = planned.params.get("character_id") if planned is not None else None
+            rows.append(f"| {alias} | {_md_cell(f'add_training {character}')} | {leading_code(stop[len(refused):])} |")
+        if not rows and entry["status"] in ("locked", "error") and leading_code(entry["reason"]):
+            rows.append(f"| {alias} | training | {leading_code(entry['reason'])} |")
+        training_rows += rows
+    if training_rows:
+        lines += ["", "## Training starts", "", "| Account | Candidate | Skip |", "| --- | --- | --- |",
+                  *training_rows]
     if evaluated:  # alert text is scrubbed like the record and the e-mail (S11-R4)
         lines += [scrub_text(line) for line in _fleet_report_sections(registry, journals, fleet_run, None, evaluated)]
     lines += ["", "## After the run", "",
@@ -1531,9 +1829,12 @@ def main():
     )
     parser.add_argument(
         "--account-alias",
+        "--account",  # the older abbreviation of --account-alias, and the alias option of the training store commands
         dest="account_alias",
-        default="primary",
-        help="lowercase account alias used in the progression and training journals (default: primary)",
+        default=None,
+        metavar="ALIAS",
+        help="lowercase account alias used in the progression and training journals (default: primary); with "
+        "--fleet-provision-training or --fleet-resolve-training, the registry account alias (required there)",
     )
     parser.add_argument(
         "--progression-journal",
@@ -1724,8 +2025,28 @@ def main():
         dest="identity_salt_env",
         default=None,
         metavar="NAME",
-        help="with --fleet-dry-run, --baseline, --capture-reads, --crew-plan or --fleet-execute (required there): "
-        "environment variable holding the game identity salt",
+        help="with --fleet-dry-run, --baseline, --capture-reads, --crew-plan, --fleet-execute, "
+        "--fleet-provision-training or --fleet-resolve-training (required for the last three): environment variable "
+        "holding the game identity salt",
+    )
+    parser.add_argument(
+        "--fleet-provision-training",
+        dest="fleet_provision_training",
+        action="store_true",
+        default=False,
+        help="create the empty training attempt store of the training-v2 --registry account named by --account "
+        "(<--fleet-journal-dir>/training-attempts/<alias>.json) after logging in and checking its game identity; "
+        "needed once before its first --fleet-execute, never recreates a missing or unreadable store and never "
+        "changes the game account (SPEC-14)",
+    )
+    parser.add_argument(
+        "--fleet-resolve-training",
+        dest="fleet_resolve_training",
+        action="store_true",
+        default=False,
+        help="record the operator's reconciliation of the --account's pending or unresolved training attempt from a "
+        "fresh read-only roster read, under the account lock, so training starts resume; changes nothing without "
+        "authoritative evidence and never changes the game account (SPEC-14)",
     )
     args = parser.parse_args()
 
@@ -1742,6 +2063,28 @@ def main():
         ("--smtp-email", args.smtp_email), ("--smtp-password-file", args.smtp_password_file),
         ("--recipient", args.recipient),
     )
+    if args.fleet_provision_training or args.fleet_resolve_training:
+        # Operator commands for one training-v2 account's attempt store (SPEC-14 step 4): only --registry,
+        # --fleet-journal-dir, --identity-salt-env and --account apply.
+        command = "--fleet-provision-training" if args.fleet_provision_training else "--fleet-resolve-training"
+        other_flags = (
+            ("--fleet-provision-training", args.fleet_provision_training and args.fleet_resolve_training),
+            ("--crew-plan", args.crew_plan), ("--capture-reads", args.capture_reads), ("--baseline", args.baseline),
+            ("--baseline-summary", args.baseline_summary), ("--fleet-dry-run", args.fleet_dry_run),
+            ("--fleet-execute", args.fleet_execute), ("--authorization", args.authorization), ("--mode", args.mode),
+            ("--plan-only", args.plan_only), ("--place-room", args.place_room), ("--upgrade-ship", args.upgrade_ship),
+            ("--halt-share", args.halt_share is not None), ("--dashboard-out", args.dashboard_out),
+            ("--concurrent", args.concurrent is not None), *single_account_flags, *smtp_flags,
+        )
+        conflicting = [flag for flag, value in other_flags if value]
+        if conflicting:
+            parser.error(f"{command} cannot be combined with {', '.join(conflicting)}")
+        if not args.registry or args.account_alias is None:
+            parser.error(f"{command} needs --registry PATH and --account ALIAS")
+        handler = run_fleet_provision_training if args.fleet_provision_training else run_fleet_resolve_training
+        sys.exit(handler(args.registry, args.account_alias, args.fleet_journal_dir, args.identity_salt_env))
+    if args.account_alias is None:  # elsewhere --account-alias (or --account) defaults to "primary", as it always did
+        args.account_alias = "primary"
     if args.crew_plan:
         # Read-only: only --registry and --identity-salt-env apply (SPEC-14, S14-R3).
         other_flags = (
@@ -1827,7 +2170,8 @@ def main():
     if args.concurrent is not None or args.fleet_journal_dir or args.identity_salt_env:
         parser.error("--concurrent, --fleet-journal-dir and --identity-salt-env are only used with --fleet-dry-run "
                      "or --fleet-execute (--concurrent and --identity-salt-env also with --baseline, "
-                     "--identity-salt-env also with --capture-reads and --crew-plan)")
+                     "--identity-salt-env also with --capture-reads and --crew-plan, --fleet-journal-dir and "
+                     "--identity-salt-env also with --fleet-provision-training and --fleet-resolve-training)")
 
     if args.training_journal_dir is not None and (args.report or args.progression_dry_run):
         parser.error("--training-journal-dir is only used by the daily run; it cannot be combined with --report or "

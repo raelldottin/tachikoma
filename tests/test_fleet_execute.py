@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import random
+import re
 import socket
 import sys
 import tempfile
@@ -81,6 +82,9 @@ from tests.test_fleet_dry_run import (
 from tests.test_fleet_dry_run import ENV as CREDENTIALS
 from tests import test_room_placement as placement_tests  # a module import: its test cases are not rerun here
 from tests import training_fixtures as training_tests
+# A module import (its tests are not rerun here); it imports every sdk module before any FakePss.install().
+from tests import test_crew_plan as crew_plan_tests
+from tests.fakes.pss_server import SimulatedCrash
 
 REPO_ROOT = Path(os.path.abspath(__file__)).parents[1]
 SALT_ENV = "FLEET_SALT"
@@ -532,6 +536,32 @@ class DryRunRequirementTests(FleetExecuteTestCase):
         self.assertEqual(second.evidence[DRY_RUN_REGISTRY], "0123456789abcdef")
         self.assertRegex(second.evidence[DRY_RUN_ID], r"^[0-9a-f]{32}$")
 
+    # Regression QA2-R40, QA2-R41: a dry run finished exactly now, or exactly 24 hours ago, still qualifies
+    def test_the_dry_run_age_limits_are_inclusive(self):
+        from sdk.fleet.factory import DRY_RUN_MAX_AGE, latest_dry_run
+
+        now = datetime(2026, 11, 10, 12, 0, tzinfo=timezone.utc)
+        profile = AccountProfile(alias="alpha", objective="grow", policy_id="training-v2",
+                                 credentials_secret="ALPHA")
+        second = timedelta(seconds=1)
+
+        def finished(at):
+            return [GameplayEvent.create(account_alias="alpha", action_id="add_training", started_at=at,
+                                         finished_at=at, outcome="skipped", reason="dry run", attempted=False,
+                                         dry_run=True, evidence={DRY_RUN_ID: "0" * 32, DRY_RUN_POLICY: "training-v2",
+                                                                 DRY_RUN_REGISTRY: "0123456789abcdef"})]
+
+        self.assertEqual(DRY_RUN_MAX_AGE, timedelta(hours=24))
+        for age, why in ((-second, "its latest dry run is dated in the future"), (timedelta(0), None),
+                         (DRY_RUN_MAX_AGE, None), (DRY_RUN_MAX_AGE + second, "its latest dry run is older than 24 "
+                                                                            "hours")):
+            with self.subTest(age=age):
+                plan, reason = latest_dry_run(finished(now - age), profile, "0123456789abcdef", now)
+                self.assertEqual(reason, why)
+                self.assertEqual(plan is None, why is not None)
+                if plan is not None:
+                    self.assertEqual(plan.finished_at, now - age)
+
     # Verifies: S05-R3
     def test_the_fleet_dry_run_stamps_its_plan_with_the_registry_and_policy(self):
         self.dry_run()
@@ -571,6 +601,18 @@ class CanaryTests(FleetExecuteTestCase):
         self.assertEqual(code, 0, err + out)
         self.assertEqual(ExecClient.executed, [])
         self.assertIn("| alpha | none | no | n/a | no action ran |", out)
+
+    # Regression QA3-S38: a disabled training-v2 account is neither preflighted nor checked against the authorization
+    def test_a_disabled_training_v2_account_without_a_store_does_not_stop_a_full_run(self):
+        self.write_registry(charlie={"policy_id": "training-v2",
+                                     "expected_game_identity": game_identity_fingerprint("3003", SALT)})
+        self.dry_run()
+        code, out, err = self.execute("--mode", "full")
+        self.assertEqual(code, 0, err + out)
+        self.assertNotIn("charlie", err)
+        self.assertEqual(sorted(name for uid, name in ExecClient.executed if uid == "1001"),
+                         ["collectAllResources", "collectDailyReward"])
+        self.assertFalse((self.journal_dir / "training-attempts" / "charlie.json").exists())
 
     # Verifies: S05-R4, S05-R10
     def test_full_mode_executes_only_authorized_actions(self):
@@ -1311,6 +1353,20 @@ class PlaceModeTests(FleetExecuteTestCase):
         self.assertNotIn("room-instance-7000", (self.journal_dir / "alpha.log").read_text(encoding="utf-8"))
         self.assertFalse(any(call == "collectAllResources" for _, call in ExecClient.executed))
 
+    # Regression QA3-S29: place mode takes only the account lock of a training-v2 account, never its store
+    def test_a_training_v2_account_places_without_a_training_attempt_store(self):
+        self.write_registry(alpha={"policy_id": "training-v2"}, bravo={"enabled": False})
+        code, out, err = self.place()
+        self.assertEqual(code, 0, err + out)
+        self.assertNotIn("state_missing", out + err)
+        self.assertEqual(ExecClient.executed, [("1001", "placeRoom")])
+        (record,) = self.records()
+        self.assertEqual([(account["alias"], account["status"]) for account in record["accounts"]],
+                         [("alpha", "completed"), ("bravo", "disabled"), ("charlie", "disabled")])
+        (event,) = self.attempted("alpha")
+        self.assertEqual((event.action_id, event.outcome), ("place_room", "verified"))
+        self.assertFalse((self.journal_dir / "training-attempts" / "alpha.json").exists())
+
     # Verifies: S13-R7
     def test_place_mode_needs_no_dry_run_but_still_checks_identity(self):
         code, out, err = self.place()  # no --fleet-dry-run first
@@ -1537,6 +1593,18 @@ class UpgradeShipModeTests(FleetExecuteTestCase):
         self.assertEqual((record["mode"], record["hull_upgrade"], record["placement"]),
                          ("upgrade-ship", {"ship_design_id": 3}, None))
         self.assertFalse(any(call == "collectAllResources" for _, call in ExecClient.executed))
+
+    # Regression QA3-S29: upgrade-ship mode takes only the account lock of a training-v2 account, never its store
+    def test_a_training_v2_account_upgrades_without_a_training_attempt_store(self):
+        self.write_registry(alpha={"policy_id": "training-v2"}, bravo={"enabled": False})
+        code, out, err = self.upgrade()
+        self.assertEqual(code, 0, err + out)
+        self.assertNotIn("state_missing", out + err)
+        self.assertEqual(ExecClient.executed, [("1001", "upgradeShip")])
+        (record,) = self.records()
+        self.assertEqual([(account["alias"], account["status"]) for account in record["accounts"]],
+                         [("alpha", "completed"), ("bravo", "disabled"), ("charlie", "disabled")])
+        self.assertFalse((self.journal_dir / "training-attempts" / "alpha.json").exists())
 
     def test_an_instant_hull_change_is_verified_too(self):
         def instant(client, design_id):
@@ -1937,6 +2005,1339 @@ class TrainingDesignReadTests(unittest.TestCase):
                                                  credentials_secret="BRAVO"))
                 self.assertEqual(len(context.design.training_designs), expected)
                 self.assertEqual("listAllTrainingDesigns2" in FakeClient.instances[-1].calls, bool(expected))
+
+
+# --- training-v2 execution (SPEC-14 step 4) against FakePss -----------------------------------------------------------
+# The real run.main: provision, dry run, execute and resolve through the CLI. Every Pixel Starships request goes to
+# FakePss (in process, no socket); its ledger records every mutating request independently of production's journal.
+
+TRAINING_SALT_ENV = "TWB_SALT"
+TRAINING_SALT = "synthetic-workflow-salt-0001"
+COMMON_TRAINING_ARGS = ("--registry", "registry.json", "--fleet-journal-dir", "journals",
+                        "--identity-salt-env", TRAINING_SALT_ENV)
+ADD_TRAINING = "/TrainingService/AddTraining"
+ROSTER = "/CharacterService/ListAllCharactersOfUser"
+HARNESS_CORRUPTION = b"\x00not-a-store\xff\n"
+TRAINING_CODES = json.loads((REPO_ROOT / "tests/fixtures/training/workflow_benchmark.json").read_text(
+    encoding="utf-8"))["vocabulary"]["skip_codes"]
+
+
+def codes_in(text):
+    """The workflow vocabulary codes ``text`` names as whole words; none for no text."""
+    if text is None:
+        return set()
+    return {code for code in TRAINING_CODES
+            if re.search(rf"(?<![A-Za-z0-9_]){re.escape(code)}(?![A-Za-z0-9_])", text)}
+
+
+def training_world(*, crew=("cora",), mineral=1000, gas=0, **options):
+    """crew_plan_tests.preview_world (strict rules, level 2 Academy of capacity 2, 500-mineral Engineering Manual)
+    with ``crew`` idle in the Academy: Cora (Repair 20) and Gina (Weapon 20, a 400-mineral Weapon Drill)."""
+    fakes = crew_plan_tests
+    world = fakes.preview_world(prestige=False, **options)
+    world.resources = fakes.Resources(mineral=mineral, gas=gas)
+    members = {"cora": fakes.Character("1001", "Cora", "31", "11", stats=fakes.stats(Repair=20)),
+               "gina": fakes.Character("1002", "Gina", "31", "11", stats=fakes.stats(Weapon=20))}
+    world.characters = [members[name] for name in crew]
+    world.training_designs.append(fakes.TrainingDesign(
+        "42", "Weapon Drill", "WeaponImprovement", 2, 10, fakes.HOUR, price="mineral:400", rank=1,
+        required_room_type="Academy", required_room_level=2, required_research_id="61"))
+    return world
+
+
+class NonBlockingLockWatch:
+    """Stands in for ``fcntl`` inside ``sdk.fleet.attempts``: an account-lock ``flock`` that would wait for its holder
+    (no ``LOCK_NB``) is recorded and made non-blocking, so it fails the test instead of hanging the module.
+
+    Regression QA1-Q16: these runs contend for a lock the test (or another dispatch) holds. A blocking lock would park
+    the run until the holder lets go: a hook acquiring inside the run that holds the lock never returns, and a run left
+    waiting in a thread would carry on after the fake server is uninstalled. The watch keeps every run bounded.
+    """
+
+    def __init__(self):
+        import fcntl
+
+        self._fcntl = fcntl
+        self.waiting = []
+
+    def __getattr__(self, name):
+        return getattr(self._fcntl, name)
+
+    def flock(self, fd, operation):
+        fcntl = self._fcntl
+        if operation & (fcntl.LOCK_EX | fcntl.LOCK_SH) and not operation & fcntl.LOCK_NB:
+            self.waiting.append(operation)
+            operation |= fcntl.LOCK_NB
+        return fcntl.flock(fd, operation)
+
+
+class TrainingExecutionCase(unittest.TestCase):
+    """A scratch directory holding a training-v2 registry for 'alpha' and an owner authorization for it."""
+
+    crew = ("cora",)
+    actions = ("add_training",)
+    policy_id = "training-v2"
+
+    def watch_the_lock(self):
+        """Every account-lock acquisition of this test must return at once (``NonBlockingLockWatch``)."""
+        if "lock_watch" not in vars(self):  # once per test: subtests call setUp() again
+            from sdk.fleet import attempts
+
+            self.lock_watch = NonBlockingLockWatch()
+            watching = patch.object(attempts, "fcntl", self.lock_watch)
+            watching.start()
+            self.addCleanup(watching.stop)
+
+    def assert_no_lock_waited(self):
+        waiting, self.lock_watch.waiting[:] = list(self.lock_watch.waiting), []  # each wait is reported once
+        self.assertEqual(waiting, [], "an account-lock acquisition would wait for its holder instead of returning "
+                                      "at once")
+
+    def tearDown(self):
+        self.assert_no_lock_waited()
+
+    def setUp(self):
+        self.watch_the_lock()
+        tmp = tempfile.TemporaryDirectory(prefix="tachikoma-training-exec-")
+        self.addCleanup(tmp.cleanup)
+        cwd = os.getcwd()
+        os.chdir(tmp.name)
+        self.addCleanup(os.chdir, cwd)
+        self.directory = Path(tmp.name)
+        self.journals = self.directory / "journals"
+        self.store_root = self.journals / "training-attempts"
+        self.store_path = self.store_root / "alpha.json"
+        self.marker_path = None  # set once the identity is known
+        epoch = datetime.now(timezone.utc).replace(tzinfo=None, microsecond=0)
+        self.fake = crew_plan_tests.FakePss(self.world(), epoch=epoch)
+        self.identity = game_identity_fingerprint(self.fake.state.account.user_id, TRAINING_SALT)
+        self.marker_path = self.journals / "training-provisioned" / f"{self.identity}.json"
+        self.write_registry()
+        self.write_authorization()
+
+    def world(self):
+        return training_world(crew=self.crew)
+
+    def write_registry(self, **account):
+        entry = {"alias": "alpha", "objective": "grow", "policy_id": self.policy_id,
+                 "credentials_secret": "TWB_ALPHA", "expected_game_identity": self.identity, **account}
+        entry = {key: value for key, value in entry.items() if value is not None}
+        Path("registry.json").write_text(json.dumps({"version": 1, "accounts": [entry]}), encoding="utf-8")
+
+    def write_authorization(self, **overrides):
+        payload = authorization_payload(accounts=["alpha"], actions=list(self.actions),
+                                        caps={"alpha": {"minerals": 1000, "gas": 1000}}, modes=["full"])
+        payload.update(overrides)
+        Path("authorization.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    def env(self):
+        return {"TWB_ALPHA": f"fleet|{SYNTHETIC_DEVICE_KEY_IOS}|{self.fake.state.account.refresh_token}|en",
+                TRAINING_SALT_ENV: TRAINING_SALT}
+
+    def main(self, *argv):
+        out, err = io.StringIO(), io.StringIO()
+        with self.fake.install(), patch.dict(os.environ, self.env()), patch("sys.argv", ["run.py", *argv]), \
+                redirect_stdout(out), redirect_stderr(err):
+            try:
+                code = run.main()
+            except SystemExit as stop:
+                code = stop.code
+        self.assert_no_lock_waited()
+        return code, out.getvalue(), err.getvalue()
+
+    def provision(self, alias="alpha"):
+        return self.main("--fleet-provision-training", *COMMON_TRAINING_ARGS, "--account", alias)
+
+    def resolve(self, alias="alpha"):
+        return self.main("--fleet-resolve-training", *COMMON_TRAINING_ARGS, "--account", alias)
+
+    def dry_run(self):
+        return self.main("--fleet-dry-run", *COMMON_TRAINING_ARGS)
+
+    def execute(self, *extra):
+        return self.main("--fleet-execute", "--authorization", "authorization.json", "--mode", "full",
+                         *COMMON_TRAINING_ARGS, *extra)
+
+    def mark(self):
+        return len(self.fake.ledger), len(self.fake.exchanges)
+
+    def mutations_since(self, mark):
+        return self.fake.ledger[mark[0]:]
+
+    def requests_since(self, mark):
+        return self.fake.exchanges[mark[1]:]
+
+    def starts_since(self, mark):
+        return [entry for entry in self.mutations_since(mark) if entry.path == ADD_TRAINING]
+
+    def store(self):
+        return json.loads(self.store_path.read_bytes())
+
+    def refusal_lines(self, err):
+        return [line for line in err.splitlines() if re.match(r"^\s*-\s*account '([^']+)'(?=[\s:]|$)", line)]
+
+
+class TrainingProvisionTests(TrainingExecutionCase):
+    # Verifies: S14-R6
+    def test_provision_creates_the_store_for_the_verified_account(self):
+        mark = self.mark()
+        code, out, err = self.provision()
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self.mutations_since(mark), [])  # login and reads only
+        self.assertEqual(self.store()["game_identity"], self.identity)
+        self.assertEqual(self.store()["attempts"], [])
+        # Regression QA3-S45: the whole success line, the store location included
+        self.assertEqual(out.splitlines(), [f"Provisioned the training attempt store of account 'alpha' (game identity "
+                                            f"{self.identity}): journals/training-attempts/alpha.json"])
+        self.assertEqual(sorted(path.name for path in self.store_root.iterdir()),
+                         sorted(["alpha.json", f"{self.identity}.lock"]))
+        self.assertTrue(self.marker_path.is_file())  # outside the directory it protects
+
+    def test_provision_twice_is_a_no_op_without_login(self):
+        self.assertEqual(self.provision()[0], 0)
+        before = self.store_path.read_bytes()
+        mark = self.mark()
+        code, out, _ = self.provision()
+        self.assertEqual(code, 0)
+        self.assertIn("already provisioned", out)
+        self.assertEqual(self.requests_since(mark), [])
+        self.assertEqual(self.store_path.read_bytes(), before)
+
+    def test_provision_refuses_another_identity(self):
+        self.write_registry(expected_game_identity=game_identity_fingerprint("424242", TRAINING_SALT))
+        code, _, err = self.provision()
+        self.assertEqual(code, 1, err)
+        self.assertFalse(self.store_path.exists())
+
+    def test_provision_refuses_established_missing_and_unreadable_state(self):
+        self.assertEqual(self.provision()[0], 0)
+        self.store_path.write_bytes(HARNESS_CORRUPTION)
+        code, _, err = self.provision()
+        self.assertEqual(code, 1)
+        self.assertEqual([codes_in(line) for line in self.refusal_lines(err)], [{"state_unreadable"}])
+        self.assertEqual(self.store_path.read_bytes(), HARNESS_CORRUPTION)
+        self.store_path.unlink()
+        mark = self.mark()
+        code, _, err = self.provision()
+        self.assertEqual(code, 1)
+        self.assertEqual([codes_in(line) for line in self.refusal_lines(err)], [{"state_missing"}])
+        self.assertFalse(self.store_path.exists())  # established state is never recreated
+        self.assertEqual(self.requests_since(mark), [])
+
+    # Regression C4/D3
+    # Verifies: S14-R6
+    def test_a_removed_store_directory_is_never_recreated(self):
+        import shutil
+
+        self.assertEqual(self.provision()[0], 0)
+        self.assertEqual(self.main("--fleet-dry-run", *COMMON_TRAINING_ARGS)[0], 0)
+        shutil.rmtree(self.store_root)
+        mark = self.mark()
+        code, _, err = self.provision()
+        self.assertEqual(code, 1, err)
+        [line] = self.refusal_lines(err)
+        self.assertEqual(codes_in(line), {"state_missing"})
+        self.assertIn("never recreated", line)
+        self.assertFalse(self.store_path.exists())
+        code, _, err = self.main("--fleet-execute", "--authorization", "authorization.json", "--mode", "full",
+                                 *COMMON_TRAINING_ARGS)
+        self.assertEqual(code, 2, err)
+        [line] = self.refusal_lines(err)
+        self.assertEqual(codes_in(line), {"state_missing"})
+        self.assertIn("never recreated", line)
+        self.assertEqual(self.requests_since(mark), [])
+        self.assertFalse(self.store_path.exists())
+
+    # Regression C4: the account journal is a second witness
+    # Verifies: S14-R6
+    def test_a_journal_that_records_a_training_v2_start_is_never_provisioned_fresh(self):
+        import shutil
+
+        self.assertEqual(self.provision()[0], 0)
+        self.assertEqual(self.main("--fleet-dry-run", *COMMON_TRAINING_ARGS)[0], 0)
+        self.assertEqual(self.main("--fleet-execute", "--authorization", "authorization.json", "--mode", "full",
+                                   *COMMON_TRAINING_ARGS)[0], 0)  # Cora starts her course
+        shutil.rmtree(self.store_root)
+        shutil.rmtree(self.marker_path.parent)  # a backup from before provisioning, say: both witnesses on disk gone
+        mark = self.mark()
+        code, _, err = self.provision()
+        self.assertEqual(code, 1, err)
+        [line] = self.refusal_lines(err)
+        self.assertEqual(codes_in(line), {"state_missing"})
+        self.assertIn("journal", line)
+        self.assertEqual(self.requests_since(mark), [])
+        self.assertFalse(self.store_path.exists())
+        self.assertFalse(self.marker_path.exists())
+
+    def test_a_training_v1_journal_does_not_stop_provisioning(self):
+        GameplayJournal(self.journals / "alpha.log").append(GameplayEvent.create(
+            account_alias="alpha", action_id="add_training", started_at=datetime.now(timezone.utc),
+            finished_at=datetime.now(timezone.utc), outcome="verified", reason="a training-v1 start", attempted=True,
+            params={"character_id": "1001", "training_design_id": "41"}))
+        code, out, err = self.provision()
+        self.assertEqual(code, 0, err)
+        self.assertTrue(self.store_path.exists())
+
+    # Regression C5
+    # Verifies: S14-R6
+    def test_provision_rewrites_a_missing_marker_only_beside_a_readable_store(self):
+        self.assertEqual(self.provision()[0], 0)
+        self.marker_path.unlink()
+        before = self.store_path.read_bytes()
+        mark = self.mark()
+        code, out, err = self.provision()
+        self.assertEqual(code, 0, err)
+        self.assertNotIn("nothing changed", out)
+        self.assertIn("marker", out)
+        self.assertTrue(self.marker_path.is_file())
+        self.assertEqual(self.store_path.read_bytes(), before)
+        self.assertEqual(self.requests_since(mark), [])  # no login: the store already names the identity
+        # an unreadable store gets no marker
+        self.marker_path.unlink()
+        self.store_path.write_bytes(HARNESS_CORRUPTION)
+        code, _, err = self.provision()
+        self.assertEqual(code, 1, err)
+        self.assertFalse(self.marker_path.exists())
+        self.assertEqual(self.store_path.read_bytes(), HARNESS_CORRUPTION)
+
+    def test_provision_checks_policy_and_alias_but_not_authorization(self):
+        self.write_registry(policy_id="training-v1")
+        self.assertEqual(self.provision()[0], 2)
+        self.write_registry()
+        self.assertEqual(self.provision("bravo")[0], 2)
+        self.write_registry(legacy_run_account=3)
+        Path("authorization.json").unlink()
+        self.assertEqual(self.provision()[0], 0)
+        self.assertTrue(self.store_path.exists())
+
+    def test_provision_needs_the_identity_salt_and_an_expected_identity(self):
+        self.assertEqual(self.main("--fleet-provision-training", "--registry", "registry.json",
+                                   "--account", "alpha")[0], 2)
+        self.write_registry(expected_game_identity=None)
+        self.assertEqual(self.provision()[0], 2)
+        self.assertFalse(self.store_path.exists())
+
+    # Regression C10: --account kept meaning --account-alias (argparse abbreviation) for every older command line
+    def test_an_older_account_command_line_still_sets_the_alias(self):
+        for flag in ("--account", "--account-alias", "--account-a"):
+            with self.subTest(flag=flag):
+                with patch("run.open_training_journal", side_effect=run.TrainingJournalError("stop here")) as opened:
+                    code, _, err = self.main("--training-journal-dir", "training-journals", flag, "myacct")
+                self.assertEqual(code, 2, err)
+                opened.assert_called_once_with("training-journals", "myacct")
+        code, out, err = self.main("--fleet-provision-training", *COMMON_TRAINING_ARGS, "--account-alias", "alpha")
+        self.assertEqual(code, 0, out + err)
+        self.assertTrue(self.store_path.exists())
+
+    # Regression QA1-Q54: the operator commands never fall back to a default alias
+    def test_the_operator_commands_need_an_explicit_account(self):
+        self.write_registry(alias="primary")
+        for command in ("--fleet-provision-training", "--fleet-resolve-training"):
+            with self.subTest(command=command):
+                code, out, err = self.main(command, *COMMON_TRAINING_ARGS)
+                self.assertEqual(code, 2, out + err)
+                self.assertIn(f"{command} needs --registry PATH and --account ALIAS", err)
+                self.assertFalse((self.store_root / "primary.json").exists())
+                self.assertFalse(self.marker_path.exists())
+                self.assertEqual(self.fake.exchanges, [])
+
+    def test_new_flag_guards(self):
+        for argv in (
+            ("--fleet-provision-training", *COMMON_TRAINING_ARGS),
+            ("--fleet-provision-training", "--fleet-resolve-training", *COMMON_TRAINING_ARGS, "--account", "alpha"),
+            ("--fleet-provision-training", "--fleet-execute", *COMMON_TRAINING_ARGS, "--account", "alpha"),
+            ("--fleet-provision-training", *COMMON_TRAINING_ARGS, "--account", "alpha",
+             "--authorization", "authorization.json"),
+            ("--fleet-resolve-training", *COMMON_TRAINING_ARGS, "--account", "alpha", "--concurrent", "2"),
+        ):
+            with self.subTest(argv=argv):
+                code, _, err = self.main(*argv)
+                self.assertEqual(code, 2, err)
+        self.assertFalse(self.store_root.exists())
+
+
+class TrainingPreloginTests(TrainingExecutionCase):
+    """training-v2 refusals before any login: exit 2, no request, each line naming the account and one code."""
+
+    def assert_refused_before_login(self, expected):
+        mark = self.mark()
+        code, _, err = self.execute()
+        self.assertEqual(code, 2, err)
+        self.assertEqual(self.requests_since(mark), [])
+        lines = self.refusal_lines(err)
+        self.assertTrue(lines, err)
+        for line in lines:
+            self.assertEqual(len(codes_in(line)), 1, line)
+        self.assertIn(expected, set().union(*(codes_in(line) for line in lines)), err)
+        return lines
+
+    # Verifies: S14-R4
+    def test_no_dry_run_is_dry_run_stale(self):
+        self.provision()
+        self.assert_refused_before_login("dry_run_stale")
+
+    def test_a_changed_registry_is_dry_run_stale(self):
+        self.provision()
+        self.assertEqual(self.dry_run()[0], 0)
+        self.write_registry(max_actions=7)
+        self.assert_refused_before_login("dry_run_stale")
+
+    # Verifies: S14-R6
+    def test_unprovisioned_and_removed_stores_are_state_missing(self):
+        self.assertEqual(self.dry_run()[0], 0)  # the dry run never reads the store
+        self.assert_refused_before_login("state_missing")
+        self.provision()
+        self.store_path.unlink()
+        [line] = self.assert_refused_before_login("state_missing")
+        self.assertIn("never recreated", line)
+        self.assertFalse(self.store_path.exists())
+
+    # C7: --plan-only makes the live run's pre-login store checks, read-only and without the lock
+    # Verifies: S14-R6
+    def test_plan_only_refuses_a_store_the_live_run_would_refuse(self):
+        self.assertEqual(self.dry_run()[0], 0)
+        mark = self.mark()
+        code, out, err = self.execute("--plan-only")
+        self.assertEqual(code, 2, out + err)
+        self.assertEqual([codes_in(line) for line in self.refusal_lines(err)], [{"state_missing"}])
+        self.assertEqual(self.requests_since(mark), [])
+        self.provision()
+        before = self.store_path.read_bytes()
+        mark = self.mark()
+        code, out, err = self.execute("--plan-only")
+        self.assertEqual(code, 0, out + err)
+        self.assertIn("Plan only: nothing was logged in", out)
+        self.assertEqual(self.store_path.read_bytes(), before)
+        self.assertEqual(self.requests_since(mark), [])
+
+    def test_a_corrupted_store_is_state_unreadable(self):
+        self.provision()
+        self.assertEqual(self.dry_run()[0], 0)
+        self.store_path.write_bytes(HARNESS_CORRUPTION)
+        self.assert_refused_before_login("state_unreadable")
+        self.assertEqual(self.store_path.read_bytes(), HARNESS_CORRUPTION)
+
+    # Regression QA1-Q52: a readable store that belongs to another game identity is refused before any login
+    # Verifies: S14-R6
+    def test_a_store_of_another_identity_is_state_unreadable_before_login(self):
+        self.provision()
+        self.assertEqual(self.dry_run()[0], 0)
+        payload = self.store()
+        payload["game_identity"] = game_identity_fingerprint("9999", TRAINING_SALT)
+        foreign = (json.dumps(payload) + "\n").encode()
+        self.store_path.write_bytes(foreign)
+        [line] = self.assert_refused_before_login("state_unreadable")
+        self.assertIn("account 'alpha'", line)
+        self.assertEqual(self.store_path.read_bytes(), foreign)
+        self.assertEqual(self.fake.ledger, [])
+
+    # Verifies: S14-R6
+    def test_a_serialized_legacy_account_is_legacy_run_not_skipped(self):
+        self.write_registry(legacy_run_account=3)
+        self.write_authorization(legacy_run_serialized=[3])
+        self.provision()
+        self.assertEqual(self.dry_run()[0], 0)
+        self.assert_refused_before_login("legacy_run_not_skipped")
+
+    # Verifies: S14-R4
+    def test_full_mode_without_add_training_is_not_authorized(self):
+        self.write_authorization(actions=["collect_all_resources"])
+        self.provision()
+        self.assertEqual(self.dry_run()[0], 0)
+        self.assert_refused_before_login("not_authorized")
+
+    def test_an_unauthorized_account_is_not_authorized(self):
+        self.write_authorization(accounts=["bravo"], caps={"bravo": {"minerals": 1000, "gas": 1000}})
+        self.provision()
+        self.assertEqual(self.dry_run()[0], 0)
+        self.assert_refused_before_login("not_authorized")
+
+    def test_training_v1_lines_are_unchanged(self):
+        self.policy_id = "training-v1"
+        self.write_registry()
+        code, _, err = self.execute()
+        self.assertEqual(code, 2)
+        self.assertIn("  - account 'alpha': no completed --fleet-dry-run plan in its journal; run --fleet-dry-run "
+                      "with this registry first\n", err)
+        self.assertFalse(self.store_root.exists())
+
+
+class TrainingStartCase(TrainingExecutionCase):
+    def ready(self):
+        """Provision the store and take a fresh dry run."""
+        code, _, err = self.provision()
+        self.assertEqual(code, 0, err)
+        code, out, err = self.dry_run()
+        self.assertEqual(code, 0, out + err)
+
+    def executed_events(self, since=0):
+        """The account's journal events of execute runs (not dry runs), from index ``since``."""
+        return [event for event in read_events(self.journals / "alpha.log") if not event.dry_run][since:]
+
+    def latest_record(self):
+        return json.loads(max((self.journals / "runs").glob("*.json"), key=lambda path: path.stat().st_mtime_ns)
+                          .read_text(encoding="utf-8"))
+
+    def record_texts(self, record):
+        [account] = record["accounts"]
+        return ([f"status: {account['status']}", f"reason: {account['reason']}"]
+                + [f"{item['candidate']}: {item['reason']}" for item in account["rejected"]]
+                + [f"{item['action_id']}: {item['reason']}" for item in account["results"]])
+
+    def assert_lock_released(self):
+        from sdk.fleet.attempts import FileAccountLock
+
+        handle = FileAccountLock(self.store_root).try_acquire(self.identity)
+        self.assertIsNotNone(handle, "the account lock is still held after the run")
+        handle.release()
+
+
+class TrainingStartTests(TrainingStartCase):
+    # Verifies: S14-R4, S14-R5
+    def test_an_exact_500_start_is_verified_settled_and_journaled_with_its_spend(self):
+        self.ready()
+        mark = self.mark()
+        code, out, err = self.execute()
+        self.assertEqual(code, 0, out + err)
+        [start] = self.starts_since(mark)
+        self.assertEqual((start.params["characterId"], start.params["trainingDesignId"], start.applied),
+                         ("1001", "41", True))
+        self.assertEqual(start.delta, {"mineral": -500, "gas": 0, "starbux": 0})
+        self.assertEqual([entry.path for entry in self.mutations_since(mark)], [ADD_TRAINING])
+        [event] = [event for event in self.executed_events() if event.attempted]
+        self.assertEqual((event.action_id, event.outcome, event.cost["minerals_delta"], event.cost["gas_delta"]),
+                         ("add_training", "verified", -500, 0))
+        [attempt] = self.store()["attempts"]
+        self.assertEqual((attempt["state"], attempt["outcome"], attempt["journal_attempt_id"]),
+                         ("verified", "verified", event.attempt_id))
+        self.assertEqual(attempt["planned_cost"], {"minerals": 500})
+        self.assert_lock_released()
+
+    # Verifies: S14-R5
+    def test_an_intent_write_failure_sends_nothing(self):
+        self.ready()
+        mark = self.mark()
+        with patch("sdk.execution.runner.write_training_intent",
+                   side_effect=OSError("synthetic intent-write failure")):
+            code, out, err = self.execute()
+        self.assertEqual(code, 1, out + err)
+        self.assertEqual(self.starts_since(mark), [])
+        self.assertEqual(self.mutations_since(mark), [])
+        [event] = self.executed_events()
+        self.assertEqual((event.action_id, event.outcome, event.attempted, event.params["character_id"]),
+                         ("add_training", "skipped", False, "1001"))
+        self.assertEqual(codes_in(event.reason), {"intent_not_persisted"})
+        self.assertEqual(self.store()["attempts"], [])
+        self.assert_lock_released()
+
+    # Verifies: S14-R5
+    def test_a_settlement_write_failure_keeps_a_pending_record_and_blocks_the_next_run(self):
+        self.ready()
+        mark = self.mark()
+        with patch("sdk.execution.runner.settle_training_intent",
+                   side_effect=OSError("synthetic settle-write failure")):
+            code, out, err = self.execute()
+        self.assertEqual(code, 1, out + err)
+        self.assertEqual([entry.applied for entry in self.starts_since(mark)], [True])
+        [attempt] = self.store()["attempts"]
+        self.assertEqual(attempt["state"], "pending")
+        [account] = self.latest_record()["accounts"]
+        self.assertEqual([(item["action_id"], item["outcome"]) for item in account["results"]],
+                         [("add_training", "verified")])
+        self.assertIn("unresolved_attempt", codes_in(account["reason"]))
+        # Regression QA2-R50: a start that was sent is never printed as a skipped one
+        self.assertEqual([row for row in self.training_rows(out) if row.startswith("| alpha | add_training ")], [],
+                         out)
+        self.assert_lock_released()
+        # the next run (Cora is busy now, so the planner would pick Gina if she were there) starts nothing
+        self.fake.state.characters.append(crew_plan_tests.Character("1002", "Gina", "31", "11",
+                                                                    stats=crew_plan_tests.stats(Weapon=20)))
+        self.assertEqual(self.dry_run()[0], 0)
+        mark = self.mark()
+        self.execute()
+        self.assertEqual(self.starts_since(mark), [])
+        self.assertIn("unresolved_attempt", set().union(*(codes_in(text)
+                                                          for text in self.record_texts(self.latest_record()))))
+
+    # Verifies: S14-R6
+    def test_a_locked_account_sends_no_writes_and_does_not_halt_the_fleet(self):
+        from sdk.fleet.attempts import FileAccountLock
+
+        self.ready()
+        held = FileAccountLock(self.store_root).try_acquire(self.identity)
+        try:
+            mark = self.mark()
+            code, out, err = self.execute()
+        finally:
+            held.release()
+        self.assertEqual(code, 1, out + err)
+        self.assertEqual(self.mutations_since(mark), [])
+        lines = [line for line in out.splitlines() if re.search(r"(?<![A-Za-z0-9_])alpha(?![A-Za-z0-9_])", line)
+                 and codes_in(line)]
+        self.assertTrue(lines, out)
+        for line in lines:
+            self.assertEqual(codes_in(line), {"locked"}, line)
+        record = self.latest_record()
+        self.assertEqual(record["accounts"][0]["status"], "locked")
+        self.assertIsNone(record["stop_reason"])
+        self.assertEqual(self.store()["attempts"], [])
+
+    # Regression C3: every execute mode of a training-v2 account takes the lock
+    # Verifies: S14-R6
+    def test_every_execute_mode_of_a_locked_training_v2_account_sends_no_writes(self):
+        from sdk.fleet.attempts import FileAccountLock
+
+        modes = {
+            "canary": (dict(actions=["collect_all_resources"], modes=["canary"]), ("--mode", "canary")),
+            "upgrade-ship": (dict(actions=["upgrade_ship"], modes=["upgrade-ship"],
+                                  hull_upgrades={"alpha": [{"ship_design_id": 3}]}),
+                             ("--mode", "upgrade-ship", "--upgrade-ship", "3")),
+        }
+        for mode, (authorization, argv) in modes.items():
+            with self.subTest(mode=mode):
+                self.setUp()
+                self.ready()
+                self.write_authorization(**authorization)
+                held = FileAccountLock(self.store_root).try_acquire(self.identity)
+                try:
+                    mark = self.mark()
+                    code, out, err = self.main("--fleet-execute", "--authorization", "authorization.json", *argv,
+                                               *COMMON_TRAINING_ARGS)
+                finally:
+                    held.release()
+                self.assertEqual(self.mutations_since(mark), [], out + err)
+                [account] = self.latest_record()["accounts"]
+                self.assertEqual((account["status"], codes_in(account["reason"] or "")), ("locked", {"locked"}),
+                                 out + err)
+                self.assertIsNone(self.latest_record()["stop_reason"])
+                self.assertEqual(self.store()["attempts"], [])
+                self.assert_lock_released()
+
+    def test_a_non_full_execute_takes_no_store_and_creates_no_attempt(self):
+        self.ready()
+        self.write_authorization(actions=["collect_all_resources"], modes=["canary"])
+        self.store_path.write_bytes(HARNESS_CORRUPTION)  # only full mode reads the store
+        code, out, err = self.main("--fleet-execute", "--authorization", "authorization.json", "--mode", "canary",
+                                   *COMMON_TRAINING_ARGS)
+        # Regression QA2-R48: only a full run preflights the store before login
+        self.assertNotIn("state_unreadable", out + err)
+        self.assertEqual(code, 0, out + err)
+        [account] = self.latest_record()["accounts"]
+        self.assertNotEqual(account["status"], "locked", out + err)
+        self.assertNotIn("state_unreadable", out + err)
+        self.assertEqual(self.store_path.read_bytes(), HARNESS_CORRUPTION)
+        self.assertEqual(self.starts_since((0, 0)), [])
+        self.assert_lock_released()
+
+    def change_the_price_after_planning(self, price):
+        """The course's price changes after the planning read, before the runner's read under the lock (the 3rd
+        course list read of an execute run: claim snapshot, planning snapshot, then the runner's ``before``)."""
+        def raise_price(fake, exchange):
+            fake.state.training_design("41").price = price
+
+        return self.fake.on_reply("GET /TrainingService/ListAllTrainingDesigns2", raise_price, nth=3)
+
+    # Verifies: S14-R4
+    def test_a_price_change_before_sending_is_refused_under_the_lock(self):
+        for price, code in (("mineral:600", "price_unavailable"), ("mineral:1200", "insufficient_funds"),
+                            ("starbux:5", "premium_currency")):
+            with self.subTest(price=price):
+                self.setUp()
+                self.ready()
+                hook = self.change_the_price_after_planning(price)
+                mark = self.mark()
+                exit_code, out, err = self.execute()
+                self.assertEqual(hook.hits, 1)
+                self.assertEqual(self.starts_since(mark), [], out + err)
+                self.assertEqual(self.mutations_since(mark), [])
+                [event] = self.executed_events()
+                self.assertEqual((event.action_id, event.outcome, event.attempted), ("add_training", "skipped", False))
+                self.assertEqual(codes_in(event.reason), {code}, event.reason)
+                self.assertEqual(self.store()["attempts"], [])  # no intent: nothing was going to be sent
+                self.assertEqual(exit_code, 0, out + err)  # a skipped start does not stop the account
+
+    # Verifies: S14-R6
+    def test_the_lock_is_held_across_earlier_progression_actions(self):
+        from sdk.fleet.attempts import FileAccountLock
+
+        self.write_authorization(actions=["add_training", "collect_daily_reward"])
+        self.ready()
+        seen = []
+
+        def try_the_lock(fake, exchange):
+            handle = FileAccountLock(self.store_root).try_acquire(self.identity)
+            seen.append(handle)
+            if handle is not None:
+                handle.release()
+
+        self.fake.on_reply("POST /UserService/CollectDailyReward2", try_the_lock)
+        self.fake.on_reply("POST /TrainingService/AddTraining", try_the_lock)
+        mark = self.mark()
+        code, out, err = self.execute()
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual([entry.path for entry in self.mutations_since(mark)],
+                         ["/UserService/CollectDailyReward2", ADD_TRAINING])
+        self.assertEqual(seen, [None, None])  # held during the earlier action and during the start
+        self.assert_lock_released()
+
+    # Verifies: S14-R5
+    def test_skipped_starts_are_printed_one_code_per_line(self):
+        self.ready()
+        self.assertEqual(self.execute()[0], 0)  # Cora starts her course
+        self.assertEqual(self.dry_run()[0], 0)
+        mark = self.mark()
+        code, out, err = self.execute()
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.starts_since(mark), [])  # an active course cannot trigger a new start
+        self.assertIn("## Training starts", out)
+        self.assertIn("| alpha | training 1001 | training_in_progress |", out.splitlines())
+        section = out.split("## Training starts", 1)[1].split("\n## ", 1)[0]
+        rows = [line for line in section.splitlines() if line.startswith("| alpha |")]
+        self.assertTrue(rows)
+        for row in rows:
+            self.assertEqual(len(codes_in(row)), 1, row)
+
+    def training_rows(self, out):
+        if "## Training starts" not in out:
+            return []
+        section = out.split("## Training starts", 1)[1].split("\n## ", 1)[0]
+        return [line for line in section.splitlines() if line.startswith("| alpha |")]
+
+    # Regression C8: run-time skips are printed under "Training starts" too
+    # Verifies: S14-R4
+    def test_run_time_skips_are_printed_under_training_starts(self):
+        from sdk.fleet.attempts import FileAccountLock
+
+        def price_change():
+            self.change_the_price_after_planning("mineral:600")
+            return self.execute()
+
+        def intent_failure():
+            with patch("sdk.execution.runner.write_training_intent", side_effect=OSError("synthetic")):
+                return self.execute()
+
+        def locked():
+            held = FileAccountLock(self.store_root).try_acquire(self.identity)
+            try:
+                return self.execute()
+            finally:
+                held.release()
+
+        def intent_failure_after_progression():
+            self.write_authorization(actions=["add_training", "collect_daily_reward"])
+            return intent_failure()
+
+        plan_rows = ["| alpha | training shields | role_uncovered |", "| alpha | training weapons | role_uncovered |"]
+        for name, run_it, row in (("recheck", price_change, "| alpha | add_training 1001 | price_unavailable |"),
+                                  ("intent", intent_failure, "| alpha | add_training 1001 | intent_not_persisted |"),
+                                  ("locked", locked, "| alpha | training | locked |")):
+            with self.subTest(name):
+                self.setUp()
+                self.ready()
+                _, out, err = run_it()
+                rows = self.training_rows(out)
+                self.assertIn(row, rows, out + err)
+                for line in rows:
+                    self.assertEqual(len(codes_in(line)), 1, line)
+                # Regression QA3-S39: the exact rows in order, the plan's skips before the run's
+                self.assertEqual(rows, [row] if name == "locked" else plan_rows + [row], out + err)
+        # Regression QA3-S41: the stop row names the planned start's crew member, even after a progression action
+        self.setUp()
+        self.ready()
+        mark = self.mark()
+        _, out, err = intent_failure_after_progression()
+        self.assertEqual([entry.path for entry in self.mutations_since(mark)], ["/UserService/CollectDailyReward2"])
+        self.assertEqual(self.training_rows(out),
+                         plan_rows + ["| alpha | add_training 1001 | intent_not_persisted |"], out + err)
+
+    # Regression QA3-S40, QA3-S46: a block with no planned start still gets its "training" row, and the operator's
+    # resolution prints the evidence it recorded, the observed end time included
+    def test_a_block_without_a_planned_start_is_printed_and_its_resolution_names_the_evidence(self):
+        self.ready()
+        heal = self.lose_the_reply()
+        self.execute()
+        heal()
+        self.assertEqual(self.store()["attempts"][0]["state"], "unresolved")
+        self.assertEqual(self.dry_run()[0], 0)
+        mark = self.mark()
+        _, out, err = self.execute()  # Cora is running the course: nothing is planned, the block is still shown
+        self.assertEqual(self.starts_since(mark), [])
+        self.assertEqual(self.training_rows(out), [
+            "| alpha | training 1001 | training_in_progress |", "| alpha | training shields | role_uncovered |",
+            "| alpha | training weapons | role_uncovered |", "| alpha | training | unresolved_attempt |"], out + err)
+        code, out, err = self.resolve()
+        self.assertEqual(code, 0, out + err)
+        [attempt] = self.store()["attempts"]
+        resolution = attempt["resolution"]
+        self.assertEqual((resolution["verdict"], resolution["observed_phase"], resolution["observed_course_id"]),
+                         ("started", "running", 41))
+        self.assertIsNotNone(resolution["observed_end"])
+        self.assertEqual(out.splitlines(), [
+            f"Resolved training attempt {attempt['intent_id'][:8]} of account 'alpha': character 1001, course 41: "
+            f"started (observed running, course 41, ends {resolution['observed_end']})"])
+
+    # Regression QA3-S42: a training-v2 run with nothing skipped prints no "Training starts" section
+    def test_a_run_with_nothing_skipped_prints_no_training_starts_section(self):
+        from dataclasses import replace as dc_replace
+
+        from sdk.policy import TrainingV2
+        from sdk.training.strategy import DEFAULT_CREW_POLICY
+
+        repair_only = dc_replace(DEFAULT_CREW_POLICY, roles=DEFAULT_CREW_POLICY.roles[:1])
+        with patch.object(TrainingV2, "crew_policy", repair_only):  # Cora covers the only role: nothing is skipped
+            self.ready()
+            mark = self.mark()
+            code, out, err = self.execute()
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual([entry.params["characterId"] for entry in self.starts_since(mark)], ["1001"])
+        self.assertEqual(self.store()["attempts"][0]["state"], "verified")
+        self.assertNotIn("## Training starts", out)
+        self.assertNotIn("| Account | Candidate | Skip |", out)
+
+    def lose_the_reply(self, apply=True):
+        """The next AddTraining's reply is lost (applied or not) and every roster read after it fails."""
+        roster_faults = []
+        start_fault = self.fake.fail(ADD_TRAINING, status=404, apply=apply)
+
+        def fail_the_roster(fake, exchange):
+            roster_faults.append(fake.fail(ROSTER, times=99, status=404))
+
+        self.fake.on_reply("POST " + ADD_TRAINING, fail_the_roster)
+
+        def heal():
+            for fault in (start_fault, *roster_faults):
+                fault.times = fault.hits
+
+        return heal
+
+    def add_gina(self):
+        self.fake.state.characters.append(crew_plan_tests.Character("1002", "Gina", "31", "11",
+                                                                    stats=crew_plan_tests.stats(Weapon=20)))
+
+    # Verifies: S14-R5
+    def test_an_unresolved_start_blocks_every_start_until_a_resolution_lifts_it(self):
+        self.ready()
+        heal = self.lose_the_reply()
+        mark = self.mark()
+        self.execute()
+        heal()
+        self.assertEqual([entry.applied for entry in self.starts_since(mark)], [True])
+        [event] = [event for event in self.executed_events() if event.attempted]
+        self.assertEqual(event.outcome, "unknown")
+        self.assertEqual(self.store()["attempts"][0]["state"], "unresolved")
+        # another crew member, another course: still paused, across runs
+        self.add_gina()
+        self.assertEqual(self.dry_run()[0], 0)
+        mark = self.mark()
+        self.execute()
+        self.assertEqual(self.starts_since(mark), [])
+        self.assertIn("unresolved_attempt",
+                      set().union(*(codes_in(text) for text in self.record_texts(self.latest_record()))))
+        # the operator's resolution: a fresh read shows Cora running the requested course
+        journal_before = len(read_events(self.journals / "alpha.log"))
+        mark = self.mark()
+        code, out, err = self.resolve()
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.mutations_since(mark), [])
+        self.assertEqual(len(read_events(self.journals / "alpha.log")), journal_before)  # nothing journaled
+        [attempt] = self.store()["attempts"]
+        self.assertEqual((attempt["state"], attempt["resolution"]["verdict"], attempt["resolution"]["previous_state"]),
+                         ("resolved", "started", "unresolved"))
+        self.assertIn("started", out)
+        # resumed: Gina starts her course; the journal holds only that start
+        self.assertEqual(self.dry_run()[0], 0)
+        since = len(self.executed_events())
+        mark = self.mark()
+        code, out, err = self.execute()
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual([(entry.params["characterId"], entry.applied) for entry in self.starts_since(mark)],
+                         [("1002", True)])
+        self.assertEqual([(event.params["character_id"], event.outcome)
+                          for event in self.executed_events(since) if event.attempted], [("1002", "verified")])
+
+    def age_dry_runs(self, hours):
+        """Move every dry-run event already in the journal ``hours`` back, so an earlier stamped dry run can no
+        longer stand in for one that did not complete (``DRY_RUN_MAX_AGE`` is 24 hours)."""
+        path = self.journals / "alpha.log"
+        lines = []
+        for line in path.read_text(encoding="utf-8").splitlines():
+            payload = json.loads(line)
+            if payload["dry_run"]:
+                for key in ("started_at", "finished_at"):
+                    payload[key] = (datetime.fromisoformat(payload[key]) - timedelta(hours=hours)).isoformat()
+            lines.append(json.dumps(payload, sort_keys=True, separators=(",", ":")))
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    def attempted_events(self, since=0):
+        return [event for event in self.executed_events(since) if event.attempted]
+
+    # Regression C2/D1: a resolution links an attempt its settlement never linked
+    # Verifies: S14-R5
+    def test_a_resolution_lifts_an_unsettled_unknown_start_of_the_same_course(self):
+        for failure in (OSError("synthetic settle-write failure"), SimulatedCrash("crash after the journal write")):
+            with self.subTest(failure=type(failure).__name__):
+                self.setUp()
+                self.ready()
+                heal = self.lose_the_reply(apply=False)
+                with patch("sdk.execution.runner.settle_training_intent", side_effect=failure):
+                    try:
+                        self.execute()
+                    except SimulatedCrash:
+                        pass
+                heal()
+                [event] = self.attempted_events()
+                self.assertEqual(event.outcome, "unknown")
+                [attempt] = self.store()["attempts"]
+                self.assertEqual((attempt["state"], attempt["journal_attempt_id"]), ("pending", None))
+                mark = self.mark()
+                self.execute()  # still unresolved: nothing starts
+                self.assertEqual(self.starts_since(mark), [])
+                code, out, err = self.resolve()
+                self.assertEqual(code, 0, out + err)
+                [attempt] = self.store()["attempts"]
+                self.assertEqual((attempt["state"], attempt["resolution"]["verdict"], attempt["journal_attempt_id"]),
+                                 ("resolved", "not_running", event.attempt_id))
+                self.age_dry_runs(hours=25)
+                self.assertEqual(self.dry_run()[0], 0)
+                mark = self.mark()
+                code, out, err = self.execute()
+                self.assertEqual(code, 0, out + err)
+                self.assertEqual([(entry.params["characterId"], entry.params["trainingDesignId"], entry.applied)
+                                  for entry in self.starts_since(mark)], [("1001", "41", True)])
+
+    # Regression C1/D2: the dry run honours an operator's resolution
+    # Verifies: S14-R5
+    def test_a_not_running_resolution_lets_the_dry_run_and_execute_start_the_same_course(self):
+        self.ready()
+        heal = self.lose_the_reply(apply=False)
+        self.execute()
+        heal()
+        [event] = self.attempted_events()
+        self.assertEqual((event.outcome, self.store()["attempts"][0]["journal_attempt_id"]),
+                         ("unknown", event.attempt_id))
+        code, out, err = self.resolve()
+        self.assertEqual(code, 0, out + err)
+        self.assertIn("not_running", out)
+        self.age_dry_runs(hours=25)  # the stamp from before the attempt cannot mask a dry run that did not complete
+        code, out, err = self.dry_run()
+        self.assertEqual(code, 0, out + err)
+        self.assertTrue(any(line.startswith("| alpha | completed |") for line in out.splitlines()), out + err)
+        since = len(self.executed_events())
+        mark = self.mark()
+        code, out, err = self.execute()
+        self.assertEqual(code, 0, out + err)
+        self.assertNotIn("dry_run_stale", err)
+        self.assertEqual([(entry.params["characterId"], entry.params["trainingDesignId"], entry.applied)
+                          for entry in self.starts_since(mark)], [("1001", "41", True)])
+        self.assertEqual([(item.params["character_id"], item.outcome) for item in self.attempted_events(since)],
+                         [("1001", "verified")])
+
+    # Regression C6/D6: the evidence is read under the lock
+    # Verifies: S14-R5
+    def test_resolve_reads_the_roster_under_the_lock(self):
+        from sdk.fleet.attempts import FileAccountLock
+
+        self.ready()
+        heal = self.lose_the_reply()
+        self.execute()
+        heal()
+        held = FileAccountLock(self.store_root).try_acquire(self.identity)
+        try:
+            mark = self.mark()
+            code, _, err = self.resolve()
+        finally:
+            held.release()
+        self.assertEqual((code, [codes_in(line) for line in self.refusal_lines(err)]), (1, [{"locked"}]))
+        self.assertEqual(self.requests_since(mark), [])  # refused before the login and the roster read
+        seen = []
+
+        def try_the_lock(fake, exchange):
+            handle = FileAccountLock(self.store_root).try_acquire(self.identity)
+            seen.append(handle)
+            if handle is not None:
+                handle.release()
+
+        self.fake.on_reply("GET " + ROSTER, try_the_lock)
+        code, out, err = self.resolve()
+        self.assertEqual(code, 0, out + err)
+        self.assertTrue(seen)
+        self.assertEqual(seen, [None] * len(seen))  # every roster read happened while resolve held the lock
+        self.assertEqual(self.store()["attempts"][0]["resolution"]["verdict"], "started")
+
+    def test_resolve_refuses_without_an_authoritative_read(self):
+        self.ready()
+        heal = self.lose_the_reply()
+        self.execute()
+        before = self.store_path.read_bytes()
+        code, out, err = self.resolve()  # the roster still fails
+        heal()
+        self.assertEqual(code, 1, out + err)
+        self.assertIn("nothing resolved", err)
+        self.assertEqual(self.store_path.read_bytes(), before)
+
+    def test_resolve_with_nothing_unresolved_is_a_no_op(self):
+        self.ready()
+        mark = self.mark()
+        code, out, _ = self.resolve()
+        self.assertEqual(code, 0)
+        self.assertIn("No unresolved training attempt for account 'alpha'", out)
+        self.assertEqual(self.requests_since(mark), [])
+
+    def test_resolve_refuses_while_locked_and_on_missing_or_unreadable_state(self):
+        from sdk.fleet.attempts import FileAccountLock
+
+        self.ready()
+        heal = self.lose_the_reply()
+        self.execute()
+        heal()
+        before = self.store_path.read_bytes()
+        held = FileAccountLock(self.store_root).try_acquire(self.identity)
+        try:
+            code, _, err = self.resolve()
+        finally:
+            held.release()
+        self.assertEqual(code, 1)
+        self.assertEqual([codes_in(line) for line in self.refusal_lines(err)], [{"locked"}])
+        self.assertEqual(self.store_path.read_bytes(), before)
+        self.store_path.write_bytes(HARNESS_CORRUPTION)
+        code, _, err = self.resolve()
+        self.assertEqual((code, [codes_in(line) for line in self.refusal_lines(err)]), (1, [{"state_unreadable"}]))
+        self.store_path.unlink()
+        code, _, err = self.resolve()
+        self.assertEqual((code, [codes_in(line) for line in self.refusal_lines(err)]), (1, [{"state_missing"}]))
+        self.assertFalse(self.store_path.exists())
+
+    # Verifies: S14-R5
+    def test_a_misapplied_start_is_contradicted_and_blocks_another_crew_across_runs(self):
+        self.ready()
+        self.fake.misapply_training("42")
+        mark = self.mark()
+        self.execute()
+        [start] = self.starts_since(mark)
+        self.assertTrue(start.applied)
+        [event] = [event for event in self.executed_events() if event.attempted]
+        self.assertEqual(event.outcome, "contradicted")  # the strict verdict: another course is running
+        self.assertEqual(self.store()["attempts"][0]["state"], "unresolved")
+        self.add_gina()
+        self.assertEqual(self.dry_run()[0], 0)
+        mark = self.mark()
+        self.execute()
+        self.assertEqual(self.starts_since(mark), [])
+        self.assertEqual(self.mutations_since(mark), [])
+
+    # Verifies: S14-R5, S14-R6
+    def test_a_crash_leaves_a_pending_intent_that_pauses_the_restarted_account(self):
+        for apply in (True, False):
+            with self.subTest(apply=apply):
+                self.setUp()
+                self.ready()
+                self.fake.crash("POST " + ADD_TRAINING, apply=apply)
+                mark = self.mark()
+                with self.assertRaises(SimulatedCrash):
+                    self.execute()
+                self.assertEqual([entry.applied for entry in self.starts_since(mark)], [apply])
+                [attempt] = self.store()["attempts"]
+                self.assertEqual(attempt["state"], "pending")  # never settled by the unwinding
+                self.assert_lock_released()
+                self.add_gina()
+                self.assertEqual(self.dry_run()[0], 0)
+                mark = self.mark()
+                self.execute()  # a new process: new orchestrator, new store and lock objects
+                self.assertEqual(self.starts_since(mark), [])
+                self.assertIn("unresolved_attempt",
+                              set().union(*(codes_in(text) for text in self.record_texts(self.latest_record()))))
+                # Regression QA2-R36: the block reaches the plan, so no start is planned (and then refused at send
+                # time, which would stop the account): the account completes its other work
+                [account] = self.latest_record()["accounts"]
+                self.assertEqual(account["status"], "completed", self.record_texts(self.latest_record()))
+                self.assertEqual([item for item in account["results"] if item["action_id"] == "add_training"], [])
+                self.assertIn({"unresolved_attempt"}, [codes_in(item["reason"]) for item in account["rejected"]
+                                                       if item["candidate"].startswith(("training", "add_training"))])
+
+    # Verifies: S14-R6
+    def test_a_stop_file_created_mid_run_sends_nothing(self):
+        self.ready()
+
+        def stop(fake, exchange):
+            (self.journals / "STOP").touch()
+
+        self.fake.on_reply("GET " + ROSTER, stop)  # after the claim's roster read, before the plan runs
+        mark = self.mark()
+        code, out, err = self.execute()
+        self.assertEqual(code, 1, out + err)
+        self.assertEqual(self.mutations_since(mark), [])
+        self.assertEqual(self.latest_record()["accounts"][0]["status"], "stopped")
+        self.assertEqual(self.store()["attempts"], [])
+
+    # Regression QA1-Q59: the store is checked against the dispatch's identity again under the lock
+    # Verifies: S14-R6
+    def test_a_store_swapped_for_another_identity_after_the_preflight_is_refused_under_the_lock(self):
+        from sdk.fleet.attempts import TrainingAttempts
+
+        self.ready()
+        payload = self.store()
+        payload["game_identity"] = game_identity_fingerprint("9999", TRAINING_SALT)
+        foreign = (json.dumps(payload) + "\n").encode()
+        real_preflight = TrainingAttempts.preflight
+
+        def swap_after_preflight(service, alias, declared_identity):
+            why = real_preflight(service, alias, declared_identity)
+            self.store_path.write_bytes(foreign)  # another process replaces the store after the pre-login check
+            return why
+
+        mark = self.mark()
+        with patch.object(TrainingAttempts, "preflight", swap_after_preflight):
+            code, out, err = self.execute()
+        self.assertEqual(code, 1, out + err)
+        [account] = self.latest_record()["accounts"]
+        self.assertEqual(account["status"], "error", account)
+        self.assertEqual(codes_in(account["reason"]), {"state_unreadable"}, account["reason"])
+        self.assertEqual(account["results"], [])
+        self.assertEqual(self.mutations_since(mark), [])
+        self.assertEqual(self.store_path.read_bytes(), foreign)
+        self.assert_lock_released()
+
+    # Regression QA1-Q2: training-v2 settles with the strict verdict, never the lenient training-v1 one
+    # Verifies: S14-R5
+    def test_a_timer_over_by_the_post_read_is_unknown_and_blocks_the_next_start(self):
+        self.ready()
+
+        def short_course(fake, exchange):  # applied, running after the runner's read, over by the post-read
+            cora = next(member for member in fake.state.characters if member.id == "1001")
+            cora.session.end = fake.now + timedelta(seconds=1)
+            fake.advance(seconds=5)
+
+        self.fake.on_reply("POST " + ADD_TRAINING, short_course)
+        mark = self.mark()
+        self.execute()
+        [start] = self.starts_since(mark)
+        self.assertTrue(start.applied)
+        [event] = [event for event in self.executed_events() if event.attempted]
+        self.assertEqual(event.outcome, "unknown", f"the lenient verdict settled the start: {event.reason}")
+        [attempt] = self.store()["attempts"]
+        self.assertEqual((attempt["state"], attempt["outcome"]), ("unresolved", "unknown"))
+        self.assert_lock_released()
+        self.add_gina()
+        self.assertEqual(self.dry_run()[0], 0)
+        mark = self.mark()
+        self.execute()
+        self.assertEqual(self.starts_since(mark), [])
+        self.assertIn("unresolved_attempt",
+                      set().union(*(codes_in(text) for text in self.record_texts(self.latest_record()))))
+
+    # Regression QA1-Q55: a refusal without a leading skip code prints no "Training starts" row
+    # Verifies: S14-R4
+    def test_a_refusal_without_a_skip_code_prints_no_training_starts_row(self):
+        self.ready()
+
+        def partial_roster(fake, exchange):  # after planning: the runner's roster read lists a member without an id
+            roster = fake._h_characters({}).replace("</Characters>", '<Character CharacterName="No Id"/></Characters>')
+            fake.fail(ROSTER, body=roster)
+
+        hook = self.fake.on_reply("GET /TrainingService/ListAllTrainingDesigns2", partial_roster, nth=3)
+        mark = self.mark()
+        code, out, err = self.execute()
+        self.assertEqual(hook.hits, 1)
+        self.assertEqual(self.starts_since(mark), [], out + err)
+        [event] = self.executed_events()
+        self.assertEqual((event.action_id, event.outcome, event.attempted), ("add_training", "skipped", False))
+        self.assertEqual(codes_in(event.reason.split(":", 1)[0]), set(), event.reason)  # free text, no code
+        rows = self.training_rows(out)
+        for row in rows:
+            cells = [cell.strip() for cell in row.strip("|").split("|")]
+            self.assertIn(cells[2], set(TRAINING_CODES), row)
+
+    def test_forbidden_writes_never_happen(self):
+        self.ready()
+        self.execute()
+        heal = self.lose_the_reply()
+        self.add_gina()
+        self.dry_run()
+        self.execute()
+        heal()
+        self.resolve()
+        for exchange in self.fake.exchanges:  # neither the path nor any request parameter names a forbidden write
+            for word in ("UsingCredits", "Rush", "SpeedUp", "Prestige", "Move", "Assign"):
+                self.assertNotIn(word, exchange.path)
+                for name, value in (exchange.params or {}).items():
+                    self.assertNotIn(word, str(name), f"{exchange.method} {exchange.path} sends {name}={value}")
+                    if exchange.path == ADD_TRAINING:
+                        self.assertNotIn(word, str(value), f"{exchange.path} sends {name}={value}")
+        self.assertEqual({entry.path for entry in self.fake.ledger}, {ADD_TRAINING})
+        self.assertTrue(all(entry.delta.get("starbux", 0) == 0 for entry in self.fake.ledger))
+
+    def test_a_starbux_priced_course_is_never_started(self):
+        self.fake.state.training_design("41").price = "starbux:5"
+        self.ready()
+        mark = self.mark()
+        code, out, err = self.execute()
+        self.assertEqual(self.starts_since(mark), [])
+        self.assertIn("| alpha | training 1001 | premium_currency |", out.splitlines())
+
+    def test_only_a_training_v2_journal_carries_the_reconciled_view(self):
+        from sdk.fleet.factory import EnvironmentAccountFactory
+
+        for stamp in (None, "0123456789abcdef"):
+            factory = EnvironmentAccountFactory(self.journals, client_cls=object, dry_run_registry_stamp=stamp)
+            for policy_id, carried in (("training-v2", True), ("training-v1", False), ("baseline-v1", False),
+                                       ("fleet-v1", False)):
+                with self.subTest(stamp=stamp, policy=policy_id):
+                    profile = registry_from_dict({"version": 1, "accounts": [{
+                        "alias": "alpha", "objective": "grow", "policy_id": policy_id,
+                        "credentials_secret": "TWB_ALPHA"}]}).get("alpha")
+                    journal = factory._journal(profile)
+                    self.assertEqual(hasattr(journal, "reconciled_attempts"), carried)
+                    if carried:  # no store yet: nothing reconciled, and nothing created by asking
+                        self.assertEqual(journal.reconciled_attempts(), frozenset())
+                        self.assertFalse(self.store_root.exists())
+
+    def test_training_v1_execute_needs_no_store_and_creates_none(self):
+        self.policy_id = "training-v1"
+        self.write_registry()
+        self.assertEqual(self.dry_run()[0], 0)
+        code, out, err = self.execute()
+        self.assertNotIn("training attempt", out + err)
+        self.assertNotIn("## Training starts", out)
+        self.assertFalse(self.store_root.exists())
+
+
+class TrainingDispatchOverlapTests(TrainingStartCase):
+    """SPEC-14 D9: concurrency witnesses on the unit channel (the workflow benchmark also covers them)."""
+
+    # Verifies: S14-R6
+    def test_a_training_v2_start_runs_in_threads_mode(self):
+        self.ready()
+        mark = self.mark()
+        code, out, err = self.execute("--concurrent", "2")
+        self.assertEqual(code, 0, out + err)
+        [start] = self.starts_since(mark)
+        self.assertEqual((start.params["characterId"], start.applied), ("1001", True))
+        [attempt] = self.store()["attempts"]
+        self.assertEqual(attempt["state"], "verified")
+        self.assert_lock_released()
+
+    # Verifies: S14-R6
+    def test_an_overlapping_dispatch_sends_nothing_even_with_another_candidate(self):
+        """Dispatch A holds the lock inside its AddTraining reply while dispatch B runs from login to its end."""
+        self.crew = ("cora", "gina")
+        self.setUp()
+        self.ready()
+        loser = {}
+
+        def run_the_loser():
+            out = io.StringIO()
+            loser["code"] = run.run_fleet_execute("registry.json", "authorization.json", mode="full",
+                                                  journal_dir="journals", identity_salt_env=TRAINING_SALT_ENV,
+                                                  out=out, environ=self.env())
+            loser["out"] = out.getvalue()
+
+        def barrier(fake, exchange):  # Cora's start is applied: B would now plan Gina if it got the lock
+            if loser:
+                return
+            loser["started"] = True
+            thread = threading.Thread(target=run_the_loser, name="dispatch-loser")
+            thread.start()
+            thread.join(timeout=30)
+            loser["finished"] = not thread.is_alive()
+
+        self.fake.on_reply("POST " + ADD_TRAINING, barrier, blocking=True)  # the hook runs outside the fake's lock
+        mark = self.mark()
+        code, out, err = self.execute()
+        self.assertTrue(loser.get("finished"), "the overlapping dispatch did not finish while the lock was held")
+        mine = [entry for entry in self.mutations_since(mark) if entry.thread == "dispatch-loser"]
+        self.assertEqual(mine, [])
+        self.assertEqual([entry.params["characterId"] for entry in self.starts_since(mark)], ["1001"])
+        locked_lines = [line for line in loser["out"].splitlines() if "alpha" in line and codes_in(line)]
+        self.assertTrue(locked_lines, loser["out"])
+        self.assertTrue(all(codes_in(line) == {"locked"} for line in locked_lines), locked_lines)
+        self.assertEqual(len(self.store()["attempts"]), 1)
+        self.assert_lock_released()
+
+    # Verifies: S14-R5, S14-R6
+    def test_a_crash_then_a_resolution_resumes_training(self):
+        self.ready()
+        self.fake.crash("POST " + ADD_TRAINING, apply=True)
+        with self.assertRaises(SimulatedCrash):
+            self.execute()
+        [attempt] = self.store()["attempts"]
+        self.assertEqual((attempt["state"], attempt["journal_attempt_id"]), ("pending", None))
+        self.fake.state.characters.append(crew_plan_tests.Character("1002", "Gina", "31", "11",
+                                                                    stats=crew_plan_tests.stats(Weapon=20)))
+        code, out, err = self.resolve()  # a new process: Cora runs the requested course
+        self.assertEqual(code, 0, out + err)
+        [attempt] = self.store()["attempts"]
+        self.assertEqual((attempt["state"], attempt["resolution"]["verdict"]), ("resolved", "started"))
+        self.assertEqual(self.dry_run()[0], 0)
+        mark = self.mark()
+        code, out, err = self.execute()
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual([(entry.params["characterId"], entry.applied) for entry in self.starts_since(mark)],
+                         [("1002", True)])
+        self.assertEqual(self.store()["attempts"][-1]["state"], "verified")
+
+
+class TrainingDistinctAccountsTests(TrainingStartCase):
+    """Two training-v2 accounts behind one FakePssFleet: separate identities never contend for a lock."""
+
+    def setUp(self):
+        super().setUp()
+        from tests.fakes.pss_server import FakePss, FakePssFleet
+        from tests.fakes.state import Account
+
+        epoch = datetime.now(timezone.utc).replace(tzinfo=None, microsecond=0)
+        self.fake = FakePss(self.world(), epoch=epoch, token_tag="000000000001")
+        bravo_world = self.world()
+        bravo_world.account = Account(user_id="700000502", refresh_token="RT-synthetic-daily-0002")
+        self.bravo = FakePss(bravo_world, epoch=epoch, token_tag="000000000002")
+        self.fleet = FakePssFleet({"alpha": self.fake, "bravo": self.bravo})
+        self.bravo_identity = game_identity_fingerprint("700000502", TRAINING_SALT)
+        accounts = [{"alias": alias, "objective": "grow", "policy_id": "training-v2", "credentials_secret": secret,
+                     "expected_game_identity": identity}
+                    for alias, secret, identity in (("alpha", "TWB_ALPHA", self.identity),
+                                                    ("bravo", "TWB_BRAVO", self.bravo_identity))]
+        Path("registry.json").write_text(json.dumps({"version": 1, "accounts": accounts}), encoding="utf-8")
+        payload = authorization_payload(accounts=["alpha", "bravo"], actions=["add_training"],
+                                        caps={alias: {"minerals": 1000, "gas": 1000} for alias in ("alpha", "bravo")},
+                                        modes=["full"])
+        Path("authorization.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    def env(self):
+        return {**super().env(),
+                "TWB_BRAVO": f"fleet|{SYNTHETIC_DEVICE_KEY_IOS}|{self.bravo.state.account.refresh_token}|en"}
+
+    def main(self, *argv):
+        out, err = io.StringIO(), io.StringIO()
+        with self.fleet.install(), patch.dict(os.environ, self.env()), patch("sys.argv", ["run.py", *argv]), \
+                redirect_stdout(out), redirect_stderr(err):
+            try:
+                code = run.main()
+            except SystemExit as stop:
+                code = stop.code
+        self.assert_no_lock_waited()
+        return code, out.getvalue(), err.getvalue()
+
+    # Verifies: S14-R6
+    def test_a_second_account_still_starts_while_the_first_is_locked(self):
+        from sdk.fleet.attempts import FileAccountLock
+
+        for alias in ("alpha", "bravo"):
+            code, out, err = self.provision(alias)
+            self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.dry_run()[0], 0)
+        alpha_mark, bravo_mark = len(self.fake.ledger), len(self.bravo.ledger)
+        held = FileAccountLock(self.store_root).try_acquire(self.identity)
+        try:
+            code, out, err = self.execute()
+        finally:
+            held.release()
+        self.assertEqual(self.fake.ledger[alpha_mark:], [])
+        self.assertEqual([(entry.path, entry.applied) for entry in self.bravo.ledger[bravo_mark:]],
+                         [(ADD_TRAINING, True)])
+        statuses = {account["alias"]: account["status"] for account in self.latest_record()["accounts"]}
+        self.assertEqual(statuses, {"alpha": "locked", "bravo": "completed"})
+        self.assertIsNone(self.latest_record()["stop_reason"])
+        bravo_store = json.loads((self.store_root / "bravo.json").read_bytes())
+        self.assertEqual([attempt["state"] for attempt in bravo_store["attempts"]], ["verified"])
 
 
 if __name__ == "__main__":

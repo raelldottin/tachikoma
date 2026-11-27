@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 
 from unittest.mock import patch
 
-from sdk.actions import check_preconditions, get_spec
+from sdk.actions import CATALOG, check_preconditions, get_spec
 from sdk.execution.runner import planned_cost
 from sdk.policy import ActionRequest, DesignData, PolicyConfig, Rejection
 from sdk.policy.training import DEFERRED, TrainingV1, training_context, training_payloads, training_strategy
@@ -834,7 +834,9 @@ class TrainingV2PlanTests(unittest.TestCase):
 
     def test_reserves_count(self):
         self.assertIn(V2_START, training_ids(v2_plan(mineral_reserve=500)))
-        self.assertTrue(reasons(v2_plan(mineral_reserve=501))["training 101"].startswith("insufficient_funds: "))
+        short = v2_plan(mineral_reserve=501)  # 499 spendable for a 500-mineral course: one short
+        self.assertNotIn(V2_START, training_ids(short))
+        self.assertTrue(reasons(short).get("training 101", "").startswith("insufficient_funds: "), reasons(short))
 
     def test_spend_cap_counts(self):
         self.assertIn(V2_START, training_ids(v2_plan(max_mineral_spend=500)))
@@ -1282,29 +1284,209 @@ def execute_gate(actions=("add_training", "finish_training", "use_consumable", "
     return ExecutionGate(authorization, registry, mode, lambda: now)
 
 
-class ExecuteHoldTests(unittest.TestCase):
-    # Verifies: S14-R4
-    def plan(self, policy_id, gate):
+class TrainingV2ExecuteGateTests(unittest.TestCase):
+    """training-v2 under --fleet-execute: no hold any more; its start is authorized, priced and capped like the rest,
+    and an unresolved attempt pauses every start (SPEC-14 step 4)."""
+
+    def plan(self, policy, gate, snapshot=None, data=None, training_block=None, **config):
         from sdk.fleet.factory import AuthorizedPolicy
         from sdk.policy import get_policy
 
-        snapshot = v2_snap() if policy_id == "training-v2" else snap([crew("102", "Delish", room="12")])
-        return AuthorizedPolicy(get_policy(policy_id), gate).plan(snapshot, design(), PolicyConfig())
+        policy = get_policy(policy) if isinstance(policy, str) else policy
+        if snapshot is None:
+            snapshot = v2_snap() if policy.name == "training-v2" else snap([crew("102", "Delish", room="12")])
+        return AuthorizedPolicy(policy, gate, training_block=training_block).plan(
+            snapshot, data or design(), PolicyConfig(**config))
 
-    def test_training_v2_add_training_is_held_under_execute(self):
-        self.assertIn(V2_START, training_ids(v2_plan()))  # control: the plain policy (dry run) plans it
+    # Verifies: S14-R4
+    def test_training_v2_selects_the_guarded_execute_path_by_its_attribute(self):
+        from sdk.fleet.attempts import guarded_training
+        from sdk.policy import TrainingV2, get_policy
+
+        class RenamedV2(TrainingV2):
+            name = "training-v2-renamed"
+
+        class Unguarded(TrainingV2):
+            holds_paid_training = False
+
+        self.assertIs(TrainingV2.holds_paid_training, True)
+        self.assertTrue(guarded_training(TrainingV2()))
+        self.assertTrue(guarded_training(RenamedV2()))
+        self.assertFalse(guarded_training(Unguarded()))
+        self.assertFalse(guarded_training(get_policy("training-v1")))
+        self.assertFalse(guarded_training(get_policy("fleet-v1")))
+
+    # Verifies: S14-R4
+    def test_authorized_training_v2_start_is_kept_with_its_price(self):
         result = self.plan("training-v2", execute_gate())
-        self.assertEqual(training_requests(result), [])
-        self.assertEqual(reasons(result)["add_training 40001 101"],
-                         "training_v2_execute_hold: training-v2 starts no paid course under --fleet-execute until "
-                         "SPEC-14 step 4")
-        self.assertTrue(result.requests)  # the progression block still runs
+        starts = [(request.action_id, dict(request.params), dict(request.expected_cost))
+                  for request in training_requests(result)]
+        self.assertEqual(starts, [("add_training", V2_START[1], {"minerals": 500, "gas": 0})])
+        self.assertNotIn("add_training 40001 101", reasons(result))
 
-    def test_hold_comes_before_authorization_and_canary(self):
-        for gate in (execute_gate(mode="canary"), execute_gate(actions=["collect_daily_reward"])):
-            with self.subTest(mode=gate.canary):
-                result = self.plan("training-v2", gate)
-                self.assertTrue(reasons(result)["add_training 40001 101"].startswith("training_v2_execute_hold: "))
+    def test_unauthorized_training_v2_start_names_not_authorized(self):
+        result = self.plan("training-v2", execute_gate(actions=["collect_daily_reward"]))
+        self.assertEqual(training_requests(result), [])
+        self.assertTrue(reasons(result)["add_training 40001 101"].startswith(
+            "not_authorized: action 'add_training' is not allowed by the authorization"), reasons(result))
+        # other refused actions keep their text
+        others = [reason for candidate, reason in reasons(result).items() if candidate.split()[0] in CATALOG
+                  and not candidate.startswith("add_training")]
+        self.assertTrue(others and all(reason.startswith("not authorized: ") for reason in others), others)
+
+    # Verifies: S14-R5
+    def test_training_block_rejects_every_start_and_is_always_recorded(self):
+        block = "unresolved_attempt: training attempt 0123abcd (character 9, course 1) is pending"
+        result = self.plan("training-v2", execute_gate(), training_block=block)
+        self.assertEqual(training_requests(result), [])
+        self.assertIn("add_training 40001 101", reasons(result))
+        self.assertEqual(reasons(result)["add_training 40001 101"], block)
+        self.assertTrue(result.requests)  # the progression block still runs
+        nothing_planned = self.plan("training-v2", execute_gate(), snapshot=v2_snap([]), training_block=block)
+        # Regression QA2-R37: the block is recorded even when no start was planned
+        self.assertIn("training", reasons(nothing_planned), "a block with no planned start recorded no rejection")
+        self.assertEqual(reasons(nothing_planned)["training"], block)
+        # Regression QA3-S31: the block rejects every planned start, not only the first one
+        from dataclasses import replace as dc_replace
+        from sdk.fleet.factory import AuthorizedPolicy
+
+        second = ActionRequest("add_training", {"training_design_id": "40002", "character_id": "102"}, "second",
+                               {"minerals": 500})
+        real = AuthorizedPolicy._guarded_plan
+
+        def two_starts(policy, *args):
+            plan = real(policy, *args)
+            return dc_replace(plan, requests=plan.requests + (second,))
+
+        with patch.object(AuthorizedPolicy, "_guarded_plan", two_starts):
+            both = self.plan("training-v2", execute_gate(), training_block=block)
+        self.assertEqual(training_requests(both), [], "a later planned start passed the block")
+        self.assertEqual([(rejection.candidate, rejection.reason) for rejection in both.rejected
+                          if rejection.reason == block],
+                         [("add_training 40001 101", block), ("add_training 40002 102", block)])
+        self.assertNotIn("training", reasons(both))
+        # a policy without the attribute ignores a block
+        v1 = self.plan("training-v1", execute_gate(), training_block=block)
+        self.assertEqual([request.action_id for request in training_requests(v1)], ["add_training"])
+
+    # Regression QA2-R39: authorization is checked before the price, so an unauthorized starbux-priced start reads
+    # not_authorized (the starbux refusal is only for a start the authorization allows)
+    def test_an_unauthorized_starbux_start_names_not_authorized(self):
+        from sdk.fleet.factory import AuthorizedPolicy
+        from sdk.policy import get_policy
+
+        snapshot = v2_snap()
+        starbux = {"starbux": 5, "minerals": 0, "gas": 0}
+        start = ActionRequest("add_training", dict(V2_START[1]), "a starbux course", starbux)
+        upgrade = ActionRequest("upgrade_room", {"room_id": "1"}, "a starbux upgrade", starbux)
+
+        def refusal(gate, request):
+            return AuthorizedPolicy(get_policy("training-v2"), gate)._refusal(snapshot, request, True, None)
+
+        unauthorized = execute_gate(actions=["collect_daily_reward"])
+        self.assertTrue(refusal(unauthorized, start).startswith("not_authorized: action 'add_training'"),
+                        refusal(unauthorized, start))
+        self.assertTrue(refusal(unauthorized, upgrade).startswith("not authorized: action 'upgrade_room'"),
+                        refusal(unauthorized, upgrade))
+        self.assertTrue(refusal(execute_gate(), start).startswith("premium_currency: "), refusal(execute_gate(), start))
+        self.assertEqual(refusal(execute_gate(), upgrade), "starbux spending is disabled in execute runs")
+
+    def test_canary_still_keeps_no_training_start(self):
+        result = self.plan("training-v2", execute_gate(mode="canary"))
+        self.assertEqual(training_requests(result), [])
+        self.assertEqual(len(result.requests), 1)
+
+    # Verifies: S14-R4
+    def test_authorization_is_applied_before_max_requests(self):
+        rich = v2_snap(rooms=STORAGE_ROOMS, resources={"minerals": "2000", "gas": "2000", "starbux": "5"})
+        data = design(room_designs=STORAGE_DESIGNS)
+        gate = execute_gate(actions=["add_training", "upgrade_room"])
+        result = self.plan("training-v2", gate, snapshot=rich, data=data, max_requests=1)
+        self.assertEqual([request.action_id for request in result.requests], ["upgrade_room"])
+        self.assertTrue(reasons(result)["training 101"].startswith("action_cap_reached: "), reasons(result))
+        two = self.plan("training-v2", gate, snapshot=rich, data=data, max_requests=2)
+        self.assertEqual([request.action_id for request in two.requests], ["upgrade_room", "add_training"])
+
+    # Regression D5: the pre-send recheck counts the action slots this run already used
+    # Verifies: S14-R4
+    def test_the_pre_send_recheck_counts_the_slots_this_run_used(self):
+        import tempfile
+        from types import SimpleNamespace
+
+        from sdk.fleet.accounts import registry_from_dict
+        from sdk.fleet.factory import _ExecuteGateMixin
+        from sdk.journal import GameplayEvent, GameplayJournal
+        from sdk.policy import get_policy
+
+        gate = execute_gate()
+        profile = registry_from_dict({"version": 1, "accounts": [{
+            "alias": "alpha", "objective": "grow", "policy_id": "training-v2", "credentials_secret": "ALPHA",
+            "max_actions": 2}]}).get("alpha")
+        now = datetime.now(timezone.utc)
+        with tempfile.TemporaryDirectory() as directory:
+            journal = GameplayJournal(os.path.join(directory, "alpha.log"))
+            owner = SimpleNamespace(gate=gate, clock=lambda: now, period=timedelta(hours=24),
+                                    base_policy_config=PolicyConfig())
+            context = SimpleNamespace(journal=journal, design=design())
+            recheck = _ExecuteGateMixin._training_recheck(owner, profile, context, get_policy("training-v2"))
+            start, cost = V2_START[1], {"minerals": 500, "gas": 0}
+            self.assertIsNone(recheck(v2_snap(), start, cost))  # two slots, none used yet
+            journal.append(GameplayEvent.create(account_alias="alpha", action_id="collect_daily_reward",
+                                                started_at=now, finished_at=now, outcome="verified", reason="ok",
+                                                attempted=True))
+            self.assertIsNone(recheck(v2_snap(), start, cost))  # one slot left for the start
+            journal.append(GameplayEvent.create(account_alias="alpha", action_id="collect_all_resources",
+                                                started_at=now, finished_at=now, outcome="verified", reason="ok",
+                                                attempted=True))
+            reason = recheck(v2_snap(), start, cost)  # both slots used by earlier actions of this run
+            self.assertIsNotNone(reason)
+            self.assertTrue(reason.startswith("action_cap_reached: "), reason)
+
+    # Regression QA1-Q13: an earlier action of this run that spends more than planned shrinks the start's cap
+    # Verifies: S14-R4
+    def test_the_pre_send_recheck_charges_the_spend_of_earlier_actions_in_this_run(self):
+        import tempfile
+        from types import SimpleNamespace
+
+        from sdk.fleet.accounts import registry_from_dict
+        from sdk.fleet.factory import _ExecuteGateMixin
+        from sdk.journal import GameplayEvent, GameplayJournal
+        from sdk.policy import get_policy
+
+        profile = registry_from_dict({"version": 1, "accounts": [{
+            "alias": "alpha", "objective": "grow", "policy_id": "training-v2", "credentials_secret": "ALPHA",
+            "budgets": {"minerals": 600}}]}).get("alpha")
+        now = datetime.now(timezone.utc)
+        with tempfile.TemporaryDirectory() as directory:
+            journal = GameplayJournal(os.path.join(directory, "alpha.log"))
+            owner = SimpleNamespace(gate=execute_gate(), clock=lambda: now, period=timedelta(hours=24),
+                                    base_policy_config=PolicyConfig())
+            context = SimpleNamespace(journal=journal, design=design())
+            recheck = _ExecuteGateMixin._training_recheck(owner, profile, context, get_policy("training-v2"))
+            start, cost = V2_START[1], {"minerals": 500, "gas": 0}
+            self.assertIsNone(recheck(v2_snap(), start, cost))  # 600 left under the cap: the 500 course fits
+            # an earlier action of this run, planned cheaper, is charged 300 minerals after the closure was built
+            journal.append(GameplayEvent.create(account_alias="alpha", action_id="upgrade_room", started_at=now,
+                                                finished_at=now, outcome="verified", reason="ok", attempted=True,
+                                                cost={"minerals_delta": -300}))
+            reason = recheck(v2_snap(), start, cost)
+            self.assertIsNotNone(reason, "the recheck did not charge the spend of an earlier action of this run")
+            self.assertTrue(reason.startswith("cap_exceeded: "), reason)
+
+    def test_guarded_plan_equals_the_policy_plan_when_everything_is_authorized(self):
+        from sdk.policy import get_policy
+
+        everything = execute_gate(actions=sorted(set(CATALOG) - {"run_pvp_battle", "place_room", "upgrade_ship"}))
+        for snapshot, data, config in ((v2_snap(), design(), {}), (v2_snap(), design(), {"max_requests": 2}),
+                                       (v2_snap(rooms=STORAGE_ROOMS), design(room_designs=STORAGE_DESIGNS),
+                                        {"max_requests": 3})):
+            with self.subTest(config=config):
+                plain = get_policy("training-v2").plan(snapshot, data, PolicyConfig(**config))
+                gated = self.plan("training-v2", everything, snapshot=snapshot, data=data, **config)
+                # starbux-priced requests are the only ones an all-actions authorization still refuses
+                self.assertEqual([request for request in gated.requests],
+                                 [request for request in plain.requests if not planned_cost(request.expected_cost)
+                                  .get("starbux")])
 
     def test_training_v1_add_training_unchanged(self):
         result = self.plan("training-v1", execute_gate())
@@ -1313,34 +1495,14 @@ class ExecuteHoldTests(unittest.TestCase):
                          [("add_training", {"training_design_id": "5030", "character_id": "102"},
                            {"minerals": 0, "gas": 0})])
 
-    def test_hold_follows_the_policy_attribute_not_its_name(self):
-        from sdk.fleet.factory import AuthorizedPolicy
-        from sdk.policy import TrainingV2, get_policy
-
-        class RenamedV2(TrainingV2):
-            name = "training-v2-renamed"
-
-        self.assertIs(TrainingV2.holds_paid_training, True)
-        self.assertFalse(hasattr(get_policy("training-v1"), "holds_paid_training"))
-        result = AuthorizedPolicy(RenamedV2(), execute_gate()).plan(v2_snap(), design(), PolicyConfig())
-        self.assertEqual(training_requests(result), [])
-        self.assertTrue(reasons(result)["add_training 40001 101"].startswith("training_v2_execute_hold: "))
-
-        class Unheld(TrainingV2):
-            holds_paid_training = False
-
-        released = AuthorizedPolicy(Unheld(), execute_gate()).plan(v2_snap(), design(), PolicyConfig())
-        self.assertEqual([request.action_id for request in training_requests(released)], ["add_training"])
-
-    def test_hold_code_is_stable(self):
-        import json
-
+    def test_the_hold_is_gone_and_the_strict_spec_is_the_catalog_replace(self):
+        from sdk.actions.catalog import training_start_verified
         from sdk.fleet import factory
 
-        self.assertEqual(factory.TRAINING_V2_EXECUTE_HOLD, "training_v2_execute_hold")
-        with open(os.path.join(REPO_ROOT, "tests/fixtures/training/workflow_benchmark.json"), encoding="utf-8") as fh:
-            vocabulary = json.load(fh)["vocabulary"]["skip_codes"]
-        self.assertNotIn(factory.TRAINING_V2_EXECUTE_HOLD, vocabulary)
+        self.assertFalse(hasattr(factory, "TRAINING_V2_EXECUTE_HOLD"))
+        self.assertFalse(hasattr(factory, "TRAINING_V2_EXECUTE_HOLD_REASON"))
+        self.assertEqual(factory.STRICT_ADD_TRAINING,
+                         replace(get_spec("add_training"), postcondition=training_start_verified))
 
 
 if __name__ == "__main__":

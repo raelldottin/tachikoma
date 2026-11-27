@@ -526,6 +526,34 @@ def _is_aware(now: Any) -> bool:
     return isinstance(now, datetime) and now.tzinfo is not None and now.utcoffset() is not None
 
 
+# SPEC-14 (S14-R4): an account opts in to paid training starts only with this registry policy id. Its refusals name a
+# workflow skip code, as a whole word, so operators and the offline workflow benchmark can tell them apart.
+TRAINING_V2_POLICY = "training-v2"
+NOT_AUTHORIZED = "not_authorized"
+LEGACY_RUN_NOT_SKIPPED = "legacy_run_not_skipped"
+TRAINING_START_ACTION_ID = "add_training"
+
+
+def _runs_training_v2(registry: AccountRegistry, alias: Any) -> bool:
+    return isinstance(alias, str) and alias in registry and registry.get(alias).policy_id == TRAINING_V2_POLICY
+
+
+def training_authorization_refusals(auth: Authorization, registry: AccountRegistry, aliases: Iterable[str],
+                                    mode: str) -> list[str]:
+    """Why a ``full`` run cannot start training for a training-v2 account the authorization names (S14-R4).
+
+    Each enabled training-v2 account named by ``auth`` needs ``add_training`` in its actions. Other modes never run
+    ``add_training``, so nothing is refused for them; an account ``auth`` does not name is refused by
+    ``check_authorization`` already.
+    """
+    if mode != "full" or TRAINING_START_ACTION_ID in auth.actions:
+        return []
+    return [f"account {_label(alias, ACCOUNT_ALIAS_PATTERN)} runs training-v2, but the authorization does not allow "
+            f"{TRAINING_START_ACTION_ID} ({NOT_AUTHORIZED})"
+            for alias in aliases
+            if alias in auth.accounts and _runs_training_v2(registry, alias) and registry.get(alias).enabled]
+
+
 def check_authorization(auth: Authorization, registry: AccountRegistry, now: datetime,
                         aliases: Iterable[str], action_ids: Iterable[str], mode: str, *,
                         battle_events: Optional[Iterable[GameplayEvent]] = None) -> list[str]:
@@ -536,7 +564,11 @@ def check_authorization(auth: Authorization, registry: AccountRegistry, now: dat
     not name, that the registry does not hold, or that the registry disables;
     an account whose profile declares ``legacy_run_account`` N when N is in
     neither ``legacy_run_skipped`` (S06-R2) nor ``legacy_run_serialized``
-    (S06-R6); and an action the file does not allow.
+    (S06-R6); and an action the file does not allow. In ``full`` mode (the
+    only mode that sends ``add_training``) a ``training-v2`` account must be
+    in ``legacy_run_skipped``: serialized is not enough (S14-R6,
+    ``legacy_run_not_skipped``); its "not authorized" refusal names
+    ``not_authorized`` in every mode.
 
     With ``battle_events`` (journal events) and ``run_pvp_battle`` requested
     and authorized, an account whose battle cap is already full is refused
@@ -556,15 +588,26 @@ def check_authorization(auth: Authorization, registry: AccountRegistry, now: dat
         reasons.append("no account requested")
     for alias in requested:
         name = _label(alias, ACCOUNT_ALIAS_PATTERN)
+        training_v2 = _runs_training_v2(registry, alias)
         if alias not in auth.accounts:
-            reasons.append(f"account {name} is not authorized")
+            reasons.append(f"account {name} is not authorized" + (f" ({NOT_AUTHORIZED})" if training_v2 else ""))
         elif alias not in registry:
             reasons.append(f"account {name} is not in the registry")
         elif not registry.get(alias).enabled:
             reasons.append(f"account {name} is disabled in the registry")
         else:
             legacy = registry.get(alias).legacy_run_account
-            if legacy is not None and legacy not in auth.legacy_run_skipped + auth.legacy_run_serialized:
+            if training_v2 and mode == "full" and legacy is not None and legacy not in auth.legacy_run_skipped:
+                # S14-R6: the legacy run starts training outside training-v2's limit, store and lock.
+                if legacy in auth.legacy_run_serialized:
+                    reasons.append(f"account {name} is legacy daily run account {legacy}, listed only as "
+                                   f"legacy_run_serialized; training-v2 needs it in legacy_run_skipped "
+                                   f"({LEGACY_RUN_NOT_SKIPPED})")
+                else:
+                    reasons.append(f"account {name} is legacy daily run account {legacy}, and the authorization "
+                                   f"does not confirm it is skipped there (legacy_run_skipped), which training-v2 "
+                                   f"needs ({LEGACY_RUN_NOT_SKIPPED})")
+            elif legacy is not None and legacy not in auth.legacy_run_skipped + auth.legacy_run_serialized:
                 reasons.append(
                     f"account {name} is legacy daily run account {legacy}, and the authorization does not "
                     f"confirm it is skipped there (legacy_run_skipped) or never runs at the same time "

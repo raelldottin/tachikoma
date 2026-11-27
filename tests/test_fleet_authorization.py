@@ -28,6 +28,7 @@ from sdk.fleet.authorization import (
     check_authorization,
     check_trade,
     load_authorization,
+    training_authorization_refusals,
 )
 from sdk.journal import GameplayEvent
 from tests.synthetic_fixtures import SYNTHETIC_ACCESS_TOKEN, SYNTHETIC_EMAIL
@@ -378,6 +379,86 @@ class LegacyRunTests(unittest.TestCase):
                 # The refusal names both ways the owner can confirm it.
                 self.assertIn("legacy_run_skipped", reasons[0])
                 self.assertIn("legacy_run_serialized", reasons[0])
+
+
+def training_registry(policy_id="training-v2", legacy=2):
+    entry = {"alias": "alpha", "objective": "grow", "policy_id": policy_id,
+             "credentials_secret": "TACHIKOMA_ALPHA_AUTH"}
+    if legacy is not None:
+        entry["legacy_run_account"] = legacy
+    bravo = {"alias": "bravo", "objective": "grow", "policy_id": "baseline-v1",
+             "credentials_secret": "TACHIKOMA_BRAVO_AUTH"}
+    return registry_from_dict({"version": 1, "accounts": [entry, bravo]})
+
+
+class TrainingV2AuthorizationTests(unittest.TestCase):
+    """training-v2 needs its legacy daily run account skipped, not serialized (S14-R6), and add_training (S14-R4)."""
+
+    def check(self, auth, reg, aliases=("alpha",), actions=("collect_all_resources",), mode="canary"):
+        return check_authorization(auth, reg, INSIDE, list(aliases), list(actions), mode)
+
+    # Verifies: S14-R6
+    def test_training_v2_listed_only_serialized_is_refused(self):
+        reasons = self.check(authorization_from_dict(payload(legacy_run_serialized=[2], modes=["full"])),
+                             training_registry(), mode="full")
+        self.assertEqual(reasons, [
+            "account 'alpha' is legacy daily run account 2, listed only as legacy_run_serialized; training-v2 needs "
+            "it in legacy_run_skipped (legacy_run_not_skipped)"])
+
+    def test_training_v2_listed_skipped_is_accepted(self):
+        self.assertEqual(self.check(authorization_from_dict(payload(legacy_run_skipped=[2])), training_registry()), [])
+        self.assertEqual(self.check(authorization_from_dict(payload()), training_registry(legacy=None)), [])
+
+    def test_training_v2_in_neither_names_the_code(self):
+        reasons = self.check(authorization_from_dict(payload(modes=["full"])), training_registry(), mode="full")
+        self.assertEqual(len(reasons), 1)
+        self.assertIn("legacy daily run account 2", reasons[0])
+        self.assertTrue(reasons[0].endswith("(legacy_run_not_skipped)"), reasons[0])
+
+    # Regression C9: only a full run can send add_training, so only it needs the legacy run skipped
+    def test_other_modes_accept_a_serialized_training_v2_account_as_before(self):
+        auth = authorization_from_dict(payload(legacy_run_serialized=[2], modes=["canary", "full"]))
+        self.assertEqual(self.check(auth, training_registry(), mode="canary"), [])
+        self.assertEqual(len(self.check(auth, training_registry(), mode="full")), 1)
+        reasons = self.check(authorization_from_dict(payload()), training_registry(), mode="canary")
+        self.assertEqual(len(reasons), 1)
+        self.assertNotIn("legacy_run_not_skipped", reasons[0])  # in neither list: the pre-SPEC-14 refusal
+        self.assertIn("legacy_run_serialized", reasons[0])
+
+    def test_other_policies_still_accept_serialized(self):
+        for policy_id in ("training-v1", "fleet-v1", "baseline-v1"):
+            with self.subTest(policy_id=policy_id):
+                self.assertEqual(self.check(authorization_from_dict(payload(legacy_run_serialized=[2])),
+                                            training_registry(policy_id)), [])
+                reasons = self.check(authorization_from_dict(payload()), training_registry(policy_id))
+                self.assertNotIn("legacy_run_not_skipped", reasons[0])
+
+    def test_unauthorized_training_v2_account_names_not_authorized(self):
+        auth = authorization_from_dict(payload(accounts=["bravo"], caps={"bravo": {"minerals": 0, "gas": 0}}))
+        self.assertEqual(self.check(auth, training_registry(legacy=None)),
+                         ["account 'alpha' is not authorized (not_authorized)"])
+        self.assertEqual(self.check(auth, training_registry("training-v1", legacy=None)),
+                         ["account 'alpha' is not authorized"])
+
+    def test_training_authorization_refusals(self):
+        without = authorization_from_dict(payload(modes=["canary", "full"]))
+        reg = training_registry(legacy=None)
+        self.assertEqual(training_authorization_refusals(without, reg, ["alpha", "bravo"], "full"),
+                         ["account 'alpha' runs training-v2, but the authorization does not allow add_training "
+                          "(not_authorized)"])
+        self.assertEqual(training_authorization_refusals(without, reg, ["alpha"], "canary"), [])
+        self.assertEqual(training_authorization_refusals(without, training_registry("training-v1", legacy=None),
+                                                         ["alpha"], "full"), [])
+        allowed = authorization_from_dict(payload(actions=["add_training"], modes=["full"]))
+        self.assertEqual(training_authorization_refusals(allowed, reg, ["alpha"], "full"), [])
+        unauthorized = authorization_from_dict(payload(accounts=["bravo"], caps={"bravo": {"minerals": 0, "gas": 0}},
+                                                       modes=["full"]))
+        self.assertEqual(training_authorization_refusals(unauthorized, reg, ["alpha"], "full"), [])  # said already
+        # Regression QA2-R43: a disabled training-v2 account never runs, so it needs no add_training
+        disabled = registry_from_dict({"version": 1, "accounts": [
+            {"alias": "alpha", "objective": "grow", "policy_id": "training-v2",
+             "credentials_secret": "TACHIKOMA_ALPHA_AUTH", "enabled": False}]})
+        self.assertEqual(training_authorization_refusals(without, disabled, ["alpha"], "full"), [])
 
 
 LIVE_DIR = Path(os.path.abspath(__file__)).parents[1] / "docs" / "experiments" / "live"
