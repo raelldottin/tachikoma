@@ -1425,15 +1425,21 @@ class _ExecuteGateMixin:
         """The start's recheck on the runner's fresh read: the same start at the same price must still be planned.
 
         Pure over the runner's ``before`` snapshot (no extra request): the policy's crew plan is computed again from it,
-        with the caps less everything charged this period so far (earlier actions of this run included), and must
-        still start the same course for the same crew member at the same authoritative price and currency.
+        with the caps less everything charged this period so far (earlier actions of this run included) and the action
+        slots less those this run already used (one journal event per runner call since the dispatch began), and must
+        still start the same course for the same crew member at the same authoritative price and currency. Earlier
+        actions' spend is already in the fresh read and the charged spend, so nothing is reserved for them again.
         """
         gated = self.gate.profile(profile)
+        journaled_before = len(context.journal.read())
 
         def recheck(before: AccountSnapshot, params: Mapping[str, Any],
                     expected_cost: Optional[Mapping[str, Any]]) -> Optional[str]:
             spent_now = spent_in_period(context.journal, profile.alias, self.clock() - self.period)
             config_now, _ = budgeted_policy_config(gated, spent_now, self.base_policy_config)
+            if config_now.max_requests is not None:
+                used = max(len(context.journal.read()) - journaled_before, 0)
+                config_now = replace(config_now, max_requests=max(config_now.max_requests - used, 0))
             nothing = Plan(policy.name, profile.alias, before.observed_at.isoformat(), (), ())
             return start_refusal(policy.crew_plan(before, context.design, config_now, nothing), params, expected_cost)
 

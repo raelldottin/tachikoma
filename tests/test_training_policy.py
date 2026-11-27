@@ -1361,6 +1361,40 @@ class TrainingV2ExecuteGateTests(unittest.TestCase):
         two = self.plan("training-v2", gate, snapshot=rich, data=data, max_requests=2)
         self.assertEqual([request.action_id for request in two.requests], ["upgrade_room", "add_training"])
 
+    # Verifies: S14-R4 (regression D5: the pre-send recheck counts the action slots this run already used)
+    def test_the_pre_send_recheck_counts_the_slots_this_run_used(self):
+        import tempfile
+        from types import SimpleNamespace
+
+        from sdk.fleet.accounts import registry_from_dict
+        from sdk.fleet.factory import _ExecuteGateMixin
+        from sdk.journal import GameplayEvent, GameplayJournal
+        from sdk.policy import get_policy
+
+        gate = execute_gate()
+        profile = registry_from_dict({"version": 1, "accounts": [{
+            "alias": "alpha", "objective": "grow", "policy_id": "training-v2", "credentials_secret": "ALPHA",
+            "max_actions": 2}]}).get("alpha")
+        now = datetime.now(timezone.utc)
+        with tempfile.TemporaryDirectory() as directory:
+            journal = GameplayJournal(os.path.join(directory, "alpha.log"))
+            owner = SimpleNamespace(gate=gate, clock=lambda: now, period=timedelta(hours=24),
+                                    base_policy_config=PolicyConfig())
+            context = SimpleNamespace(journal=journal, design=design())
+            recheck = _ExecuteGateMixin._training_recheck(owner, profile, context, get_policy("training-v2"))
+            start, cost = V2_START[1], {"minerals": 500, "gas": 0}
+            self.assertIsNone(recheck(v2_snap(), start, cost))  # two slots, none used yet
+            journal.append(GameplayEvent.create(account_alias="alpha", action_id="collect_daily_reward",
+                                                started_at=now, finished_at=now, outcome="verified", reason="ok",
+                                                attempted=True))
+            self.assertIsNone(recheck(v2_snap(), start, cost))  # one slot left for the start
+            journal.append(GameplayEvent.create(account_alias="alpha", action_id="collect_all_resources",
+                                                started_at=now, finished_at=now, outcome="verified", reason="ok",
+                                                attempted=True))
+            reason = recheck(v2_snap(), start, cost)  # both slots used by earlier actions of this run
+            self.assertIsNotNone(reason)
+            self.assertTrue(reason.startswith("action_cap_reached: "), reason)
+
     def test_guarded_plan_equals_the_policy_plan_when_everything_is_authorized(self):
         from sdk.policy import get_policy
 

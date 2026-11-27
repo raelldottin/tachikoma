@@ -450,6 +450,28 @@ class FileStoreTests(StoreContract, TempDirCase):
         self.assertEqual((self.root / "alpha.json").read_bytes(), before)
         self.assertEqual([path.name for path in self.root.iterdir() if path.name.endswith(".tmp")], [])
 
+    # Regression C11: a write can land even though its directory fsync failed; the messages must allow for it
+    def test_failure_messages_allow_for_a_write_that_landed(self):
+        store = self.make_store()
+        store.provision("alpha", ID_A, T0)
+        with patch.object(FileAttemptStore, "_sync_root", side_effect=OSError("directory fsync failed")):
+            with self.assertRaises(OSError) as caught:
+                store.write_intent("alpha", intent())
+        self.assertEqual(store.load("alpha").blocking().state, PENDING)  # the intent did land
+        text = attempts.intent_failure_reason(caught.exception)
+        self.assertEqual(codes_in(text), {"intent_not_persisted"})
+        self.assertIn("nothing was sent", text)
+        self.assertIn("may", text)
+        self.assertIn("--fleet-resolve-training", text)
+        with patch.object(FileAttemptStore, "_sync_root", side_effect=OSError("directory fsync failed")):
+            with self.assertRaises(OSError) as caught:
+                store.settle("alpha", "0" * 32, {"outcome": "verified", "settled_at": T0.isoformat()})
+        self.assertEqual(store.load("alpha").attempts[0].state, VERIFIED)  # the settlement did land
+        text = attempts.settle_failure_reason(intent(), caught.exception)
+        self.assertEqual(codes_in(text), {"unresolved_attempt"})
+        self.assertIn("may", text)
+        self.assertNotIn("stays pending", text)
+
     # Verifies: S14-R5
     def test_restart_sees_a_pending_intent(self):
         FileAttemptStore(self.journal_dir).provision("alpha", ID_A, T0)

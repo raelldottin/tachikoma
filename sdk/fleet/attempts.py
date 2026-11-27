@@ -477,13 +477,17 @@ def state_reason(location: str, error: TrainingStateError) -> str:
 
 
 def intent_failure_reason(error: BaseException) -> str:
-    return (f"{INTENT_NOT_PERSISTED}: the training intent could not be written durably ({type(error).__name__}); "
-            "nothing was sent")
+    """The write may have landed (only its directory fsync failed, say), so the text does not claim it did not."""
+    return (f"{INTENT_NOT_PERSISTED}: the training intent may not have been written durably "
+            f"({type(error).__name__}); nothing was sent. If the store still shows it pending, record a "
+            "reconciliation with --fleet-resolve-training before the next training start")
 
 
 def settle_failure_reason(attempt: Attempt, error: BaseException) -> str:
-    return (f"{UNRESOLVED_ATTEMPT}: the outcome of training attempt {attempt.intent_id[:8]} could not be recorded "
-            f"durably ({type(error).__name__}); the attempt stays pending and pauses later training starts")
+    """The settlement may have landed, so the text names both store states it can leave."""
+    return (f"{UNRESOLVED_ATTEMPT}: the outcome of training attempt {attempt.intent_id[:8]} may not have been "
+            f"recorded durably ({type(error).__name__}); while the store shows it pending or unresolved, later "
+            "training starts pause until --fleet-resolve-training records a reconciliation")
 
 
 # --- ports -----------------------------------------------------------------------------------------------------------
