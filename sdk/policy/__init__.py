@@ -19,7 +19,15 @@ from sdk.policy.progression import (
     get_policy,
     hull_hold,
 )
-from sdk.policy.training import TRAINING_ZERO_COST, ZERO_COST_ACTIONS, TrainingV1, training_context, training_plan
+from sdk.policy.training import (
+    TRAINING_ZERO_COST,
+    ZERO_COST_ACTIONS,
+    CrewPreview,
+    TrainingV1,
+    TrainingV2,
+    training_context,
+    training_plan,
+)
 
 __all__ = [
     "POLICIES",
@@ -27,6 +35,7 @@ __all__ = [
     "ZERO_COST_ACTIONS",
     "ActionRequest",
     "BaselineV1",
+    "CrewPreview",
     "DesignData",
     "DesignRecord",
     "FleetV1",
@@ -40,6 +49,7 @@ __all__ = [
     "ResearchDesign",
     "RoomDesign",
     "TrainingV1",
+    "TrainingV2",
     "get_policy",
     "hull_hold",
     "training_context",

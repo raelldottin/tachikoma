@@ -14,9 +14,11 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field, replace
+from types import MappingProxyType
 from typing import Any, Iterable, Mapping, Optional, Protocol
 
 from sdk.actions import check_preconditions, get_spec
+from sdk.execution.runner import COST_KINDS
 from sdk.pvp.config import crew_level_cap
 from sdk.state import AccountSnapshot, Completeness
 
@@ -231,6 +233,36 @@ class _Budget:
             self.available[kind] -= amount
             if self.cap_left[kind] is not None:
                 self.cap_left[kind] -= amount
+
+
+# ``runner.COST_KINDS`` resource name -> the budget key above; starbux has no mineral or gas budget.
+_BUDGET_KEYS: Mapping[str, Optional[str]] = MappingProxyType({"minerals": "mineral", "gas": "gas", "starbux": None})
+
+
+def remaining_budget(snapshot: AccountSnapshot, config: PolicyConfig, requests: Iterable[ActionRequest],
+                     ) -> tuple[dict[str, Optional[int]], dict[str, Optional[int]]]:
+    """What is spendable above the reserves and left under the spend caps after ``requests``' planned costs.
+
+    Both results map "mineral" and "gas" to an amount, or None (balance not observed / no cap). Each cost kind is read
+    through ``sdk.execution.runner.COST_KINDS`` (any case, "mineral" or "minerals"); a starbux cost touches neither.
+    A positive amount lowers the balance and the cap; 0 and below change nothing. A kind ``COST_KINDS`` does not know,
+    or an amount that is not a whole number, raises ValueError: an earlier cost the budget cannot read fails closed.
+    """
+    budget = _Budget(snapshot, config)
+    for request in requests:
+        for kind, amount in request.expected_cost.items():
+            name = COST_KINDS.get(str(kind).lower())
+            if name is None:
+                raise ValueError(f"unknown cost kind {kind!r} in a planned request")
+            if isinstance(amount, bool) or not isinstance(amount, int):
+                raise ValueError(f"planned {kind} cost {amount!r} is not a whole number")
+            key = _BUDGET_KEYS[name]
+            if key is None or amount <= 0:
+                continue
+            for remaining in (budget.available, budget.cap_left):
+                if remaining[key] is not None:
+                    remaining[key] -= amount
+    return dict(budget.available), dict(budget.cap_left)
 
 
 def _cap_requests(requests: list[ActionRequest], rejected: list[Rejection],
@@ -526,12 +558,12 @@ class FleetV1(BaselineV1):
 
 
 def _registry() -> dict[str, ProgressionPolicy]:
-    # training-v1 builds on FleetV1 above, so a top-level import would be circular. Whichever module is imported
-    # first, everything training.py needs from here is defined by the time this runs.
-    from sdk.policy.training import TrainingV1
+    # training-v1 and training-v2 build on FleetV1 above, so a top-level import would be circular. Whichever module is
+    # imported first, everything training.py needs from here is defined by the time this runs.
+    from sdk.policy.training import TrainingV1, TrainingV2
 
     return {BaselineV1.name: BaselineV1(), HullReserveV1.name: HullReserveV1(), FleetV1.name: FleetV1(),
-            TrainingV1.name: TrainingV1()}
+            TrainingV1.name: TrainingV1(), TrainingV2.name: TrainingV2()}
 
 
 POLICIES: dict[str, ProgressionPolicy] = _registry()
