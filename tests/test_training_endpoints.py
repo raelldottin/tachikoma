@@ -758,14 +758,15 @@ class TestResearchLevel(EndpointCase):
         self.assertEqual(self.client.listAllResearchDesigns2.call_count, 1)
 
     def test_a_failed_fetch_leaves_no_placeholder_for_other_readers(self):
-        """speedUpResearchUsingBoostGauge fetches designs only when the attribute is absent; None would crash it."""
+        """A failed fetch leaves the attribute absent, not None; the research boost does not read designs at all."""
         self.client.listAllResearches = MagicMock()
         self.client.listAllResearchDesigns2 = MagicMock(return_value=False)
         self.assertEqual(self.client.getResearchLevel("Fitness"), 0)
         self.assertFalse(hasattr(self.client, "allResearches"))
         self.assertFalse(hasattr(self.client, "allResearchDesigns"))
-        self.assertIs(self.client.speedUpResearchUsingBoostGauge("1", "900"), False)
-        self.assertEqual(self.client.listAllResearchDesigns2.call_count, 2)
+        self.client.request = MagicMock(return_value=None)
+        self.assertIs(self.client.speedUpResearchUsingBoostGauge("1"), False)
+        self.assertEqual(self.client.listAllResearchDesigns2.call_count, 1)
 
     def test_lists_already_loaded_are_used_without_fetching(self):
         self.client.allResearches = researches(("1", "900", "Completed"))
@@ -962,6 +963,23 @@ class CrewPlanWorkflowTests(unittest.TestCase):
                                   if any(text.startswith(step) for step in steps)], [])
                 ran += 1
         self.assertGreater(ran, 20)
+
+
+class TestShipBoost(EndpointCase):
+    def test_speedUpShipConstructionUsingBoostGauge_returns_true_on_success(self):
+        self.serve(reply("<ShipService><SpeedUpShipConstructionUsingBoostGauge><Ship ShipId='800000501'/></SpeedUpShipConstructionUsingBoostGauge></ShipService>"))
+        self.assertIs(self.client.speedUpShipConstructionUsingBoostGauge("800000501"), True)
+
+    def test_speedUpShipConstructionUsingBoostGauge_returns_false_on_error(self):
+        self.serve(reply("<ShipService><SpeedUpShipConstructionUsingBoostGauge errorMessage='boom'/></SpeedUpShipConstructionUsingBoostGauge></ShipService>"))
+        self.assertIs(self.client.speedUpShipConstructionUsingBoostGauge("800000501"), False)
+
+    def test_speedUpShipConstructionUsingBoostGauge_returns_false_on_no_response(self):
+        self.client.request = MagicMock(return_value=None)
+        patcher = patch.object(self.client, "request", self.client.request)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.assertIs(self.client.speedUpShipConstructionUsingBoostGauge("800000501"), False)
 
 
 if __name__ == "__main__":

@@ -1002,15 +1002,16 @@ class TestBuyReward2Checksum(unittest.TestCase):
 class TestAddStarbux2Checksum(unittest.TestCase):
     """Tests for UserService/AddStarbux2 MD5 checksum.
 
-    Formula: MD5(quantity + clientDateTime + accessToken + ChecksumKey + SavyChecksum)
-    Inferred from IL2CPP template (not yet capture-verified).
+    Formula (pattern-matched from verified MD5 endpoints GoTo and SpeedUpTravelling;
+    not yet capture-verified for AddStarbux2 specifically):
+        MD5(clientDateTime + quantity + accessToken + ChecksumKey + SavyChecksum)
     """
 
     def test_add_starbux2_known_formula(self):
         """Verify the MD5 formula produces expected output."""
         result = checksum_add_starbux2("1", "2026-08-10T00:00:00", "tok", "5343", "Savvy!s0d@")
         import hashlib
-        expected = hashlib.md5(b"12026-08-10T00:00:00tok5343Savvy!s0d@").hexdigest()
+        expected = hashlib.md5(b"2026-08-10T00:00:001tok5343Savvy!s0d@").hexdigest()
         self.assertEqual(result, expected)
 
     def test_add_starbux2_raises_on_empty_keys(self):
