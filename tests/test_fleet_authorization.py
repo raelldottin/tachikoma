@@ -399,7 +399,8 @@ class TrainingV2AuthorizationTests(unittest.TestCase):
 
     # Verifies: S14-R6
     def test_training_v2_listed_only_serialized_is_refused(self):
-        reasons = self.check(authorization_from_dict(payload(legacy_run_serialized=[2])), training_registry())
+        reasons = self.check(authorization_from_dict(payload(legacy_run_serialized=[2], modes=["full"])),
+                             training_registry(), mode="full")
         self.assertEqual(reasons, [
             "account 'alpha' is legacy daily run account 2, listed only as legacy_run_serialized; training-v2 needs "
             "it in legacy_run_skipped (legacy_run_not_skipped)"])
@@ -409,10 +410,20 @@ class TrainingV2AuthorizationTests(unittest.TestCase):
         self.assertEqual(self.check(authorization_from_dict(payload()), training_registry(legacy=None)), [])
 
     def test_training_v2_in_neither_names_the_code(self):
-        reasons = self.check(authorization_from_dict(payload()), training_registry())
+        reasons = self.check(authorization_from_dict(payload(modes=["full"])), training_registry(), mode="full")
         self.assertEqual(len(reasons), 1)
         self.assertIn("legacy daily run account 2", reasons[0])
         self.assertTrue(reasons[0].endswith("(legacy_run_not_skipped)"), reasons[0])
+
+    # Regression C9: only a full run can send add_training, so only it needs the legacy run skipped
+    def test_other_modes_accept_a_serialized_training_v2_account_as_before(self):
+        auth = authorization_from_dict(payload(legacy_run_serialized=[2], modes=["canary", "full"]))
+        self.assertEqual(self.check(auth, training_registry(), mode="canary"), [])
+        self.assertEqual(len(self.check(auth, training_registry(), mode="full")), 1)
+        reasons = self.check(authorization_from_dict(payload()), training_registry(), mode="canary")
+        self.assertEqual(len(reasons), 1)
+        self.assertNotIn("legacy_run_not_skipped", reasons[0])  # in neither list: the pre-SPEC-14 refusal
+        self.assertIn("legacy_run_serialized", reasons[0])
 
     def test_other_policies_still_accept_serialized(self):
         for policy_id in ("training-v1", "fleet-v1", "baseline-v1"):

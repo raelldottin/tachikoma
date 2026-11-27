@@ -564,10 +564,11 @@ def check_authorization(auth: Authorization, registry: AccountRegistry, now: dat
     not name, that the registry does not hold, or that the registry disables;
     an account whose profile declares ``legacy_run_account`` N when N is in
     neither ``legacy_run_skipped`` (S06-R2) nor ``legacy_run_serialized``
-    (S06-R6); and an action the file does not allow. A ``training-v2`` account
-    must be in ``legacy_run_skipped``: serialized is not enough (S14-R6,
-    ``legacy_run_not_skipped``), and its "not authorized" refusal names
-    ``not_authorized``.
+    (S06-R6); and an action the file does not allow. In ``full`` mode (the
+    only mode that sends ``add_training``) a ``training-v2`` account must be
+    in ``legacy_run_skipped``: serialized is not enough (S14-R6,
+    ``legacy_run_not_skipped``); its "not authorized" refusal names
+    ``not_authorized`` in every mode.
 
     With ``battle_events`` (journal events) and ``run_pvp_battle`` requested
     and authorized, an account whose battle cap is already full is refused
@@ -596,7 +597,7 @@ def check_authorization(auth: Authorization, registry: AccountRegistry, now: dat
             reasons.append(f"account {name} is disabled in the registry")
         else:
             legacy = registry.get(alias).legacy_run_account
-            if training_v2 and legacy is not None and legacy not in auth.legacy_run_skipped:
+            if training_v2 and mode == "full" and legacy is not None and legacy not in auth.legacy_run_skipped:
                 # S14-R6: the legacy run starts training outside training-v2's limit, store and lock.
                 if legacy in auth.legacy_run_serialized:
                     reasons.append(f"account {name} is legacy daily run account {legacy}, listed only as "
