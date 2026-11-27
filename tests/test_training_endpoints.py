@@ -981,6 +981,33 @@ class TestShipBoost(EndpointCase):
         self.addCleanup(patcher.stop)
         self.assertIs(self.client.speedUpShipConstructionUsingBoostGauge("800000501"), False)
 
+    BOOST_REPLY = ("<ShipService><SpeedUpShipConstructionUsingBoostGauge>"
+                   "<Ship ShipId='800000501' Hp='1500' UpgradeShipDesignId='0'>"
+                   "<Rooms><Room RoomId='7' RoomStatus='Normal'/></Rooms>"
+                   "<Researches><Research ResearchId='9' ResearchState='Completed'/></Researches>"
+                   "</Ship></SpeedUpShipConstructionUsingBoostGauge></ShipService>")
+
+    def test_ship_boost_reply_is_stored_as_a_ship_read(self):
+        # Regression: the boost reply used to be stored under its own wrapper, so every
+        # reader of ShipService/GetShipByUserId/Ship (getShipHp, getShipHpFraction, the
+        # snapshot provider) lost the ship for the rest of the run.
+        self.serve(reply(self.BOOST_REPLY))
+        self.assertIs(self.client.speedUpShipConstructionUsingBoostGauge("800000501"), True)
+        ship = self.client.shipByUserId["ShipService"]["GetShipByUserId"]["Ship"]
+        self.assertEqual(ship["@ShipId"], "800000501")
+        self.assertEqual(self.client._shipRecord(), ship)
+        self.assertEqual(self.client.getShipHp(), 1500)
+        self.assertEqual(self.client.rooms, {"@RoomId": "7", "@RoomStatus": "Normal"})
+        self.assertEqual(self.client.researches, {"@ResearchId": "9", "@ResearchState": "Completed"})
+
+    def test_ship_boost_reply_without_a_ship_keeps_the_last_ship_read(self):
+        before = {"ShipService": {"GetShipByUserId": {"Ship": {"@ShipId": "800000501", "@Hp": "900"}}}}
+        self.client.shipByUserId = before
+        self.serve(reply("<ShipService><SpeedUpShipConstructionUsingBoostGauge/></ShipService>"))
+        self.assertIs(self.client.speedUpShipConstructionUsingBoostGauge("800000501"), True)
+        self.assertIs(self.client.shipByUserId, before)
+        self.assertEqual(self.client.getShipHp(), 900)
+
 
 if __name__ == "__main__":
     unittest.main()
