@@ -25,7 +25,6 @@ from sdk.fleet.attempts import (
     RESOLVED,
     UNRESOLVED,
     VERIFIED,
-    Attempt,
     FileAccountLock,
     FileAttemptStore,
     MemoryAccountLock,
@@ -52,7 +51,7 @@ from tests import training_fixtures as tf
 T0 = datetime(2026, 11, 10, 12, 0, tzinfo=timezone.utc)
 ID_A = "gid1-" + "a" * 32
 ID_B = "gid1-" + "b" * 32
-REPO = Path(__file__).resolve().parent.parent
+REPO = Path(os.path.abspath(__file__)).parents[1]
 VOCABULARY = json.loads((REPO / "tests/fixtures/training/workflow_benchmark.json").read_text(encoding="utf-8"))[
     "vocabulary"]["skip_codes"]
 HARNESS_CORRUPTION = b"\x00not-a-store\xff\n"  # what the workflow benchmark writes over a store

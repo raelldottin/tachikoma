@@ -440,7 +440,8 @@ class TrainingV2AuthorizationTests(unittest.TestCase):
                                                          ["alpha"], "full"), [])
         allowed = authorization_from_dict(payload(actions=["add_training"], modes=["full"]))
         self.assertEqual(training_authorization_refusals(allowed, reg, ["alpha"], "full"), [])
-        unauthorized = authorization_from_dict(payload(accounts=["bravo"], caps={"bravo": {"minerals": 0, "gas": 0}}, modes=["full"]))
+        unauthorized = authorization_from_dict(payload(accounts=["bravo"], caps={"bravo": {"minerals": 0, "gas": 0}},
+                                                       modes=["full"]))
         self.assertEqual(training_authorization_refusals(unauthorized, reg, ["alpha"], "full"), [])  # said already
 
 
