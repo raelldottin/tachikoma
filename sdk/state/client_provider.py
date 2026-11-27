@@ -25,6 +25,22 @@ resource, or, for an item without one, whose ``@ItemDesignId`` maps to it in
 ``resource_item_designs`` (``item_resource_kinds`` of the server's item
 designs). Live ``ListItemsOfAShip`` items carry no type, so without that
 mapping minerals and gas stay ``None``. Exactly one item must match each.
+
+Design data (S14-R2): ``design_reader`` is an optional callable returning
+``(training_designs, room_designs)``, the raw TrainingDesign and RoomDesign
+payloads. The provider calls it on every snapshot, so a post-action snapshot
+carries designs read after the action, never a copy from before it. Its
+payloads give ``snapshot.courses`` and each room's design name, level,
+capacity and type. ``READ_METHODS`` and the client calls are unchanged: the
+reader is not a client read and never enters ``failed_reads``. A reader that
+raises observes nothing (both payloads None, so courses are unknown) and the
+snapshot is still built; an unreadable payload likewise observes nothing.
+Without a reader the provider behaves exactly as before.
+
+``snapshot.courses`` is the price and eligibility source for training-v2;
+``DesignData`` remains the source for training-v1. Requirement for training
+execution (SPEC-14 step 4): it must supply a ``design_reader`` that reads the
+designs fresh under its dispatch lock. Nothing does that yet.
 """
 
 from __future__ import annotations
@@ -158,6 +174,7 @@ class ClientSnapshotProvider:
         identity_salt: Optional[bytes | str] = None,
         profile_observation: Optional[ProfileObservation] = None,
         resource_item_designs: Optional[Mapping[str, str]] = None,
+        design_reader: Optional[Callable[[], tuple[Any, Any]]] = None,
     ) -> None:
         if not ACCOUNT_ALIAS_PATTERN.match(account_alias or ""):
             raise SnapshotInputError("account_alias must be a lowercase alias, not an e-mail or display name")
@@ -171,6 +188,7 @@ class ClientSnapshotProvider:
         self.failed_reads: tuple[str, ...] = ()
         self._profile_observation = profile_observation
         self._resource_item_designs = dict(resource_item_designs or {})
+        self._design_reader = design_reader
 
     def _read(self, method_name: str, attribute: str) -> Any:
         try:
@@ -232,6 +250,7 @@ class ClientSnapshotProvider:
             }
 
         self.failed_reads = tuple(failed)
+        training_designs, room_designs = self._read_designs()
         ship_fields = {key: value for key, value in ship.items() if key.startswith("@")} if ship else None
         return build_snapshot(
             self.account_alias,
@@ -246,4 +265,16 @@ class ClientSnapshotProvider:
             research=research,
             inventory=items,
             game_identity=self._game_identity(),
+            training_designs=training_designs,
+            room_designs=room_designs,
         )
+
+    def _read_designs(self) -> tuple[Any, Any]:
+        """The design payloads from ``design_reader``: (None, None) without one, or when it raises."""
+        if self._design_reader is None:
+            return None, None
+        try:
+            training_designs, room_designs = self._design_reader()
+        except Exception:  # a failed design read observes nothing; it never fails the snapshot
+            return None, None
+        return training_designs, room_designs
