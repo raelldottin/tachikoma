@@ -2898,5 +2898,143 @@ class TrainingStartTests(TrainingStartCase):
         self.assertFalse(self.store_root.exists())
 
 
+class TrainingDispatchOverlapTests(TrainingStartCase):
+    """SPEC-14 D9: concurrency witnesses on the unit channel (the workflow benchmark also covers them)."""
+
+    # Verifies: S14-R6
+    def test_a_training_v2_start_runs_in_threads_mode(self):
+        self.ready()
+        mark = self.mark()
+        code, out, err = self.execute("--concurrent", "2")
+        self.assertEqual(code, 0, out + err)
+        [start] = self.starts_since(mark)
+        self.assertEqual((start.params["characterId"], start.applied), ("1001", True))
+        [attempt] = self.store()["attempts"]
+        self.assertEqual(attempt["state"], "verified")
+        self.assert_lock_released()
+
+    # Verifies: S14-R6
+    def test_an_overlapping_dispatch_sends_nothing_even_with_another_candidate(self):
+        """Dispatch A holds the lock inside its AddTraining reply while dispatch B runs from login to its end."""
+        self.crew = ("cora", "gina")
+        self.setUp()
+        self.ready()
+        loser = {}
+
+        def run_the_loser():
+            out = io.StringIO()
+            loser["code"] = run.run_fleet_execute("registry.json", "authorization.json", mode="full",
+                                                  journal_dir="journals", identity_salt_env=TRAINING_SALT_ENV,
+                                                  out=out, environ=self.env())
+            loser["out"] = out.getvalue()
+
+        def barrier(fake, exchange):  # Cora's start is applied: B would now plan Gina if it got the lock
+            if loser:
+                return
+            loser["started"] = True
+            thread = threading.Thread(target=run_the_loser, name="dispatch-loser")
+            thread.start()
+            thread.join(timeout=30)
+            loser["finished"] = not thread.is_alive()
+
+        self.fake.on_reply("POST " + ADD_TRAINING, barrier, blocking=True)  # the hook runs outside the fake's lock
+        mark = self.mark()
+        code, out, err = self.execute()
+        self.assertTrue(loser.get("finished"), "the overlapping dispatch did not finish while the lock was held")
+        mine = [entry for entry in self.mutations_since(mark) if entry.thread == "dispatch-loser"]
+        self.assertEqual(mine, [])
+        self.assertEqual([entry.params["characterId"] for entry in self.starts_since(mark)], ["1001"])
+        locked_lines = [line for line in loser["out"].splitlines() if "alpha" in line and codes_in(line)]
+        self.assertTrue(locked_lines, loser["out"])
+        self.assertTrue(all(codes_in(line) == {"locked"} for line in locked_lines), locked_lines)
+        self.assertEqual(len(self.store()["attempts"]), 1)
+        self.assert_lock_released()
+
+    # Verifies: S14-R5, S14-R6
+    def test_a_crash_then_a_resolution_resumes_training(self):
+        self.ready()
+        self.fake.crash("POST " + ADD_TRAINING, apply=True)
+        with self.assertRaises(SimulatedCrash):
+            self.execute()
+        [attempt] = self.store()["attempts"]
+        self.assertEqual((attempt["state"], attempt["journal_attempt_id"]), ("pending", None))
+        self.fake.state.characters.append(crew_plan_tests.Character("1002", "Gina", "31", "11",
+                                                                    stats=crew_plan_tests.stats(Weapon=20)))
+        code, out, err = self.resolve()  # a new process: Cora runs the requested course
+        self.assertEqual(code, 0, out + err)
+        [attempt] = self.store()["attempts"]
+        self.assertEqual((attempt["state"], attempt["resolution"]["verdict"]), ("resolved", "started"))
+        self.assertEqual(self.dry_run()[0], 0)
+        mark = self.mark()
+        code, out, err = self.execute()
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual([(entry.params["characterId"], entry.applied) for entry in self.starts_since(mark)],
+                         [("1002", True)])
+        self.assertEqual(self.store()["attempts"][-1]["state"], "verified")
+
+
+class TrainingDistinctAccountsTests(TrainingStartCase):
+    """Two training-v2 accounts behind one FakePssFleet: separate identities never contend for a lock."""
+
+    def setUp(self):
+        super().setUp()
+        from tests.fakes.pss_server import FakePss, FakePssFleet
+        from tests.fakes.state import Account
+
+        epoch = datetime.now(timezone.utc).replace(tzinfo=None, microsecond=0)
+        self.fake = FakePss(self.world(), epoch=epoch, token_tag="000000000001")
+        bravo_world = self.world()
+        bravo_world.account = Account(user_id="700000502", refresh_token="RT-synthetic-daily-0002")
+        self.bravo = FakePss(bravo_world, epoch=epoch, token_tag="000000000002")
+        self.fleet = FakePssFleet({"alpha": self.fake, "bravo": self.bravo})
+        self.bravo_identity = game_identity_fingerprint("700000502", TRAINING_SALT)
+        accounts = [{"alias": alias, "objective": "grow", "policy_id": "training-v2", "credentials_secret": secret,
+                     "expected_game_identity": identity}
+                    for alias, secret, identity in (("alpha", "TWB_ALPHA", self.identity),
+                                                    ("bravo", "TWB_BRAVO", self.bravo_identity))]
+        Path("registry.json").write_text(json.dumps({"version": 1, "accounts": accounts}), encoding="utf-8")
+        payload = authorization_payload(accounts=["alpha", "bravo"], actions=["add_training"],
+                                        caps={alias: {"minerals": 1000, "gas": 1000} for alias in ("alpha", "bravo")},
+                                        modes=["full"])
+        Path("authorization.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    def env(self):
+        return {**super().env(),
+                "TWB_BRAVO": f"fleet|{SYNTHETIC_DEVICE_KEY_IOS}|{self.bravo.state.account.refresh_token}|en"}
+
+    def main(self, *argv):
+        out, err = io.StringIO(), io.StringIO()
+        with self.fleet.install(), patch.dict(os.environ, self.env()), patch("sys.argv", ["run.py", *argv]), \
+                redirect_stdout(out), redirect_stderr(err):
+            try:
+                code = run.main()
+            except SystemExit as stop:
+                code = stop.code
+        return code, out.getvalue(), err.getvalue()
+
+    # Verifies: S14-R6
+    def test_a_second_account_still_starts_while_the_first_is_locked(self):
+        from sdk.fleet.attempts import FileAccountLock
+
+        for alias in ("alpha", "bravo"):
+            code, out, err = self.provision(alias)
+            self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.dry_run()[0], 0)
+        alpha_mark, bravo_mark = len(self.fake.ledger), len(self.bravo.ledger)
+        held = FileAccountLock(self.store_root).try_acquire(self.identity)
+        try:
+            code, out, err = self.execute()
+        finally:
+            held.release()
+        self.assertEqual(self.fake.ledger[alpha_mark:], [])
+        self.assertEqual([(entry.path, entry.applied) for entry in self.bravo.ledger[bravo_mark:]],
+                         [(ADD_TRAINING, True)])
+        statuses = {account["alias"]: account["status"] for account in self.latest_record()["accounts"]}
+        self.assertEqual(statuses, {"alpha": "locked", "bravo": "completed"})
+        self.assertIsNone(self.latest_record()["stop_reason"])
+        bravo_store = json.loads((self.store_root / "bravo.json").read_bytes())
+        self.assertEqual([attempt["state"] for attempt in bravo_store["attempts"]], ["verified"])
+
+
 if __name__ == "__main__":
     unittest.main()
