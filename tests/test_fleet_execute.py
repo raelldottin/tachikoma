@@ -2461,6 +2461,81 @@ class TrainingStartTests(TrainingStartCase):
         self.assertEqual([(event.params["character_id"], event.outcome)
                           for event in self.executed_events(since) if event.attempted], [("1002", "verified")])
 
+    def age_dry_runs(self, hours):
+        """Move every dry-run event already in the journal ``hours`` back, so an earlier stamped dry run can no
+        longer stand in for one that did not complete (``DRY_RUN_MAX_AGE`` is 24 hours)."""
+        path = self.journals / "alpha.log"
+        lines = []
+        for line in path.read_text(encoding="utf-8").splitlines():
+            payload = json.loads(line)
+            if payload["dry_run"]:
+                for key in ("started_at", "finished_at"):
+                    payload[key] = (datetime.fromisoformat(payload[key]) - timedelta(hours=hours)).isoformat()
+            lines.append(json.dumps(payload, sort_keys=True, separators=(",", ":")))
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    def attempted_events(self, since=0):
+        return [event for event in self.executed_events(since) if event.attempted]
+
+    # Verifies: S14-R5 (regression C2/D1: a resolution links an attempt its settlement never linked)
+    def test_a_resolution_lifts_an_unsettled_unknown_start_of_the_same_course(self):
+        for failure in (OSError("synthetic settle-write failure"), SimulatedCrash("crash after the journal write")):
+            with self.subTest(failure=type(failure).__name__):
+                self.setUp()
+                self.ready()
+                heal = self.lose_the_reply(apply=False)
+                with patch("sdk.execution.runner.settle_training_intent", side_effect=failure):
+                    try:
+                        self.execute()
+                    except SimulatedCrash:
+                        pass
+                heal()
+                [event] = self.attempted_events()
+                self.assertEqual(event.outcome, "unknown")
+                [attempt] = self.store()["attempts"]
+                self.assertEqual((attempt["state"], attempt["journal_attempt_id"]), ("pending", None))
+                mark = self.mark()
+                self.execute()  # still unresolved: nothing starts
+                self.assertEqual(self.starts_since(mark), [])
+                code, out, err = self.resolve()
+                self.assertEqual(code, 0, out + err)
+                [attempt] = self.store()["attempts"]
+                self.assertEqual((attempt["state"], attempt["resolution"]["verdict"], attempt["journal_attempt_id"]),
+                                 ("resolved", "not_running", event.attempt_id))
+                self.age_dry_runs(hours=25)
+                self.assertEqual(self.dry_run()[0], 0)
+                mark = self.mark()
+                code, out, err = self.execute()
+                self.assertEqual(code, 0, out + err)
+                self.assertEqual([(entry.params["characterId"], entry.params["trainingDesignId"], entry.applied)
+                                  for entry in self.starts_since(mark)], [("1001", "41", True)])
+
+    # Verifies: S14-R5 (regression C1/D2: the dry run honours an operator's resolution)
+    def test_a_not_running_resolution_lets_the_dry_run_and_execute_start_the_same_course(self):
+        self.ready()
+        heal = self.lose_the_reply(apply=False)
+        self.execute()
+        heal()
+        [event] = self.attempted_events()
+        self.assertEqual((event.outcome, self.store()["attempts"][0]["journal_attempt_id"]),
+                         ("unknown", event.attempt_id))
+        code, out, err = self.resolve()
+        self.assertEqual(code, 0, out + err)
+        self.assertIn("not_running", out)
+        self.age_dry_runs(hours=25)  # the stamp from before the attempt cannot mask a dry run that did not complete
+        code, out, err = self.dry_run()
+        self.assertEqual(code, 0, out + err)
+        self.assertTrue(any(line.startswith("| alpha | completed |") for line in out.splitlines()), out + err)
+        since = len(self.executed_events())
+        mark = self.mark()
+        code, out, err = self.execute()
+        self.assertEqual(code, 0, out + err)
+        self.assertNotIn("dry_run_stale", err)
+        self.assertEqual([(entry.params["characterId"], entry.params["trainingDesignId"], entry.applied)
+                          for entry in self.starts_since(mark)], [("1001", "41", True)])
+        self.assertEqual([(item.params["character_id"], item.outcome) for item in self.attempted_events(since)],
+                         [("1001", "verified")])
+
     def test_resolve_refuses_without_an_authoritative_read(self):
         self.ready()
         heal = self.lose_the_reply()
@@ -2581,6 +2656,23 @@ class TrainingStartTests(TrainingStartCase):
         code, out, err = self.execute()
         self.assertEqual(self.starts_since(mark), [])
         self.assertIn("| alpha | training 1001 | premium_currency |", out.splitlines())
+
+    def test_only_a_training_v2_journal_carries_the_reconciled_view(self):
+        from sdk.fleet.factory import EnvironmentAccountFactory
+
+        for stamp in (None, "0123456789abcdef"):
+            factory = EnvironmentAccountFactory(self.journals, client_cls=object, dry_run_registry_stamp=stamp)
+            for policy_id, carried in (("training-v2", True), ("training-v1", False), ("baseline-v1", False),
+                                       ("fleet-v1", False)):
+                with self.subTest(stamp=stamp, policy=policy_id):
+                    profile = registry_from_dict({"version": 1, "accounts": [{
+                        "alias": "alpha", "objective": "grow", "policy_id": policy_id,
+                        "credentials_secret": "TWB_ALPHA"}]}).get("alpha")
+                    journal = factory._journal(profile)
+                    self.assertEqual(hasattr(journal, "reconciled_attempts"), carried)
+                    if carried:  # no store yet: nothing reconciled, and nothing created by asking
+                        self.assertEqual(journal.reconciled_attempts(), frozenset())
+                        self.assertFalse(self.store_root.exists())
 
     def test_training_v1_execute_needs_no_store_and_creates_none(self):
         self.policy_id = "training-v1"

@@ -235,8 +235,13 @@ class ActionRunner:
         key = params_key(params)
         account_wide = spec.action_id in ACCOUNT_WIDE_UNCERTAINTY
         guard = self._guard_for(spec)
-        # An attempt the guard's store records as reconciled by an operator is no longer uncertain.
-        reconciled = guard.reconciled() if guard is not None else frozenset()
+        # An attempt the guard's store records as reconciled by an operator is no longer uncertain. Without a guard (the
+        # dry run) the journal may carry the same read-only view (``reconciled_attempts``), so both plan alike.
+        if guard is not None:
+            reconciled = guard.reconciled()
+        else:
+            provider = getattr(self.journal, "reconciled_attempts", None)
+            reconciled = provider() if callable(provider) else frozenset()
         attempts = [
             event
             for event in self.journal.read()

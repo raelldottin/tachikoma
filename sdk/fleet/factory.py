@@ -626,11 +626,26 @@ class EnvironmentAccountFactory:
     def _journal(self, profile: AccountProfile) -> GameplayJournal:
         path = self.journal_path(profile.alias)
         if self.dry_run_registry_stamp is None:
-            return GameplayJournal(path)
-        journal = DryRunJournal(path, policy_id=profile.policy_id, registry_stamp=self.dry_run_registry_stamp)
-        with self._lock:
-            self._dry_run_journals[profile.alias] = journal
+            journal = GameplayJournal(path)
+        else:
+            journal = DryRunJournal(path, policy_id=profile.policy_id, registry_stamp=self.dry_run_registry_stamp)
+            with self._lock:
+                self._dry_run_journals[profile.alias] = journal
+        self._attach_reconciled(profile, journal)
         return journal
+
+    def _attach_reconciled(self, profile: AccountProfile, journal: GameplayJournal) -> None:
+        """Give a training-v2 account's journal the read-only view of its operator reconciliations
+        (``reconciled_attempts``: no lock, the store only read, never raising), so a runner without the execute guard
+        (the dry run's) lifts the same journaled uncertainty the executor does. The journal's events stay as they are,
+        so budgets still charge an uncertain spend. Other policies' journals get nothing."""
+        try:
+            guarded = guarded_training(get_policy(profile.policy_id))
+        except Exception:  # an unknown policy fails later, where it did before
+            return
+        if guarded:
+            attempts, alias = TrainingAttempts.for_journal_dir(self.journal_dir), profile.alias
+            journal.reconciled_attempts = lambda: attempts.reconciled(alias)  # type: ignore[attr-defined]
 
     def commit_dry_runs(self, statuses: Mapping[str, str]) -> None:
         """Write every held dry-run event; ``statuses`` maps alias to its ``AccountRun.status``.

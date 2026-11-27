@@ -158,6 +158,50 @@ class PureCoreTests(unittest.TestCase):
         with self.assertRaises(ValueError):  # only a blocking attempt is resolved
             resolved(after, {"0" * 32: evidence}, T0)
 
+    # Verifies: S14-R5 (regression C2/D1)
+    def test_a_resolution_links_an_unsettled_attempt_to_its_journal_event(self):
+        from sdk.journal import GameplayEvent
+
+        def event(attempt_id, finished, cid="1001", course="41", attempted=True, action_id="add_training"):
+            return GameplayEvent.create(account_alias="alpha", action_id=action_id, started_at=finished - timedelta(
+                seconds=5), finished_at=finished, outcome="unknown" if attempted else "skipped", reason="r",
+                attempted=attempted, attempt_id=attempt_id, params=params(cid, course))
+
+        state = with_intent(virgin_store("alpha", ID_A, T0), intent(now=T0))  # never settled: no journal id
+        second = timedelta(seconds=1)
+        events = [event("before", T0 - second), event("other-course", T0 + second, course="42"),
+                  event("other-crew", T0 + second, cid="1002"), event("skipped", T0 + second, attempted=False),
+                  event("other-action", T0 + second, action_id="add_research"), event("mine", T0 + second),
+                  event("later", T0 + 3 * second)]
+        evidence = {"verdict": "not_running", "observed_phase": "none", "observed_course_id": None,
+                    "observed_end": None}
+        after = resolved(state, {"0" * 32: evidence}, T0 + 2 * second, events)
+        self.assertEqual(after.attempts[0].journal_attempt_id, "mine")
+        self.assertEqual(attempts.reconciled_attempt_ids(after), frozenset({"mine"}))
+        # resolved without the journal: the pure view still links it from the events, within the resolution window
+        bare = resolved(state, {"0" * 32: evidence}, T0 + 2 * second)
+        self.assertIsNone(bare.attempts[0].journal_attempt_id)
+        self.assertEqual(attempts.reconciled_attempt_ids(bare), frozenset())
+        self.assertEqual(attempts.reconciled_attempt_ids(bare, events), frozenset({"mine"}))
+        self.assertEqual(attempts.reconciled_attempt_ids(bare, [event("later", T0 + 3 * second)]), frozenset())
+        # a settled id is kept; a blocking attempt covers nothing
+        self.assertEqual(attempts.reconciled_attempt_ids(state, events), frozenset())
+        linked = settled(state, "0" * 32, {"outcome": "unknown", "journal_attempt_id": "j1",
+                                           "settled_at": T0.isoformat()})
+        self.assertEqual(resolved(linked, {"0" * 32: evidence}, T0, events).attempts[0].journal_attempt_id, "j1")
+
+    def test_reconciled_never_raises_and_covers_nothing_without_a_readable_store(self):
+        training = TrainingAttempts(MemoryAttemptStore(), MemoryAccountLock())
+        self.assertEqual(training.reconciled("alpha"), frozenset())  # missing
+        training.store._data["alpha"] = HARNESS_CORRUPTION
+        self.assertEqual(training.reconciled("alpha"), frozenset())  # unreadable
+        state = settled(with_intent(virgin_store("alpha", ID_A, T0), intent()), "0" * 32,
+                        {"outcome": "unknown", "journal_attempt_id": "j1", "settled_at": T0.isoformat()})
+        training.store._data["alpha"] = dump_store(state)
+        self.assertEqual(training.reconciled("alpha"), frozenset())  # unresolved
+        training.store._data["alpha"] = dump_store(resolved(state, {"0" * 32: {"verdict": "not_running"}}, T0))
+        self.assertEqual(training.reconciled("alpha"), frozenset({"j1"}))
+
     def test_classify_resolution_table(self):
         attempt = intent(cid="101", course="5010")
         hour = timedelta(hours=1)

@@ -724,6 +724,26 @@ class TrainingStartGuardTests(unittest.TestCase):
         fresh = TrainingGuard(self.store, "alpha", IDENTITY, None, self.clock)
         self.assertEqual(self.runner(guard=fresh).run("add_training", START, expected_cost=COST).outcome, "verified")
 
+    # Verifies: S14-R5 (regression C1/D2)
+    def test_a_dry_run_without_a_guard_uses_the_journal_reconciled_view(self):
+        self.world.fail_after_snapshot = True
+        first = self.runner().run("add_training", START, expected_cost=COST)
+        self.world.fail_after_snapshot = False
+        self.world.state["crew"] = [training_fixtures.crew("101")]
+        dry = ActionRunner("alpha", self.world, self.world.snapshot, self.journal, clock=self.clock)
+        with self.assertRaises(UncertainPriorAttemptError):  # no view: the journal's uncertainty blocks
+            dry.run("add_training", START, dry_run=True, expected_cost=COST)
+        self.journal.reconciled_attempts = lambda: frozenset()
+        with self.assertRaises(UncertainPriorAttemptError):  # nothing reconciled yet
+            dry.run("add_training", START, dry_run=True, expected_cost=COST)
+        self.journal.reconciled_attempts = lambda: frozenset({first.event.attempt_id})
+        result = dry.run("add_training", START, dry_run=True, expected_cost=COST)
+        self.assertEqual((result.outcome, result.attempted), ("skipped", False))
+        self.assertTrue(result.reason.startswith("dry run: would call"), result.reason)
+        self.assertEqual(self.world.calls, [("addTraining", ("5010", "101"))])  # only the first, real start
+        # the journal is never filtered: the first start's uncertain spend is still there to be charged
+        self.assertIn(first.event.attempt_id, [event.attempt_id for event in self.journal.read()])
+
 
 if __name__ == "__main__":
     unittest.main()

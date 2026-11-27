@@ -531,6 +531,7 @@ def run_fleet_resolve_training(registry_path, alias, journal_dir=None, identity_
     from sdk.fleet.attempts import BLOCKING, ResolutionRefused, TrainingStateError, state_reason
     from sdk.fleet.factory import EnvironmentAccountFactory, LogScrubber
     from sdk.fleet.orchestrator import error_reason
+    from sdk.journal import read_events
 
     command = "--fleet-resolve-training"
     out = out or sys.stdout
@@ -569,7 +570,8 @@ def run_fleet_resolve_training(registry_path, alias, journal_dir=None, identity_
             refusal = "its game identity was not observed"
         if refusal is not None:
             return _training_store_failure(command, alias, f"{refusal}; nothing resolved")
-        resolutions = attempts.resolve(alias, snapshot.game_identity, snapshot, clock())
+        resolutions = attempts.resolve(alias, snapshot.game_identity, snapshot, clock(),
+                                       events=lambda: read_events(Path(journal_dir) / f"{alias}.log"))
     except TrainingStateError as error:
         return _training_store_failure(command, alias, state_reason(location, error))
     except ResolutionRefused as error:

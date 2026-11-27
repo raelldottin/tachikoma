@@ -42,7 +42,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Iterator, Mapping, Optional, Protocol
+from typing import Any, Callable, Iterable, Iterator, Mapping, Optional, Protocol
 
 from sdk.execution.runner import COST_KINDS
 from sdk.state import AccountSnapshot, Completeness
@@ -286,15 +286,73 @@ def settled(state: StoreState, intent_id: str, settlement: Mapping[str, Any]) ->
     return _replace_attempt(state, intent_id, settle)
 
 
-def resolved(state: StoreState, resolutions: Mapping[str, Mapping[str, Any]], now: datetime) -> StoreState:
-    """Record an operator's reconciliation (authoritative evidence) for each blocking attempt named."""
+def _moment(text: Any) -> Optional[datetime]:
+    try:
+        moment = datetime.fromisoformat(text) if isinstance(text, str) else None
+    except ValueError:
+        return None
+    return moment if moment is not None and moment.tzinfo is not None else None
+
+
+def journal_attempt_link(attempt: Attempt, events: Iterable[Any], until: Optional[datetime] = None
+                         ) -> Optional[str]:
+    """The journal attempt id of ``attempt``'s request, or ``None``.
+
+    The settlement records it; when the settlement was never written (its write failed, or the process died between
+    the journal append and the settlement), it is the first attempted journal event of the same action, crew member
+    and course that finished at or after the intent was written (and at or before ``until``, the resolution time).
+    The attempt blocked every other start of the account until it was resolved, so no other request falls in there.
+    """
+    if attempt.journal_attempt_id:
+        return attempt.journal_attempt_id
+    written = _moment(attempt.written_at)
+    if written is None:
+        return None
+    for event in events:
+        params = getattr(event, "params", None) or {}
+        if (getattr(event, "action_id", None) != attempt.action_id or not getattr(event, "attempted", False)
+                or str(params.get("character_id")) != attempt.character_id
+                or str(params.get("training_design_id")) != attempt.training_design_id):
+            continue
+        finished = _moment(getattr(event, "finished_at", None))
+        if finished is not None and finished >= written and (until is None or finished <= until):
+            return getattr(event, "attempt_id", None) or None
+    return None
+
+
+def reconciled_attempt_ids(state: StoreState, events: Iterable[Any] = ()) -> frozenset[str]:
+    """Journal attempt ids an operator's reconciliation covers: those of the resolved attempts (linked through
+    ``journal_attempt_link`` when no settlement recorded the id). Their journaled uncertainty no longer blocks the
+    same crew member and course; the journal itself is never changed, so budgets still charge their uncertain spend.
+    """
+    events = tuple(events)
+    ids = set()
+    for attempt in state.attempts:
+        if attempt.state != RESOLVED:
+            continue
+        resolved_at = _moment((attempt.resolution or {}).get("resolved_at"))
+        link = journal_attempt_link(attempt, events, resolved_at)
+        if link:
+            ids.add(link)
+    return frozenset(ids)
+
+
+def resolved(state: StoreState, resolutions: Mapping[str, Mapping[str, Any]], now: datetime,
+             events: Iterable[Any] = ()) -> StoreState:
+    """Record an operator's reconciliation (authoritative evidence) for each blocking attempt named.
+
+    An attempt whose settlement was never written gets its journal attempt id from ``events`` (the account's
+    journal, ``journal_attempt_link``), so its journaled uncertainty is lifted too.
+    """
+    events = tuple(events)
     for intent_id, evidence in resolutions.items():
         def resolve(attempt: Attempt, evidence=evidence) -> Attempt:
             if attempt.state not in BLOCKING:
                 raise ValueError(f"training attempt {intent_id[:8]} is {attempt.state}; nothing to resolve")
             if evidence.get("verdict") not in RESOLUTION_VERDICTS:
                 raise ValueError("a resolution has a known verdict")
-            return replace(attempt, state=RESOLVED, resolution={
+            return replace(attempt, state=RESOLVED, journal_attempt_id=journal_attempt_link(attempt, events, now),
+                           resolution={
                 "resolved_at": _iso(now), "previous_state": attempt.state, "verdict": evidence["verdict"],
                 "observed_phase": evidence.get("observed_phase"),
                 "observed_course_id": evidence.get("observed_course_id"),
@@ -406,7 +464,8 @@ class AttemptStore(Protocol):
     def provision(self, alias: str, identity: str, now: datetime) -> bool: ...
     def write_intent(self, alias: str, attempt: Attempt) -> None: ...
     def settle(self, alias: str, intent_id: str, settlement: Mapping[str, Any]) -> None: ...
-    def resolve(self, alias: str, resolutions: Mapping[str, Mapping[str, Any]], now: datetime) -> None: ...
+    def resolve(self, alias: str, resolutions: Mapping[str, Mapping[str, Any]], now: datetime,
+                events: Iterable[Any] = ()) -> None: ...
 
 
 class LockHandle(Protocol):
@@ -477,8 +536,9 @@ class _StoreBase:
     def settle(self, alias: str, intent_id: str, settlement: Mapping[str, Any]) -> None:
         self._replace(alias, dump_store(settled(self.load(alias), intent_id, settlement)))
 
-    def resolve(self, alias: str, resolutions: Mapping[str, Mapping[str, Any]], now: datetime) -> None:
-        self._replace(alias, dump_store(resolved(self.load(alias), resolutions, now)))
+    def resolve(self, alias: str, resolutions: Mapping[str, Mapping[str, Any]], now: datetime,
+                events: Iterable[Any] = ()) -> None:
+        self._replace(alias, dump_store(resolved(self.load(alias), resolutions, now, events)))
 
 
 def _write_all(fd: int, data: bytes) -> None:
@@ -737,8 +797,7 @@ class TrainingGuard:
             state = self.store.load(self.alias)
         except TrainingStateError:
             return frozenset()
-        return frozenset(attempt.journal_attempt_id for attempt in state.attempts
-                         if attempt.state == RESOLVED and attempt.journal_attempt_id)
+        return reconciled_attempt_ids(state)
 
     @staticmethod
     def intent_failure_reason(error: BaseException) -> str:
@@ -783,6 +842,15 @@ class TrainingAttempts:
 
     def location(self, alias: str) -> str:
         return self.store.location(alias)
+
+    def reconciled(self, alias: str) -> frozenset[str]:
+        """Read-only, without the lock, and never raising: the journal attempt ids an operator's reconciliation
+        covers (``reconciled_attempt_ids``). A store that is missing or unreadable covers none, which keeps every
+        journaled uncertainty blocking. The dry run's runner uses it, so it plans what the executor will."""
+        try:
+            return reconciled_attempt_ids(self.store.load(alias))
+        except (TrainingStateError, ValueError):
+            return frozenset()
 
     def preflight(self, alias: str, declared_identity: Optional[str]) -> Optional[str]:
         """Before any login, read-only and without the lock: why the store of ``alias`` cannot be used, or ``None``."""
@@ -837,8 +905,8 @@ class TrainingAttempts:
         finally:
             handle.release()
 
-    def resolve(self, alias: str, identity: str, snapshot: AccountSnapshot, now: datetime
-                ) -> list[tuple[Attempt, dict]]:
+    def resolve(self, alias: str, identity: str, snapshot: AccountSnapshot, now: datetime,
+                events: Callable[[], Iterable[Any]] = tuple) -> list[tuple[Attempt, dict]]:
         """Under the lock, record a reconciliation for every blocking attempt from ``snapshot``: all or nothing.
 
         Raises ``AccountLocked``, ``TrainingStateError`` or ``ResolutionRefused`` (nothing persisted).
@@ -858,8 +926,8 @@ class TrainingAttempts:
                 if evidence is None:
                     raise ResolutionRefused(why)
                 resolutions[attempt.intent_id] = evidence
-            if resolutions:
-                self.store.resolve(alias, resolutions, now)
+            if resolutions:  # the journal is read under the lock, so the attempt's own event is in it
+                self.store.resolve(alias, resolutions, now, tuple(events()))
             return [(attempt, resolutions[attempt.intent_id]) for attempt in blocking]
         finally:
             handle.release()
