@@ -32,6 +32,7 @@ from sdk.fleet.attempts import (
     StoreMissing,
     StoreUnreadable,
     TrainingAttempts,
+    TrainingStateError,
     block_reason,
     classify_resolution,
     dump_store,
@@ -58,7 +59,9 @@ HARNESS_CORRUPTION = b"\x00not-a-store\xff\n"  # what the workflow benchmark wri
 
 
 def codes_in(text):
-    """The vocabulary codes ``text`` names as whole words (the workflow benchmark's rule)."""
+    """The vocabulary codes ``text`` names as whole words (the workflow benchmark's rule); none for no text."""
+    if text is None:
+        return set()
     return {code for code in VOCABULARY if re.search(rf"(?<![A-Za-z0-9_]){re.escape(code)}(?![A-Za-z0-9_])", text)}
 
 
@@ -111,6 +114,7 @@ class PureCoreTests(unittest.TestCase):
             "unknown state": json.dumps({**good, "attempts": [{**good["attempts"][0], "state": "maybe"}]}).encode(),
             "missing key": json.dumps({**good, "attempts": [{k: v for k, v in good["attempts"][0].items()
                                                             if k != "character_id"}]}).encode(),
+            "extra key": json.dumps({**good, "attempts": [{**good["attempts"][0], "note": "x"}]}).encode(),
         }
         for name, raw in cases.items():
             with self.subTest(name):
@@ -296,6 +300,28 @@ class StartRefusalTests(unittest.TestCase):
         self.assertTrue(reason.startswith("price_unavailable: "), reason)
         self.assertEqual(codes_in(reason), {"price_unavailable"})
 
+    # Regression QA1-Q9: the same amount in another currency is another price
+    def test_a_changed_currency_at_the_same_amount_is_refused(self):
+        reason = start_refusal(preview([start_request(minerals=0, gas=500)]), params(), {"minerals": 500})
+        self.assertIsNotNone(reason, "500 gas observed was taken for the 500 minerals planned")
+        self.assertTrue(reason.startswith("price_unavailable: "), reason)
+
+    # Regression QA1-Q10: an unreadable fresh price is never equal to a readable (or free) one
+    def test_an_unreadable_fresh_price_is_refused(self):
+        for planned, amount in (({}, "?"), ({"minerals": 500}, None), ({"minerals": 0}, "500")):
+            with self.subTest(planned=planned, amount=amount):
+                reason = start_refusal(preview([start_request(minerals=amount)]), params(), planned)
+                self.assertIsNotNone(reason, f"an unreadable price {amount!r} passed the recheck")
+                self.assertTrue(reason.startswith("price_unavailable: "), reason)
+
+    # Regression QA1-Q11: a course planned free that is priced on the fresh read is refused
+    def test_a_free_plan_that_is_now_priced_is_refused(self):
+        for planned in ({"minerals": 0}, {}, None):
+            with self.subTest(planned=planned):
+                reason = start_refusal(preview([start_request(minerals=500)]), params(), planned)
+                self.assertIsNotNone(reason, "a free plan skipped the price recheck")
+                self.assertTrue(reason.startswith("price_unavailable: "), reason)
+
     def test_a_crew_skip_on_the_fresh_read_names_its_code(self):
         for code in ("insufficient_funds", "room_not_ready", "premium_currency", "training_in_progress"):
             with self.subTest(code):
@@ -422,13 +448,37 @@ class FileStoreTests(StoreContract, TempDirCase):
                           lambda: store.write_intent("alpha", intent()),
                           lambda: store.settle("alpha", "0" * 32, {"outcome": "verified"})):
             with self.subTest(operation):
-                with self.assertRaises(StoreUnreadable):
+                with self.assertRaises(TrainingStateError) as caught:
                     operation()
+                self.assertIsInstance(caught.exception, StoreUnreadable)
                 self.assertEqual((self.root / "alpha.json").read_bytes(), HARNESS_CORRUPTION)
         (self.root / "alpha.json").unlink()
-        (self.root / "alpha.json").mkdir()  # a directory in place of the file
-        with self.assertRaises(StoreUnreadable):
-            store.load("alpha")
+        (self.root / "alpha.json").mkdir()  # a directory in place of the file: never missing, never fresh
+        for operation in (lambda: store.load("alpha"), lambda: store.provision("alpha", ID_A, T0)):
+            with self.subTest(operation, directory=True):
+                with self.assertRaises(TrainingStateError) as caught:
+                    operation()
+                self.assertIsInstance(caught.exception, StoreUnreadable)
+                self.assertTrue((self.root / "alpha.json").is_dir())
+
+    # Regression QA1-Q26: an attempt with a key outside the schema is unreadable, and its bytes are kept
+    def test_an_attempt_with_an_extra_key_is_unreadable_and_never_overwritten(self):
+        store = self.make_store()
+        store.provision("alpha", ID_A, T0)
+        store.write_intent("alpha", intent())
+        payload = json.loads((self.root / "alpha.json").read_bytes())
+        payload["attempts"][0]["note"] = "x"
+        raw = json.dumps(payload).encode()
+        (self.root / "alpha.json").write_bytes(raw)
+        for operation in (lambda: store.load("alpha"), lambda: store.provision("alpha", ID_A, T0),
+                          lambda: store.settle("alpha", "0" * 32, {"outcome": "verified", "reason": "ok",
+                                                                   "journal_attempt_id": "j",
+                                                                   "settled_at": T0.isoformat()})):
+            with self.subTest(operation):
+                with self.assertRaises(TrainingStateError) as caught:
+                    operation()
+                self.assertIsInstance(caught.exception, StoreUnreadable)
+                self.assertEqual((self.root / "alpha.json").read_bytes(), raw)
 
     def test_atomic_write_order_and_failure(self):
         store = self.make_store()
@@ -526,6 +576,24 @@ class LockContract:
         again.release()
         other.release()
 
+    # Regression QA1-Q16: a contended acquisition returns at once; it never waits for the holder
+    def test_a_contended_acquisition_returns_none_without_waiting(self):
+        lock = self.make_lock()
+        first = lock.try_acquire(ID_A)
+        self.assertIsNotNone(first)
+        seen = []
+        thread = threading.Thread(target=lambda: seen.append(lock.try_acquire(ID_A)), daemon=True)
+        thread.start()
+        thread.join(timeout=5)
+        waited = thread.is_alive()
+        first.release()  # lets a waiting acquisition through, so the thread ends either way
+        thread.join(timeout=5)
+        for handle in seen:
+            if handle is not None:
+                handle.release()
+        self.assertFalse(waited, "a second acquisition of a held lock waited instead of returning None")
+        self.assertEqual(seen, [None])
+
     def test_lock_rejects_a_malformed_identity(self):
         lock = self.make_lock()
         for identity in (None, "../x", "gid1-XYZ", "gid1-" + "a" * 31):
@@ -612,6 +680,17 @@ class DispatchTests(TempDirCase):
         self.assertEqual(service.store.load("alpha").blocking().state, PENDING)
         handle = service.lock.try_acquire(ID_A)
         self.assertIsNotNone(handle)
+        handle.release()
+
+    # Regression QA1-Q19: hold() releases the lock however its block exits
+    def test_hold_releases_on_a_crash(self):
+        service = self.attempts_service()
+        with self.assertRaises(Crash):
+            with service.hold("alpha", ID_A) as dispatch:
+                self.assertIsNone(dispatch.refusal)
+                raise Crash()
+        handle = service.lock.try_acquire(ID_A)
+        self.assertIsNotNone(handle, "a crash inside hold() left the account's lock held")
         handle.release()
 
     def test_a_locked_dispatch_reads_no_store(self):

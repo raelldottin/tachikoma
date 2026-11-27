@@ -585,6 +585,49 @@ class TrainingStartGuardTests(unittest.TestCase):
         self.assertIs(ActionRunner("alpha", self.world, self.world.snapshot, self.journal).spec_for("add_training"),
                       get_spec("add_training"))
 
+    # Regression QA1-Q3: training-v1 (the catalog spec) keeps the lenient verdict; only the strict spec is strict
+    def test_training_v1_keeps_its_verdict_for_a_timer_that_ends_before_the_post_read(self):
+        def short_course(state):  # running after the read before the call, over by the read after it
+            end = training_fixtures.server_time(self.clock.now + timedelta(seconds=1))
+            state["crew"] = [training_fixtures.crew("101", training="5010", end=end)]
+            self.clock.now += timedelta(seconds=5)
+
+        self.world.effect = short_course
+        lenient = ActionRunner("alpha", self.world, self.world.snapshot, self.journal, clock=self.clock)
+        result = lenient.run("add_training", START, expected_cost=COST)
+        self.assertEqual(result.outcome, "verified", f"training-v1 lost its own verdict: {result.reason}")
+        self.world.state["crew"] = [training_fixtures.crew("101")]
+        strict = self.runner(guard=None).run("add_training", START, expected_cost=COST)
+        self.assertEqual(strict.outcome, "unknown", strict.reason)
+        self.assertIn("no running timer", strict.reason)
+
+    # Regression QA1-Q65: the requested course without a running timer at the post-read is never verified
+    # Verifies: S14-R5
+    def test_the_requested_course_without_a_running_timer_is_unknown_and_blocks(self):
+        def ended(state):
+            end = training_fixtures.server_time(self.clock.now - timedelta(minutes=1))
+            state["crew"] = [training_fixtures.crew("101", training="5010", end=end)]
+
+        self.world.effect = ended
+        result = self.runner().run("add_training", START, expected_cost=COST)
+        self.assertEqual(result.outcome, "unknown", f"verified without a running timer: {result.reason}")
+        self.assertIn("no running timer", result.reason)
+        self.assertEqual(self.attempt().state, UNRESOLVED)
+        self.assertEqual(self.store.load("alpha").blocking().intent_id, self.attempt().intent_id)
+
+    # Regression QA1-Q66: no course ID after the call is never taken for the requested course
+    # Verifies: S14-R5
+    def test_a_start_without_a_course_id_after_the_call_is_unknown_and_says_so(self):
+        def no_course(state):
+            end = training_fixtures.server_time(self.clock.now + timedelta(hours=1))
+            state["crew"] = [training_fixtures.crew("101", training="0", end=end)]
+
+        self.world.effect = no_course
+        result = self.runner().run("add_training", START, expected_cost=COST)
+        self.assertEqual(result.outcome, "unknown", result.reason)
+        self.assertIn("with no course ID", result.reason)
+        self.assertEqual(self.attempt().state, UNRESOLVED)
+
     def test_no_guard_no_specs_is_unchanged(self):
         with patch.object(runner_module, "write_training_intent") as write, \
                 patch.object(runner_module, "settle_training_intent") as settle:

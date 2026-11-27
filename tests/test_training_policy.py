@@ -834,7 +834,9 @@ class TrainingV2PlanTests(unittest.TestCase):
 
     def test_reserves_count(self):
         self.assertIn(V2_START, training_ids(v2_plan(mineral_reserve=500)))
-        self.assertTrue(reasons(v2_plan(mineral_reserve=501))["training 101"].startswith("insufficient_funds: "))
+        short = v2_plan(mineral_reserve=501)  # 499 spendable for a 500-mineral course: one short
+        self.assertNotIn(V2_START, training_ids(short))
+        self.assertTrue(reasons(short).get("training 101", "").startswith("insufficient_funds: "), reasons(short))
 
     def test_spend_cap_counts(self):
         self.assertIn(V2_START, training_ids(v2_plan(max_mineral_spend=500)))
@@ -1395,6 +1397,37 @@ class TrainingV2ExecuteGateTests(unittest.TestCase):
             reason = recheck(v2_snap(), start, cost)  # both slots used by earlier actions of this run
             self.assertIsNotNone(reason)
             self.assertTrue(reason.startswith("action_cap_reached: "), reason)
+
+    # Regression QA1-Q13: an earlier action of this run that spends more than planned shrinks the start's cap
+    # Verifies: S14-R4
+    def test_the_pre_send_recheck_charges_the_spend_of_earlier_actions_in_this_run(self):
+        import tempfile
+        from types import SimpleNamespace
+
+        from sdk.fleet.accounts import registry_from_dict
+        from sdk.fleet.factory import _ExecuteGateMixin
+        from sdk.journal import GameplayEvent, GameplayJournal
+        from sdk.policy import get_policy
+
+        profile = registry_from_dict({"version": 1, "accounts": [{
+            "alias": "alpha", "objective": "grow", "policy_id": "training-v2", "credentials_secret": "ALPHA",
+            "budgets": {"minerals": 600}}]}).get("alpha")
+        now = datetime.now(timezone.utc)
+        with tempfile.TemporaryDirectory() as directory:
+            journal = GameplayJournal(os.path.join(directory, "alpha.log"))
+            owner = SimpleNamespace(gate=execute_gate(), clock=lambda: now, period=timedelta(hours=24),
+                                    base_policy_config=PolicyConfig())
+            context = SimpleNamespace(journal=journal, design=design())
+            recheck = _ExecuteGateMixin._training_recheck(owner, profile, context, get_policy("training-v2"))
+            start, cost = V2_START[1], {"minerals": 500, "gas": 0}
+            self.assertIsNone(recheck(v2_snap(), start, cost))  # 600 left under the cap: the 500 course fits
+            # an earlier action of this run, planned cheaper, is charged 300 minerals after the closure was built
+            journal.append(GameplayEvent.create(account_alias="alpha", action_id="upgrade_room", started_at=now,
+                                                finished_at=now, outcome="verified", reason="ok", attempted=True,
+                                                cost={"minerals_delta": -300}))
+            reason = recheck(v2_snap(), start, cost)
+            self.assertIsNotNone(reason, "the recheck did not charge the spend of an earlier action of this run")
+            self.assertTrue(reason.startswith("cap_exceeded: "), reason)
 
     def test_guarded_plan_equals_the_policy_plan_when_everything_is_authorized(self):
         from sdk.policy import get_policy

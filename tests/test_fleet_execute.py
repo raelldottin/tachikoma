@@ -1959,7 +1959,9 @@ TRAINING_CODES = json.loads((REPO_ROOT / "tests/fixtures/training/workflow_bench
 
 
 def codes_in(text):
-    """The workflow vocabulary codes ``text`` names as whole words."""
+    """The workflow vocabulary codes ``text`` names as whole words; none for no text."""
+    if text is None:
+        return set()
     return {code for code in TRAINING_CODES
             if re.search(rf"(?<![A-Za-z0-9_]){re.escape(code)}(?![A-Za-z0-9_])", text)}
 
@@ -2215,6 +2217,18 @@ class TrainingProvisionTests(TrainingExecutionCase):
         self.assertEqual(code, 0, out + err)
         self.assertTrue(self.store_path.exists())
 
+    # Regression QA1-Q54: the operator commands never fall back to a default alias
+    def test_the_operator_commands_need_an_explicit_account(self):
+        self.write_registry(alias="primary")
+        for command in ("--fleet-provision-training", "--fleet-resolve-training"):
+            with self.subTest(command=command):
+                code, out, err = self.main(command, *COMMON_TRAINING_ARGS)
+                self.assertEqual(code, 2, out + err)
+                self.assertIn(f"{command} needs --registry PATH and --account ALIAS", err)
+                self.assertFalse((self.store_root / "primary.json").exists())
+                self.assertFalse(self.marker_path.exists())
+                self.assertEqual(self.fake.exchanges, [])
+
     def test_new_flag_guards(self):
         for argv in (
             ("--fleet-provision-training", *COMMON_TRAINING_ARGS),
@@ -2290,6 +2304,20 @@ class TrainingPreloginTests(TrainingExecutionCase):
         self.store_path.write_bytes(HARNESS_CORRUPTION)
         self.assert_refused_before_login("state_unreadable")
         self.assertEqual(self.store_path.read_bytes(), HARNESS_CORRUPTION)
+
+    # Regression QA1-Q52: a readable store that belongs to another game identity is refused before any login
+    # Verifies: S14-R6
+    def test_a_store_of_another_identity_is_state_unreadable_before_login(self):
+        self.provision()
+        self.assertEqual(self.dry_run()[0], 0)
+        payload = self.store()
+        payload["game_identity"] = game_identity_fingerprint("9999", TRAINING_SALT)
+        foreign = (json.dumps(payload) + "\n").encode()
+        self.store_path.write_bytes(foreign)
+        [line] = self.assert_refused_before_login("state_unreadable")
+        self.assertIn("account 'alpha'", line)
+        self.assertEqual(self.store_path.read_bytes(), foreign)
+        self.assertEqual(self.fake.ledger, [])
 
     # Verifies: S14-R6
     def test_a_serialized_legacy_account_is_legacy_run_not_skipped(self):
@@ -2857,6 +2885,84 @@ class TrainingStartTests(TrainingStartCase):
         self.assertEqual(self.latest_record()["accounts"][0]["status"], "stopped")
         self.assertEqual(self.store()["attempts"], [])
 
+    # Regression QA1-Q59: the store is checked against the dispatch's identity again under the lock
+    # Verifies: S14-R6
+    def test_a_store_swapped_for_another_identity_after_the_preflight_is_refused_under_the_lock(self):
+        from sdk.fleet.attempts import TrainingAttempts
+
+        self.ready()
+        payload = self.store()
+        payload["game_identity"] = game_identity_fingerprint("9999", TRAINING_SALT)
+        foreign = (json.dumps(payload) + "\n").encode()
+        real_preflight = TrainingAttempts.preflight
+
+        def swap_after_preflight(service, alias, declared_identity):
+            why = real_preflight(service, alias, declared_identity)
+            self.store_path.write_bytes(foreign)  # another process replaces the store after the pre-login check
+            return why
+
+        mark = self.mark()
+        with patch.object(TrainingAttempts, "preflight", swap_after_preflight):
+            code, out, err = self.execute()
+        self.assertEqual(code, 1, out + err)
+        [account] = self.latest_record()["accounts"]
+        self.assertEqual(account["status"], "error", account)
+        self.assertEqual(codes_in(account["reason"]), {"state_unreadable"}, account["reason"])
+        self.assertEqual(account["results"], [])
+        self.assertEqual(self.mutations_since(mark), [])
+        self.assertEqual(self.store_path.read_bytes(), foreign)
+        self.assert_lock_released()
+
+    # Regression QA1-Q2: training-v2 settles with the strict verdict, never the lenient training-v1 one
+    # Verifies: S14-R5
+    def test_a_timer_over_by_the_post_read_is_unknown_and_blocks_the_next_start(self):
+        self.ready()
+
+        def short_course(fake, exchange):  # applied, running after the runner's read, over by the post-read
+            cora = next(member for member in fake.state.characters if member.id == "1001")
+            cora.session.end = fake.now + timedelta(seconds=1)
+            fake.advance(seconds=5)
+
+        self.fake.on_reply("POST " + ADD_TRAINING, short_course)
+        mark = self.mark()
+        self.execute()
+        [start] = self.starts_since(mark)
+        self.assertTrue(start.applied)
+        [event] = [event for event in self.executed_events() if event.attempted]
+        self.assertEqual(event.outcome, "unknown", f"the lenient verdict settled the start: {event.reason}")
+        [attempt] = self.store()["attempts"]
+        self.assertEqual((attempt["state"], attempt["outcome"]), ("unresolved", "unknown"))
+        self.assert_lock_released()
+        self.add_gina()
+        self.assertEqual(self.dry_run()[0], 0)
+        mark = self.mark()
+        self.execute()
+        self.assertEqual(self.starts_since(mark), [])
+        self.assertIn("unresolved_attempt",
+                      set().union(*(codes_in(text) for text in self.record_texts(self.latest_record()))))
+
+    # Regression QA1-Q55: a refusal without a leading skip code prints no "Training starts" row
+    # Verifies: S14-R4
+    def test_a_refusal_without_a_skip_code_prints_no_training_starts_row(self):
+        self.ready()
+
+        def partial_roster(fake, exchange):  # after planning: the runner's roster read lists a member without an id
+            roster = fake._h_characters({}).replace("</Characters>", '<Character CharacterName="No Id"/></Characters>')
+            fake.fail(ROSTER, body=roster)
+
+        hook = self.fake.on_reply("GET /TrainingService/ListAllTrainingDesigns2", partial_roster, nth=3)
+        mark = self.mark()
+        code, out, err = self.execute()
+        self.assertEqual(hook.hits, 1)
+        self.assertEqual(self.starts_since(mark), [], out + err)
+        [event] = self.executed_events()
+        self.assertEqual((event.action_id, event.outcome, event.attempted), ("add_training", "skipped", False))
+        self.assertEqual(codes_in(event.reason.split(":", 1)[0]), set(), event.reason)  # free text, no code
+        rows = self.training_rows(out)
+        for row in rows:
+            cells = [cell.strip() for cell in row.strip("|").split("|")]
+            self.assertIn(cells[2], set(TRAINING_CODES), row)
+
     def test_forbidden_writes_never_happen(self):
         self.ready()
         self.execute()
@@ -2866,10 +2972,14 @@ class TrainingStartTests(TrainingStartCase):
         self.execute()
         heal()
         self.resolve()
-        self.assertEqual({entry.path for entry in self.fake.ledger}, {ADD_TRAINING})
-        for exchange in self.fake.exchanges:
+        for exchange in self.fake.exchanges:  # neither the path nor any request parameter names a forbidden write
             for word in ("UsingCredits", "Rush", "SpeedUp", "Prestige", "Move", "Assign"):
                 self.assertNotIn(word, exchange.path)
+                for name, value in (exchange.params or {}).items():
+                    self.assertNotIn(word, str(name), f"{exchange.method} {exchange.path} sends {name}={value}")
+                    if exchange.path == ADD_TRAINING:
+                        self.assertNotIn(word, str(value), f"{exchange.path} sends {name}={value}")
+        self.assertEqual({entry.path for entry in self.fake.ledger}, {ADD_TRAINING})
         self.assertTrue(all(entry.delta.get("starbux", 0) == 0 for entry in self.fake.ledger))
 
     def test_a_starbux_priced_course_is_never_started(self):
