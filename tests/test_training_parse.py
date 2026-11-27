@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import inspect
 import os
 import random
@@ -15,6 +16,29 @@ from unittest import mock
 import xmltodict
 
 from sdk.training.model import CrewState, FinishTraining, Skip, StartTraining, TrainingDesign, UseConsumable
+from sdk.training.model import (
+    CURRENCY_GAS,
+    CURRENCY_MINERAL,
+    CURRENCY_STARBUX,
+    PRICE_CURRENCIES,
+    PRICE_MALFORMED,
+    PRICE_OK,
+    PRICE_PREMIUM,
+    PRICE_STATUSES,
+    PRICE_UNAVAILABLE,
+    SESSION_ENDED_UNCLAIMED,
+    SESSION_FINISHED,
+    SESSION_NONE,
+    SESSION_PHASES,
+    SESSION_RUNNING,
+    SESSION_UNKNOWN,
+    SPENDABLE_CURRENCIES,
+    CourseObservation,
+    CoursePrice,
+    PrestigeRecipe,
+    RoomDesignObservation,
+    TrainingSession,
+)
 import sdk.training.parse as parse_module
 from sdk.training.parse import (
     build_context,
@@ -22,13 +46,18 @@ from sdk.training.parse import (
     classify_payloads,
     extract_collection,
     parse_consumable_designs,
+    parse_course_observations,
+    parse_course_price,
     parse_crew,
     parse_datetime,
     parse_items,
+    parse_prestige_recipes,
     parse_research_family_levels,
     parse_research_levels,
+    parse_room_design_observations,
     parse_rooms,
     parse_training_designs,
+    parse_training_session,
     research_course,
     to_int,
 )
@@ -1405,6 +1434,565 @@ class TestConsumableDesignFilter(unittest.TestCase):
             ]
         }
         self.assertEqual(dict(parse_consumable_designs(designs)), {("WPN", "Legendary"): 7, ("HP", "Hero"): 8})
+
+
+# --- SPEC-14 observations: course prices, course and room design facts, training sessions, Prestige recipes ---
+
+AWARE_END = datetime(2026, 3, 1, 13, 0, tzinfo=UTC)
+
+
+def sample_course(**overrides: object) -> CourseObservation:
+    fields: dict = dict(
+        design_id=40001,
+        name="Engineering Manual",
+        rank=1,
+        stat="RepairImprovement",
+        required_room_name="Academy",
+        required_room_level=2,
+        required_research_design_id=60001,
+        price=CoursePrice(PRICE_OK, CURRENCY_MINERAL, 500),
+    )
+    fields.update(overrides)
+    return CourseObservation(**fields)
+
+
+# Verifies: S14-R2
+class TestObservationModel(unittest.TestCase):
+    def test_constants_are_pinned(self) -> None:
+        self.assertEqual(
+            (PRICE_OK, PRICE_UNAVAILABLE, PRICE_MALFORMED, PRICE_PREMIUM), ("ok", "unavailable", "malformed", "premium")
+        )
+        self.assertEqual((CURRENCY_MINERAL, CURRENCY_GAS, CURRENCY_STARBUX), ("mineral", "gas", "starbux"))
+        self.assertEqual(
+            (SESSION_NONE, SESSION_RUNNING, SESSION_ENDED_UNCLAIMED, SESSION_FINISHED, SESSION_UNKNOWN),
+            ("none", "running", "ended_unclaimed", "finished", "unknown"),
+        )
+        self.assertEqual(PRICE_STATUSES, frozenset({"ok", "unavailable", "malformed", "premium"}))
+        self.assertEqual(SPENDABLE_CURRENCIES, frozenset({"mineral", "gas"}))
+        self.assertEqual(PRICE_CURRENCIES, frozenset({"mineral", "gas", "starbux"}))
+        self.assertEqual(SESSION_PHASES, frozenset({"none", "running", "ended_unclaimed", "finished", "unknown"}))
+
+    def test_observations_are_frozen(self) -> None:
+        values = (
+            (CoursePrice(PRICE_UNAVAILABLE), "status"),
+            (sample_course(), "price"),
+            (RoomDesignObservation(11, "Academy", 2, 2, None), "level"),
+            (TrainingSession(None, None, SESSION_NONE), "phase"),
+            (PrestigeRecipe(30001, 30001, 30002), "to_design_id"),
+        )
+        for value, attribute in values:
+            with self.subTest(type=type(value).__name__), self.assertRaises(dataclasses.FrozenInstanceError):
+                setattr(value, attribute, None)
+
+    def test_unknown_price_status_is_refused(self) -> None:
+        with self.assertRaisesRegex(ValueError, "unknown price status"):
+            CoursePrice("free")
+
+    def test_an_ok_price_needs_a_spendable_currency_and_a_whole_amount(self) -> None:
+        for currency, amount in ((CURRENCY_STARBUX, 5), (None, 5), (CURRENCY_MINERAL, None), (CURRENCY_MINERAL, -1)):
+            with self.subTest(currency=currency, amount=amount), self.assertRaisesRegex(ValueError, "ok price"):
+                CoursePrice(PRICE_OK, currency, amount)
+        for currency in (CURRENCY_MINERAL, CURRENCY_GAS):
+            with self.subTest(currency=currency):
+                zero = CoursePrice(PRICE_OK, currency, 0)
+                self.assertEqual((zero.currency, zero.amount), (currency, 0))
+                self.assertTrue(zero.usable)
+
+    def test_only_an_ok_price_is_usable(self) -> None:
+        self.assertTrue(CoursePrice(PRICE_OK, CURRENCY_GAS, 300).usable)
+        for price in (
+            CoursePrice(PRICE_UNAVAILABLE),
+            CoursePrice(PRICE_MALFORMED),
+            CoursePrice(PRICE_PREMIUM, CURRENCY_STARBUX, 5),
+            CoursePrice(PRICE_PREMIUM, CURRENCY_STARBUX, 0),
+        ):
+            with self.subTest(price=price):
+                self.assertFalse(price.usable)
+
+    def test_a_price_amount_is_none_or_a_whole_int(self) -> None:
+        for amount in (True, False, 5.0, "5"):
+            for status, currency in ((PRICE_OK, CURRENCY_MINERAL), (PRICE_PREMIUM, CURRENCY_STARBUX)):
+                with self.subTest(status=status, amount=amount), self.assertRaisesRegex(
+                    ValueError, "price amount must be None or an int"
+                ):
+                    CoursePrice(status, currency, amount)  # type: ignore[arg-type]
+
+    def test_an_unreadable_price_carries_no_currency_or_amount(self) -> None:
+        for status in (PRICE_UNAVAILABLE, PRICE_MALFORMED):
+            for currency, amount in ((CURRENCY_MINERAL, None), (None, 0), (CURRENCY_GAS, 500)):
+                with self.subTest(status=status, currency=currency, amount=amount), self.assertRaisesRegex(
+                    ValueError, "price carries no currency or amount"
+                ):
+                    CoursePrice(status, currency, amount)
+            with self.subTest(status=status):
+                self.assertEqual((CoursePrice(status).currency, CoursePrice(status).amount), (None, None))
+
+    def test_a_premium_price_needs_starbux_and_a_whole_amount(self) -> None:
+        for currency, amount in ((CURRENCY_MINERAL, 5), (None, 5), (CURRENCY_STARBUX, None), (CURRENCY_STARBUX, -1)):
+            with self.subTest(currency=currency, amount=amount), self.assertRaisesRegex(ValueError, "premium price"):
+                CoursePrice(PRICE_PREMIUM, currency, amount)
+        zero = CoursePrice(PRICE_PREMIUM, CURRENCY_STARBUX, 0)
+        self.assertEqual((zero.currency, zero.amount), (CURRENCY_STARBUX, 0))
+
+    def test_training_session_validates_phase_and_end(self) -> None:
+        with self.assertRaisesRegex(ValueError, "unknown session phase"):
+            TrainingSession(7, AWARE_END, "started")
+        with self.assertRaisesRegex(ValueError, "end must be a timezone-aware datetime"):
+            TrainingSession(7, datetime(2026, 3, 1, 13, 0), SESSION_RUNNING)
+        for phase in (SESSION_NONE, SESSION_UNKNOWN):
+            with self.subTest(phase=phase):
+                self.assertEqual(TrainingSession(None, None, phase).phase, phase)
+        for phase in (SESSION_RUNNING, SESSION_ENDED_UNCLAIMED, SESSION_FINISHED):
+            with self.subTest(phase=phase):
+                self.assertEqual(TrainingSession(None, AWARE_END, phase).phase, phase)
+        self.assertEqual(TrainingSession(7, AWARE_END, SESSION_RUNNING).end, AWARE_END)
+
+    def test_a_dated_phase_needs_an_end(self) -> None:
+        for phase in (SESSION_RUNNING, SESSION_ENDED_UNCLAIMED, SESSION_FINISHED):
+            with self.subTest(phase=phase), self.assertRaisesRegex(ValueError, f"a {phase} session needs an end"):
+                TrainingSession(7, None, phase)
+
+    def test_no_training_and_an_unknown_session_carry_no_end(self) -> None:
+        for phase in (SESSION_NONE, SESSION_UNKNOWN):
+            with self.subTest(phase=phase), self.assertRaisesRegex(ValueError, f"a {phase} session carries no end"):
+                TrainingSession(None, AWARE_END, phase)
+        with self.assertRaisesRegex(ValueError, "no training carries no course"):
+            TrainingSession(7, None, SESSION_NONE)
+        self.assertEqual(TrainingSession(7, None, SESSION_UNKNOWN).course_id, 7)
+
+    def test_a_course_id_is_none_or_a_positive_int(self) -> None:
+        for course in (0, -1, True, "7", 7.0):
+            with self.subTest(course=course), self.assertRaisesRegex(
+                ValueError, "course_id must be None or a positive int"
+            ):
+                TrainingSession(course, AWARE_END, SESSION_RUNNING)  # type: ignore[arg-type]
+        self.assertEqual(TrainingSession(1, AWARE_END, SESSION_RUNNING).course_id, 1)
+
+
+# Verifies: S14-R2
+class TestCoursePrice(unittest.TestCase):
+    def test_no_price_is_unavailable(self) -> None:
+        for value in (None, "", "   "):
+            with self.subTest(value=value):
+                self.assertEqual(parse_course_price(value), CoursePrice(PRICE_UNAVAILABLE, None, None))
+
+    def test_mineral_and_gas_prices_are_ok(self) -> None:
+        self.assertEqual(parse_course_price("mineral:500"), CoursePrice(PRICE_OK, CURRENCY_MINERAL, 500))
+        self.assertEqual(parse_course_price("gas:300"), CoursePrice(PRICE_OK, CURRENCY_GAS, 300))
+
+    def test_an_observed_zero_price_is_ok_and_usable(self) -> None:
+        price = parse_course_price("mineral:0")
+        self.assertEqual(price, CoursePrice(PRICE_OK, CURRENCY_MINERAL, 0))
+        self.assertTrue(price.usable)
+
+    def test_a_starbux_price_is_premium_and_never_usable(self) -> None:
+        self.assertEqual(parse_course_price("starbux:5"), CoursePrice(PRICE_PREMIUM, CURRENCY_STARBUX, 5))
+        zero = parse_course_price("Starbux:0")
+        self.assertEqual(zero, CoursePrice(PRICE_PREMIUM, CURRENCY_STARBUX, 0))
+        self.assertFalse(zero.usable)
+
+    def test_case_and_surrounding_whitespace_are_tolerated(self) -> None:
+        for value in (" Mineral : 500 ", "MINERAL:500", "mineral:0500", "\tmineral:500\n"):
+            with self.subTest(value=value):
+                self.assertEqual(parse_course_price(value), CoursePrice(PRICE_OK, CURRENCY_MINERAL, 500))
+
+    def test_anything_that_could_change_the_amount_is_malformed(self) -> None:
+        values = (
+            "mineral:5O0",
+            "mineral:",
+            ":500",
+            "mineral:-5",
+            "mineral:+5",
+            "mineral:5.0",
+            "mineral:1_000",
+            "mineral:\u0665\u0660\u0660",
+            "mineral500",
+            "mineral:500:1",
+            "diamond:500",
+            "mineral :5 0",
+            "mineral:" + "9" * 5000,
+            500,
+            {},
+            [],
+        )
+        for value in values:
+            with self.subTest(value=value if not isinstance(value, str) else value[:20]):
+                self.assertEqual(parse_course_price(value), CoursePrice(PRICE_MALFORMED, None, None))
+
+    def test_a_malformed_starbux_amount_is_malformed_not_premium(self) -> None:
+        self.assertEqual(parse_course_price("starbux:5O0"), CoursePrice(PRICE_MALFORMED, None, None))
+
+
+COURSE_RECORD = {
+    "@TrainingDesignId": "40001",
+    "@TrainingName": "Engineering Manual",
+    "@RepairChance": "100",
+    "@Rank": "1",
+    "@RequiredRoomType": "Academy",
+    "@RequiredRoomLevel": "2",
+    "@RequiredResearchDesignId": "60001",
+    "@CostString": "mineral:500",
+}
+
+
+def course_record(**overrides: object) -> dict:
+    record: dict[str, object] = dict(COURSE_RECORD)
+    for key, value in overrides.items():
+        if value is None:
+            record.pop("@" + key, None)
+        else:
+            record["@" + key] = value
+    return record
+
+
+# Verifies: S14-R2
+class TestCourseObservations(unittest.TestCase):
+    def test_no_records_give_no_courses(self) -> None:
+        for raw in (None, {}, "junk", {"TrainingDesigns": None}, {"TrainingDesigns": {"TrainingDesign": "x"}}):
+            with self.subTest(raw=raw):
+                self.assertEqual(parse_course_observations(raw), ())
+
+    def test_one_fake_shaped_record_becomes_one_course(self) -> None:
+        raw = {"TrainingDesigns": {"TrainingDesign": COURSE_RECORD}}
+        self.assertEqual(parse_course_observations(raw), (sample_course(),))
+
+    def test_payload_order_first_duplicate_and_positive_ids(self) -> None:
+        records = [
+            course_record(TrainingDesignId="40003", TrainingName="Third"),
+            course_record(TrainingDesignId="40001", TrainingName="First"),
+            course_record(TrainingDesignId="40003", TrainingName="Duplicate"),
+            course_record(TrainingDesignId="0"),
+            course_record(TrainingDesignId="-4"),
+            course_record(TrainingDesignId="x"),
+            course_record(TrainingDesignId=None),
+        ]
+        courses = parse_course_observations({"TrainingDesign": records})
+        self.assertEqual([(course.design_id, course.name) for course in courses], [(40003, "Third"), (40001, "First")])
+
+    def test_an_observed_zero_stays_zero(self) -> None:
+        raw = {"TrainingDesign": course_record(Rank="0", RequiredRoomLevel="0", RequiredResearchDesignId="0")}
+        (course,) = parse_course_observations(raw)
+        self.assertEqual((course.rank, course.required_room_level, course.required_research_design_id), (0, 0, 0))
+
+    def test_missing_attributes_are_unknown(self) -> None:
+        record = {"@TrainingDesignId": "40001"}
+        (course,) = parse_course_observations({"TrainingDesign": record})
+        self.assertEqual(
+            course,
+            CourseObservation(40001, "", None, None, None, None, None, CoursePrice(PRICE_UNAVAILABLE)),
+        )
+
+    def test_malformed_numbers_are_unknown_never_zero(self) -> None:
+        for value in ("x", "-1", "2.5", "\u0662", "9" * 5000, ""):
+            with self.subTest(value=value[:12]):
+                record = course_record(Rank=value, RequiredRoomLevel=value, RequiredResearchDesignId=value)
+                (course,) = parse_course_observations({"TrainingDesign": record})
+                self.assertEqual((course.rank, course.required_room_level, course.required_research_design_id), (None,) * 3)
+
+    def test_required_room_name_is_stripped_and_keeps_its_case(self) -> None:
+        cases = ((" Academy ", "Academy"), ("gym", "gym"))
+        for value, expected in cases:
+            with self.subTest(value=value):
+                (course,) = parse_course_observations({"TrainingDesign": course_record(RequiredRoomType=value)})
+                self.assertEqual(course.required_room_name, expected)
+
+    def test_a_blank_room_requirement_is_no_requirement_and_a_missing_one_is_unknown(self) -> None:
+        cases = (("", ""), ("   ", ""), (None, None), ({}, None), (5, None))
+        for value, expected in cases:
+            with self.subTest(value=value):
+                (course,) = parse_course_observations({"TrainingDesign": course_record(RequiredRoomType=value)})
+                self.assertEqual(course.required_room_name, expected)
+
+    def test_stat_is_the_highest_positive_chance(self) -> None:
+        record = course_record(RepairChance="20", PilotChance="60", HpChance="0")
+        (course,) = parse_course_observations({"TrainingDesign": record})
+        self.assertEqual(course.stat, "PilotImprovement")
+        (course,) = parse_course_observations({"TrainingDesign": course_record(RepairChance=None)})
+        self.assertIsNone(course.stat)
+
+    def test_real_xml_keeps_malformed_and_unavailable_prices_apart(self) -> None:
+        xml = (
+            "<TrainingService><ListAllTrainingDesigns><TrainingDesigns>"
+            '<TrainingDesign TrainingDesignId="40001" TrainingName="Engineering Manual" RepairChance="100" Rank="1"'
+            ' RequiredRoomType="Academy" RequiredRoomLevel="2" RequiredResearchDesignId="60001"'
+            ' CostString="mineral:5O0"/>'
+            '<TrainingDesign TrainingDesignId="40002" TrainingName="Free Weights" HpChance="100" Rank="1"/>'
+            "</TrainingDesigns></ListAllTrainingDesigns></TrainingService>"
+        )
+        first, second = parse_course_observations(xmltodict.parse(xml, xml_attribs=True))
+        self.assertEqual(first, sample_course(price=CoursePrice(PRICE_MALFORMED)))
+        self.assertEqual(
+            second,
+            CourseObservation(40002, "Free Weights", 1, "HpImprovement", None, None, None, CoursePrice(PRICE_UNAVAILABLE)),
+        )
+
+
+# Verifies: S14-R2
+class TestRoomDesignObservations(unittest.TestCase):
+    def test_no_records_give_an_empty_mapping(self) -> None:
+        for raw in (None, {}, "junk", {"RoomDesigns": None}):
+            with self.subTest(raw=raw):
+                self.assertEqual(dict(parse_room_design_observations(raw)), {})
+
+    def test_records_are_keyed_by_positive_id_and_the_first_wins(self) -> None:
+        single = {"RoomDesign": {"@RoomDesignId": "11", "@RoomName": "Academy", "@Level": "2", "@Capacity": "2"}}
+        self.assertEqual(dict(parse_room_design_observations(single)), {11: RoomDesignObservation(11, "Academy", 2, 2, None)})
+        records = [
+            {"@RoomDesignId": "12", "@RoomName": "Gym", "@Level": "1", "@Capacity": "1"},
+            {"@RoomDesignId": "11", "@RoomName": "Academy", "@Level": "2", "@Capacity": "2"},
+            {"@RoomDesignId": "12", "@RoomName": "Duplicate", "@Level": "9", "@Capacity": "9"},
+            {"@RoomDesignId": "0", "@RoomName": "Zero"},
+            {"@RoomDesignId": "-3", "@RoomName": "Negative"},
+            {"@RoomName": "No id"},
+        ]
+        designs = parse_room_design_observations({"RoomDesigns": {"RoomDesign": records}})
+        self.assertEqual(
+            dict(designs),
+            {12: RoomDesignObservation(12, "Gym", 1, 1, None), 11: RoomDesignObservation(11, "Academy", 2, 2, None)},
+        )
+
+    def test_an_observed_zero_capacity_stays_zero(self) -> None:
+        raw = {"RoomDesign": {"@RoomDesignId": "11", "@RoomName": "Academy", "@Level": "0", "@Capacity": "0"}}
+        self.assertEqual(parse_room_design_observations(raw)[11], RoomDesignObservation(11, "Academy", 0, 0, None))
+
+    def test_missing_or_malformed_level_and_capacity_are_unknown(self) -> None:
+        raw = {"RoomDesign": {"@RoomDesignId": "11", "@RoomName": "Academy", "@Level": "2"}}
+        self.assertEqual(parse_room_design_observations(raw)[11], RoomDesignObservation(11, "Academy", 2, None, None))
+        for value in ("x", "-1", "1.5", ""):
+            with self.subTest(value=value):
+                record = {"@RoomDesignId": "11", "@RoomName": "Academy", "@Level": value, "@Capacity": value}
+                self.assertEqual(
+                    parse_room_design_observations({"RoomDesign": record})[11],
+                    RoomDesignObservation(11, "Academy", None, None, None),
+                )
+
+    def test_name_is_stripped_and_missing_is_empty(self) -> None:
+        raw = {"RoomDesign": [{"@RoomDesignId": "11", "@RoomName": "  Academy "}, {"@RoomDesignId": "12"}]}
+        designs = parse_room_design_observations(raw)
+        self.assertEqual((designs[11].name, designs[12].name), ("Academy", ""))
+
+    def test_room_type_is_stripped_blank_is_empty_and_missing_is_unknown(self) -> None:
+        records = [
+            {"@RoomDesignId": "11", "@RoomName": "Academy", "@RoomType": " Training "},
+            {"@RoomDesignId": "12", "@RoomType": "  "},
+            {"@RoomDesignId": "13"},
+            {"@RoomDesignId": "14", "@RoomType": {}},
+        ]
+        designs = parse_room_design_observations({"RoomDesigns": {"RoomDesign": records}})
+        self.assertEqual(designs[11], RoomDesignObservation(11, "Academy", None, None, "Training"))
+        self.assertEqual([designs[key].room_type for key in (12, 13, 14)], ["", None, None])
+
+    def test_the_result_is_read_only(self) -> None:
+        designs = parse_room_design_observations({"RoomDesign": {"@RoomDesignId": "11"}})
+        with self.assertRaises(TypeError):
+            designs[12] = RoomDesignObservation(12, "", None, None, None)  # type: ignore[index]
+
+
+def server_time(moment: datetime) -> str:
+    return moment.strftime("%Y-%m-%dT%H:%M:%S")
+
+
+# Verifies: S14-R2, S14-R5
+class TestTrainingSession(unittest.TestCase):
+    at = FIXTURE_NOW
+    past = server_time(FIXTURE_NOW - timedelta(seconds=1))
+    future = server_time(FIXTURE_NOW + timedelta(seconds=1))
+
+    def session(self, course: object, end: object) -> TrainingSession:
+        return parse_training_session(course, end, self.at)
+
+    def test_an_empty_end_is_no_training_and_drops_the_course(self) -> None:
+        for course, end in ((None, ""), ("0", ""), ("7", ""), (7, ""), ("", "")):
+            with self.subTest(course=course, end=end):
+                self.assertEqual(self.session(course, end), TrainingSession(None, None, SESSION_NONE))
+
+    def test_a_missing_end_is_unknown(self) -> None:
+        # Unlike an empty @TrainingEndDate (no training), a missing one says nothing about the training.
+        for course in (None, "0", "7", ""):
+            with self.subTest(course=course):
+                self.assertEqual(self.session(course, None), TrainingSession(None, None, SESSION_UNKNOWN))
+
+    def test_a_future_end_is_running(self) -> None:
+        end = FIXTURE_NOW + timedelta(seconds=1)
+        self.assertEqual(self.session("7", self.future), TrainingSession(7, end, SESSION_RUNNING))
+        self.assertEqual(self.session("1", self.future), TrainingSession(1, end, SESSION_RUNNING))
+        self.assertEqual(self.session(7, self.future), TrainingSession(7, end, SESSION_RUNNING))
+        for course in ("0", "abc", None, "", 0):
+            with self.subTest(course=course):
+                self.assertEqual(self.session(course, self.future), TrainingSession(None, end, SESSION_RUNNING))
+        self.assertIsNotNone(getattr(self.session("7", self.future).end, "tzinfo", None))
+
+    def test_an_end_at_or_before_the_observation_is_over(self) -> None:
+        at_text, past = server_time(FIXTURE_NOW), FIXTURE_NOW - timedelta(seconds=1)
+        cases = (
+            (("7", at_text), TrainingSession(7, FIXTURE_NOW, SESSION_ENDED_UNCLAIMED)),
+            (("7", self.past), TrainingSession(7, past, SESSION_ENDED_UNCLAIMED)),
+            (("1", self.past), TrainingSession(1, past, SESSION_ENDED_UNCLAIMED)),
+            (("0", at_text), TrainingSession(None, FIXTURE_NOW, SESSION_FINISHED)),
+            (("00", self.past), TrainingSession(None, past, SESSION_FINISHED)),
+            ((" 0 ", "2020-01-01T00:00:00"), TrainingSession(None, datetime(2020, 1, 1, tzinfo=UTC), SESSION_FINISHED)),
+            ((0, self.past), TrainingSession(None, past, SESSION_FINISHED)),
+            ((7, self.past), TrainingSession(7, past, SESSION_ENDED_UNCLAIMED)),
+        )
+        for (course, end), expected in cases:
+            with self.subTest(course=course, end=end):
+                self.assertEqual(self.session(course, end), expected)
+
+    def test_a_missing_or_blank_course_with_an_ended_timer_is_unknown(self) -> None:
+        # Only an explicit zero says "no course": a missing or blank course could be an ended course not yet claimed.
+        for course in (None, "", "   "):
+            for end in (self.past, server_time(FIXTURE_NOW), "2020-01-01T00:00:00"):
+                with self.subTest(course=course, end=end):
+                    self.assertEqual(self.session(course, end), TrainingSession(None, None, SESSION_UNKNOWN))
+
+    def test_a_malformed_course_with_an_ended_timer_is_unknown(self) -> None:
+        for course in ("abc", "-7", " ", "7.0", True, False, -7, 7.0):
+            with self.subTest(course=course):
+                self.assertEqual(self.session(course, self.past), TrainingSession(None, None, SESSION_UNKNOWN))
+
+    def test_a_whole_number_is_ascii_digits_or_a_non_bool_int(self) -> None:
+        whole = parse_module._whole_or_none
+        cases = (
+            ("7", 7), (" 07 ", 7), ("0", 0), (0, 0), (7, 7), (10**30, 10**30),
+            (True, None), (False, None), (-1, None), (7.0, None), ("-1", None), ("", None), (None, None),
+            ("9" * 5000, None), ("٧", None),
+        )
+        for value, expected in cases:
+            with self.subTest(value=str(value)[:12]):
+                self.assertEqual(whole(value), expected)
+
+    def test_an_unreadable_end_is_unknown(self) -> None:
+        for end in ("soon", "   ", {}, 0, "2026-03-01 13:00:00"):
+            with self.subTest(end=end):
+                self.assertEqual(self.session("7", end), TrainingSession(7, None, SESSION_UNKNOWN))
+        self.assertEqual(self.session("abc", "soon"), TrainingSession(None, None, SESSION_UNKNOWN))
+        self.assertEqual(self.session("0", "soon"), TrainingSession(None, None, SESSION_UNKNOWN))
+
+    def test_an_offset_end_is_compared_in_utc(self) -> None:
+        # 13:00+02:00 is 11:00 UTC: an hour before the observation, so the training is over, not running.
+        session = self.session("7", "2026-03-01T13:00:00+02:00")
+        self.assertEqual(session, TrainingSession(7, datetime(2026, 3, 1, 11, 0, tzinfo=UTC), SESSION_ENDED_UNCLAIMED))
+        session = self.session("7", "2026-03-01T13:00:00-02:00")
+        self.assertEqual(session.phase, SESSION_RUNNING)
+
+    def test_a_naive_observation_time_is_refused(self) -> None:
+        for end in (None, self.future):
+            with self.subTest(end=end), self.assertRaisesRegex(ValueError, "at must be a timezone-aware datetime"):
+                parse_training_session("7", end, datetime(2026, 3, 1, 12, 0))
+
+
+def prestige(first: object, second: object, target: object) -> dict:
+    record = {"@CharacterDesignId1": first, "@CharacterDesignId2": second, "@ToCharacterDesignId": target}
+    return {key: value for key, value in record.items() if value is not None}
+
+
+# Verifies: S14-R2
+class TestPrestigeRecipes(unittest.TestCase):
+    def test_no_payload_gives_no_recipes(self) -> None:
+        for raw in (None, {}, "junk", {"Prestiges": None}):
+            with self.subTest(raw=raw):
+                self.assertEqual(parse_prestige_recipes(raw), ())
+
+    def test_fake_xml_keeps_a_two_copy_recipe(self) -> None:
+        xml = (
+            "<CharacterService><PrestigeCharacterTo><Prestiges>"
+            '<Prestige CharacterDesignId1="30001" CharacterDesignId2="30001" ToCharacterDesignId="30002"/>'
+            "</Prestiges></PrestigeCharacterTo></CharacterService>"
+        )
+        self.assertEqual(
+            parse_prestige_recipes(xmltodict.parse(xml, xml_attribs=True)), (PrestigeRecipe(30001, 30001, 30002),)
+        )
+
+    def test_payload_order_is_kept_and_identical_rows_both_count(self) -> None:
+        rows = [prestige("30003", "30004", "30009"), prestige("30001", "30002", "30008"), prestige("30001", "30002", "30008")]
+        self.assertEqual(
+            parse_prestige_recipes({"Prestiges": {"Prestige": rows}}),
+            (PrestigeRecipe(30003, 30004, 30009), PrestigeRecipe(30001, 30002, 30008), PrestigeRecipe(30001, 30002, 30008)),
+        )
+
+    def test_a_record_without_three_positive_ids_is_skipped(self) -> None:
+        bad = (None, "0", "x", "-5", "2.5", "")
+        rows = []
+        for value in bad:
+            rows += [prestige(value, "30002", "30008"), prestige("30001", value, "30008"), prestige("30001", "30002", value)]
+        rows.append(prestige("30001", "30002", "30008"))
+        self.assertEqual(parse_prestige_recipes({"Prestige": rows}), (PrestigeRecipe(30001, 30002, 30008),))
+
+
+OBSERVATION_SCALARS = FUZZ_SCALARS + (
+    "mineral:500",
+    "gas:0",
+    "starbux:5",
+    " Mineral : 0500 ",
+    "mineral:5O0",
+    "mineral:",
+    ":",
+    "starbux:-1",
+    "\u0665",
+    "2026-03-01T13:00:00",
+    "2026-03-01T13:00:00+02:00",
+    "soon",
+)
+OBSERVATION_RECORDS = {
+    "TrainingDesign": (
+        "@TrainingDesignId", "@TrainingName", "@Rank", "@RequiredRoomType", "@RequiredRoomLevel",
+        "@RequiredResearchDesignId", "@CostString", "@RepairChance", "@HpChance",
+    ),
+    "RoomDesign": ("@RoomDesignId", "@RoomName", "@Level", "@Capacity", "@RoomType"),
+    "Prestige": ("@CharacterDesignId1", "@CharacterDesignId2", "@ToCharacterDesignId"),
+}
+
+
+def observation_value(rng: random.Random) -> object:
+    return rng.choice(OBSERVATION_SCALARS) if rng.random() < 0.85 else garbage(rng, 3)
+
+
+def observation_payload(rng: random.Random, item_key: str) -> object:
+    """An envelope of records over ``item_key``'s attributes, or plain garbage."""
+    if rng.random() < 0.15:
+        return garbage(rng)
+    attrs = OBSERVATION_RECORDS[item_key]
+    records = [
+        {key: observation_value(rng) for key in rng.sample(attrs, rng.randint(0, len(attrs)))}
+        for _ in range(rng.randint(0, 4))
+    ]
+    value: object = records[0] if len(records) == 1 and rng.random() < 0.5 else records
+    return {item_key + "s": {item_key: value}}
+
+
+def optional(value: object, kind: type) -> bool:
+    return value is None or (isinstance(value, kind) and not isinstance(value, bool))
+
+
+# Verifies: S14-R2
+class TestObservationFuzz(unittest.TestCase):
+    def test_observation_parsers_never_raise_and_keep_their_types(self) -> None:
+        for seed in range(300):
+            rng = random.Random(seed)
+            with self.subTest(seed=seed):
+                price = parse_course_price(observation_value(rng))
+                self.assertIn(price.status, PRICE_STATUSES)
+                self.assertTrue(optional(price.amount, int))
+                for course in parse_course_observations(observation_payload(rng, "TrainingDesign")):
+                    self.assertIsInstance(course.design_id, int)
+                    self.assertGreater(course.design_id, 0)
+                    self.assertIsInstance(course.name, str)
+                    for number in (course.rank, course.required_room_level, course.required_research_design_id):
+                        self.assertTrue(optional(number, int) and (number is None or number >= 0))
+                    self.assertTrue(optional(course.required_room_name, str))
+                    self.assertIn(course.price.status, PRICE_STATUSES)
+                designs = parse_room_design_observations(observation_payload(rng, "RoomDesign"))
+                for design_id, design in designs.items():
+                    self.assertEqual(design.design_id, design_id)
+                    self.assertTrue(optional(design.level, int) and optional(design.capacity, int))
+                    self.assertTrue(optional(design.room_type, str))
+                for recipe in parse_prestige_recipes(observation_payload(rng, "Prestige")):
+                    ids = (recipe.first_design_id, recipe.second_design_id, recipe.to_design_id)
+                    self.assertTrue(all(isinstance(value, int) and value > 0 for value in ids))
+                session = parse_training_session(observation_value(rng), observation_value(rng), FIXTURE_NOW)
+                self.assertIn(session.phase, SESSION_PHASES)
+                self.assertTrue(optional(session.course_id, int) and (session.course_id or 1) > 0)
+                self.assertTrue(session.end is None or session.end.utcoffset() == timedelta(0))
 
 
 if __name__ == "__main__":
