@@ -739,18 +739,19 @@ class Client(object):
     def getShipByUserId(self, userId=0):
         url = f"https://api.pixelstarships.com/ShipService/GetShipByUserId?userId={userId if userId else self.user.id}&accessToken={self.accessToken}&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
         r = self.request(url, "GET")
-        if r:
-            self.shipByUserId = xmltodict.parse(r.content, xml_attribs=True)
-            ship = self._shipRecord()
-            if ship is None:
-                logging.error("Ship data not available.")
-                return False
-            # A new ship can return an empty <Rooms/> or <Researches/>, which parses to
-            # None: treat it as no records instead of failing the whole read.
-            self.rooms = (ship.get("Rooms") or {}).get("Room") or []
-            self.researches = (ship.get("Researches") or {}).get("Research") or []
-            return True
-        return False
+        if not r or "errorMessage" in r.text or "@errorMessage" in r.text:
+            logging.error(f"[{self.info['@Name']}] Failed to get ship data.")
+            return False
+        self.shipByUserId = xmltodict.parse(r.content, xml_attribs=True)
+        ship = self._shipRecord()
+        if ship is None:
+            logging.error("Ship data not available.")
+            return False
+        # A new ship can return an empty <Rooms/> or <Researches/>, which parses to
+        # None: treat it as no records instead of failing the whole read.
+        self.rooms = (ship.get("Rooms") or {}).get("Room") or []
+        self.researches = (ship.get("Researches") or {}).get("Research") or []
+        return True
 
     def listAchievementsOfAUser(self):
         url = f"https://api.pixelstarships.com/AchievementService/ListAchievementsOfAUser?accessToken={self.accessToken}&clientDateTime={DotNet.validDateTime():%Y-%m-%dT%H:%M:%S}"
