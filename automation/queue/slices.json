@@ -2826,7 +2826,7 @@
     {
       "slice_id": "spec14-crew-policy",
       "title": "Assign crew roles from the roster, choose role-matched courses and preview them with --crew-plan",
-      "status": "queued",
+      "status": "done",
       "priority": 500,
       "domain": "crew-training",
       "allowed_paths": [
@@ -2861,6 +2861,41 @@
       ],
       "max_files_changed": 20,
       "notes": "Implements S14-R1, S14-R2, S14-R3 (SPEC-14). Read docs/specs/SPEC-14-automated-crew-training.md, the frozen harness contract in scripts/training_workflow_benchmark.py (items 5 and 6: crew-plan and Prestige line formats, skip codes, vocabulary) and the hand-off section of #301. Add training-v2 to the policy registry on top of training-v1: deterministic role assignment from observed stats (distinct repair, shields and weapons specialists first, ties by character instance id, unobserved stats unknown, role_uncovered reported), course choice by assigned stat, room, room level, research, fatigue, training points and observed price, and read-only --crew-plan with Prestige routes resolved by design id (duplicates counted). Previews make no gameplay writes. Paid execution, the attempt store, the lock, --fleet-provision-training, --fleet-resolve-training and the pre-login refusals belong to spec14-training-execution: do not add them, not even as stubs. Keep training-v1, baseline-v1 and the legacy daily run unchanged, and keep the training benchmark and blocking mutation gate green."
+    },
+
+    {
+      "slice_id": "spec14-training-execution",
+      "title": "Execute at most one verified training-v2 start per account under the attempt store and account lock",
+      "status": "queued",
+      "priority": 500,
+      "domain": "crew-training",
+      "allowed_paths": [
+        "run.py",
+        "sdk/execution/runner.py",
+        "sdk/scheduler/daily.py",
+        "sdk/fleet/factory.py",
+        "sdk/fleet/authorization.py",
+        "sdk/fleet/attempts.py",
+        "README.template",
+        "README.md",
+        "docs/baseline/capability-inventory.json",
+        "tests/test_action_runner.py",
+        "tests/test_daily_scheduler.py",
+        "tests/test_fleet_execute.py",
+        "tests/test_fleet_authorization.py",
+        "tests/test_training_attempts.py",
+        "tests/test_training_policy.py"
+      ],
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ],
+      "depends_on": [
+        "spec14-crew-policy"
+      ],
+      "max_files_changed": 15,
+      "notes": "Implements S14-R4, S14-R5, S14-R6 (SPEC-14). Read docs/specs/SPEC-14-automated-crew-training.md (S14-R4 to R6, design constraints, S14-AC3 and S14-AC4), the frozen harness contract in scripts/training_workflow_benchmark.py and the hand-off section of #304. Replace training_v2_execute_hold in sdk/fleet/factory.py with real execution: at most one training-v2 start per account per run, under an injected attempt store and an account lock keyed to the verified account identity across processes, taken before any budget-affecting write and held for the whole execute dispatch. Write intent atomically before sending; on persistence failure send nothing; keep unresolved intents blocking later starts until --fleet-resolve-training settles them under the same lock. Provision the store explicitly with --fleet-provision-training and refuse missing or unreadable established state. Swap add_training's postcondition to training_start_verified for training-v2 only. Add the pre-login refusal lines of --fleet-execute and the legacy_run_not_skipped refusal (S14-R6). No Starbux spend, no crew relocation, no Prestige ingredient spend. Keep training-v1, baseline-v1 and the legacy daily run unchanged, and keep the training benchmark and blocking mutation gate green."
     }
   ]
 }
