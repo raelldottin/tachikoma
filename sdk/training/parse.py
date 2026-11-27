@@ -523,3 +523,174 @@ def _by_id(raw: object, item_key: str, id_key: str) -> dict[int, dict]:
         if record_id > 0:
             records.setdefault(record_id, record)
     return records
+
+
+# --- SPEC-14 observations (S14-R2) -----------------------------------------------------------------------------
+# Imported here, not at the top: automation/mutation/config.json pins two equivalent mutants of this file by line
+# number (94 and 99), so everything above this section must stay byte for byte as it is.
+from sdk.training.model import (
+    CURRENCY_STARBUX,
+    PRICE_CURRENCIES,
+    PRICE_MALFORMED,
+    PRICE_OK,
+    PRICE_PREMIUM,
+    PRICE_UNAVAILABLE,
+    SESSION_ENDED_UNCLAIMED,
+    SESSION_FINISHED,
+    SESSION_NONE,
+    SESSION_RUNNING,
+    SESSION_UNKNOWN,
+    CourseObservation,
+    CoursePrice,
+    PrestigeRecipe,
+    RoomDesignObservation,
+    TrainingSession,
+)
+
+# A whole number: ASCII digits only, no sign, no fraction, no separator. Unlike ``to_int``, nothing malformed reads
+# as 0: an observation must keep "not readable" (None) apart from an observed zero.
+_WHOLE_RE = re.compile(r"[0-9]+")
+
+
+def _whole_or_none(value: object) -> int | None:
+    """A whole number from a non-bool int >= 0 or a string of ASCII digits (surrounding whitespace ignored).
+
+    Anything else (a bool, a negative int, a float, other text) -> None.
+    """
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value if value >= 0 else None
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if _WHOLE_RE.fullmatch(text) is None:
+        return None
+    try:
+        return int(text)
+    except ValueError:  # beyond int()'s digit limit
+        return None
+
+
+def _stripped_or_none(value: object) -> str | None:
+    """Reported text, stripped ("" when blank); None when it is not reported as text."""
+    return value.strip() if isinstance(value, str) else None
+
+
+def parse_course_price(value: object) -> CoursePrice:
+    """A TrainingDesign @CostString ("<currency>:<amount>") -> a classified ``CoursePrice``.
+
+    Missing or blank -> unavailable. Mineral or gas with a whole amount -> ok (an observed "mineral:0" stays ok, 0).
+    Starbux with a whole amount -> premium. Case and whitespace around the currency and the amount are tolerated, as
+    are leading zeros; anything that could change the amount (a sign, a fraction, a separator, a Unicode digit, a
+    second ":", a letter) or an unknown currency -> malformed. The amount is read before the currency is classed, so
+    a malformed Starbux price is malformed, not premium.
+    """
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return CoursePrice(PRICE_UNAVAILABLE)
+    if not isinstance(value, str):
+        return CoursePrice(PRICE_MALFORMED)
+    head, _, tail = value.strip().partition(":")
+    currency = head.strip().lower()
+    amount = _whole_or_none(tail)
+    if currency not in PRICE_CURRENCIES or amount is None:
+        return CoursePrice(PRICE_MALFORMED)
+    return CoursePrice(PRICE_PREMIUM if currency == CURRENCY_STARBUX else PRICE_OK, currency, amount)
+
+
+def parse_course_observations(raw: object) -> tuple[CourseObservation, ...]:
+    """TrainingDesign records -> ``CourseObservation``s, in payload order (the first record of a repeated id wins).
+
+    Unlike ``parse_training_designs``, nothing defaults: @Rank, @RequiredRoomLevel and @RequiredResearchDesignId are
+    whole numbers ("0" stays 0: no minimum, no research) or None when missing or malformed. @RequiredRoomType is kept
+    as stripped text: None when the record does not report it (unknown), "" when it reports a blank requirement
+    (explicitly no room requirement). The price comes from @CostString (``parse_course_price``).
+    """
+    return tuple(
+        CourseObservation(
+            design_id=design_id,
+            name=_text(record.get("@TrainingName")),
+            rank=_whole_or_none(record.get("@Rank")),
+            stat=_design_stat(record),
+            required_room_name=_stripped_or_none(record.get("@RequiredRoomType")),
+            required_room_level=_whole_or_none(record.get("@RequiredRoomLevel")),
+            required_research_design_id=_whole_or_none(record.get("@RequiredResearchDesignId")),
+            price=parse_course_price(record.get("@CostString")),
+        )
+        for design_id, record in _by_id(raw, "TrainingDesign", "@TrainingDesignId").items()
+    )
+
+
+def parse_room_design_observations(raw: object) -> Mapping[int, RoomDesignObservation]:
+    """RoomDesign id -> ``RoomDesignObservation`` (read-only; the first record of a repeated id wins).
+
+    @Level and @Capacity are whole numbers ("0" stays 0) or None when missing or malformed; @RoomName is stripped.
+    @RoomType is stripped text ("" when blank) or None when the record does not report it.
+    """
+    return frozen_mapping(
+        {
+            design_id: RoomDesignObservation(
+                design_id=design_id,
+                name=_text(record.get("@RoomName")),
+                level=_whole_or_none(record.get("@Level")),
+                capacity=_whole_or_none(record.get("@Capacity")),
+                room_type=_stripped_or_none(record.get("@RoomType")),
+            )
+            for design_id, record in _by_id(raw, "RoomDesign", "@RoomDesignId").items()
+        }
+    )
+
+
+def parse_training_session(course: object, end: object, at: datetime) -> TrainingSession:
+    """A crew member's @TrainingDesignId and @TrainingEndDate, judged at the aware observation time ``at``.
+
+    | End                       | Course                               | Phase           | course_id | end    |
+    |---------------------------|--------------------------------------|-----------------|-----------|--------|
+    | missing (None)            | -                                    | unknown         | None      | None   |
+    | ""                        | -                                    | none            | None      | None   |
+    | unreadable (incl. blank)  | -                                    | unknown         | positive  | None   |
+    | after ``at``              | -                                    | running         | positive  | the end|
+    | at or before ``at``       | a positive id                        | ended_unclaimed | the id    | the end|
+    | at or before ``at``       | an explicit zero ("0", "00", 0)      | finished        | None      | the end|
+    | at or before ``at``       | missing, blank or malformed          | unknown         | None      | None   |
+
+    "positive" means the course id when it is a positive whole number (``_whole_or_none``), else None. The end is
+    aware UTC. Only an explicit zero says "no course": a missing or blank course with an ended timer could be an
+    ended course not yet claimed, so it fails closed. A naive ``at`` raises ValueError, whatever the record holds.
+
+    Unlike ``parse_crew`` (where a missing or whitespace-only end reads as idle), a missing end is unknown here and
+    only an exactly empty end is "none": a whitespace-only end is unreadable, as it is for the catalog's training
+    phase.
+    """
+    if at.utcoffset() is None:
+        raise ValueError("at must be a timezone-aware datetime")
+    if end is None:
+        return TrainingSession(None, None, SESSION_UNKNOWN)
+    if end == "":
+        return TrainingSession(None, None, SESSION_NONE)
+    whole = _whole_or_none(course)
+    course_id = whole or None
+    parsed = parse_datetime(end)
+    if parsed is None:
+        return TrainingSession(course_id, None, SESSION_UNKNOWN)
+    if parsed > at:
+        return TrainingSession(course_id, parsed, SESSION_RUNNING)
+    if course_id is not None:
+        return TrainingSession(course_id, parsed, SESSION_ENDED_UNCLAIMED)
+    if whole == 0:
+        return TrainingSession(None, parsed, SESSION_FINISHED)
+    return TrainingSession(None, None, SESSION_UNKNOWN)
+
+
+def parse_prestige_recipes(raw: object) -> tuple[PrestigeRecipe, ...]:
+    """Prestige records -> ``PrestigeRecipe``s, in payload order; identical rows are all kept.
+
+    A record needs three positive whole design ids (@CharacterDesignId1, @CharacterDesignId2, @ToCharacterDesignId);
+    any other record is skipped. Both ingredients may be the same design (a two-copy recipe).
+    """
+    recipes: list[PrestigeRecipe] = []
+    for record in extract_collection(raw, "Prestige"):
+        first = _whole_or_none(record.get("@CharacterDesignId1"))
+        second = _whole_or_none(record.get("@CharacterDesignId2"))
+        target = _whole_or_none(record.get("@ToCharacterDesignId"))
+        if first and second and target:
+            recipes.append(PrestigeRecipe(first, second, target))
+    return tuple(recipes)

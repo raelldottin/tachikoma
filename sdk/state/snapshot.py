@@ -22,6 +22,15 @@ from enum import Enum
 from typing import Any, Iterable, Mapping, Optional
 
 from sdk.redaction import redact_secrets
+from sdk.training.model import SESSION_RUNNING, SESSION_UNKNOWN, CourseObservation, TrainingSession
+from sdk.training.parse import (
+    PAYLOAD_ERROR,
+    _whole_or_none,
+    classify_payload,
+    parse_course_observations,
+    parse_room_design_observations,
+    parse_training_session,
+)
 
 ACCOUNT_ALIAS_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 SECTIONS = ("profile", "ship", "resources", "crew", "rooms", "research", "inventory")
@@ -129,6 +138,11 @@ class CrewMember:
     # (listAllCharacterDesigns2), which the snapshot reads do not fetch, so it is read only if the character record
     # itself carries @TrainingCapacity; in practice it is None.
     training_capacity: Optional[int] = None
+    # @TrainingDesignId exactly as reported, stripped (S14-R2): None when the record does not carry it, "" when blank,
+    # "0" for an explicit zero. ``training_design_id`` folds all three into None; a training session must not (an
+    # ended timer with a missing course is unknown, with a zero course finished). Not kept in baselines, so it is left
+    # out of equality.
+    training_design_reported: Optional[str] = field(default=None, compare=False)
 
     @property
     def training_active(self) -> Optional[bool]:
@@ -160,6 +174,13 @@ class Room:
     # so they are left out of equality: a snapshot loaded from a baseline still equals the one it was written from.
     row: Optional[int] = field(default=None, compare=False)
     column: Optional[int] = field(default=None, compare=False)
+    # The room design's @RoomName, @Level and @Capacity (S14-R2), joined from a RoomDesign payload when the builder
+    # was given one; None when not supplied or not reported. Left out of equality and baselines like row/column.
+    design_name: Optional[str] = field(default=None, compare=False)
+    level: Optional[int] = field(default=None, compare=False)
+    capacity: Optional[int] = field(default=None, compare=False)
+    # The room design's @RoomType, stripped ("" when blank); None when not supplied or not reported.
+    room_type: Optional[str] = field(default=None, compare=False)
 
     @property
     def upgrading(self) -> bool:
@@ -202,6 +223,10 @@ class AccountSnapshot:
     # does not carry one, carries "0" (no upgrade under way) or carries the ship's own hull design (a leftover of a
     # finished upgrade). Read only by hull upgrades, and left out of equality and baselines like ship_design_id.
     upgrade_ship_design_id: Optional[str] = field(default=None, compare=False)
+    # The TrainingDesign courses (S14-R2): None when no design payload was supplied or it was unreadable, () when
+    # it was observed empty. Not kept in baselines or ``to_dict``, so it is left out of equality. This is the price
+    # and eligibility source for training-v2; ``DesignData`` remains the source for training-v1.
+    courses: Optional[tuple[CourseObservation, ...]] = field(default=None, compare=False)
 
     def section(self, name: str) -> Completeness:
         return self.completeness.get(name, Completeness.MISSING)
@@ -211,6 +236,44 @@ class AccountSnapshot:
 
     def crew_member(self, character_id: str) -> Optional[CrewMember]:
         return next((member for member in self.crew if member.character_id == character_id), None)
+
+    def course(self, design_id: int | str) -> Optional[CourseObservation]:
+        """The observed course with this TrainingDesign id (an int, or a string of digits); None when the id is not a
+        whole number, the course is absent, or no courses were observed."""
+        wanted = _whole_or_none(design_id)
+        if wanted is None:
+            return None
+        return next((course for course in self.courses or () if course.design_id == wanted), None)
+
+    def training_session(self, character_id: str) -> Optional[TrainingSession]:
+        """The crew member's training judged at ``observed_at``; None when the member is absent.
+
+        A record without @TrainingEndDate (training not observed), or a snapshot whose ``observed_at`` is not
+        timezone-aware, is "unknown"; otherwise ``sdk.training.parse.parse_training_session`` decides from the
+        reported course (``training_design_reported``, or ``training_design_id`` for a member loaded from a baseline)
+        and end (an observed empty end is no training).
+        """
+        member = self.crew_member(character_id)
+        if member is None:
+            return None
+        if not member.training_observed or self.observed_at.utcoffset() is None:
+            return TrainingSession(None, None, SESSION_UNKNOWN)
+        reported = member.training_design_reported
+        course = reported if reported is not None else member.training_design_id
+        end = member.training_end if member.training_end is not None else ""
+        return parse_training_session(course, end, self.observed_at)
+
+    def running_sessions(self, room_id: str) -> Optional[int]:
+        """How many crew in the room have a running training session at ``observed_at`` (0 is observed).
+
+        None unless the crew section is complete and every crew member in the room has a known session phase.
+        """
+        if self.section("crew") is not Completeness.COMPLETE:
+            return None
+        phases = [self.training_session(member.character_id) for member in self.crew if member.room_id == room_id]
+        if any(session is None or session.phase == SESSION_UNKNOWN for session in phases):
+            return None
+        return sum(1 for session in phases if session is not None and session.phase == SESSION_RUNNING)
 
     def research_state(self, design_id: str) -> Optional[str]:
         entry = next((item for item in self.research if item.design_id == design_id), None)
@@ -287,6 +350,7 @@ def _training_design_id(value: Any) -> Optional[str]:
 
 def _crew_member(identifier: str, record: Mapping[str, Any]) -> CrewMember:
     stats = {name: _int_or_none(record.get(attribute)) for name, attribute in TRAINING_STAT_ATTRIBUTES}
+    reported = _clean_text(record.get("@TrainingDesignId"), "crew.training_design_id")
     return CrewMember(
         character_id=identifier,
         design_id=_clean_text(record.get("@CharacterDesignId"), "crew.design_id"),
@@ -298,8 +362,16 @@ def _crew_member(identifier: str, record: Mapping[str, Any]) -> CrewMember:
         training_design_id=_training_design_id(record.get("@TrainingDesignId")),
         training_end=_clean_text(record.get("@TrainingEndDate"), "crew.training_end") or None,
         training_capacity=_int_or_none(record.get("@TrainingCapacity")),
+        training_design_reported=reported.strip() if reported is not None else None,
         **stats,
     )
+
+
+def _design_payload(raw: Any, item_key: str) -> Any:
+    """A raw design payload, or None when it was not supplied or is an error (``classify_payload``)."""
+    if raw is None or classify_payload(raw, item_key) == PAYLOAD_ERROR:
+        return None
+    return raw
 
 
 def _records(value: Any) -> Optional[list[Mapping[str, Any]]]:
@@ -351,6 +423,8 @@ def build_snapshot(
     research: Any = None,
     inventory: Any = None,
     game_identity: Optional[str] = None,
+    training_designs: Any = None,
+    room_designs: Any = None,
 ) -> AccountSnapshot:
     """Build a snapshot from already-parsed client responses.
 
@@ -361,6 +435,13 @@ def build_snapshot(
     including account e-mail, tokens and device keys, are never copied.
     ``game_identity`` must be a ``gid1-`` fingerprint or ``None``; a raw user
     id is refused.
+
+    ``training_designs`` and ``room_designs`` are optional raw (xmltodict)
+    TrainingDesign and RoomDesign payloads. The first gives ``courses`` (the
+    price and eligibility source for training-v2; ``DesignData`` remains the
+    training-v1 source); the second adds each room's design name, level,
+    capacity and type. An error payload observes nothing (None), never an
+    empty list.
     """
     if not ACCOUNT_ALIAS_PATTERN.match(account_alias or ""):
         raise SnapshotInputError("account_alias must be a lowercase alias, not an e-mail or display name")
@@ -406,19 +487,27 @@ def build_snapshot(
             Completeness.COMPLETE if all(value is not None for value in known) else Completeness.PARTIAL
         )
 
-    crew_records = builder.parse_section("crew", crew, "@CharacterId", _crew_member)
-    room_records = builder.parse_section(
-        "rooms",
-        rooms,
-        "@RoomId",
-        lambda identifier, record: Room(
+    training_payload = _design_payload(training_designs, "TrainingDesign")
+    courses = parse_course_observations(training_payload) if training_payload is not None else None
+    room_payload = _design_payload(room_designs, "RoomDesign")
+    designs = parse_room_design_observations(room_payload) if room_payload is not None else {}
+
+    def make_room(identifier: str, record: Mapping[str, Any]) -> Room:
+        design = designs.get(_int_or_none(record.get("@RoomDesignId")))
+        return Room(
             room_id=identifier,
             design_id=_clean_text(record.get("@RoomDesignId"), "rooms.design_id"),
             status=_clean_text(record.get("@RoomStatus"), "rooms.status"),
             row=_int_or_none(record.get("@Row")),
             column=_int_or_none(record.get("@Column")),
-        ),
-    )
+            design_name=(_clean_text(design.name, "rooms.design_name") or None) if design is not None else None,
+            level=design.level if design is not None else None,
+            capacity=design.capacity if design is not None else None,
+            room_type=_clean_text(design.room_type, "rooms.room_type") if design is not None else None,
+        )
+
+    crew_records = builder.parse_section("crew", crew, "@CharacterId", _crew_member)
+    room_records = builder.parse_section("rooms", rooms, "@RoomId", make_room)
     research_records = builder.parse_section(
         "research",
         research,
@@ -453,6 +542,7 @@ def build_snapshot(
         game_identity=game_identity,
         ship_design_id=ship_design_id,
         upgrade_ship_design_id=upgrade_ship_design_id,
+        courses=courses,
     )
 
 

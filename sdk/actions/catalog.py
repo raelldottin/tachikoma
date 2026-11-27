@@ -17,6 +17,8 @@ from typing import Any, Callable, Mapping, Optional
 
 from sdk.state import AccountSnapshot, Completeness, CrewMember, SnapshotDelta, diff_snapshots
 from sdk.state.profile_reads import ATTACKER, BattleRecord, int_or_none, matching_battle, parse_battles
+from sdk.training.model import SESSION_FINISHED, SESSION_NONE, SESSION_RUNNING
+from sdk.training.parse import _whole_or_none
 
 
 class Idempotency(str, Enum):
@@ -392,6 +394,64 @@ def _training_started(delta, before, after, params):
             f"{character_id} started a training ending {new.training_end}, but its design was not reported",
         )
     return ReconciliationStatus.CONTRADICTED, f"{character_id} started different training {new.training_design_id}"
+
+
+def training_start_verified(delta, before, after, params):
+    """The strict S14-R5 start verdict: verified only for an observed idle -> requested course with a running timer.
+
+    Not wired into the catalog. ``add_training`` keeps ``_training_started`` for training-v1; training-v2
+    reconciliation must use this one through
+    ``dataclasses.replace(get_spec("add_training"), postcondition=training_start_verified)``.
+
+    Phases come from each snapshot's own ``training_session`` (S14-R2), judged at that snapshot's observation time;
+    an observation time that is not timezone-aware gives an unknown phase. Stat gains are never read: completion
+    and stat gains are separate observations. The first matching row wins.
+
+    | #  | Observed                                                                | Status        |
+    |----|-------------------------------------------------------------------------|---------------|
+    | 1  | crew not observed on both sides                                         | unknown       |
+    | 2  | member gone after                                                       | contradicted  |
+    | 3  | member absent before, or training unobserved on either side             | unknown       |
+    | 4  | same (design, end) as before: nothing this call did                     | not observed  |
+    | 5  | before phase not none or finished: not observed idle before the call    | unknown       |
+    | 6  | after reports a positive course ID other than the requested one,        |               |
+    |    | whatever its timer (none, unreadable or ended)                          | contradicted  |
+    | 7  | after reports no course ID (missing, blank, zero or malformed)          | unknown       |
+    | 8  | after phase not running (no, unreadable or ended timer at the post-read)| unknown       |
+    | 9  | idle before, the requested course running after                         | verified      |
+    """
+    character_id = str(params["character_id"])
+    requested = str(params["training_design_id"]).strip()
+    if "crew" in delta.unknown_sections:
+        return ReconciliationStatus.UNKNOWN, "crew was not observed on both sides"
+    old, new = before.crew_member(character_id), after.crew_member(character_id)
+    if new is None:
+        return ReconciliationStatus.CONTRADICTED, f"crew member {character_id} disappeared"
+    if old is None or not (old.training_observed and new.training_observed):
+        return ReconciliationStatus.UNKNOWN, f"training state of {character_id} was not observed on both sides"
+    if (old.training_design_id, old.training_end) == (new.training_design_id, new.training_end):
+        return (
+            ReconciliationStatus.NOT_OBSERVED,
+            f"training of {character_id} unchanged ({new.training_design_id} until {new.training_end})",
+        )
+    if before.training_session(character_id).phase not in (SESSION_NONE, SESSION_FINISHED):
+        return ReconciliationStatus.UNKNOWN, f"{character_id} was not observed idle before the call"
+    reported = new.training_design_reported if new.training_design_reported is not None else new.training_design_id
+    course_id = _whole_or_none(reported) or None
+    if course_id is not None and course_id != _whole_or_none(requested):
+        return ReconciliationStatus.CONTRADICTED, f"{character_id} started different training {course_id}"
+    if course_id is None:
+        return (
+            ReconciliationStatus.UNKNOWN,
+            f"{character_id} shows a training ending {new.training_end} with no course ID",
+        )
+    session = after.training_session(character_id)
+    if session.phase != SESSION_RUNNING or session.course_id != course_id:
+        return (
+            ReconciliationStatus.UNKNOWN,
+            f"{character_id} shows course {requested} but no running timer at the post-read ({new.training_end})",
+        )
+    return ReconciliationStatus.VERIFIED, f"{character_id} is training {requested} until {new.training_end}"
 
 
 def _training_finished(delta, before, after, params):

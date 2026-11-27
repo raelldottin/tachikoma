@@ -8,6 +8,7 @@ from pathlib import Path
 
 from sdk.state import READ_METHODS, ClientSnapshotProvider, Completeness, SnapshotInputError
 from sdk.state.client_provider import item_resource_kinds
+from sdk.training.model import CoursePrice
 from tests.synthetic_fixtures import SYNTHETIC_ACCESS_TOKEN, SYNTHETIC_EMAIL
 
 REPO_ROOT = Path(os.path.abspath(__file__)).parents[1]
@@ -240,6 +241,107 @@ class ClientSnapshotProviderTests(unittest.TestCase):
         provider, _, client = provide()
         provider()
         self.assertEqual(client.calls, list(READ_METHODS) * 2)
+
+
+TRAINING_DESIGNS = {
+    "TrainingService": {
+        "ListAllTrainingDesigns": {
+            "TrainingDesigns": {
+                "TrainingDesign": {"@TrainingDesignId": "40001", "@TrainingName": "Engineering Manual",
+                                   "@RepairChance": "100", "@RequiredRoomLevel": "2", "@CostString": "gas:300"}
+            }
+        }
+    }
+}
+ROOM_DESIGNS = {
+    "RoomService": {
+        "ListRoomDesigns": {
+            "RoomDesigns": {"RoomDesign": {"@RoomDesignId": "11", "@RoomName": "Academy", "@Level": "2", "@Capacity": "2"}}
+        }
+    }
+}
+
+
+def typed_items(*items):
+    return {"ItemService": {"ListItemsOfAShip": {"Items": {"Item": list(items)}}}}
+
+
+# Verifies: S14-R2
+class DesignObservationTests(unittest.TestCase):
+    def test_without_design_payloads_nothing_is_observed(self):
+        provider, snapshot, client = provide()
+        self.assertIsNone(snapshot.courses)
+        self.assertIsNone(snapshot.room("r1").level)
+        self.assertEqual(client.calls, list(READ_METHODS))
+        self.assertEqual(provider.failed_reads, ())
+
+    def test_supplied_design_payloads_are_joined_without_extra_reads(self):
+        provider, snapshot, client = provide(design_reader=lambda: (TRAINING_DESIGNS, ROOM_DESIGNS))
+        self.assertEqual(client.calls, list(READ_METHODS))
+        self.assertEqual(provider.failed_reads, ())
+        self.assertEqual(snapshot.course(40001).price, CoursePrice("ok", "gas", 300))
+        self.assertEqual(snapshot.course(40001).required_room_level, 2)
+        room = snapshot.room("r1")
+        self.assertEqual((room.design_name, room.level, room.capacity), ("Academy", 2, 2))
+        self.assertEqual(snapshot, provide()[1])
+
+    def test_every_snapshot_reads_the_designs_afresh(self):
+        prices = iter(("gas:500", "gas:1100"))
+        reads = []
+
+        def reader():
+            reads.append(len(reads))
+            record = {"@TrainingDesignId": "40001", "@RepairChance": "100", "@CostString": next(prices)}
+            return {"TrainingDesigns": {"TrainingDesign": record}}, ROOM_DESIGNS
+
+        provider, first, client = provide(design_reader=reader)
+        self.assertEqual(len(reads), 1)
+        second = provider()
+        self.assertEqual(len(reads), 2)
+        self.assertEqual(
+            [snapshot.course(40001).price.amount for snapshot in (first, second)],
+            [500, 1100],
+        )
+        self.assertEqual(client.calls, list(READ_METHODS) * 2)
+        self.assertEqual(provider.failed_reads, ())
+
+    def test_a_failing_design_reader_observes_nothing_and_never_raises(self):
+        def reader():
+            raise RuntimeError("design read failed")
+
+        provider, snapshot, client = provide(design_reader=reader)
+        self.assertIsNone(snapshot.courses)
+        self.assertEqual((snapshot.room("r1").design_name, snapshot.room("r1").level), (None, None))
+        self.assertEqual(provider.failed_reads, ())
+        self.assertEqual(client.calls, list(READ_METHODS))
+        self.assertEqual(snapshot, provide()[1])
+
+    def test_static_design_payloads_are_no_longer_accepted(self):
+        for name in ("training_designs", "room_designs"):
+            with self.subTest(name=name), self.assertRaises(TypeError):
+                ClientSnapshotProvider(FakeClient(), "alpha", clock=lambda: T0, **{name: TRAINING_DESIGNS})
+
+    def test_an_unreadable_design_payload_is_not_a_failed_read(self):
+        error = {"TrainingService": {"@errorMessage": "Failed"}}
+        provider, snapshot, _ = provide(design_reader=lambda: (error, None))
+        self.assertIsNone(snapshot.courses)
+        self.assertEqual(provider.failed_reads, ())
+
+    def test_fake_shaped_typed_resource_items_read_an_observed_zero(self):
+        items = typed_items(
+            {"@ItemId": "9990001", "@ItemDesignId": "9990901", "@Type": "Mineral", "@Quantity": "0"},
+            {"@ItemId": "9990002", "@ItemDesignId": "9990902", "@Type": "Gas", "@Quantity": "0"},
+        )
+        _, snapshot, _ = provide(FakeClient(items=items))
+        self.assertEqual((snapshot.resources.minerals, snapshot.resources.gas), (0, 0))
+
+    def test_a_missing_or_malformed_resource_quantity_is_unknown(self):
+        items = typed_items(
+            {"@ItemId": "9990001", "@ItemDesignId": "9990901", "@Type": "Mineral"},
+            {"@ItemId": "9990002", "@ItemDesignId": "9990902", "@Type": "Gas", "@Quantity": "5O0"},
+        )
+        _, snapshot, _ = provide(FakeClient(items=items))
+        self.assertEqual((snapshot.resources.minerals, snapshot.resources.gas), (None, None))
 
 
 if __name__ == "__main__":
