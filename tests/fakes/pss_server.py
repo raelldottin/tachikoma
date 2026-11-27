@@ -1175,15 +1175,12 @@ class FakePss:
         return envelope("ShipService", "GetShipByUserId", el("Ship", attrs, rooms, researches))
 
     def _h_speed_up_ship_construction(self, p: dict) -> str:
-        self._check_user(p)
         return envelope("ShipService", "SpeedUpShipConstructionUsingBoostGauge", result="Success")
 
     def _h_speed_up_research(self, p: dict) -> str:
-        self._check_user(p)
         return envelope("ResearchService", "SpeedUpResearchUsingBoostGauge", result="Success")
 
     def _h_speed_up_room_construction(self, p: dict) -> str:
-        self._check_user(p)
         return envelope("RoomService", "SpeedUpRoomConstructionUsingBoostGauge", result="Success")
 
     def _h_rooms(self, p: dict) -> str:
