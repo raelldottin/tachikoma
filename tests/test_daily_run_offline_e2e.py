@@ -126,7 +126,7 @@ KNOWN_DEFECTS = {
 # Client methods run.main() calls on the daily path, in run.py's order (run.py ~L1745-1876).
 DAILY_STEPS = (
     "heartbeat", "purchaseScorchedPodIfAffordable", "grabFlyingStarbux", "collectTaskReward", "getCrewInfo",
-    "upgradeResearches", "upgradeRooms", "collectDailyReward", "collectAvailableMarkers",
+    "upgradeResearches", "upgradeRooms", "speedUpBoostGauge", "collectDailyReward", "collectAvailableMarkers",
     "collectMiningDronesWithTravel", "listActiveMarketplaceMessages", "getMessages", "infoBux", "manageTraining",
     "analyzeShipLayout", "getResourceTotals", "upgradeCharacters",
 )
@@ -452,6 +452,11 @@ EXPECTED_STEP_PATHS = {  # manageTraining is owned by EXPECTED_TRAINING_PATHS
                      "POST /RoomService/UpgradeRoom2",  # room 104 -> design 51
                      "POST /RoomService/CollectAllResources",
                      "GET /ShipService/GetShipByUserId"),  # pass 2 requests nothing -> break
+    "speedUpBoostGauge": ("POST /ResearchService/SpeedUpResearchUsingBoostGauge",
+                          "POST /RoomService/SpeedUpRoomConstructionUsingBoostGauge",
+                          "POST /RoomService/SpeedUpRoomConstructionUsingBoostGauge",
+                          "POST /ShipService/SpeedUpShipConstructionUsingBoostGauge",
+                          "GET /ShipService/GetShipByUserId"),
     "collectDailyReward": ("POST /UserService/CollectDailyReward2",),
     "collectAvailableMarkers": ("GET /GalaxyService/ListStarSystemMarkersAndUserMarkers",
                                 "POST /GalaxyService/CollectMarker2"),  # user marker 9004 (M1 fixed in #276)
@@ -489,6 +494,11 @@ EXPECTED_STEP_MUTATIONS = {  # manageTraining is owned by EXPECTED_TRAINING
     "upgradeRooms": (
         ("POST", "/RoomService/UpgradeRoom2", {"roomId": "104", "upgradeRoomDesignId": "51", "accessToken": T}),
         COLLECT),
+    "speedUpBoostGauge": (
+        ("POST", "/ResearchService/SpeedUpResearchUsingBoostGauge", {"researchId": "10", "clientDateTime": N, "accessToken": T}),
+        ("POST", "/RoomService/SpeedUpRoomConstructionUsingBoostGauge", {"roomId": "104", "clientDateTime": N, "accessToken": T}),
+        ("POST", "/RoomService/SpeedUpRoomConstructionUsingBoostGauge", {"roomId": "105", "clientDateTime": N, "accessToken": T}),
+        ("POST", "/ShipService/SpeedUpShipConstructionUsingBoostGauge", {"shipId": "800000501", "clientDateTime": N, "accessToken": T})),
     "collectDailyReward": (
         ("POST", "/UserService/CollectDailyReward2", {"dailyRewardStatus": "Box", "argument": "3", "accessToken": T}),),
     "collectAvailableMarkers": (
@@ -777,6 +787,8 @@ FATAL_STEP_FAULTS: tuple[tuple[str, str, dict[str, Any], str], ...] = (
 # Later steps whose requests legitimately differ from the baseline after a fault (state or cache the fault changed).
 DIFFERS_AFTER_FAULT = {
     "getCrewInfo": {"manageTraining"},  # refetches the characters getCrewInfo failed to load
+    "upgradeResearches": {"speedUpBoostGauge"},  # research state changes affect which boosts run
+    "upgradeRooms": {"speedUpBoostGauge"},  # room/ship state changes affect which boosts run
 }
 
 
@@ -1283,7 +1295,10 @@ class MinimalWorldTests(NeedsHealthyBaseline):
     def test_minimal_world_run_exits_zero_and_only_collects_resources(self):
         daily = run_daily(FakePss(minimal_world()))
         self.assertEqual(daily.code, 0, daily.log[-2000:])
-        self.assertEqual(daily.mutations_by_step(), {"upgradeResearches": (COLLECT,)})  # sent before any research
+        self.assertEqual(daily.mutations_by_step(), {
+            "upgradeResearches": (COLLECT,),
+            "speedUpBoostGauge": (("POST", "/ShipService/SpeedUpShipConstructionUsingBoostGauge",
+                                   {"shipId": "800000501", "clientDateTime": N, "accessToken": T}),)})
         assert_every_step_ran(self, daily)
         assert_protocol_clean(self, daily.fake)
 
@@ -1325,9 +1340,13 @@ class MultiRunTests(NeedsHealthyBaseline):
 
         first = run_daily(fake)  # 72 / 100 = 72 %: S-T1, Bench Press (ungated), with no FinishTraining first (D3)
         self.assertEqual(training_of(first), [("AddTraining", crew.id, "3", None)])
-        self.assertEqual(first.mutations_by_step(), {"upgradeResearches": (COLLECT,), "manageTraining": (
-            ("POST", "/TrainingService/AddTraining", {"trainingDesignId": "3", "characterId": crew.id,
-                                                      "trainingStartDate": N, "accessToken": T}),)})
+        self.assertEqual(first.mutations_by_step(), {
+            "upgradeResearches": (COLLECT,),
+            "speedUpBoostGauge": (("POST", "/ShipService/SpeedUpShipConstructionUsingBoostGauge",
+                                   {"shipId": "800000501", "clientDateTime": N, "accessToken": T}),),
+            "manageTraining": (("POST", "/TrainingService/AddTraining",
+                                {"trainingDesignId": "3", "characterId": crew.id,
+                                 "trainingStartDate": N, "accessToken": T}),)})
         self.assertIn("] Starting training Bench Press for Galactic Succubus in Galaxy Gym with 72% training complete\n",
                       first.log)
         self.assertIn("training: started=1 finished=0 consumables=0 skipped=0 failed=0\n", first.log)

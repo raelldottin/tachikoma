@@ -582,7 +582,7 @@
       "tests": []
     },
     {
-      "name": "rushResearchOrConstruction",
+      "name": "speedUpBoostGauge",
       "pillar": "B",
       "kind": "mutating",
       "evidence": "untested",
