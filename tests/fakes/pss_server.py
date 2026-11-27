@@ -37,11 +37,13 @@ from __future__ import annotations
 import calendar
 import contextlib
 import datetime
+import hashlib
 import importlib
 import inspect
 import json
 import random
 import sys
+import threading
 import time
 import types
 from collections.abc import Callable, Generator
@@ -67,6 +69,8 @@ from urllib3.util import Retry
 from .state import (
     FAKE_EPOCH,
     GUEST_USER_ID,
+    MAX_TRAINING_FATIGUE,
+    STATS,
     Character,
     Message,
     Research,
@@ -223,6 +227,14 @@ ROUTES = {
     ("POST", "/GalaxyService/SpeedUpTravelling"): _route(
         "speed_up", "GalaxyService", "SpeedUpTravelling", "account", CHECKSUMMED, mutating=True),
 }
+# Opt-in routes (SPEC-14 workflow benchmark), kept out of ROUTES so the self-tests that iterate ROUTES are unchanged. A
+# FakePss serves PRESTIGE_ROUTES only when its world has prestige_recipes. The route and its reply shape are a fake
+# assumption: the live source of Prestige recipes is not pinned in this repository.
+PRESTIGE_ROUTES = {
+    ("GET", "/CharacterService/PrestigeCharacterTo"): _route(
+        "prestige", "CharacterService", "PrestigeCharacterTo", "none", "characterDesignId",
+        "languageKey designVersion"),
+}
 # Parameters that carry the server's date format (production formats them with "{0:%Y-%m-%dT%H:%M:%S}").
 DATE_PARAMS = ("clientDateTime", "trainingStartDate", "researchStartDate", "collectDate")
 SERVER_DATE_FORMAT = "%Y-%m-%dT%H:%M:%S"
@@ -251,10 +263,76 @@ class Fault:
     when: Callable[[dict], bool] | None = None
     raises: type[RequestException] | None = None
     hits: int = 0
+    apply: bool = False  # run the handler (state changes) first, then answer with the fault
 
     def matches(self, method: str, path: str, params: dict) -> bool:
         return (self.hits < self.times and self.path == path and self.method in (None, method)
                 and (self.when is None or bool(self.when(params))))
+
+
+class SimulatedCrash(BaseException):
+    """The process dies at a request (``FakePss.crash``): a BaseException, so production's ``except Exception``
+    handlers cannot swallow it. ``finally`` blocks still run, which a real crash would not do."""
+
+
+@dataclass(frozen=True)
+class LedgerEntry:
+    """One request to a mutating route as the fake received and applied it, independent of production's records.
+
+    ``delta`` is the account's mineral, gas and starbux (credits) change the request caused. ``session`` is the
+    training session an applied AddTraining left: (character id, design id, start, end). ``exchange`` is the
+    request's index in ``FakePss.exchanges``, so what was read after it (and on which thread) can be told.
+    """
+
+    seq: int
+    thread: str
+    method: str
+    path: str
+    params: dict
+    applied: bool
+    refusal: str | None
+    delta: dict
+    session: tuple[str, str, str, str] | None = None
+    exchange: int = -1
+
+    def to_dict(self) -> dict:
+        return {"seq": self.seq, "thread": self.thread, "method": self.method, "path": self.path,
+                "params": dict(self.params), "applied": self.applied, "refusal": self.refusal,
+                "delta": dict(self.delta), "session": list(self.session) if self.session else None,
+                "exchange": self.exchange}
+
+
+@dataclass
+class Hook:
+    """``FakePss.on_reply``: ``fn(fake, exchange)`` after the ``nth`` matching reply, at most ``times`` times."""
+
+    method: str
+    path: str
+    fn: Callable
+    nth: int = 1
+    times: int = 1
+    blocking: bool = False
+    seen: int = 0
+    hits: int = 0
+
+
+@dataclass
+class Crash:
+    """``FakePss.crash``: the first matching request raises SimulatedCrash, before or after its handler runs."""
+
+    method: str
+    path: str
+    apply: bool
+    hits: int = 0
+
+
+@dataclass
+class Misapply:
+    """``FakePss.misapply_training``: the next ``times`` applied AddTraining requests start ``design_id`` instead."""
+
+    design_id: str
+    times: int = 1
+    hits: int = 0
 
 
 @dataclass
@@ -265,6 +343,10 @@ class Exchange:
     token_status: str  # "n/a" | "missing" | "current" | "guest" | "revoked" | "unknown"
     status: int = 200
     error: str | None = None
+    thread: str = ""  # the requesting thread's name (opt-in readers: the SPEC-14 workflow benchmark)
+    # What a successful ListAllCharactersOfUser reply showed, per visible character id: the TrainingDesignId served
+    # ("0" when none) and whether its timer was still running. None for every other request. Opt-in readers only.
+    roster: dict | None = None
 
 
 def _flatten_json(value, prefix: str, out: dict) -> None:
@@ -337,7 +419,7 @@ class _Adapter(BaseAdapter):
     ``raises=`` class itself.
     """
 
-    def __init__(self, fake: FakePss, retry: Retry | None = None):
+    def __init__(self, fake: FakePss | FakePssFleet, retry: Retry | None = None):
         super().__init__()
         self.fake = fake
         self.retry = retry
@@ -556,12 +638,23 @@ def _is_sdk(module_name: str) -> bool:
 
 
 class FakePss:
-    def __init__(self, world=None, *, seed: int = 5343, local_offset: datetime.timedelta = HOST_UTC):
-        """``local_offset``: the host's local time minus UTC (HOST_UTC, HOST_UTC_MINUS_5, HOST_UTC_PLUS_9...)."""
+    def __init__(self, world=None, *, seed: int = 5343, local_offset: datetime.timedelta = HOST_UTC,
+                 epoch: datetime.datetime = FAKE_EPOCH, token_tag: str = "", permute_seed: int | None = None):
+        """``local_offset``: the host's local time minus UTC (HOST_UTC, HOST_UTC_MINUS_5, HOST_UTC_PLUS_9...).
+
+        Opt-in (SPEC-14 workflow benchmark), each a no-op at its default: ``epoch`` starts the clock elsewhere (naive
+        UTC); ``token_tag`` (12 lowercase hex digits) ends every token this fake issues, so the tokens of several
+        fakes behind one FakePssFleet never collide; ``permute_seed`` reorders the characters, rooms and design lists
+        of each reply by a seeded hash of their ids, the same order in every process.
+        """
+        if token_tag and (len(token_tag) != 12 or any(c not in "0123456789abcdef" for c in token_tag)):
+            raise ValueError(f"token_tag {token_tag!r} is not 12 lowercase hex digits")
         self.state = world if world is not None else default_world()
         self.state.validate()
-        self.clock = FakeClock(FAKE_EPOCH, local_offset)
+        self.clock = FakeClock(epoch, local_offset)
         self.seed = seed
+        self.token_tag = token_tag
+        self.permute_seed = permute_seed
         self.exchanges: list[Exchange] = []
         self.unknown: list[tuple[str, str]] = []
         self.violations: list[str] = []
@@ -570,12 +663,22 @@ class FakePss:
         self._revoked: set[str] = set()
         self._expire_at: str | None = None
         self.adapter = _Adapter(self)
+        self.routes = {**ROUTES, **(PRESTIGE_ROUTES if self.state.prestige_recipes else {})}
+        self.ledger: list[LedgerEntry] = []
+        self.hooks: list[Hook] = []
+        self.crashes: list[Crash] = []
+        self.misapplies: list[Misapply] = []
+        # One request at a time, so concurrent production threads see a consistent world. Blocking hooks run after
+        # it is released (handle), so a barrier in one thread never stops another thread's requests.
+        self._lock = threading.RLock()
+        self._pending: list[tuple[Hook, Exchange]] = []
+        self._raised: type[RequestException] | None = None  # the raises= fault handle() re-raises after its hooks
 
     # --- test controls ------------------------------------------------------------------------------------------
 
     def fail(self, path: str, *, times: int = 1, status: int | None = None, error: str | None = None,
              body: str | None = None, method: str | None = None, when: Callable[[dict], bool] | None = None,
-             raises: type[RequestException] | None = None) -> Fault:
+             raises: type[RequestException] | None = None, apply: bool = False) -> Fault:
         """Fail the next ``times`` matching requests to ``path`` without running its handler (no state change).
 
         The reply is ``body`` if given, else an errorMessage envelope with ``error``, else empty; ``raises`` (e.g.
@@ -586,21 +689,61 @@ class FakePss:
         ``times``), so a one-off 5xx or ``raises`` is invisible to production: a falsy reply needs a 4xx such as 404,
         and a ``RetryError`` (or a network exception) needs ``times=11``. The network exception is then what requests
         raises after urllib3's retries (a persistent ``ReadTimeout`` arrives as a ``ConnectionError``; see
-        ``_exhausted_network_error``). ``path`` must be a route (ValueError).
+        ``_exhausted_network_error``). ``path`` must be a route (ValueError). ``apply=True`` runs the handler first
+        (the state changes, as when a reply is lost on its way back) and then answers with the fault.
         """
         self._check_route_path(path)
-        fault = Fault(path, method, times, status, error, body, when, raises)
-        self.faults.append(fault)
+        fault = Fault(path, method, times, status, error, body, when, raises, apply=apply)
+        with self._lock:
+            self.faults.append(fault)
         return fault
+
+    def on_reply(self, route: str, fn: Callable, *, nth: int = 1, times: int = 1, blocking: bool = False) -> Hook:
+        """Call ``fn(fake, exchange)`` after the reply to the ``nth`` request to ``route`` ("METHOD /path"), and to
+        the following ones until it has run ``times`` times (faulted replies count).
+
+        A non-blocking hook runs under the fake's lock, before the reply leaves (a world change production sees on
+        its next read). A blocking hook (a barrier, a hold) runs after the lock is released, so other threads keep
+        being answered while it waits. ``hook.hits`` counts the calls. A ``raises=`` fault counts as a reply: its
+        hooks run before the exception leaves the adapter. A SimulatedCrash does not: the process is gone.
+        """
+        method, path = self._split_route(route)
+        hook = Hook(method, path, fn, nth, times, blocking)
+        with self._lock:
+            self.hooks.append(hook)
+        return hook
+
+    def crash(self, route: str, *, apply: bool) -> Crash:
+        """Raise SimulatedCrash from the first request to ``route``: before its handler runs (nothing applied) or,
+        with ``apply=True``, after it (the state changed but production never sees the reply)."""
+        method, path = self._split_route(route)
+        crash = Crash(method, path, apply)
+        with self._lock:
+            self.crashes.append(crash)
+        return crash
+
+    def misapply_training(self, design_id: str, *, times: int = 1) -> Misapply:
+        """The next ``times`` AddTraining requests that pass every rule start ``design_id`` instead of the
+        requested course (the reply still names the requested one): a server that applied something else."""
+        self.state.training_design(design_id)
+        misapply = Misapply(design_id, times)
+        with self._lock:
+            self.misapplies.append(misapply)
+        return misapply
+
+    def _split_route(self, route: str) -> tuple[str, str]:
+        method, _, path = route.partition(" ")
+        if (method, path) not in self.routes:
+            raise ValueError(f"{route!r} is not a FakePss route: the hook would never fire")
+        return method, path
 
     def expire_token_once(self, at: str) -> None:
         """Revoke the current account token just before the first request to path ``at`` is routed."""
         self._check_route_path(at)
         self._expire_at = at
 
-    @staticmethod
-    def _check_route_path(path: str) -> None:
-        if not any(path == route_path for _, route_path in ROUTES):
+    def _check_route_path(self, path: str) -> None:
+        if not any(path == route_path for _, route_path in self.routes):
             raise ValueError(f"{path!r} is not a FakePss route: the fault would never fire")
 
     @contextlib.contextmanager
@@ -682,7 +825,7 @@ class FakePss:
         """
         result = []
         for e in self.exchanges if exchanges is None else exchanges:
-            route = ROUTES.get((e.method, e.path))
+            route = self.routes.get((e.method, e.path))
             if route is None or not route.mutating:
                 continue
             params = dict(e.params)
@@ -711,28 +854,38 @@ class FakePss:
         FAKE_ERROR_STATUS reply (answered once, never retried), never an exception production could catch and log as
         its own failure.
         """
-        logged = len(self.exchanges)
-        try:
-            return self._handle(method, url, body)
-        except _RaisedFault:
-            raise
-        except Exception as bug:
-            self.violations.append(f"{method} {urlsplit(url).path}: FakePss error {bug!r}")
-            if len(self.exchanges) > logged:
-                self.exchanges[-1].status, self.exchanges[-1].error = FAKE_ERROR_STATUS, f"FakePss error {bug!r}"
-            return FAKE_ERROR_STATUS, ""
+        pending: list[tuple[Hook, Exchange]] = []
+        raised = False
+        with self._lock:
+            self._pending = pending
+            logged = len(self.exchanges)
+            try:
+                result = self._handle(method, url, body)
+            except _RaisedFault:
+                raised = True
+            except Exception as bug:
+                self.violations.append(f"{method} {urlsplit(url).path}: FakePss error {bug!r}")
+                if len(self.exchanges) > logged:
+                    self.exchanges[-1].status, self.exchanges[-1].error = FAKE_ERROR_STATUS, f"FakePss error {bug!r}"
+                return FAKE_ERROR_STATUS, ""
+        for hook, exchange in pending:  # blocking hooks: outside the lock
+            hook.fn(self, exchange)
+        if raised:
+            raise _RaisedFault(self._raised)
+        return result
 
     def _handle(self, method: str, url: str, body) -> tuple[int, str]:
         parts = urlsplit(url)
         path = parts.path
         params = dict(parse_qsl(parts.query, keep_blank_values=True))
         params.update(_body_params(body))
-        route = ROUTES.get((method, path))
+        route = self.routes.get((method, path))
         if self._expire_at == path:
             self._expire_at = None
             self._revoked.update(token for token, kind in self.tokens.items() if kind == "account")
         logged = {key: "<redacted>" if key == "password" else value for key, value in params.items()}
-        exchange = Exchange(method, path, logged, self._token_status(route, params))
+        exchange = Exchange(method, path, logged, self._token_status(route, params),
+                            thread=threading.current_thread().name)
         self.exchanges.append(exchange)
         if route is None:
             self.unknown.append((method, path))
@@ -746,14 +899,61 @@ class FakePss:
         param_violations = self._param_violations(route, params)
         for problem in param_violations:
             self._record_violation(exchange, problem)
+        crash = next((c for c in self.crashes if c.hits == 0 and (c.method, c.path) == (method, path)), None)
+        if crash is not None and not crash.apply:
+            crash.hits += 1
+            exchange.error = "crash"
+            if route.mutating:
+                self._record_ledger(exchange, False, "crash", self._wallet(), None)
+            raise SimulatedCrash(f"{method} {path}: crashed before the request was applied")
         fault = next((f for f in self.faults if f.matches(method, path, params)), None)
         if fault is not None:
-            return self._answer_fault(fault, exchange, route)
-        if violation:
-            return 200, error_envelope(route.service, route.element, AUTH_ERROR)
-        if param_violations:
-            return 200, error_envelope(route.service, route.element, "; ".join(param_violations))
-        return self._dispatch(exchange, route, params)
+            if fault.apply and not violation and not param_violations:
+                self._dispatch(exchange, route, params)
+            elif route.mutating:
+                self._record_ledger(exchange, False, "fault", self._wallet(), None)
+            try:
+                reply = self._answer_fault(fault, exchange, route)
+            except _RaisedFault as raised:  # no reply, but hooks on this route still see the request
+                self._raised = raised.error_class
+                self._after_reply(method, path, exchange)
+                raise
+        elif violation:
+            reply = 200, error_envelope(route.service, route.element, AUTH_ERROR)
+        elif param_violations:
+            reply = 200, error_envelope(route.service, route.element, "; ".join(param_violations))
+        else:
+            reply = self._dispatch(exchange, route, params)
+        if crash is not None:  # apply=True: the request was applied; production never sees the reply
+            crash.hits += 1
+            raise SimulatedCrash(f"{method} {path}: crashed after the request was applied")
+        self._after_reply(method, path, exchange)
+        return reply
+
+    def _after_reply(self, method: str, path: str, exchange: Exchange) -> None:
+        for hook in self.hooks:
+            if (hook.method, hook.path) != (method, path):
+                continue
+            hook.seen += 1
+            if hook.seen < hook.nth or hook.hits >= hook.times:
+                continue
+            hook.hits += 1
+            if hook.blocking:
+                self._pending.append((hook, exchange))
+            else:
+                hook.fn(self, exchange)
+
+    def _wallet(self) -> tuple[int, int, int]:
+        return self.state.resources.mineral, self.state.resources.gas, self.state.account.credits
+
+    def _record_ledger(self, exchange: Exchange, applied: bool, refusal: str | None, before: tuple[int, int, int],
+                       session: tuple[str, str, str, str] | None) -> None:
+        after = self._wallet()
+        delta = {kind: after[index] - before[index] for index, kind in enumerate(("mineral", "gas", "starbux"))}
+        params = {key: value for key, value in exchange.params.items() if key != "accessToken"}
+        self.ledger.append(LedgerEntry(len(self.ledger) + 1, threading.current_thread().name, exchange.method,
+                                       exchange.path, params, applied, refusal, delta, session,
+                                       exchange=len(self.exchanges) - 1))
 
     @staticmethod
     def _param_violations(route: Route, params: dict) -> list[str]:
@@ -769,17 +969,32 @@ class FakePss:
         return problems
 
     def _dispatch(self, exchange: Exchange, route: Route, params: dict) -> tuple[int, str]:
+        before = self._wallet()
         try:
-            return 200, getattr(self, f"_h_{route.handler}")(params)
+            reply = 200, getattr(self, f"_h_{route.handler}")(params)
         except _Reject as reject:
             if reject.violation:
                 self._record_violation(exchange, str(reject))
             exchange.error = str(reject)
+            if route.mutating:
+                self._record_ledger(exchange, False, str(reject), before, None)
             return 200, error_envelope(route.service, route.element, str(reject))
         except Exception as bug:  # a defect in the fake itself: fail every test that checks violations
             self._record_violation(exchange, f"FakePss handler error {bug!r}")
             exchange.status = FAKE_ERROR_STATUS
+            if route.mutating:
+                self._record_ledger(exchange, False, f"FakePss handler error {bug!r}", before, None)
             return FAKE_ERROR_STATUS, ""
+        if route.handler == "characters":
+            exchange.roster = self._roster_view()
+        if route.mutating:
+            session = None
+            if route.handler == "add_training":
+                crew = self.state.character(params.get("characterId", ""))
+                started = crew.last_session
+                session = (crew.id, started.design_id, fmt(started.start), fmt(started.end))
+            self._record_ledger(exchange, True, None, before, session)
+        return reply
 
     @staticmethod
     def _answer_fault(fault: Fault, exchange: Exchange, route: Route) -> tuple[int, str]:
@@ -816,7 +1031,7 @@ class FakePss:
         return f"{status} accessToken (wanted {wanted})"
 
     def _issue(self, kind: str) -> str:
-        token = f"{len(self.tokens) + 1:08d}-1111-2222-3333-444444444444"
+        token = f"{len(self.tokens) + 1:08d}-1111-2222-3333-{self.token_tag or '444444444444'}"
         self.tokens[token] = kind
         return token
 
@@ -831,7 +1046,8 @@ class FakePss:
             return envelope("UserService", "UserLogin", user, UserId=GUEST_USER_ID, accessToken=token)
         if refresh != account.refresh_token:
             raise _Reject("Invalid refresh token")
-        self._revoked.update(token for token, kind in self.tokens.items() if kind == "account")
+        if not self.state.concurrent_sessions:  # opt-in (World.concurrent_sessions): earlier sessions stay valid
+            self._revoked.update(token for token, kind in self.tokens.items() if kind == "account")
         token = self._issue("account")
         user = el("User", {"Id": account.user_id, "Name": account.name, "Credits": account.credits,
                            "DailyRewardStatus": account.daily_reward_status,
@@ -862,11 +1078,28 @@ class FakePss:
 
     def _h_training_designs(self, p: dict) -> str:
         self._check_version(p, "Training")
-        rows = [el("TrainingDesign", {"TrainingDesignId": d.id, "TrainingName": d.name, "Stat": d.stat,
-                                      "Gain": d.gain, "Fatigue": d.fatigue,
-                                      "Duration": int(d.duration.total_seconds())})
-                for d in self.state.training_designs]
+        rows = [el("TrainingDesign", self._training_design_attrs(d))
+                for d in self._order(self.state.training_designs)]
         return envelope("TrainingService", "ListAllTrainingDesigns", el("TrainingDesigns", None, *rows))
+
+    @staticmethod
+    def _training_design_attrs(d) -> dict:
+        attrs = {"TrainingDesignId": d.id, "TrainingName": d.name, "Stat": d.stat, "Gain": d.gain,
+                 "Fatigue": d.fatigue, "Duration": int(d.duration.total_seconds())}
+        if d.wire_extended:  # opt-in: the shape sdk/training/parse.py reads (<Stat>Chance, Rank, Required...)
+            attrs[d.stat.replace("Improvement", "Chance")] = 100
+            for key, value in (("Rank", d.rank), ("RequiredRoomType", d.required_room_type),
+                               ("RequiredRoomLevel", d.required_room_level),
+                               ("RequiredResearchDesignId", d.required_research_id), ("CostString", d.price)):
+                if value is not None:
+                    attrs[key] = value
+        return attrs
+
+    def _order(self, rows: list) -> list:
+        """``rows`` in world order, or (``permute_seed``) in a seeded order of their ids, stable across processes."""
+        if self.permute_seed is None:
+            return list(rows)
+        return sorted(rows, key=lambda row: hashlib.sha256(f"{self.permute_seed}:{row.id}".encode()).hexdigest())
 
     def _h_marketplace(self, p: dict) -> str:
         self._check_user(p)
@@ -906,25 +1139,34 @@ class FakePss:
 
     def _h_room_designs(self, p: dict) -> str:
         self._check_version(p, "Room")
-        rows = [el("RoomDesign", {"RoomDesignId": d.id, "RoomName": d.name, "RoomType": d.room_type,
-                                  "UpgradeFromRoomDesignId": d.upgrade_from, "PriceString": d.price,
-                                  "ColumnWidth": d.column_width, "RowHeight": d.row_height, "RoomHp": d.room_hp,
-                                  "PowerGenerated": d.power_generated, "MaxPopulation": d.max_population})
-                for d in self.state.room_designs]
+        rows = [el("RoomDesign", self._room_design_attrs(d)) for d in self._order(self.state.room_designs)]
         return envelope("RoomService", "ListRoomDesigns", el("RoomDesigns", None, *rows))
+
+    @staticmethod
+    def _room_design_attrs(d) -> dict:
+        attrs = {"RoomDesignId": d.id, "RoomName": d.name, "RoomType": d.room_type,
+                 "UpgradeFromRoomDesignId": d.upgrade_from, "PriceString": d.price, "ColumnWidth": d.column_width,
+                 "RowHeight": d.row_height, "RoomHp": d.room_hp, "PowerGenerated": d.power_generated,
+                 "MaxPopulation": d.max_population}
+        for key, value in (("Level", d.level), ("Capacity", d.capacity)):  # opt-in
+            if value is not None:
+                attrs[key] = value
+        return attrs
 
     def _h_ship(self, p: dict) -> str:
         self._check_user(p)
         ship, state = self.state.ship, self.state
-        rooms = el("Rooms", None, *(el("Room", self._room_attrs(r)) for r in state.rooms))
+        rooms = el("Rooms", None, *(el("Room", self._room_attrs(r)) for r in self._order(state.rooms)))
         researches = el("Researches", None, *(el("Research", self._research_attrs(r)) for r in state.researches))
         attrs = {"ShipId": ship.ship_id, "UserId": state.account.user_id, "ShipName": ship.name,
                  "ShipLevel": ship.level, "ShipDesignId": ship.design_id, "StarSystemId": ship.star_system_id,
                  "UpgradeShipDesignId": ship.upgrade_design_id}
+        if state.ship_omits_researches:  # opt-in: research unobserved
+            return envelope("ShipService", "GetShipByUserId", el("Ship", attrs, rooms))
         return envelope("ShipService", "GetShipByUserId", el("Ship", attrs, rooms, researches))
 
     def _h_rooms(self, p: dict) -> str:
-        rows = [el("Room", self._room_attrs(r)) for r in self.state.rooms]
+        rows = [el("Room", self._room_attrs(r)) for r in self._order(self.state.rooms)]
         return envelope("RoomService", "ListRoomsViaAccessToken", el("Rooms", None, *rows))
 
     def _h_markers(self, p: dict) -> str:
@@ -944,12 +1186,17 @@ class FakePss:
         rows = [el("CharacterDesign", {"CharacterDesignId": d.id, "CharacterDesignName": d.name,
                                        "TrainingCapacity": d.training_capacity, "Rarity": d.rarity,
                                        "SpecialAbilityType": d.special_ability_type})
-                for d in self.state.character_designs]
+                for d in self._order(self.state.character_designs)]
         return envelope("CharacterService", "ListAllCharacterDesigns", el("CharacterDesigns", None, *rows))
 
     def _h_items(self, p: dict) -> str:
         rows = [el("Item", {"ItemId": i.id, "ItemDesignId": i.design_id, "Quantity": i.quantity})
                 for i in self.state.items]
+        if self.state.typed_resource_items:  # opt-in: resources the snapshot can read by the item's own Type
+            resources = self.state.resources
+            rows += [el("Item", {"ItemId": item_id, "ItemDesignId": design_id, "Type": kind, "Quantity": quantity})
+                     for item_id, design_id, kind, quantity in (("9990001", "9990901", "Mineral", resources.mineral),
+                                                                ("9990002", "9990902", "Gas", resources.gas))]
         return envelope("ItemService", "ListItemsOfAShip", el("Items", None, *rows))
 
     def _h_add_starbux(self, p: dict) -> str:
@@ -981,7 +1228,7 @@ class FakePss:
     def _character_attrs(c) -> dict:
         attrs = {"CharacterId": c.id, "CharacterDesignId": c.design_id, "CharacterName": c.name,
                  "RoomId": c.room_id, "Level": c.level, "Xp": c.xp, "Fatigue": c.fatigue}
-        attrs.update(c.stats)
+        attrs.update({name: value for name, value in c.stats.items() if name not in c.omit_stats})
         # The session's design while it is not yet applied (running, or ended and not collected), "0" otherwise: the
         # shape sdk/training/parse.py, the snapshot and the simulator assume (unverified live). TrainingEndDate keeps
         # the last session's end after a finish.
@@ -990,8 +1237,19 @@ class FakePss:
                       "TrainingEndDate": fmt(c.training_end), "AvailableDate": fmt(c.available_date)})
         return attrs
 
+    def _roster_view(self) -> dict:
+        """Per visible character: the course the roster reply serves (as ``_character_attrs``) and a running timer."""
+        view = {}
+        for c in self.state.characters:
+            if c.hidden:
+                continue
+            unapplied = c.session is not None and not c.session.applied
+            view[c.id] = {"course": c.session.design_id if unapplied else "0",
+                          "running": bool(unapplied and c.session.end > self.now)}
+        return view
+
     def _h_characters(self, p: dict) -> str:
-        rows = [el("Character", self._character_attrs(c)) for c in self.state.characters]
+        rows = [el("Character", self._character_attrs(c)) for c in self._order(self.state.characters) if not c.hidden]
         return envelope("CharacterService", "ListAllCharactersOfUser", el("Characters", None, *rows))
 
     def _h_activate_item(self, p: dict) -> str:
@@ -1027,8 +1285,58 @@ class FakePss:
             raise _Reject("Crew must be in a training room")
         if crew.session and not crew.session.applied:
             raise _Reject("Crew is already training")
-        crew.session = TrainingSession(design.id, self.now, self.now + design.duration)  # TrainingEndDate follows
-        return envelope("TrainingService", "AddTraining", el("Character", self._character_attrs(crew)))
+        if self.state.strict_training_rules:
+            self._strict_training_checks(crew, design)
+            self._charge(design.charged())
+        misapply = next((m for m in self.misapplies if m.hits < m.times), None)
+        if misapply is None:
+            crew.session = TrainingSession(design.id, self.now, self.now + design.duration)  # TrainingEndDate follows
+            return envelope("TrainingService", "AddTraining", el("Character", self._character_attrs(crew)))
+        misapply.hits += 1  # opt-in: another course starts; the reply still names the requested one
+        started = self.state.training_design(misapply.design_id)
+        crew.session = TrainingSession(started.id, self.now, self.now + started.duration)
+        reply = el("Character", {**self._character_attrs(crew), "TrainingDesignId": design.id})
+        return envelope("TrainingService", "AddTraining", reply)
+
+    def _strict_training_checks(self, crew: Character, design) -> None:
+        """Opt-in (World.strict_training_rules): the rules SPEC-14 says a start depends on, refused in this order."""
+        state = self.state
+        room = state.room(crew.room_id)
+        room_design = state.room_design(room.design_id)
+        if room.status != "Normal":
+            raise _Reject("Room is not ready")
+        if design.required_room_type is not None and room_design.name != design.required_room_type:
+            raise _Reject("Wrong room for this training")
+        if design.required_room_level is not None and (room_design.level or 0) < design.required_room_level:
+            raise _Reject("Room level is too low")
+        if room_design.capacity is not None:
+            busy = sum(1 for other in state.characters if other.room_id == room.id and other.session is not None
+                       and not other.session.applied and other.session.end > self.now)
+            if busy >= room_design.capacity:
+                raise _Reject("Room is full")
+        if design.required_research_id is not None and not any(
+                r.design_id == design.required_research_id and r.state == "Completed" for r in state.researches):
+            raise _Reject("Research required")
+        if crew.fatigue >= MAX_TRAINING_FATIGUE:
+            raise _Reject("Crew is too fatigued")
+        if sum(crew.stats.get(stat, 0) for stat in STATS) >= state.character_design(crew.design_id).training_capacity:
+            raise _Reject("Training points are at capacity")
+
+    def _charge(self, price: tuple[str, int] | None) -> None:
+        if price is None:
+            return
+        kind, cost = price
+        wallet, attribute = (self.state.account, "credits") if kind == "starbux" else (self.state.resources, kind)
+        if cost > getattr(wallet, attribute):
+            raise _Reject(f"Not enough {kind}s" if kind == "mineral" else f"Not enough {kind}")
+        setattr(wallet, attribute, getattr(wallet, attribute) - cost)
+
+    def _h_prestige(self, p: dict) -> str:
+        target = p.get("characterDesignId", "")
+        rows = [el("Prestige", {"CharacterDesignId1": first, "CharacterDesignId2": second,
+                                "ToCharacterDesignId": to})
+                for first, second, to in self.state.prestige_recipes if to == target]
+        return envelope("CharacterService", "PrestigeCharacterTo", el("Prestiges", None, *rows))
 
     def _h_finish_training(self, p: dict) -> str:
         crew = self._crew(p.get("characterId"))
@@ -1215,3 +1523,85 @@ class FakePss:
         if research.level is not None:
             attrs["ResearchLevel"] = research.level
         return attrs
+
+
+class FakePssFleet:
+    """Several FakePss accounts behind one adapter (SPEC-14 workflow benchmark): opt-in, used by no other test.
+
+    A login is routed by its RefreshToken to the fake whose account owns it, and every later request by the fake that
+    issued its accessToken, so one account's login never revokes another's token (each FakePss revokes only its own).
+    A request without a token (settings, design lists) goes to the first fake; ``validate_shared_catalogs`` requires
+    every fake to serve the same design lists. All fakes read the first fake's clock. Each keeps its own exchanges,
+    ledger and violations; routing takes no lock across fakes, so one fake's blocking hook never stops another.
+    """
+
+    def __init__(self, fakes: dict[str, FakePss]):
+        if not fakes:
+            raise ValueError("FakePssFleet needs at least one FakePss")
+        tags = [fake.token_tag for fake in fakes.values()]
+        if len(fakes) > 1 and (not all(tags) or len(set(tags)) != len(tags)):
+            raise ValueError("every FakePss behind a FakePssFleet needs its own token_tag")
+        refresh = [fake.state.account.refresh_token for fake in fakes.values()]
+        if len(set(refresh)) != len(refresh):
+            raise ValueError("two FakePss accounts share a refresh token")
+        self.fakes = dict(fakes)
+        self.primary = next(iter(self.fakes.values()))
+        for fake in self.fakes.values():
+            fake.clock = self.primary.clock
+        self.validate_shared_catalogs()
+        self.adapter = _Adapter(self)
+
+    def validate_shared_catalogs(self) -> None:
+        first = self.primary.state
+        for alias, fake in self.fakes.items():
+            for name in ("room_designs", "training_designs", "research_designs", "character_designs",
+                         "design_versions"):
+                if getattr(fake.state, name) != getattr(first, name):
+                    raise ValueError(f"FakePssFleet: {alias} serves different {name} than the first account")
+
+    @property
+    def violations(self) -> list[str]:
+        return [f"{alias}: {violation}" for alias, fake in self.fakes.items() for violation in fake.violations]
+
+    def ledger(self, alias: str) -> list[LedgerEntry]:
+        return list(self.fakes[alias].ledger)
+
+    def exchanges(self, alias: str) -> list[Exchange]:
+        return list(self.fakes[alias].exchanges)
+
+    def owner(self, method: str, url: str, body) -> FakePss:
+        parts = urlsplit(url)
+        params = dict(parse_qsl(parts.query, keep_blank_values=True))
+        try:
+            params.update(_body_params(body))
+        except ValueError:
+            return self.primary  # the owner records the malformed body as its own violation
+        if (method, parts.path) == ("POST", "/UserService/DeviceLogin17"):
+            refresh = params.get("RefreshToken", "")
+            for fake in self.fakes.values():
+                if refresh and fake.state.account.refresh_token == refresh:
+                    return fake
+            return self.primary
+        token = params.get("accessToken")
+        if token:
+            for fake in self.fakes.values():
+                with fake._lock:
+                    if token in fake.tokens:
+                        return fake
+        return self.primary
+
+    def handle(self, method: str, url: str, body) -> tuple[int, str]:
+        return self.owner(method, url, body).handle(method, url, body)
+
+    @contextlib.contextmanager
+    def install(self) -> Generator[FakePssFleet, None, None]:
+        """The first fake's ``install()`` (clock, rate limiter, blocked real sends), with this router as adapter."""
+        from sdk.client import Client
+
+        with self.primary.install():
+            self.adapter.retry = self.primary.adapter.retry  # production's urllib3 retry, as install() copied it
+            try:
+                with patch.dict(Client.session.adapters, {"https://": self.adapter, "http://": self.adapter}):
+                    yield self
+            finally:
+                self.adapter.retry = None
