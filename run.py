@@ -1363,7 +1363,7 @@ def run_fleet_execute(registry_path, authorization_path, mode=None, journal_dir=
         client_settings=CLIENT_CHECKSUM_SETTINGS, identity_salt=identity_salt, log_scrubber=scrubber,
         source=EXECUTE_SOURCE, **factory_options,
     )
-    options = {"gate": gate, "halt_share": halt_share, "stop_file": stop_file, "clock": clock}
+    options = {"gate": gate, "halt_share": halt_share, "stop_file": stop_file, "clock": clock, "attempts": attempts}
     if concurrent is not None:
         orchestrator = ConcurrentExecuteFleetOrchestrator(registry, factory, max_workers=concurrent, **options)
     else:

@@ -2214,5 +2214,131 @@ class TrainingPreloginTests(TrainingExecutionCase):
         self.assertFalse(self.store_root.exists())
 
 
+class TrainingStartCase(TrainingExecutionCase):
+    def ready(self):
+        """Provision the store and take a fresh dry run."""
+        code, _, err = self.provision()
+        self.assertEqual(code, 0, err)
+        code, out, err = self.dry_run()
+        self.assertEqual(code, 0, out + err)
+
+    def executed_events(self, since=0):
+        """The account's journal events of execute runs (not dry runs), from index ``since``."""
+        return [event for event in read_events(self.journals / "alpha.log") if not event.dry_run][since:]
+
+    def latest_record(self):
+        return json.loads(max((self.journals / "runs").glob("*.json"), key=lambda path: path.stat().st_mtime_ns)
+                          .read_text(encoding="utf-8"))
+
+    def record_texts(self, record):
+        [account] = record["accounts"]
+        return ([f"status: {account['status']}", f"reason: {account['reason']}"]
+                + [f"{item['candidate']}: {item['reason']}" for item in account["rejected"]]
+                + [f"{item['action_id']}: {item['reason']}" for item in account["results"]])
+
+    def assert_lock_released(self):
+        from sdk.fleet.attempts import FileAccountLock
+
+        handle = FileAccountLock(self.store_root).try_acquire(self.identity)
+        self.assertIsNotNone(handle, "the account lock is still held after the run")
+        handle.release()
+
+
+class TrainingStartTests(TrainingStartCase):
+    # Verifies: S14-R4, S14-R5
+    def test_an_exact_500_start_is_verified_settled_and_journaled_with_its_spend(self):
+        self.ready()
+        mark = self.mark()
+        code, out, err = self.execute()
+        self.assertEqual(code, 0, out + err)
+        [start] = self.starts_since(mark)
+        self.assertEqual((start.params["characterId"], start.params["trainingDesignId"], start.applied),
+                         ("1001", "41", True))
+        self.assertEqual(start.delta, {"mineral": -500, "gas": 0, "starbux": 0})
+        self.assertEqual([entry.path for entry in self.mutations_since(mark)], [ADD_TRAINING])
+        [event] = [event for event in self.executed_events() if event.attempted]
+        self.assertEqual((event.action_id, event.outcome, event.cost["minerals_delta"], event.cost["gas_delta"]),
+                         ("add_training", "verified", -500, 0))
+        [attempt] = self.store()["attempts"]
+        self.assertEqual((attempt["state"], attempt["outcome"], attempt["journal_attempt_id"]),
+                         ("verified", "verified", event.attempt_id))
+        self.assertEqual(attempt["planned_cost"], {"minerals": 500})
+        self.assert_lock_released()
+
+    # Verifies: S14-R5
+    def test_an_intent_write_failure_sends_nothing(self):
+        self.ready()
+        mark = self.mark()
+        with patch("sdk.execution.runner.write_training_intent",
+                   side_effect=OSError("synthetic intent-write failure")):
+            code, out, err = self.execute()
+        self.assertEqual(code, 1, out + err)
+        self.assertEqual(self.starts_since(mark), [])
+        self.assertEqual(self.mutations_since(mark), [])
+        [event] = self.executed_events()
+        self.assertEqual((event.action_id, event.outcome, event.attempted, event.params["character_id"]),
+                         ("add_training", "skipped", False, "1001"))
+        self.assertEqual(codes_in(event.reason), {"intent_not_persisted"})
+        self.assertEqual(self.store()["attempts"], [])
+        self.assert_lock_released()
+
+    # Verifies: S14-R5
+    def test_a_settlement_write_failure_keeps_a_pending_record_and_blocks_the_next_run(self):
+        self.ready()
+        mark = self.mark()
+        with patch("sdk.execution.runner.settle_training_intent",
+                   side_effect=OSError("synthetic settle-write failure")):
+            code, out, err = self.execute()
+        self.assertEqual(code, 1, out + err)
+        self.assertEqual([entry.applied for entry in self.starts_since(mark)], [True])
+        [attempt] = self.store()["attempts"]
+        self.assertEqual(attempt["state"], "pending")
+        [account] = self.latest_record()["accounts"]
+        self.assertEqual([(item["action_id"], item["outcome"]) for item in account["results"]],
+                         [("add_training", "verified")])
+        self.assertIn("unresolved_attempt", codes_in(account["reason"]))
+        self.assert_lock_released()
+        # the next run (Cora is busy now, so the planner would pick Gina if she were there) starts nothing
+        self.fake.state.characters.append(crew_plan_tests.Character("1002", "Gina", "31", "11",
+                                                                    stats=crew_plan_tests.stats(Weapon=20)))
+        self.assertEqual(self.dry_run()[0], 0)
+        mark = self.mark()
+        self.execute()
+        self.assertEqual(self.starts_since(mark), [])
+        self.assertIn("unresolved_attempt", set().union(*(codes_in(text)
+                                                          for text in self.record_texts(self.latest_record()))))
+
+    # Verifies: S14-R6
+    def test_a_locked_account_sends_no_writes_and_does_not_halt_the_fleet(self):
+        from sdk.fleet.attempts import FileAccountLock
+
+        self.ready()
+        held = FileAccountLock(self.store_root).try_acquire(self.identity)
+        try:
+            mark = self.mark()
+            code, out, err = self.execute()
+        finally:
+            held.release()
+        self.assertEqual(code, 1, out + err)
+        self.assertEqual(self.mutations_since(mark), [])
+        lines = [line for line in out.splitlines() if re.search(r"(?<![A-Za-z0-9_])alpha(?![A-Za-z0-9_])", line)
+                 and codes_in(line)]
+        self.assertTrue(lines, out)
+        for line in lines:
+            self.assertEqual(codes_in(line), {"locked"}, line)
+        record = self.latest_record()
+        self.assertEqual(record["accounts"][0]["status"], "locked")
+        self.assertIsNone(record["stop_reason"])
+        self.assertEqual(self.store()["attempts"], [])
+
+    def test_training_v1_execute_needs_no_store_and_creates_none(self):
+        self.policy_id = "training-v1"
+        self.write_registry()
+        self.assertEqual(self.dry_run()[0], 0)
+        code, out, err = self.execute()
+        self.assertNotIn("training attempt", out + err)
+        self.assertFalse(self.store_root.exists())
+
+
 if __name__ == "__main__":
     unittest.main()

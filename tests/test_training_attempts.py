@@ -17,7 +17,7 @@ import time
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from sdk.fleet import attempts
 from sdk.fleet.attempts import (
@@ -539,6 +539,36 @@ class DispatchTests(TempDirCase):
             service.provision("alpha", ID_A, T0)
         held.release()
         self.assertFalse(service.provision("alpha", ID_A, T0))
+
+
+class GuardTests(TempDirCase):
+    def test_before_send_checks_in_order(self):
+        store = FileAttemptStore(self.journal_dir)
+        store.provision("alpha", ID_A, T0)
+        recheck = Mock(return_value="price_unavailable: changed")
+        guard = attempts.TrainingGuard(store, "alpha", ID_A, recheck, lambda: T0)
+        before = tf.snap()
+        self.assertEqual(guard.before_send(before, params(), {"minerals": 500}), ("price_unavailable: changed", False))
+        recheck.assert_called_once_with(before, params(), {"minerals": 500})
+        recheck.return_value = None
+        self.assertIsNone(guard.before_send(before, params(), {"minerals": 500}))
+        guard.mark_sent(None)
+        self.assertEqual(guard.before_send(before, params(), {}), (attempts.ONE_START_REASON, False))
+        store.write_intent("alpha", intent())  # another dispatch's pending intent: the store is read again
+        fresh = attempts.TrainingGuard(store, "alpha", ID_A, recheck, lambda: T0)
+        reason, stop = fresh.before_send(before, params(), {})
+        self.assertEqual((codes_in(reason), stop), ({"unresolved_attempt"}, True))
+        (self.root / "alpha.json").unlink()
+        reason, stop = fresh.before_send(before, params(), {})
+        self.assertEqual((codes_in(reason), stop), ({"state_missing"}, True))
+        self.assertEqual(recheck.call_count, 2)
+
+    def test_factory_imports_the_attempt_module_at_its_top_level(self):
+        # FakePss swaps the clocks of the sdk modules loaded before it is installed (tests/fakes/pss_server.py).
+        probe = subprocess.run([sys.executable, "-c", "import sys; import sdk.fleet.factory; "
+                                "print('sdk.fleet.attempts' in sys.modules)"],
+                               cwd=REPO, capture_output=True, text=True, check=True)
+        self.assertEqual(probe.stdout.strip(), "True")
 
 
 if __name__ == "__main__":

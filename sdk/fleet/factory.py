@@ -98,11 +98,13 @@ from typing import Any, Callable, Iterable, Mapping, Optional, Sequence
 from urllib.parse import quote, quote_plus
 
 from sdk.actions import Idempotency, check_preconditions, get_spec
+from sdk.actions.catalog import training_start_verified
 from sdk.client import _extract_collection
 from sdk.device import Device
 from sdk.execution import ActionRunner, UncertainPriorAttemptError
 from sdk.execution.runner import COST_KINDS, planned_cost
 from sdk.fleet.accounts import REGISTRY_VERSION, AccountProfile, AccountRegistry
+from sdk.fleet.attempts import NOT_AUTHORIZED, STATE_MISSING, TrainingAttempts, guarded_training, start_refusal
 from sdk.fleet.authorization import (
     BATTLE_ACTION_ID,
     HULL_UPGRADE_ACTION_ID,
@@ -137,7 +139,7 @@ from sdk.policy import (
     get_policy,
 )
 from sdk.policy.placement import ShipLayout, first_free, placement_refusal
-from sdk.policy.progression import next_hull_design
+from sdk.policy.progression import FleetV1, _cap_requests, next_hull_design
 from sdk.redaction import redact_secrets
 from sdk.scheduler import DailyScheduler, ScheduleReport, SchedulerConfig
 from sdk.state import AccountSnapshot, ClientSnapshotProvider, Completeness
@@ -1014,20 +1016,15 @@ def _canary_refusal(action_id: str) -> str:
     return CANARY_NOT_CANARY_SAFE if _safe_to_retry(action_id) else CANARY_NOT_SAFE
 
 
-# training-v2's paid start is held under --fleet-execute until SPEC-14 step 4 (spec14-training-execution) replaces this
-# hold with real paid execution: the account lock, the attempt store and the strict start verdict. The dry run and
-# ``run.py --crew-plan`` never build an AuthorizedPolicy, so they still show the start. The code is a stable name, and
-# not a workflow-benchmark skip code.
-TRAINING_V2_EXECUTE_HOLD = "training_v2_execute_hold"
-TRAINING_V2_EXECUTE_HOLD_REASON = (f"{TRAINING_V2_EXECUTE_HOLD}: training-v2 starts no paid course under "
-                                   "--fleet-execute until SPEC-14 step 4")
+# training-v2's start under --fleet-execute (SPEC-14 step 4) is reconciled with the strict S14-R5 verdict: verified
+# only for an observed idle crew member now running the requested course. training-v1 keeps the catalog's verdict.
+STRICT_ADD_TRAINING = replace(get_spec("add_training"), postcondition=training_start_verified)
+TRAINING_START = "add_training"
 
 
 class AuthorizedPolicy:
     """A progression policy whose plan keeps only what the gate allows.
 
-    An ``add_training`` of a policy that sets ``holds_paid_training`` (training-v2) is rejected first, whatever the
-    authorization says (``TRAINING_V2_EXECUTE_HOLD``).
     Requests the authorization does not allow, and any request with a planned
     starbux cost, move to ``rejected``. In canary mode only the first
     remaining canary-safe request is kept; when none remains and the policy
@@ -1035,31 +1032,69 @@ class AuthorizedPolicy:
     ``collect_all_resources`` request is planned instead, if the gate allows it
     for the account and its preconditions hold. ``journal`` supplies the events
     the battle cap is checked with.
+
+    A policy that runs its training starts under the attempt store and account lock (``guarded_training``:
+    training-v2) is planned with the authorization applied first: fleet-v1's requests the gate refuses are rejected
+    before the crew plan counts action slots and funds, and before ``max_requests`` caps the plan. Its refused start
+    reads ``not_authorized: ...`` and a starbux-priced one ``premium_currency: ...``. With ``training_block`` (an
+    unresolved attempt, SPEC-14 S14-R5) every start is rejected with that reason, and the reason is recorded even
+    when no start was planned; the progression requests still run.
     """
 
     def __init__(self, policy: ProgressionPolicy, gate: ExecutionGate,
-                 journal: Optional[GameplayJournal] = None) -> None:
+                 journal: Optional[GameplayJournal] = None, *, training_block: Optional[str] = None) -> None:
         self.policy = policy
         self.gate = gate
         self.journal = journal
         self.name = policy.name
+        self.training_block = training_block
+
+    def _refusal(self, snapshot: AccountSnapshot, request: ActionRequest, guarded: bool,
+                 events: Optional[Callable[[], Iterable[GameplayEvent]]]) -> Optional[str]:
+        """Why the gate rejects ``request``, as the plan records it, or ``None``."""
+        start = guarded and request.action_id == TRAINING_START
+        refusal = self.gate.refusal(snapshot.account_alias, request.action_id, events)
+        if refusal is not None:
+            return f"{NOT_AUTHORIZED}: {refusal}" if start else f"not authorized: {refusal}"
+        if planned_cost(request.expected_cost).get("starbux"):
+            return ("premium_currency: " if start else "") + "starbux spending is disabled in execute runs"
+        return None
+
+    def _guarded_plan(self, snapshot: AccountSnapshot, design: DesignData, config: PolicyConfig,
+                      events: Optional[Callable[[], Iterable[GameplayEvent]]]) -> Plan:
+        """training-v2's plan (fleet-v1 uncapped, then the crew plan, then the cap) over the authorized base only."""
+        base = FleetV1.plan(self.policy, snapshot, design, replace(config, max_requests=None))
+        allowed, refused = [], []
+        for request in base.requests:
+            why = self._refusal(snapshot, request, True, events)
+            if why is None:
+                allowed.append(request)
+            else:
+                refused.append(Rejection(_candidate(request.action_id, request.params), why))
+        preview = self.policy.crew_plan(snapshot, design, config, replace(base, requests=tuple(allowed)))
+        kept, rejected = _cap_requests(allowed + list(preview.requests),
+                                       list(base.rejected) + refused + list(preview.rejected), config.max_requests)
+        return replace(base, requests=tuple(kept), rejected=tuple(rejected))
 
     def plan(self, snapshot: AccountSnapshot, design: DesignData, config: PolicyConfig) -> Plan:
-        plan = self.policy.plan(snapshot, design, config)
-        kept, rejected = [], list(plan.rejected)
         events = self.journal.read if self.journal is not None else None
+        guarded = guarded_training(self.policy)
+        plan = (self._guarded_plan(snapshot, design, config, events) if guarded
+                else self.policy.plan(snapshot, design, config))
+        kept, rejected = [], list(plan.rejected)
+        block = self.training_block if guarded else None
         for request in plan.requests:
             label = _candidate(request.action_id, request.params)
-            if getattr(self.policy, "holds_paid_training", False) and request.action_id == "add_training":
-                rejected.append(Rejection(label, TRAINING_V2_EXECUTE_HOLD_REASON))
+            if block is not None and request.action_id == TRAINING_START:
+                rejected.append(Rejection(label, block))
                 continue
-            refusal = self.gate.refusal(snapshot.account_alias, request.action_id, events)
+            refusal = self._refusal(snapshot, request, guarded, events)
             if refusal is not None:
-                rejected.append(Rejection(label, f"not authorized: {refusal}"))
-            elif planned_cost(request.expected_cost).get("starbux"):
-                rejected.append(Rejection(label, "starbux spending is disabled in execute runs"))
+                rejected.append(Rejection(label, refusal))
             else:
                 kept.append(request)
+        if block is not None and all(request.action_id != TRAINING_START for request in plan.requests):
+            rejected.append(Rejection("training", block))
         if self.gate.canary:
             first = next((index for index, request in enumerate(kept) if _canary_safe(request.action_id)), None)
             canary = kept[first] if first is not None else None
@@ -1278,7 +1313,7 @@ class GatedActionRunner(ActionRunner):
         refusal = self._refusal(action_id, expected_cost) or self.gate.params_refusal(
             action_id, dict(params or {}))
         if refusal is not None:
-            self._record(get_spec(action_id), self.clock(), dict(params or {}), outcome="skipped",
+            self._record(self.spec_for(action_id), self.clock(), dict(params or {}), outcome="skipped",
                          reason=f"execute gate refused: {refusal}", attempted=False,
                          error_class="ExecutionRefusedError", dry_run=dry_run)
             raise ExecutionRefusedError(refusal)
@@ -1299,15 +1334,27 @@ class _ExecuteGateMixin:
     as with the stop file (in concurrent mode, an action already in flight
     finishes). The fleet run's reasons then name the halt, not the stop file,
     and the halt is the fleet's ``stop_reason``.
+
+    training-v2 in ``full`` mode (SPEC-14 step 4, ``guarded_training``): once the account's identity is verified
+    (login, journal claim and first snapshot make no mutating request), ``attempts`` takes the account's non-blocking
+    lock, keyed by that identity, and reads its attempt store; the whole scheduler run (planning, progression
+    actions, the training start and its settlement) happens under the lock, which is released however the run ends.
+    An account whose lock another dispatch holds ends ``locked`` with no account write; it does not count as stopped,
+    so it never halts the fleet. A missing or unreadable store, or one of another identity, ends it ``error``. The
+    runner then uses ``STRICT_ADD_TRAINING`` and the dispatch's guard: the start is rechecked on the runner's fresh
+    read, its intent is written before it is sent and settled once journaled, and an unresolved attempt pauses every
+    start.
     """
 
     def __init__(self, registry: AccountRegistry, factory: Callable[[AccountProfile], AccountContext], *,
-                 gate: ExecutionGate, halt_share: float = DEFAULT_HALT_SHARE, **kwargs: Any) -> None:
+                 gate: ExecutionGate, halt_share: float = DEFAULT_HALT_SHARE,
+                 attempts: Optional[TrainingAttempts] = None, **kwargs: Any) -> None:
         if isinstance(halt_share, bool) or not isinstance(halt_share, (int, float)) or not 0 <= halt_share < 1:
             raise ValueError("halt_share must be at least 0 and below 1")
         super().__init__(registry, factory, **kwargs)
         self.gate = gate
         self.halt_share = halt_share
+        self.attempts = attempts
         self._gate_lock = threading.Lock()
         self.reports: dict[str, ScheduleReport] = {}
         self._stopped: set[str] = set()
@@ -1332,8 +1379,37 @@ class _ExecuteGateMixin:
     def _stop_requested(self) -> bool:
         return super()._stop_requested() or self._halted() is not None
 
+    def _guarded(self, profile: AccountProfile) -> bool:
+        """Whether this account's run takes the training lock and attempt store (training-v2, full mode)."""
+        if self.gate.mode != FULL:
+            return False
+        try:
+            return guarded_training(get_policy(profile.policy_id))
+        except Exception:  # an unknown policy fails inside the scheduler run, as before
+            return False
+
     def _run_scheduler(self, profile: AccountProfile, context: AccountContext, execute: bool,
                        started: float, claims: Optional[FleetClaims] = None) -> AccountRun:
+        if not execute or not self._guarded(profile):
+            return self._run_gated(profile, context, execute, started, claims)
+        identity = claims.identity(profile.alias) if claims is not None else None
+        if self.attempts is None:
+            return self._finish(profile, started, "error",
+                                f"{STATE_MISSING}: this run was given no training attempt store", game_identity=identity)
+        with self.attempts.dispatch(profile.alias, identity) as dispatch:  # the account lock is taken here
+            if dispatch.locked:
+                return self._finish(profile, started, "locked", dispatch.refusal, game_identity=identity)
+            if dispatch.refusal is not None:
+                return self._finish(profile, started, "error", dispatch.refusal, game_identity=identity)
+            return self._run_gated(profile, context, execute, started, claims, dispatch=dispatch)
+        # ... and released when the block exits, however it exits (never settled there)
+
+    def _training_recheck(self, profile: AccountProfile, context: AccountContext, policy: ProgressionPolicy):
+        """The start's recheck on the runner's fresh read: the same start at the same price must still be planned."""
+        return None
+
+    def _run_gated(self, profile: AccountProfile, context: AccountContext, execute: bool, started: float,
+                   claims: Optional[FleetClaims] = None, dispatch: Any = None) -> AccountRun:
         identity = claims.identity(profile.alias) if claims is not None else None
         try:
             gated = self.gate.profile(profile)
@@ -1341,14 +1417,23 @@ class _ExecuteGateMixin:
             policy_config, remaining = budgeted_policy_config(gated, spent, self.base_policy_config)
             provider = (claims.pinned_provider(profile.alias, context.snapshot_provider) if claims is not None
                         else context.snapshot_provider)
+            guard_options: dict[str, Any] = {}
+            training_block = None
+            if dispatch is not None:
+                recheck = self._training_recheck(profile, context, get_policy(profile.policy_id))
+                guard_options = {"specs": {TRAINING_START: STRICT_ADD_TRAINING},
+                                 "attempt_guard": dispatch.guard(recheck, self.clock)}
+                training_block = dispatch.block_reason()
             runner = GatedActionRunner(self.gate, gated.budgets, self.period, profile.alias, context.client,
-                                       provider, context.journal, clock=self.clock, halted=self._halted)
+                                       provider, context.journal, clock=self.clock, halted=self._halted,
+                                       **guard_options)
             if self.gate.placing:
                 policy = PlacementPolicy(self.gate, ship_layout(context.client))
             elif self.gate.upgrading_ship:
                 policy = HullUpgradePolicy(self.gate)
             else:
-                policy = AuthorizedPolicy(get_policy(profile.policy_id), self.gate, context.journal)
+                policy = AuthorizedPolicy(get_policy(profile.policy_id), self.gate, context.journal,
+                                          training_block=training_block)
             scheduler = DailyScheduler(
                 runner, policy, context.design,
                 policy_config,

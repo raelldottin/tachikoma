@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 
 from unittest.mock import patch
 
-from sdk.actions import check_preconditions, get_spec
+from sdk.actions import CATALOG, check_preconditions, get_spec
 from sdk.execution.runner import planned_cost
 from sdk.policy import ActionRequest, DesignData, PolicyConfig, Rejection
 from sdk.policy.training import DEFERRED, TrainingV1, training_context, training_payloads, training_strategy
@@ -1282,29 +1282,99 @@ def execute_gate(actions=("add_training", "finish_training", "use_consumable", "
     return ExecutionGate(authorization, registry, mode, lambda: now)
 
 
-class ExecuteHoldTests(unittest.TestCase):
-    # Verifies: S14-R4
-    def plan(self, policy_id, gate):
+class TrainingV2ExecuteGateTests(unittest.TestCase):
+    """training-v2 under --fleet-execute: no hold any more; its start is authorized, priced and capped like the rest,
+    and an unresolved attempt pauses every start (SPEC-14 step 4)."""
+
+    def plan(self, policy, gate, snapshot=None, data=None, training_block=None, **config):
         from sdk.fleet.factory import AuthorizedPolicy
         from sdk.policy import get_policy
 
-        snapshot = v2_snap() if policy_id == "training-v2" else snap([crew("102", "Delish", room="12")])
-        return AuthorizedPolicy(get_policy(policy_id), gate).plan(snapshot, design(), PolicyConfig())
+        policy = get_policy(policy) if isinstance(policy, str) else policy
+        if snapshot is None:
+            snapshot = v2_snap() if policy.name == "training-v2" else snap([crew("102", "Delish", room="12")])
+        return AuthorizedPolicy(policy, gate, training_block=training_block).plan(
+            snapshot, data or design(), PolicyConfig(**config))
 
-    def test_training_v2_add_training_is_held_under_execute(self):
-        self.assertIn(V2_START, training_ids(v2_plan()))  # control: the plain policy (dry run) plans it
+    # Verifies: S14-R4
+    def test_training_v2_selects_the_guarded_execute_path_by_its_attribute(self):
+        from sdk.fleet.attempts import guarded_training
+        from sdk.policy import TrainingV2, get_policy
+
+        class RenamedV2(TrainingV2):
+            name = "training-v2-renamed"
+
+        class Unguarded(TrainingV2):
+            holds_paid_training = False
+
+        self.assertIs(TrainingV2.holds_paid_training, True)
+        self.assertTrue(guarded_training(TrainingV2()))
+        self.assertTrue(guarded_training(RenamedV2()))
+        self.assertFalse(guarded_training(Unguarded()))
+        self.assertFalse(guarded_training(get_policy("training-v1")))
+        self.assertFalse(guarded_training(get_policy("fleet-v1")))
+
+    # Verifies: S14-R4
+    def test_authorized_training_v2_start_is_kept_with_its_price(self):
         result = self.plan("training-v2", execute_gate())
-        self.assertEqual(training_requests(result), [])
-        self.assertEqual(reasons(result)["add_training 40001 101"],
-                         "training_v2_execute_hold: training-v2 starts no paid course under --fleet-execute until "
-                         "SPEC-14 step 4")
-        self.assertTrue(result.requests)  # the progression block still runs
+        starts = [(request.action_id, dict(request.params), dict(request.expected_cost))
+                  for request in training_requests(result)]
+        self.assertEqual(starts, [("add_training", V2_START[1], {"minerals": 500, "gas": 0})])
+        self.assertNotIn("add_training 40001 101", reasons(result))
 
-    def test_hold_comes_before_authorization_and_canary(self):
-        for gate in (execute_gate(mode="canary"), execute_gate(actions=["collect_daily_reward"])):
-            with self.subTest(mode=gate.canary):
-                result = self.plan("training-v2", gate)
-                self.assertTrue(reasons(result)["add_training 40001 101"].startswith("training_v2_execute_hold: "))
+    def test_unauthorized_training_v2_start_names_not_authorized(self):
+        result = self.plan("training-v2", execute_gate(actions=["collect_daily_reward"]))
+        self.assertEqual(training_requests(result), [])
+        self.assertTrue(reasons(result)["add_training 40001 101"].startswith(
+            "not_authorized: action 'add_training' is not allowed by the authorization"), reasons(result))
+        # other refused actions keep their text
+        others = [reason for candidate, reason in reasons(result).items() if candidate.split()[0] in CATALOG
+                  and not candidate.startswith("add_training")]
+        self.assertTrue(others and all(reason.startswith("not authorized: ") for reason in others), others)
+
+    # Verifies: S14-R5
+    def test_training_block_rejects_every_start_and_is_always_recorded(self):
+        block = "unresolved_attempt: training attempt 0123abcd (character 9, course 1) is pending"
+        result = self.plan("training-v2", execute_gate(), training_block=block)
+        self.assertEqual(training_requests(result), [])
+        self.assertEqual(reasons(result)["add_training 40001 101"], block)
+        self.assertTrue(result.requests)  # the progression block still runs
+        nothing_planned = self.plan("training-v2", execute_gate(), snapshot=v2_snap([]), training_block=block)
+        self.assertEqual(reasons(nothing_planned)["training"], block)
+        # a policy without the attribute ignores a block
+        v1 = self.plan("training-v1", execute_gate(), training_block=block)
+        self.assertEqual([request.action_id for request in training_requests(v1)], ["add_training"])
+
+    def test_canary_still_keeps_no_training_start(self):
+        result = self.plan("training-v2", execute_gate(mode="canary"))
+        self.assertEqual(training_requests(result), [])
+        self.assertEqual(len(result.requests), 1)
+
+    # Verifies: S14-R4
+    def test_authorization_is_applied_before_max_requests(self):
+        rich = v2_snap(rooms=STORAGE_ROOMS, resources={"minerals": "2000", "gas": "2000", "starbux": "5"})
+        data = design(room_designs=STORAGE_DESIGNS)
+        gate = execute_gate(actions=["add_training", "upgrade_room"])
+        result = self.plan("training-v2", gate, snapshot=rich, data=data, max_requests=1)
+        self.assertEqual([request.action_id for request in result.requests], ["upgrade_room"])
+        self.assertTrue(reasons(result)["training 101"].startswith("action_cap_reached: "), reasons(result))
+        two = self.plan("training-v2", gate, snapshot=rich, data=data, max_requests=2)
+        self.assertEqual([request.action_id for request in two.requests], ["upgrade_room", "add_training"])
+
+    def test_guarded_plan_equals_the_policy_plan_when_everything_is_authorized(self):
+        from sdk.policy import get_policy
+
+        everything = execute_gate(actions=sorted(set(CATALOG) - {"run_pvp_battle", "place_room", "upgrade_ship"}))
+        for snapshot, data, config in ((v2_snap(), design(), {}), (v2_snap(), design(), {"max_requests": 2}),
+                                       (v2_snap(rooms=STORAGE_ROOMS), design(room_designs=STORAGE_DESIGNS),
+                                        {"max_requests": 3})):
+            with self.subTest(config=config):
+                plain = get_policy("training-v2").plan(snapshot, data, PolicyConfig(**config))
+                gated = self.plan("training-v2", everything, snapshot=snapshot, data=data, **config)
+                # starbux-priced requests are the only ones an all-actions authorization still refuses
+                self.assertEqual([request for request in gated.requests],
+                                 [request for request in plain.requests if not planned_cost(request.expected_cost)
+                                  .get("starbux")])
 
     def test_training_v1_add_training_unchanged(self):
         result = self.plan("training-v1", execute_gate())
@@ -1313,34 +1383,14 @@ class ExecuteHoldTests(unittest.TestCase):
                          [("add_training", {"training_design_id": "5030", "character_id": "102"},
                            {"minerals": 0, "gas": 0})])
 
-    def test_hold_follows_the_policy_attribute_not_its_name(self):
-        from sdk.fleet.factory import AuthorizedPolicy
-        from sdk.policy import TrainingV2, get_policy
-
-        class RenamedV2(TrainingV2):
-            name = "training-v2-renamed"
-
-        self.assertIs(TrainingV2.holds_paid_training, True)
-        self.assertFalse(hasattr(get_policy("training-v1"), "holds_paid_training"))
-        result = AuthorizedPolicy(RenamedV2(), execute_gate()).plan(v2_snap(), design(), PolicyConfig())
-        self.assertEqual(training_requests(result), [])
-        self.assertTrue(reasons(result)["add_training 40001 101"].startswith("training_v2_execute_hold: "))
-
-        class Unheld(TrainingV2):
-            holds_paid_training = False
-
-        released = AuthorizedPolicy(Unheld(), execute_gate()).plan(v2_snap(), design(), PolicyConfig())
-        self.assertEqual([request.action_id for request in training_requests(released)], ["add_training"])
-
-    def test_hold_code_is_stable(self):
-        import json
-
+    def test_the_hold_is_gone_and_the_strict_spec_is_the_catalog_replace(self):
+        from sdk.actions.catalog import training_start_verified
         from sdk.fleet import factory
 
-        self.assertEqual(factory.TRAINING_V2_EXECUTE_HOLD, "training_v2_execute_hold")
-        with open(os.path.join(REPO_ROOT, "tests/fixtures/training/workflow_benchmark.json"), encoding="utf-8") as fh:
-            vocabulary = json.load(fh)["vocabulary"]["skip_codes"]
-        self.assertNotIn(factory.TRAINING_V2_EXECUTE_HOLD, vocabulary)
+        self.assertFalse(hasattr(factory, "TRAINING_V2_EXECUTE_HOLD"))
+        self.assertFalse(hasattr(factory, "TRAINING_V2_EXECUTE_HOLD_REASON"))
+        self.assertEqual(factory.STRICT_ADD_TRAINING,
+                         replace(get_spec("add_training"), postcondition=training_start_verified))
 
 
 if __name__ == "__main__":
