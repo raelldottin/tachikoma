@@ -758,14 +758,14 @@ class TestResearchLevel(EndpointCase):
         self.assertEqual(self.client.listAllResearchDesigns2.call_count, 1)
 
     def test_a_failed_fetch_leaves_no_placeholder_for_other_readers(self):
-        """speedUpResearchUsingBoostGauge fetches designs only when the attribute is absent; None would crash it."""
+        """A failed fetch leaves the attribute absent, not None; the research boost does not read designs at all."""
         self.client.listAllResearches = MagicMock()
         self.client.listAllResearchDesigns2 = MagicMock(return_value=False)
         self.assertEqual(self.client.getResearchLevel("Fitness"), 0)
         self.assertFalse(hasattr(self.client, "allResearches"))
         self.assertFalse(hasattr(self.client, "allResearchDesigns"))
         self.client.request = MagicMock(return_value=None)
-        self.assertIs(self.client.speedUpResearchUsingBoostGauge("1", "900"), False)
+        self.assertIs(self.client.speedUpResearchUsingBoostGauge("1"), False)
         self.assertEqual(self.client.listAllResearchDesigns2.call_count, 1)
 
     def test_lists_already_loaded_are_used_without_fetching(self):

@@ -1174,13 +1174,29 @@ class FakePss:
             return envelope("ShipService", "GetShipByUserId", el("Ship", attrs, rooms))
         return envelope("ShipService", "GetShipByUserId", el("Ship", attrs, rooms, researches))
 
+    # Boost-gauge speedups check that the id names something under way; they leave the world unchanged.
     def _h_speed_up_ship_construction(self, p: dict) -> str:
+        ship = self.state.ship
+        if p.get("shipId") != ship.ship_id:
+            raise _Reject(f"Ship {p.get('shipId')!r} not found", violation=True)
+        if ship.upgrade_design_id in ("", "0"):
+            raise _Reject("Ship is not under construction")
         return envelope("ShipService", "SpeedUpShipConstructionUsingBoostGauge", result="Success")
 
     def _h_speed_up_research(self, p: dict) -> str:
+        research = next((r for r in self.state.researches if r.id is not None and r.id == p.get("researchId")), None)
+        if research is None:
+            raise _Reject(f"Research {p.get('researchId')!r} not found", violation=True)
+        if research.state != "Researching":
+            raise _Reject("Research is not in progress")
         return envelope("ResearchService", "SpeedUpResearchUsingBoostGauge", result="Success")
 
     def _h_speed_up_room_construction(self, p: dict) -> str:
+        room = next((r for r in self.state.rooms if r.id == p.get("roomId")), None)
+        if room is None:
+            raise _Reject(f"Room {p.get('roomId')!r} not found", violation=True)
+        if room.status != "Upgrading":
+            raise _Reject("Room is not under construction")
         return envelope("RoomService", "SpeedUpRoomConstructionUsingBoostGauge", result="Success")
 
     def _h_rooms(self, p: dict) -> str:
@@ -1503,7 +1519,7 @@ class FakePss:
         if design.gas_cost > state.resources.gas:
             raise _Reject("Not enough gas")
         state.resources.gas -= design.gas_cost
-        research = Research(design.id, "Researching")
+        research = Research(design.id, "Researching", id=str(700000 + len(state.researches)))
         state.researches.append(research)
         return envelope("ResearchService", "AddResearch", el("Research", self._research_attrs(research)))
 
@@ -1536,6 +1552,8 @@ class FakePss:
     @staticmethod
     def _research_attrs(research) -> dict:
         attrs = {"ResearchDesignId": research.design_id, "ResearchState": research.state}
+        if research.id is not None:
+            attrs["ResearchId"] = research.id
         if research.name is not None:
             attrs["ResearchName"] = research.name
         if research.level is not None:

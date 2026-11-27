@@ -573,29 +573,37 @@
       "name": "speedUpResearchUsingBoostGauge",
       "pillar": "B",
       "kind": "mutating",
-      "evidence": "untested",
-      "tests": []
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_boost.py"
+      ]
     },
     {
       "name": "speedUpRoomConstructionUsingBoostGauge",
       "pillar": "B",
       "kind": "mutating",
-      "evidence": "untested",
-      "tests": []
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_boost.py"
+      ]
     },
     {
       "name": "speedUpShipConstructionUsingBoostGauge",
       "pillar": "B",
       "kind": "mutating",
-      "evidence": "untested",
-      "tests": []
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_boost.py"
+      ]
     },
     {
       "name": "speedUpBoostGauge",
       "pillar": "B",
       "kind": "mutating",
-      "evidence": "untested",
-      "tests": []
+      "evidence": "mocked-test",
+      "tests": [
+        "tests/test_boost.py"
+      ]
     },
     {
       "name": "upgradeResearches",
