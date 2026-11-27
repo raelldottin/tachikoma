@@ -2845,7 +2845,8 @@
         "tests/test_training_planner.py",
         "tests/test_training_policy.py",
         "tests/test_crew_plan.py",
-        "tests/test_training_endpoints.py"
+        "tests/test_training_endpoints.py",
+        "tests/test_progression_policy.py"
       ],
       "required_validations": [
         "make syntax-check",
@@ -2855,7 +2856,7 @@
       "depends_on": [
         "spec14-training-observations"
       ],
-      "max_files_changed": 16,
+      "max_files_changed": 17,
       "notes": "Implements S14-R1, S14-R2, S14-R3 (SPEC-14). Read docs/specs/SPEC-14-automated-crew-training.md, the frozen harness contract in scripts/training_workflow_benchmark.py (items 5 and 6: crew-plan and Prestige line formats, skip codes, vocabulary) and the hand-off section of #301. Add training-v2 to the policy registry on top of training-v1: deterministic role assignment from observed stats (distinct repair, shields and weapons specialists first, ties by character instance id, unobserved stats unknown, role_uncovered reported), course choice by assigned stat, room, room level, research, fatigue, training points and observed price, and read-only --crew-plan with Prestige routes resolved by design id (duplicates counted). Previews make no gameplay writes. Paid execution, the attempt store, the lock, --fleet-provision-training, --fleet-resolve-training and the pre-login refusals belong to spec14-training-execution: do not add them, not even as stubs. Keep training-v1, baseline-v1 and the legacy daily run unchanged, and keep the training benchmark and blocking mutation gate green."
     }
   ]
