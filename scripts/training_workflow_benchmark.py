@@ -1085,9 +1085,16 @@ def _fail_settle_writes(ctx: ScenarioRun, sid: str) -> Callable[[], None]:
 # are not PRE_KEYS; a DERIVED_OP_KEYS operation is refused by _validate_op), so no frozen trace can change. They read
 # production's store layout beyond INTERFACE ASSUMPTIONS item 2 (the establishment markers, the attempt fields), so
 # each records a witness: an option with nothing to act on fails its variant's clean run by name, never silently.
-DERIVED_PRE_KEYS = frozenset({"remove_marker", "corrupt_attempt", "hold_lock"})
+# QA round 2 added: policy_id (the step's registry policy, over a control's override), mode (another execute mode,
+# authorized for the step with its canary fallback action), day_start and dry_run_age_s (the fake clock moved to the
+# next UTC midnight, or to the latest stamped dry run's finish plus N seconds, with run.py's dry-run and execute entries
+# reading the fake clock for the step), fail_replace (the attempt store's os.replace raises) and store_as_directory.
+DERIVED_PRE_KEYS = frozenset({"remove_marker", "corrupt_attempt", "hold_lock", "policy_id", "mode", "day_start",
+                              "dry_run_age_s", "fail_replace", "store_as_directory"})
 DERIVED_OP_KEYS = frozenset({"timer_over"})
 MARKER_DIR = "training-provisioned"  # <journal dir>/training-provisioned/<game identity>.json (sdk.fleet.attempts)
+CANARY_FALLBACK = "collect_all_resources"  # sdk.fleet.factory.CANARY_FALLBACK_ACTION: the canary's account write
+RUN_ENTRIES = ("run_fleet_dry_run", "run_fleet_execute")  # run.py entries that take a clock (INTERFACE item 1 commands)
 
 
 def _store_payloads(ctx: ScenarioRun, aliases: Sequence[str]) -> list[tuple[Path, dict]]:
@@ -1105,7 +1112,9 @@ def _store_payloads(ctx: ScenarioRun, aliases: Sequence[str]) -> list[tuple[Path
 
 def _derived_pre(ctx: ScenarioRun, step: Mapping, sid: str) -> None:
     """remove_marker: delete the establishment markers naming the step's accounts (their store stays);
-    corrupt_attempt: add an unknown field to the first attempt of each store."""
+    corrupt_attempt: add an unknown field to the first attempt of each store; day_start, dry_run_age_s: move the fake
+    clock (forward to the next UTC midnight; to the latest stamped dry run's finish plus N seconds); store_as_directory:
+    a directory in place of each store file."""
     pre, aliases = step.get("pre", {}), _step_aliases(ctx, step)
     if pre.get("remove_marker"):
         root, removed = ctx.journals / MARKER_DIR, 0
@@ -1127,14 +1136,41 @@ def _derived_pre(ctx: ScenarioRun, step: Mapping, sid: str) -> None:
                 path.write_text(json.dumps(payload), encoding="utf-8")
                 changed += 1
         _witness(ctx, f"{sid}:attempt_corrupted", changed > 0, f"the store of {aliases} holds no attempt")
+    clock = _primary(ctx).clock
+    if pre.get("day_start"):
+        clock.now = datetime.datetime.combine(clock.now.date() + datetime.timedelta(days=1), datetime.time())
+    if pre.get("dry_run_age_s") is not None:
+        finished = [datetime.datetime.fromisoformat(event.finished_at).astimezone(datetime.timezone.utc)
+                    for alias in aliases for event in _journal_events(ctx, alias) or ()
+                    if event.dry_run and isinstance((event.evidence or {}).get("dry_run_id"), str)]
+        if finished:
+            clock.now = max(finished).replace(tzinfo=None) + datetime.timedelta(seconds=pre["dry_run_age_s"])
+        _witness(ctx, f"{sid}:dry_run_aged", bool(finished), f"no stamped dry run in the journal of {aliases}")
+    if pre.get("store_as_directory"):
+        replaced = 0
+        for path in (ctx.journals / STORE_DIR / f"{alias}.json" for alias in aliases):
+            if path.is_file():
+                path.unlink()
+                path.mkdir()
+                replaced += 1
+        _witness(ctx, f"{sid}:store_is_directory", replaced > 0, f"no attempt store file of {aliases} to replace")
 
 
-def _hold_locks(ctx: ScenarioRun, sid: str) -> Callable[[], None]:
-    """hold_lock (derived variants, one-account scenarios): an exclusive flock on every account lock file under
-    <journal dir>/STORE_DIR/ for the step, as a dispatch holding it would; returns the release and witness check."""
-    root, held = ctx.journals / STORE_DIR, []
-    for path in sorted(root.glob("*.lock")) if root.is_dir() else ():
-        fd = os.open(path, os.O_RDWR)
+def _identity_of(account: Mapping) -> str:
+    from sdk.state.snapshot import game_identity_fingerprint
+
+    return game_identity_fingerprint(account["user_id"], SALT)
+
+
+def _hold_locks(ctx: ScenarioRun, step: Mapping, sid: str) -> Callable[[], None]:
+    """hold_lock (derived variants): an exclusive flock on <journal dir>/STORE_DIR/<declared game identity>.lock of
+    each of the step's accounts (created if production has not yet), as a dispatch holding it would, and on no other
+    file (QA round 2 D1: a lock keyed by anything else must not look held); returns the release and witness check."""
+    root, held, aliases = ctx.journals / STORE_DIR, [], _step_aliases(ctx, step)
+    for account in ctx.accounts if root.is_dir() else ():
+        if account["alias"] not in aliases:
+            continue
+        fd = os.open(root / f"{_identity_of(account)}.lock", os.O_RDWR | os.O_CREAT, 0o600)
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             held.append(fd)
@@ -1145,7 +1181,8 @@ def _hold_locks(ctx: ScenarioRun, sid: str) -> Callable[[], None]:
         for fd in held:
             fcntl.flock(fd, fcntl.LOCK_UN)
             os.close(fd)
-        _witness(ctx, f"{sid}:lock_held", bool(held), f"no account lock file under <journal dir>/{STORE_DIR}/ to hold")
+        _witness(ctx, f"{sid}:lock_held", bool(held), f"no account lock of {aliases} under <journal dir>/{STORE_DIR}/ "
+                                                      "could be held")
 
     return release
 
@@ -1212,8 +1249,62 @@ def _arm(ctx: ScenarioRun, step: Mapping, sid: str) -> list[Callable[[], None]]:
     if step.get("pre", {}).get("fail_settle_write"):
         checks.append(_fail_settle_writes(ctx, sid))
     if step.get("pre", {}).get("hold_lock"):
-        checks.append(_hold_locks(ctx, sid))
+        checks.append(_hold_locks(ctx, step, sid))
+    if step.get("pre", {}).get("fail_replace"):
+        checks.append(_fail_store_replace(ctx, sid))
+    if step.get("pre", {}).get("day_start") or step.get("pre", {}).get("dry_run_age_s") is not None:
+        checks.append(_run_on_fake_clock(ctx))
     return checks
+
+
+class _ReplaceFails:
+    """sdk.fleet.attempts' ``os`` for one step: ``replace`` raises, every other attribute is the real module's."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(os, name)
+
+    def replace(self, *args, **kwargs):
+        self.calls += 1
+        raise OSError("workflow benchmark: injected os.replace failure (sdk.fleet.attempts)")
+
+
+def _fail_store_replace(ctx: ScenarioRun, sid: str) -> Callable[[], None]:
+    """fail_replace: every atomic replace of the attempt store fails for the step (QA round 2 D7: a store write that
+    does not go through a temporary file and os.replace would still land)."""
+    proxy = _ReplaceFails()
+    patcher = patch.object(_module("sdk.fleet.attempts"), "os", proxy)
+    patcher.start()
+
+    def check() -> None:
+        patcher.stop()
+        _witness(ctx, f"{sid}:replace_failed", proxy.calls > 0, "the attempt store never replaced a file")
+
+    return check
+
+
+def _run_on_fake_clock(ctx: ScenarioRun) -> Callable[[], None]:
+    """run.py's dry-run and execute entries read the fake clock for the step (they default to the real one); returns
+    the restore."""
+    run, clock = _run_module(), _primary(ctx).clock
+
+    def on_fake_clock(original):
+        def entry(*args, **kwargs):
+            return original(*args, **{**kwargs, "clock": lambda: clock.now.replace(tzinfo=datetime.timezone.utc)})
+
+        return entry
+
+    patchers = [patch.object(run, name, on_fake_clock(getattr(run, name))) for name in RUN_ENTRIES]
+    for patcher in patchers:
+        patcher.start()
+
+    def restore() -> None:
+        for patcher in patchers:
+            patcher.stop()
+
+    return restore
 
 
 def _disarm_fault(fault) -> None:
@@ -1329,14 +1420,23 @@ def _argv(ctx: ScenarioRun, step: Mapping, registry: str, alias: str | None = No
     argv = [part.format(**values) for part in ARGV_TEMPLATES[step["kind"]]]
     if step["kind"] == "execute" and step.get("concurrent"):
         argv += ["--concurrent", str(step["concurrent"])]
+    mode = step.get("pre", {}).get("mode")
+    if step["kind"] == "execute" and mode:  # derived variants only: another execute mode, authorized for the step
+        name = f"authorization-{step['id']}.json"
+        payload = authorization_payload(ctx.accounts, datetime.datetime.now(datetime.timezone.utc))
+        payload.update(modes=[mode], actions=sorted({*payload["actions"], CANARY_FALLBACK}))
+        _write_json(ctx.directory / name, payload)
+        argv[argv.index("--mode") + 1], argv[argv.index("--authorization") + 1] = mode, name
     return argv
 
 
 def _registry_for(ctx: ScenarioRun, step: Mapping) -> str:
-    if not step.get("registry_variant"):
+    policy = step.get("pre", {}).get("policy_id")  # derived variants only: this step's policy, over any override
+    if not step.get("registry_variant") and not policy:
         return REGISTRY_FILE
     name = f"registry-{step['id']}.json"
-    _write_json(ctx.directory / name, registry_payload(ctx.accounts, ctx.policy_override, step["registry_variant"]))
+    _write_json(ctx.directory / name, registry_payload(ctx.accounts, policy or ctx.policy_override,
+                                                       step.get("registry_variant")))
     return name
 
 
@@ -3049,6 +3149,100 @@ def _currency_blind(original):
     return lambda cost: {"total": sum(original(cost).values())}
 
 
+def _uncertainty_left_to_store(original):
+    """QA2 D15: with an attempt guard, the runner leaves uncertainty to the guard's store (the journal's unknown
+    attempts are ignored)."""
+    def uncertain(self, spec, params):
+        return False if self._guard_for(spec) is not None else original(self, spec, params)
+
+    return uncertain
+
+
+class _AliasKeyedLock:
+    def __init__(self, lock, alias: str) -> None:
+        self.lock, self.alias = lock, alias
+
+    def try_acquire(self, identity):
+        with patch.object(_module("sdk.fleet.attempts"), "_check_identity", lambda value: value):
+            return self.lock.try_acquire(self.alias)
+
+
+def _lock_by_alias(original):
+    """QA2 D1: the dispatch takes <alias>.lock instead of <game identity>.lock."""
+    def dispatch(self, alias, identity):
+        return original(dataclasses.replace(self, lock=_AliasKeyedLock(self.lock, alias)), alias, identity)
+
+    return dispatch
+
+
+def _guarded_in_full_mode_only(original):
+    """QA2 D5: an execute run in any mode but full goes down the unguarded path (no lock, no store)."""
+    def run_scheduler(self, profile, context, execute, started, claims=None):
+        if execute and self.gate.mode != _module("sdk.fleet.factory").FULL:
+            return self._run_gated(profile, context, execute, started, claims)
+        return original(self, profile, context, execute, started, claims)
+
+    return run_scheduler
+
+
+def _dry_run_age_by_day(original):
+    """QA2 D13: a dry run's age counted in calendar days (one finished yesterday always qualifies)."""
+    def latest(events, profile, stamp, now, max_age=datetime.timedelta(hours=24)):
+        plan, why = original(events, profile, stamp, now, max_age=datetime.timedelta(days=3650))
+        if plan is not None and (now.date() - plan.finished_at.date()).days > max_age.days:
+            return None, f"its latest dry run is older than {int(max_age.total_seconds() // 3600)} hours"
+        return plan, why
+
+    return latest
+
+
+def _unobserved_funds_enough(original, course, room, inputs, policy):
+    """QA2 D14: an unobserved balance counts as enough for the course."""
+    price = course.price
+    if price.currency is not None and inputs.funds.get(price.currency) is None:
+        inputs = dataclasses.replace(inputs, funds={**inputs.funds, price.currency: price.amount})
+    return original(course, room, inputs, policy)
+
+
+def _write_in_place(self, alias, data):
+    """QA2 D7: the store written in place (no temporary file, no fsync, no os.replace)."""
+    self.path(alias).write_bytes(data)
+
+
+def _any_error_missing(original):
+    """QA2 D11: any OSError reading the store (a directory in its place included) treated as a missing store."""
+    def read(self, alias):
+        try:
+            return self.path(alias).read_bytes()
+        except OSError:
+            return None
+
+    return read
+
+
+def _resolution_links_intent(original):
+    """QA2 D2: a resolution records the intent id as the journal attempt id (the journal's unknown start stays
+    uncertain, so a retry of the same crew member and course is still refused)."""
+    def resolved(state, resolutions, now, events=()):
+        state = original(state, resolutions, now, events)
+        return dataclasses.replace(state, attempts=tuple(
+            dataclasses.replace(item, journal_attempt_id=item.intent_id) if item.intent_id in resolutions else item
+            for item in state.attempts))
+
+    return resolved
+
+
+def _verified_still_blocks(original):
+    """QA2 D3: a verified settlement is stored as unresolved, so it keeps blocking the account's next start."""
+    attempts = _module("sdk.fleet.attempts")
+
+    def settled(state, intent_id, settlement):
+        return attempts._replace_attempt(original(state, intent_id, settlement), intent_id, lambda item: (
+            dataclasses.replace(item, state=attempts.UNRESOLVED) if item.state == attempts.VERIFIED else item))
+
+    return settled
+
+
 def trigger_after(nth: int) -> Callable[[dict], None]:
     """A derived variant's edit: every step trigger fires after the ``nth`` reply of its route instead."""
     def edit(scenario: dict) -> None:
@@ -3251,6 +3445,85 @@ _STOP_BETWEEN = _required(
 _CAP_TARGET = _required("paid-boundary", "spend-cap-after-earlier",
                         expect=(f"exec:{_ADD_MUTATION}", "exec:skips.alpha.cap_exceeded.fixer"),
                         hard=("exec:budget_spend",))
+_V2 = {"policy_id": "training-v2"}
+_NO_START = {"mutations": {ADD_TRAINING: []}, "resource_delta": {"alpha": {"mineral": 0, "gas": 0, "starbux": 0}},
+             "timer": {}, "journal": []}
+_NOT_STARTED = ("applied", "timer", "journal")
+
+
+def _v2_after_v1_lost_reply(scenario: dict) -> None:
+    """QA2 D15. The training-v1 control's lost reply (the server did not apply it; the post-reads fail) journals an
+    unknown start and writes no attempt store. The account then moves to training-v2: provisioned, a dry run that
+    completes while the crew member is out of the training room (it plans no start), the crew member back, execute.
+    The same crew member and course are planned again, and only the runner's journal check refuses them."""
+    course, crew = scenario["courses"][0], scenario["expected"]["dry"]["journal_planned"][0]["crew"]
+    steps = {step["id"]: step for step in scenario["steps"]}
+    steps["exec1"]["faults"][0]["apply"] = False
+    room = next(item["room"] for item in scenario["accounts"][0]["world"]["crew"] if item["label"] == crew)
+    scenario["course_overrides"] = {course: {"room_type": "Academy", "room_level": 1, "research": "fitness_101"}}
+    scenario["steps"] = [steps["dry"], steps["exec1"],
+                         {"id": "switch", "kind": "mutate", "set": [{"course": course, "price": "mineral:400"},
+                                                                     {"crew": crew, "to_room": "bridge"}]},
+                         {"id": "provision", "kind": "provision", "pre": dict(_V2)},
+                         {"id": "dry2", "kind": "dry-run", "pre": dict(_V2)},
+                         {"id": "back", "kind": "mutate", "set": [{"crew": crew, "to_room": room}]},
+                         {"id": "exec2", "kind": "execute", "pre": dict(_V2), "blocked_after_unresolved": True}]
+    expected = scenario["expected"]
+    expected["exec1"]["applied"] = {ADD_TRAINING: 0}
+    expected.update(provision=dict(_REPROVISION), dry2={"exit": 0, "mutations": {}, "other_mutations": 0,
+                                                        "journal_planned": []},
+                    exec2=dict(_NO_START, exit=1, other_mutations=0, skips=[dict(_ALPHA_SKIP, code="stopped")]))
+
+
+def _funds_unobserved(scenario: dict) -> None:
+    scenario["accounts"][0]["world"]["typed_resource_items"] = False  # no typed balance item: minerals unobserved
+
+
+def _replace_fails_instead(scenario: dict) -> None:
+    step = next(item for item in scenario["steps"] if item["id"] == "exec2")
+    step["pre"] = {"fail_replace": True}
+    scenario["witnesses"] = ["exec2:replace_failed"]
+
+
+def _start(crew: str, course: str, minerals: int) -> dict:
+    """A step's expected trace for one verified start of ``crew`` on ``course`` costing ``minerals``."""
+    return {"exit": 0, "mutations": {ADD_TRAINING: [{"alias": "alpha", "crew": crew, "course": course}]},
+            "applied": {ADD_TRAINING: 1}, "other_mutations": 0,
+            "resource_delta": {"alpha": {"mineral": -minerals, "gas": 0, "starbux": 0}},
+            "timer": {crew: {"course": course, "duration_s": 3600}},
+            "journal": [{"alias": "alpha", "action": "add_training", "outcome": "verified", "attempted": True,
+                         "crew": crew, "course": course, "cost": {"minerals": minerals, "gas": 0}}]}
+
+
+def _idle_retry_after_resolution(scenario: dict) -> None:
+    """QA2 D2. The lost start is not applied (the crew member stays idle) and no second crew member moves in: once
+    the operator resolves it (not running), the next execute retries the same crew member and course."""
+    steps = {step["id"]: step for step in scenario["steps"]}
+    steps["exec1"]["faults"].append({"route": ADD_TRAINING, "status": 404, "times": 1, "apply": False})
+    scenario["steps"] = [steps[name] for name in ("provision", "dry", "exec1", "resolve", "dry3", "exec3")]
+    scenario["witnesses"] = [*scenario.get("witnesses", ()), "exec1:fault:1"]
+    expected = scenario["expected"]
+    for name in ("dry2", "exec2"):
+        expected.pop(name, None)
+    expected["exec1"].update(applied={ADD_TRAINING: 0}, timer={}, resource_delta=_NO_START["resource_delta"])
+    planned = expected["dry"]["journal_planned"][0]
+    expected["exec3"] = _start(planned["crew"], planned["course"], 500)
+
+
+def _second_start_after_verified(scenario: dict) -> None:
+    """QA2 D3. intent-write-fails without the failing intent write: after the first run's verified start, the second
+    run starts the crew member moved into the training room."""
+    next(item for item in scenario["steps"] if item["id"] == "exec2").pop("pre")
+    scenario["witnesses"] = []
+    crew = scenario["expected"]["exec2"]["skips"][0]["crew"]
+    scenario["expected"]["exec2"] = _start(crew, "weapon_drill", 400)
+
+
+def _store_directory_instead(scenario: dict) -> None:
+    step = next(item for item in scenario["steps"] if item["id"] == "exec2")
+    step["pre"] = {"store_as_directory": True}
+    scenario["witnesses"] = ["exec2:store_is_directory"]
+
 
 SEEDED_DEFECTS: tuple[SeededDefect, ...] = (
     SeededDefect("two-starts", "two training starts sent on one account in one run", True,
@@ -3525,6 +3798,89 @@ SEEDED_DEFECTS: tuple[SeededDefect, ...] = (
                                       expecting("exec", skips=[dict(_ALPHA_SKIP, crew="fixer",
                                                                     code="price_unavailable")])))),),
                  note="QA1 D15. Derived variant: after the plan read the course costs the same amount in gas"),
+    # QA round 2 (SPEC-14 step 5): the same, for that round's survivors (D15 survived every test channel).
+    SeededDefect("v1-uncertainty-ignored-under-guard", "with an attempt guard, the journal's unknown training-v1 start "
+                 "no longer blocks a training-v2 retry of the same crew member and course", True,
+                 _swap("sdk.execution.runner", "ActionRunner._last_attempt_uncertain", _uncertainty_left_to_store), (
+                     _holdout("retry-different-crew", "v1-lost-reply", control=True,
+                                 expect=(f"exec2:{_ADD_MUTATION}", "exec2:exit", "exec2:skips.alpha.stopped",
+                                         "exec2:journal"), hard=("exec2:duplicate_write", "exec2:budget_spend"),
+                                 derive=("v2-after-v1", _v2_after_v1_lost_reply)),),
+                 note="QA2 D15. Derived variant: the control's lost reply (not applied), then the account moves to "
+                      "training-v2 (provision, a dry run planning no start, execute); the store holds no attempt, "
+                      "so only the runner's journal check refuses the retry"),
+    SeededDefect("lock-keyed-by-alias", "the dispatch locks <alias>.lock, not the game identity's lock", True,
+                 _swap("sdk.fleet.attempts", "TrainingAttempts.dispatch", _lock_by_alias), (
+                     _required("paid-boundary", "exact-500",
+                                  expect=(f"exec:{_ADD_MUTATION}", "exec:exit", "exec:skips.alpha.locked"),
+                                  hard=("exec:budget_spend",),
+                                  derive=("held", edits(step_pre("exec", ["exec:lock_held"], hold_lock=True),
+                                                        expecting("exec", drop=_NOT_STARTED, exit=1,
+                                                                  skips=[dict(_ALPHA_SKIP, code="locked")],
+                                                                  **_NO_START)))),),
+                 note="QA2 D1. Derived variant: the harness holds the declared identity's lock through the execute"),
+    SeededDefect("lock-full-mode-only", "an execute run in canary mode takes neither the account lock nor the store",
+                 True, _swap("sdk.fleet.factory", "_ExecuteGateMixin._run_scheduler", _guarded_in_full_mode_only), (
+                     _required("paid-boundary", "exact-500",
+                                  expect=("exec:exit", "exec:skips.alpha.locked", "exec:other_mutations"),
+                                  derive=("canary-held", edits(
+                                      step_pre("exec", ["exec:lock_held"], hold_lock=True, mode="canary"),
+                                      expecting("exec", drop=_NOT_STARTED, exit=1, other_mutations=0,
+                                                skips=[dict(_ALPHA_SKIP, code="locked")], **_NO_START)))),),
+                 note="QA2 D5. Derived variant: canary mode (its fallback action authorized) with the account's lock "
+                      "held; a canary never starts training, so the unlocked run shows as its account write"),
+    SeededDefect("dry-run-age-by-day", "a dry run's age counted in calendar days", True,
+                 _swap("sdk.fleet.factory", "latest_dry_run", _dry_run_age_by_day), (
+                     _required("reconciliation", "verified",
+                                  expect=(f"exec:{_ADD_MUTATION}", "exec:exit", "exec:skips.alpha.dry_run_stale"),
+                                  hard=("exec:budget_spend",),
+                                  derive=("dry-run-24h-1s", edits(
+                                      step_pre("dry", day_start=True),
+                                      step_pre("exec", ["exec:dry_run_aged"], dry_run_age_s=86401),
+                                      expecting("exec", drop=_NOT_STARTED, exit=2,
+                                                skips=[dict(_ALPHA_SKIP, code="dry_run_stale")], **_NO_START)))),),
+                 note="QA2 D13. Derived variant: the dry run just after a UTC midnight, the execute 24 hours and one "
+                      "second later (DerivedOptionTests: exactly 24 hours still starts)"),
+    SeededDefect("unobserved-funds-enough", "an unobserved balance counted as enough for a priced course", True,
+                 _blocker(_unobserved_funds_enough), (
+                     _required("paid-boundary", "exact-500",
+                                  expect=(f"exec:{_ADD_MUTATION}", "exec:skips.alpha.insufficient_funds.fixer"),
+                                  hard=("exec:budget_spend",),
+                                  derive=("funds-unobserved", edits(
+                                      _funds_unobserved, expecting("dry", journal_planned=[]),
+                                      expecting("exec", drop=_NOT_STARTED, skips=[
+                                          dict(_ALPHA_SKIP, crew="fixer", code="insufficient_funds")], **_NO_START)))),),
+                 note="QA2 D14. Derived variant: the world lists no typed balance item, so minerals are unobserved"),
+    SeededDefect("store-write-not-atomic", "the attempt store written in place, not through a replaced temporary file",
+                 True, _set("sdk.fleet.attempts", "FileAttemptStore._replace", _write_in_place), (
+                     _required("persisted-intent-restart", "intent-write-fails",
+                                  expect=(f"exec2:{_ADD_MUTATION}", "exec2:skips.alpha.intent_not_persisted.gunner"),
+                                  hard=("exec2:budget_spend",),
+                                  derive=("replace-fails", _replace_fails_instead)),),
+                 note="QA2 D7. Derived variant: the store's os.replace fails instead of the intent-write hook, so "
+                      "only an atomic write refuses the start"),
+    SeededDefect("store-unreadable-as-missing", "a store path that cannot be read (a directory) treated as missing",
+                 True, _swap("sdk.fleet.attempts", "FileAttemptStore._read", _any_error_missing), (
+                     _required("store-stop-controls", "unreadable-state",
+                                  expect=("exec2:skips.alpha.state_unreadable",),
+                                  derive=("directory", _store_directory_instead)),),
+                 note="QA2 D11. Derived variant: a directory in place of the store file before exec2; both "
+                      "revisions refuse the start, so only the skip code tells them apart"),
+    SeededDefect("resolution-links-intent", "a resolution records the intent id as the journal attempt id, so the "
+                 "resolved start's journaled uncertainty still refuses a retry", True,
+                 _swap("sdk.fleet.attempts", "resolved", _resolution_links_intent), (
+                     _required("reconciliation", "resolved-after-reconciliation",
+                                  expect=(f"exec3:{_ADD_MUTATION}", "exec3:exit", "exec3:journal"),
+                                  derive=("idle-retry", _idle_retry_after_resolution)),),
+                 note="QA2 D2. Derived variant: the lost start not applied, then resolved as not running; the next "
+                      "execute retries the same crew member and course"),
+    SeededDefect("verified-still-blocks", "a verified settlement stored as unresolved (it blocks the next start)", True,
+                 _swap("sdk.fleet.attempts", "settled", _verified_still_blocks), (
+                     _required("persisted-intent-restart", "intent-write-fails",
+                                  expect=(f"exec2:{_ADD_MUTATION}", f"exec2:{_ADD_APPLIED}", "exec2:journal"),
+                                  derive=("second-start", _second_start_after_verified)),),
+                 note="QA2 D3. Derived variant: the intent write no longer fails, so the second run must start the "
+                      "crew member moved in after the first run's verified start"),
 )
 
 

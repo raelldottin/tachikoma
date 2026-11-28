@@ -2664,6 +2664,11 @@ QA1_DEFECT_IDS = {"D3": "settle-failure-swallowed", "D4": "training-block-droppe
                   "D7": "resolve-ignores-lock", "D8": "malformed-attempt-dropped", "D9": "recheck-spend-frozen",
                   "D12": "strict-spec-dropped", "D13": "stop-checked-once", "D15": "currency-blind-recheck", "D16": "journal-witness-wrong-key",
                   "D17": "provision-overwrites-unmarked"}
+# QA round 2: the planted defects killed in the workflow channel (the others are named in the SPEC-14 doc section).
+QA2_DEFECT_IDS = {"D1": "lock-keyed-by-alias", "D2": "resolution-links-intent", "D3": "verified-still-blocks",
+                  "D5": "lock-full-mode-only", "D7": "store-write-not-atomic",
+                  "D11": "store-unreadable-as-missing", "D13": "dry-run-age-by-day", "D14": "unobserved-funds-enough",
+                  "D15": "v1-uncertainty-ignored-under-guard"}
 ADD_MUTATION = f"exec:mutations.{wb.ADD_TRAINING}"
 SUITES = {"required": REQUIRED, "holdout": HOLDOUT}
 
@@ -2773,6 +2778,17 @@ class SeededDefectCatalogueTests(unittest.TestCase):
                 item = wb.defect(defect_id)
                 self.assertTrue(item.critical)
                 self.assertTrue(item.targets)
+
+    def test_every_qa_round_2_kill_is_a_critical_catalogue_defect_with_a_derived_target(self):
+        """QA round 2: each planted defect killed in the workflow channel is a critical catalogue defect whose
+        targets are derived variants (a frozen trace never moved), so ``--defects`` fails unless every seed sees it."""
+        for qa_id, defect_id in sorted(QA2_DEFECT_IDS.items()):
+            with self.subTest(qa=qa_id, defect=defect_id):
+                item = wb.defect(defect_id)
+                self.assertTrue(item.critical)
+                self.assertTrue(item.targets)
+                self.assertTrue(all(target.derive for target in item.targets))
+                self.assertIn(f"QA2 {qa_id}", item.note)
 
     def test_every_seeding_declares_the_production_attributes_it_patches(self):
         """The seam-liveness check spies on what each seeding declares: a catalogue seeding declares at least one
@@ -2984,6 +3000,119 @@ class SeamLivenessTests(unittest.TestCase):
                 for part in dotted.split("."):
                     owner = getattr(owner, part)
                 self.assertFalse(callable(owner))
+
+
+# Verifies: S14-R7
+class DerivedOptionTests(unittest.TestCase):
+    """QA round 2: the derived-variant step options added to reach the round's survivors. Each is refused in a
+    fixture (test_derived_only_step_options_are_refused_in_a_fixture); here each does what its variants rely on."""
+
+    def test_policy_id_option_writes_the_steps_registry_under_that_policy_over_a_control_override(self):
+        with tempfile.TemporaryDirectory() as directory:
+            control = case(HOLDOUT, "retry-different-crew")["control"]
+            entry = next(s for s in control["scenarios"] if s["id"] == "v1-lost-reply")
+            ctx = wb.start_scenario("holdout", "retry-different-crew", entry, HOLDOUT["catalog"], 2401,
+                                    control["policy_id"], Path(directory))
+            self.assertEqual(wb._registry_for(ctx, {"id": "exec", "kind": "execute"}), wb.REGISTRY_FILE)
+            name = wb._registry_for(ctx, {"id": "exec2", "kind": "execute", "pre": {"policy_id": "training-v2"}})
+            self.assertNotEqual(name, wb.REGISTRY_FILE)
+            payload = json.loads((ctx.directory / name).read_text(encoding="utf-8"))
+            self.assertEqual([item["policy_id"] for item in payload["accounts"]], ["training-v2"])
+            base = json.loads((ctx.directory / wb.REGISTRY_FILE).read_text(encoding="utf-8"))
+            self.assertEqual([item["policy_id"] for item in base["accounts"]], ["training-v1"])
+
+    def test_mode_option_runs_execute_in_that_mode_under_an_authorization_allowing_it_and_its_fallback(self):
+        with scratch_ctx("paid-boundary", "exact-500") as ctx:
+            plain = wb._argv(ctx, {"id": "exec", "kind": "execute"}, wb.REGISTRY_FILE)
+            self.assertEqual(plain[plain.index("--mode") + 1], "full")
+            self.assertEqual(plain[plain.index("--authorization") + 1], wb.AUTHORIZATION_FILE)
+            argv = wb._argv(ctx, {"id": "exec", "kind": "execute", "pre": {"mode": "canary"}}, wb.REGISTRY_FILE)
+            self.assertEqual(argv[argv.index("--mode") + 1], "canary")
+            name = argv[argv.index("--authorization") + 1]
+            self.assertNotEqual(name, wb.AUTHORIZATION_FILE)
+            payload = json.loads((ctx.directory / name).read_text(encoding="utf-8"))
+            base = json.loads((ctx.directory / wb.AUTHORIZATION_FILE).read_text(encoding="utf-8"))
+            self.assertEqual(payload["modes"], ["canary"])
+            self.assertEqual(payload["actions"], sorted({*base["actions"], "collect_all_resources"}))
+            self.assertEqual((payload["accounts"], payload["caps"]), (base["accounts"], base["caps"]))
+
+    def test_hold_lock_holds_the_declared_identity_lock_only_even_before_production_created_it(self):
+        """QA round 2 D1: holding every lock file present let a lock keyed by alias look held; the option holds the
+        lock production must take, <declared game identity>.lock, and nothing else."""
+        import fcntl
+
+        from sdk.fleet.attempts import FileAccountLock
+        from sdk.state.snapshot import game_identity_fingerprint
+
+        with scratch_ctx("paid-boundary", "exact-500") as ctx:
+            step = {"id": "exec", "kind": "execute", "pre": {"hold_lock": True}}
+            wb._hold_locks(ctx, step, "exec")()
+            self.assertIn("exec:lock_held", ctx.witnesses)
+            self.assertIsNotNone(ctx.witnesses["exec:lock_held"])  # no store directory yet: nothing to hold
+            root = ctx.journals / wb.STORE_DIR
+            root.mkdir()
+            stray = root / "alpha.lock"
+            stray.write_bytes(b"")
+            identity = game_identity_fingerprint(ctx.accounts[0]["user_id"], wb.SALT)
+            release = wb._hold_locks(ctx, step, "exec")
+            try:
+                self.assertTrue((root / f"{identity}.lock").is_file())
+                self.assertIsNone(FileAccountLock(root).try_acquire(identity))
+                fd = os.open(stray, os.O_RDWR)
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)  # not held: raises if it were
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+                finally:
+                    os.close(fd)
+            finally:
+                release()
+            self.assertIsNone(ctx.witnesses["exec:lock_held"])
+            handle = FileAccountLock(root).try_acquire(identity)
+            self.assertIsNotNone(handle)
+            if handle is not None:  # narrows the type; the assertion above already failed otherwise
+                handle.release()
+
+    def test_store_and_clock_options_name_what_they_found_nothing_to_act_on(self):
+        with scratch_ctx("paid-boundary", "exact-500") as ctx:
+            step = {"id": "exec", "kind": "execute", "pre": {"store_as_directory": True, "dry_run_age_s": 60}}
+            wb._derived_pre(ctx, step, "exec")
+            self.assertIn("no attempt store file", ctx.witnesses["exec:store_is_directory"])
+            self.assertIn("no stamped dry run", ctx.witnesses["exec:dry_run_aged"])
+            store = ctx.journals / wb.STORE_DIR / "alpha.json"
+            store.parent.mkdir()
+            store.write_text("{}", encoding="utf-8")
+            wb._derived_pre(ctx, {"id": "exec2", "kind": "execute", "pre": {"store_as_directory": True}}, "exec2")
+            self.assertTrue(store.is_dir())
+            self.assertIsNone(ctx.witnesses["exec2:store_is_directory"])
+
+    def test_fail_replace_fails_only_the_attempt_stores_replace_and_restores_it(self):
+        import sdk.fleet.attempts as attempts
+
+        with scratch_ctx("paid-boundary", "exact-500") as ctx:
+            checks = wb._arm(ctx, {"id": "exec", "kind": "execute", "pre": {"fail_replace": True}}, "exec")
+            try:
+                with self.assertRaises(OSError):
+                    attempts.os.replace("a", "b")
+                self.assertIs(attempts.os.fsync, os.fsync)
+                self.assertIsNot(attempts.os, os)  # the process-wide os module is never patched
+            finally:
+                for check in checks:
+                    check()
+            self.assertIs(attempts.os, os)
+            self.assertIsNone(ctx.witnesses["exec:replace_failed"])
+
+    def test_a_dry_run_exactly_24_hours_old_still_qualifies(self):
+        """The companion of the dry-run-age-by-day kill: 24 hours to the second is not too old (the clean revision
+        starts), and one second more is (dry_run_stale), with both runs on the fake clock after a UTC midnight."""
+        target = next(t for t in wb.defect("dry-run-age-by-day").targets)
+        stale = wb.run_target(target, SUITES, first_seed(target))
+        self.assertTrue(stale.passed, observed(stale))
+        exact = wb.DefectTarget("required", "reconciliation", "verified", expect=("exec:exit",),
+                                derive=("dry-run-24h", wb.edits(wb.step_pre("dry", day_start=True),
+                                                                wb.step_pre("exec", ["exec:dry_run_aged"],
+                                                                            dry_run_age_s=86400))))
+        result = wb.run_target(exact, SUITES, first_seed(exact))
+        self.assertTrue(result.passed, observed(result))
 
 
 # Verifies: S14-R7
