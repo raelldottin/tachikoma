@@ -451,9 +451,9 @@ The catalogue holds 51 defects, 48 of them critical. The test module `tests.test
 
 ### SPEC-14 workflow evaluation results
 
-Revision: <filled at final gates>
+Revision: `9d8b623` (the slice after QA fix round 2, merged with `origin/main` at `b833a16`). Every number in this section was measured on that revision on 2026-11-28. The commit that adds this line changes only this document.
 
-Measured on 2026-11-28 on the `spec14-workflow-eval` working tree (base `1f924e0`), after QA fix round 2, with these commands:
+Commands:
 
 ```bash
 .venv/bin/python scripts/training_workflow_benchmark.py --gate --json gate.json
@@ -466,12 +466,16 @@ cmp h1.json h999.json && cmp h1.json gate.json
 
 | Command | Exit | Wall time |
 | --- | ---: | ---: |
-| `--gate --json gate.json` | 0 | 85 s |
-| `--report-only` under `PYTHONHASHSEED=1` | 0 | 38 s |
-| `--report-only` under `PYTHONHASHSEED=999` | 0 | 51 s |
+| `--gate --json gate.json` | 0 | 70 s |
+| `--report-only` under `PYTHONHASHSEED=1` | 0 | 35 s |
+| `--report-only` under `PYTHONHASHSEED=999` | 0 | 53 s |
 | `cmp` of the three reports | 0 | - |
-| `--defects --json defects.json` | 0 | 237 s |
-| `scripts/ci.py test --names tests.test_training_workflow_benchmark` (253 tests) | 0 | 143 s |
+| `--defects --json defects.json` | 0 | 193 s |
+| `scripts/ci.py test --names tests.test_training_workflow_benchmark` (253 tests) | 0 | 105 s |
+| `make automation-check syntax-check test test-security lint` (3480 tests, 1 skipped) | 0 | 434 s |
+| `git diff --check origin/main...HEAD` and `scripts/ci.py repository` | 0 | 7 s |
+| `make training-benchmark` (composite 67.261087, floor 67.261087, 0 violations) | 0 | 24 s |
+| `make mutation` (blocking targets 100%; `crew_leveling` 81.9%, `game_formulas` 73.7%, both above their minimums) | 0 | 2784 s |
 
 The gate passed: required scored 100.000000 (129 of 129 traces) and holdout 100.000000 (30 of 30), with no hard violation, missing witness or fake error, and every control passed. Its JSON report is byte-identical to the report `--gate` wrote on `1f924e0` before this slice, and to the ones written before QA fix rounds 1 and 2: no derived-only option, trigger operation or seeding changes a frozen trace.
 
@@ -588,7 +592,7 @@ The gate passed: required scored 100.000000 (129 of 129 traces) and holdout 100.
 
 **QA-eval rounds:**
 
-| Round | Revision | Workflow gate | Critical detected | Non-critical survivors | Legacy QA detection | Notes |
+| Round | Revision | Workflow gate | Critical detected | Non-critical survivors | Planted production defects | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
 | 1 | `08b14b9` (QA), fix round 1 after | pass, report unchanged | 28 of 28 at QA; 39 of 39 after the fix | 3 (published only) | 17 planted: 5 caught by the workflow module, 11 caught only in other test modules, 1 survived everything (D5) | The fix kills 11 of the 12 workflow-channel survivors in the workflow module (11 new critical defects, the seam-liveness check and `CapLayerTests`). D14 is caught only in the test channel. |
 | 2 | `c171b10` (QA), fix round 2 after | pass, report unchanged | 39 of 39 at QA; 48 of 48 after the fix | 3 (published only) | 15 planted: 5 caught by the workflow module, 9 caught only in other test modules (`test_fleet_execute`, `test_training_attempts`, `test_uncertain_spend`, `test_simulation`, `test_crew_plan`), 1 survived everything (D15). Step 0: the five re-planted round 1 defects (D3, D5, D8, D13, D17) were all caught by the workflow module | The fix kills D15 and seven of the nine elsewhere-only defects (D1, D2, D5, D7, D11, D13, D14), and replaces D3's missing-witness catch with behavioral assertions: nine new critical defects on derived variants and six new derived-only step options. D6 and D9 stay caught only in the test channel. |
@@ -641,6 +645,8 @@ The gate passed: required scored 100.000000 (129 of 129 traces) and holdout 100.
 - QA2 D6 (`charged_spend` never charges an uncertain spend): caught only by `test_uncertain_spend` (`ChargedSpendTests.test_audit_counts_uncertain_attempts_toward_budget_exceeded`, `ChargedSpendTests.test_spent_in_period_charges_uncertain_only_when_the_delta_is_unobserved`, `SchedulerAndFleetTests.test_uncertain_attempt_is_charged_against_the_next_runs_budget`) and `test_simulation` (`FaultScenarioTests.test_uncertain_spend_is_charged_against_budgets`). No FakePss workflow tried here journals an uncertain spend. In the `idle-retry` variant the lost start's mineral delta is journaled as observed (0), not uncertain, and a probe with a 900-mineral cap started the retry on both revisions. An unobserved delta would need a fake extension, and `tests/fakes/` is outside this slice's files.
 - QA2 D9 (`classify_resolution` drops the complete-roster check): caught only by `test_training_attempts` (`PureCoreTests.test_classify_resolution_table`, the roster-unread row). FakePss cannot serve a roster that is incomplete while the attempted crew member is still present (one malformed crew record, say). That would also need a fake extension.
 - Non-critical survivors, published only: `guard-latch-off`, `recheck-off-frozen` and `tie-input-order` (see the survivors above).
+
+**Legacy qa-eval (simulator mutants), reported, not fixed here.** `.venv/bin/python scripts/training_benchmark.py --qa-eval --jobs 12` on `9d8b623` exits 1: gated detection 0.536 (minimum 0.9), 0.465 over the 703 importable mutants. `sdk/training/planner.py` scores 0.385 (537 mutants: 207 caught by tests, 158 by the benchmark, 330 drift-only) and `sdk/training/strategy.py` 0.832. The same command on a clean export of `origin/main` at `b833a16` gives byte-for-byte the same overall figures and per-target table, so this slice did not cause it: it predates the slice, and the 2026-11-25 run above (415 eligible mutants) predates the SPEC-14 planner changes. This slice changes neither `scripts/training_benchmark.py`, its qa-eval test list nor `sdk/training/*`, so it cannot repair it within its allowed files. The blocking gates, `make training-benchmark` (composite 67.261087, PASS) and `make mutation` (every blocking target at 100%), pass on `9d8b623`.
 
 **Fix round 2 notes.** D15 needed an account that moves from training-v1 to training-v2. The training-v1 control's lost reply is not applied, so its crew member stays idle. That journals an unknown start but writes no attempt store. The variant then provisions the store and runs a training-v2 dry run while the crew member is out of the training room, so the dry run completes and plans no start. The crew member then moves back, and execute plans the same crew member and course. Only the runner's journal check refuses them. A dry run that planned the start would itself refuse on the journal's uncertainty and leave no stamped plan, and execute would then stop at `dry_run_stale` on both revisions. The `hold_lock` option now holds only the declared identity's lock: holding every lock file present also held a lock keyed by alias, which is how D1 hid from the existing `~held` variant (`resolve-ignores-lock` is unchanged on the clean revision). D13's variant runs the dry run just after a UTC midnight on the fake clock, so 24 hours and one second later is always the next calendar day. `DerivedOptionTests.test_a_dry_run_exactly_24_hours_old_still_qualifies` pins the boundary: exactly 24 hours still starts.
 
