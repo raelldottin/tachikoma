@@ -2,10 +2,11 @@
 extensions they rely on, the oracle (comparator, normalizer, hard-violation detectors, witnesses), the paired
 training-v1 controls on the unmodified code, and the red gate.
 
-The training-v2 assertions themselves are the benchmark's report data, not tests here: nothing in this module depends
-on how far the training-v2 implementation has got (the gate's own tests run synthetic suites, GateTests). The red run
-is ``python scripts/training_workflow_benchmark.py --gate``, run explicitly. No network: every Pixel Starships
-request goes to FakePss.
+The checked-in training-v2 traces run in WorkflowGateTests (both suites at every seed, the controls, and a
+determinism child under another PYTHONHASHSEED); the gate's own logic is tested on synthetic suites (GateTests). The
+seeded defects (S14-AC7) run in SeededDefectRunTests and through ``--defects`` in DefectsCliTests. The full gate is
+also ``python scripts/training_workflow_benchmark.py --gate``. No network: every Pixel Starships request goes to
+FakePss.
 """
 
 import contextlib
@@ -15,6 +16,7 @@ import hashlib
 import io
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import threading
@@ -2253,9 +2255,9 @@ class VaryingChild(StubChild):
 
 # Verifies: S14-R7
 class GateTests(unittest.TestCase):
-    """The gate on synthetic suites (training-v1 worlds whose behavior the spec preserves), never on the checked-in
-    training-v2 traces: nothing here depends on how far the training-v2 implementation has got. The real red run
-    is ``python scripts/training_workflow_benchmark.py --gate``, run explicitly (SPEC-14 test plan)."""
+    """The gate on synthetic suites (training-v1 worlds whose behavior the spec preserves). The checked-in training-v2
+    traces run in WorkflowGateTests, and seeded defects in SeededDefectRunTests; the full gate is also
+    ``python scripts/training_workflow_benchmark.py --gate`` (SPEC-14 test plan)."""
 
     def run_gate(self, required_scenarios, *argv, holdout_scenarios=None, control=None, holdout_control=None,
                  child=None, digests=None):
@@ -2517,6 +2519,30 @@ class GateTests(unittest.TestCase):
                 self.assertIn("fake self-check failed:", err)
                 self.assertIn(name, err)
 
+    def test_the_gate_refuses_to_run_while_a_defect_is_active(self):
+        """S14-AC7: a seeded defect never reaches a gate run; the gate stops with exit 2 instead of scoring it."""
+        with patch.object(wb, "_ACTIVE_DEFECT", "two-starts"), \
+                patch.object(wb, "run_suite", side_effect=AssertionError("the suite ran")):
+            code, out, err = self.run_gate([v1_dry_run("matches")], "--gate", "--no-probe")
+        self.assertEqual(code, wb.EXIT_ERROR, out + err)
+        self.assertIn("oracle error: a seeded defect is active (two-starts); --gate never runs with one", err)
+
+    def test_the_gate_child_and_dispatch_children_never_carry_defect_state(self):
+        """The determinism child's argv and environment carry no defect: a defect reaches a dispatch child only
+        through its spec JSON, and only while one is active in this process."""
+        command = wb.child_command(wb.parse_args(["--gate"]))
+        self.assertFalse([part for part in command if part.startswith("--defect")], command)
+        started = {}
+
+        def popen(command, **kwargs):
+            started.update(kwargs)
+            return types.SimpleNamespace(poll=lambda: 0, communicate=lambda timeout=None: ("", ""))
+
+        wb.ChildRun(command, popen=popen)
+        self.assertFalse([key for key in started["env"] if "DEFECT" in key.upper()])
+        self.assertIsNone(wb.active_defect())
+        self.assertEqual(wb.dispatch_defect_field(), {})
+
 
 # Verifies: S14-R7
 class ScenarioInputTests(unittest.TestCase):
@@ -2621,6 +2647,375 @@ class ScenarioInputTests(unittest.TestCase):
         manual, drills = courses["TrainingService"]["ListAllTrainingDesigns"]["TrainingDesigns"]["TrainingDesign"]
         self.assertEqual(manual["@CostString"], "mineral:500")
         self.assertNotIn("@CostString", drills)
+
+
+# The seeded-defect catalogue's ids (S14-AC7, SPEC-14 step 5): every spec defect, the crew-policy defects and the
+# three published-only (non-critical) ones.
+REQUIRED_DEFECT_IDS = (
+    "two-starts", "guard-latch-off", "lock-skipped", "intent-not-persisted", "intent-after-send", "stop-ignored",
+    "scheduler-stop-ignored", "missing-store-fresh", "unreadable-store-fresh", "settle-loses-pending",
+    "v1-under-v2-path", "v2-down-v1-path", "unresolved-guard-only", "unresolved-ignored", "premium-spend",
+    "false-verification", "funds-plus-one", "funds-minus-one", "reservation-ignored", "recheck-off",
+    "recheck-off-frozen", "price-under", "price-over", "currency-swapped", "zero-price-unknown", "zero-stat-unknown",
+    "greedy-roles", "tie-high-id", "tie-input-order", "two-copy-as-one", "wrong-stat-course")
+NON_CRITICAL_DEFECT_IDS = ("guard-latch-off", "recheck-off-frozen", "tie-input-order")
+ADD_MUTATION = f"exec:mutations.{wb.ADD_TRAINING}"
+SUITES = {"required": REQUIRED, "holdout": HOLDOUT}
+
+
+def first_seed(target):
+    return SUITES[target.suite]["seeds"][0]
+
+
+def synthetic_result(unmet=(), hard=(), errors=()):
+    rows = [dict({"expected": None, "actual": None, "cause": "x"}, **row) for row in unmet]
+    return wb.TraceResult(not rows and not hard and not errors, rows, [], list(hard), list(errors))
+
+
+def observed(result):
+    """A detection failure's diagnosis: what the run did show."""
+    return (f"unmet={sorted({u['step'] + ':' + u['assertion'] for u in result.unmet})} "
+            f"hard={result.hard_violations} errors={result.errors[:2]}")
+
+
+# Verifies: S14-R7
+class SeededDefectCatalogueTests(unittest.TestCase):
+    """S14-AC7: the seeded-defect catalogue itself, its targets and the detection rule (no scenario runs)."""
+
+    def test_catalogue_ids_are_unique_and_cover_every_spec_defect(self):
+        ids = [item.id for item in wb.SEEDED_DEFECTS]
+        self.assertEqual(len(ids), len(set(ids)), ids)
+        self.assertLessEqual(set(REQUIRED_DEFECT_IDS), set(ids))
+        self.assertEqual({item.id for item in wb.SEEDED_DEFECTS if not item.critical}, set(NON_CRITICAL_DEFECT_IDS))
+        for item in wb.SEEDED_DEFECTS:
+            with self.subTest(defect=item.id):
+                self.assertTrue(item.title)
+                if item.critical:
+                    self.assertTrue(item.targets)
+                for target in item.targets:
+                    self.assertTrue(target.expect or target.hard, target.label)
+
+    def test_every_target_resolves_to_a_frozen_scenario_and_names_its_steps(self):
+        for item in wb.SEEDED_DEFECTS:
+            for target in item.targets:
+                with self.subTest(defect=item.id, target=target.label):
+                    entry, codes, policy = wb.target_scenario(target, SUITES)
+                    data = SUITES[target.suite]
+                    frozen_case = case(data, target.case_id)
+                    pool = frozen_case["control"]["scenarios"] if target.control else frozen_case["scenarios"]
+                    frozen = next(s for s in pool if s["id"] == target.scenario_id)
+                    if target.derive:
+                        self.assertEqual(entry["id"], f"{target.scenario_id}~{target.derive[0]}")
+                        self.assertIsNot(entry, frozen)
+                    else:
+                        self.assertIs(entry, frozen)
+                    self.assertEqual(policy, frozen_case["control"]["policy_id"] if target.control else None)
+                    self.assertLessEqual(set(data["vocabulary"]["skip_codes"]), set(codes))
+                    steps = {step["id"] for step in entry["steps"]}
+                    for item_text in target.expect:
+                        step, assertion = item_text.split(":", 1)
+                        self.assertIn(step, steps, item_text)
+                        self.assertTrue(assertion, item_text)
+                    for item_text in target.hard:
+                        step, code = item_text.split(":", 1)
+                        self.assertIn(step, steps, item_text)
+                        self.assertIn(code, wb.HARD_CODES, item_text)
+
+    def test_a_derived_variant_is_built_in_code_and_leaves_the_frozen_fixtures_unchanged(self):
+        suite = copy.deepcopy(REQUIRED)
+        frozen = case(suite, "stale-preflight")["scenarios"]
+        price = next(s for s in frozen if s["id"] == "price-raised")
+        untouched = copy.deepcopy(price)
+        derived = wb.derived_scenario(price, ("nth3", wb.trigger_after(3)))
+        self.assertEqual(derived["id"], "price-raised~nth3")
+        triggers = [t for step in derived["steps"] for t in step.get("triggers", ())]
+        self.assertTrue(triggers)
+        self.assertEqual({t["after_nth"] for t in triggers}, {3})
+        self.assertEqual(price, untouched)
+        wb.verify_fixture_digests(["required", "holdout"])
+        room_full = next(s for s in frozen if s["id"] == "room-full")
+        with self.assertRaises(ValueError):
+            wb.derived_scenario(room_full, ("nth2", wb.trigger_after(2)))
+
+    def test_detection_requires_every_named_assertion_and_hard_code_and_no_crash_or_error(self):
+        target = wb.DefectTarget("required", "paid-boundary", "exact-500", expect=(ADD_MUTATION,),
+                                 hard=("exec:duplicate_write",))
+        add = {"step": "exec", "assertion": f"mutations.{wb.ADD_TRAINING}"}
+        duplicate = "exec: duplicate_write: 2 AddTraining sent on alpha in one step"
+        self.assertEqual(wb.detection(target, synthetic_result([add], [duplicate])), (True, []))
+        self.assertEqual(wb.detection(target, synthetic_result([], [duplicate])), (False, [ADD_MUTATION]))
+        self.assertFalse(wb.detection(target, synthetic_result(
+            [add], ["exec2: duplicate_write: 2 AddTraining sent on alpha in one step"]))[0])
+        self.assertFalse(wb.detection(target, synthetic_result([add], [duplicate], ["FakePss error x"]))[0])
+        for actual in ("crashed", "error RuntimeError"):
+            crash = {"step": "exec", "assertion": "exit", "expected": 0, "actual": actual}
+            with self.subTest(actual=actual):
+                self.assertFalse(wb.detection(target, synthetic_result([add, crash], [duplicate]))[0])
+        expected_crash = wb.DefectTarget("required", "persisted-intent-restart", "crash-after-send",
+                                         expect=("exec2:journal",))
+        self.assertEqual(wb.detection(expected_crash, synthetic_result([{"step": "exec2", "assertion": "journal"}])),
+                         (True, []))
+        glob = wb.DefectTarget("holdout", "two-copy-recipe", "one-training", expect=("plan:prestige.*",))
+        self.assertEqual(wb.detection(glob, synthetic_result([{"step": "plan", "assertion": "prestige.x"}])),
+                         (True, []))
+        self.assertFalse(wb.detection(glob, synthetic_result([{"step": "dry", "assertion": "prestige.x"}]))[0])
+
+    def test_activating_a_defect_patches_at_call_time_and_restores_on_exit(self):
+        import sdk.fleet.attempts as attempts
+
+        original = attempts.FileAccountLock.try_acquire
+        self.assertIsNone(wb.active_defect())
+        with wb.defect("lock-skipped").active():
+            self.assertIsNot(attempts.FileAccountLock.try_acquire, original)
+            self.assertEqual(wb.active_defect(), "lock-skipped")
+            self.assertEqual(wb.dispatch_defect_field(), {"defect": "lock-skipped"})
+            with self.assertRaises(wb.OracleError):
+                with wb.defect("two-starts").active():
+                    pass
+            self.assertEqual(wb.active_defect(), "lock-skipped")
+        self.assertIs(attempts.FileAccountLock.try_acquire, original)
+        self.assertIsNone(wb.active_defect())
+        self.assertEqual(wb.dispatch_defect_field(), {})
+        with self.assertRaises(KeyError):
+            wb.defect("nope")
+
+
+# Verifies: S14-R7
+class SeededDefectRunTests(unittest.TestCase):
+    """S14-AC7: each critical defect, seeded into production at call time, is caught by a named assertion or hard
+    code on every target at the suite's first seed; each derived variant passes unpatched first (the clean half).
+    One test per critical defect is generated below the class, so each defect appears by name in the output."""
+
+    def test_every_derived_variant_passes_on_the_clean_revision(self):
+        targets = {target.label: target for item in wb.SEEDED_DEFECTS for target in item.targets if target.derive}
+        self.assertTrue(targets)
+        for label, target in sorted(targets.items()):
+            with self.subTest(target=label):
+                result = wb.run_target(target, SUITES, first_seed(target))
+                self.assertTrue(result.passed, observed(result))
+                self.assertEqual((result.unmet, result.hard_violations, result.errors), ([], [], []))
+
+    def check_caught(self, defect_id):
+        item = wb.defect(defect_id)
+        self.assertTrue(item.critical)
+        with item.active():
+            for target in item.targets:
+                with self.subTest(target=target.label):
+                    result = wb.run_target(target, SUITES, first_seed(target))
+                    detected, missing = wb.detection(target, result)
+                    self.assertEqual(result.errors, [], observed(result))
+                    self.assertEqual(missing, [], observed(result))
+                    self.assertTrue(detected, observed(result))
+
+    def test_non_critical_defects_run_without_harness_errors(self):
+        for item in wb.SEEDED_DEFECTS:
+            if item.critical:
+                continue
+            with item.active():
+                for target in item.targets:
+                    with self.subTest(defect=item.id, target=target.label):
+                        result = wb.run_target(target, SUITES, first_seed(target))
+                        self.assertEqual(result.errors, [], observed(result))
+                        crashed = [u for u in result.unmet if u["assertion"] == "exit"
+                                   and (u["actual"] == "crashed" or str(u["actual"]).startswith("error "))]
+                        self.assertEqual(crashed, [], observed(result))
+
+
+def _caught_test(defect_id):
+    def test(self):
+        self.check_caught(defect_id)
+
+    test.__doc__ = f"S14-AC7: seeded defect {defect_id} is caught on every target."
+    return test
+
+
+for _item in wb.SEEDED_DEFECTS:
+    if _item.critical:
+        setattr(SeededDefectRunTests, f"test_defect_{_item.id.replace('-', '_')}_is_caught", _caught_test(_item.id))
+del _item
+
+
+# Verifies: S14-R7
+class DefectsCliTests(unittest.TestCase):
+    """``--defects``: every catalogued defect seeded in turn, the clean run first; exit 0 only when every critical
+    defect is caught on every trace."""
+
+    def run_main(self, *argv):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = wb.main(list(argv))
+        return code, out.getvalue(), err.getvalue()
+
+    def test_defects_mode_exits_0_when_the_clean_runs_pass_and_the_defect_is_caught(self):
+        code, out, err = self.run_main("--defects", "--defect", "premium-spend")
+        self.assertEqual(code, wb.EXIT_OK, out + err)
+        for seed in (1401, 1402, 1403):
+            self.assertIn(f"CLEAN PASS required/paid-boundary/premium seed={seed}", out)
+            self.assertIn(f"DETECTED premium-spend required/paid-boundary/premium seed={seed} [benchmark]", out)
+        self.assertIn("premium-spend (critical): detected 3 of 3 traces (100.000000)", out)
+        self.assertTrue(out.rstrip().endswith("Defects: PASS"), out)
+        code, out, err = self.run_main("--defects", "--defect", "premium-spend", "--json", "-")
+        self.assertEqual(code, wb.EXIT_OK, err)
+        report = json.loads(out)
+        self.assertEqual(report["schema"], wb.DEFECTS_SCHEMA)
+        [entry] = report["defects"]
+        self.assertEqual((entry["id"], entry["detected"], entry["total"], entry["survivor"]),
+                         ("premium-spend", 3, 3, False))
+        self.assertEqual(report["seeds"], {"required": [1401, 1402, 1403], "holdout": [2401, 2402, 2403]})
+        self.assertEqual(report["summary"]["survivors"], {"critical": [], "non_critical": []})
+
+    def test_a_defect_that_changes_nothing_is_a_surviving_critical_defect_and_fails_the_run(self):
+        noop = wb.SeededDefect("noop", "changes nothing", True, contextlib.nullcontext, (
+            wb.DefectTarget("required", "paid-boundary", "exact-500", expect=(ADD_MUTATION,)),))
+        with patch.object(wb, "SEEDED_DEFECTS", (noop,)):
+            code, out, err = self.run_main("--defects")
+        self.assertEqual(code, wb.EXIT_GATE, out + err)
+        self.assertIn(f"MISSED noop required/paid-boundary/exact-500 seed=1401 [benchmark] missing {ADD_MUTATION}",
+                      out)
+        self.assertIn("Defects: FAIL", out)
+        self.assertIn("- critical defect noop detected on 0 of 3 traces", out)
+
+    def test_a_target_that_fails_on_the_clean_revision_fails_the_run(self):
+        def unplanned(entry):
+            entry["expected"]["dry"]["journal_planned"] = []
+
+        broken = wb.SeededDefect("broken", "a deliberately wrong derived trace", True, contextlib.nullcontext, (
+            wb.DefectTarget("required", "paid-boundary", "exact-500", expect=(ADD_MUTATION,),
+                            derive=("broken", unplanned)),))
+        with patch.object(wb, "SEEDED_DEFECTS", (broken,)):
+            code, out, err = self.run_main("--defects")
+        self.assertEqual(code, wb.EXIT_GATE, out + err)
+        self.assertIn("CLEAN FAIL required/paid-boundary/exact-500~broken seed=1401", out)
+        self.assertIn("- clean: required/paid-boundary/exact-500~broken seed=1401 fails unpatched", out)
+
+    def test_defects_flag_errors(self):
+        with self.subTest(case="unknown id"):
+            code, _, err = self.run_main("--defects", "--defect", "nope")
+            self.assertEqual(code, wb.EXIT_ERROR)
+            self.assertIn("unknown defect ids: ['nope']", err)
+        for argv in (["--defect", "premium-spend"], ["--gate", "--defects"], ["--defects", "--case", "paid-boundary"],
+                     ["--defects", "--suite", "required"], ["--defects", "--no-probe"],
+                     ["--defects", "--control-seeds", "1"]):
+            with self.subTest(argv=argv), self.assertRaises(SystemExit) as stop:
+                self.run_main(*argv)
+            self.assertEqual(stop.exception.code, 2)
+
+
+def _spy_popen(started):
+    def popen(command, **kwargs):
+        started.update(kwargs, command=command)
+        return subprocess.Popen(command, **kwargs)
+
+    return popen
+
+
+# Verifies: S14-R7
+class WorkflowGateTests(unittest.TestCase):
+    """The checked-in training-v2 traces: both suites score 100.000000 at every seed with no hard violation, missing
+    witness or fake error, every training-v1 control passes, and a child under another PYTHONHASHSEED reproduces
+    overlapping-dispatch and persisted-intent-restart byte for byte (S14-R7, S14-AC6)."""
+
+    CHILD_CASES = ("overlapping-dispatch", "persisted-intent-restart")
+
+    @classmethod
+    def setUpClass(cls):
+        cls.started = {}
+        argv = ["--gate", "--suite", "required"]
+        for case_id in cls.CHILD_CASES:
+            argv += ["--case", case_id]
+        cls.child = wb.ChildRun(wb.child_command(wb.parse_args(argv)), popen=_spy_popen(cls.started), timeout=300)
+        try:
+            cls.report = wb.run_suite(wb.load_suites(), probe=False)
+        except BaseException:
+            cls.child.close()
+            raise
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.child.close()
+
+    def test_both_suites_score_100_with_no_hard_violation_missing_witness_or_error(self):
+        suites = self.report["suites"]
+        self.assertEqual((suites["required"]["score"], suites["required"]["passed"], suites["required"]["total"]),
+                         ("100.000000", 129, 129))
+        self.assertEqual((suites["holdout"]["score"], suites["holdout"]["passed"], suites["holdout"]["total"]),
+                         ("100.000000", 30, 30))
+        for name, suite in suites.items():
+            for case_id, result in suite["cases"].items():
+                for key, trace in result["traces"].items():
+                    with self.subTest(trace=f"{name}/{case_id}/{key}"):
+                        self.assertTrue(trace["pass"], trace["unmet"])
+                        self.assertEqual((trace["unmet"], trace["hard_violations"], trace["witnesses_missing"],
+                                          trace["errors"]), ([], [], [], []))
+        self.assertEqual(wb.fake_errors(self.report), [])
+
+    def test_every_training_v1_control_passes(self):
+        for name, suite in self.report["suites"].items():
+            for case_id, result in suite["cases"].items():
+                with self.subTest(case=f"{name}/{case_id}"):
+                    self.assertTrue(result["control"]["traces"])
+                    self.assertTrue(result["control"]["pass"])
+                    for key, trace in result["control"]["traces"].items():
+                        self.assertTrue(trace["pass"], (key, trace["unmet"]))
+
+    def test_the_gate_names_no_reason(self):
+        self.assertEqual(wb.gate_reasons(self.report, deterministic=True, subset=False), [])
+
+    def test_every_frozen_defect_target_passes_in_the_shared_run(self):
+        checked = 0
+        for item in wb.SEEDED_DEFECTS:
+            for target in item.targets:
+                if target.derive:
+                    continue
+                result = self.report["suites"][target.suite]["cases"][target.case_id]
+                traces = result["control"]["traces"] if target.control else result["traces"]
+                for seed in SUITES[target.suite]["seeds"]:
+                    with self.subTest(defect=item.id, target=target.label, seed=seed):
+                        trace = traces[f"{target.scenario_id}@{seed}"]
+                        self.assertTrue(trace["pass"], trace["unmet"])
+                        checked += 1
+        self.assertGreater(checked, 0)
+
+    def test_a_child_under_another_hash_seed_reproduces_the_shared_run(self):
+        child = json.loads(self.child.report())
+        ours = wb.scored_view(self.report)["suites"]["required"]["cases"]
+        theirs = wb.scored_view(child)["suites"]["required"]["cases"]
+        self.assertEqual(sorted(theirs), sorted(self.CHILD_CASES))
+        for case_id in self.CHILD_CASES:
+            with self.subTest(case=case_id):
+                self.assertEqual(theirs[case_id], ours[case_id])
+        self.assertEqual(self.started["env"]["PYTHONHASHSEED"], wb.child_hash_seed())
+        self.assertNotEqual(self.started["env"]["PYTHONHASHSEED"], os.environ.get("PYTHONHASHSEED"))
+        self.assertEqual(self.started["env"][wb.CHILD_ENV], "1")
+
+
+# Verifies: S14-R7
+class DeterminismTests(unittest.TestCase):
+    """The real check_determinism with a real child interpreter under another PYTHONHASHSEED (no stub)."""
+
+    def test_check_determinism_with_a_real_child_under_another_hash_seed(self):
+        args = wb.parse_args(["--gate", "--suite", "required", "--case", "distinct-accounts"])
+        started = {}
+        same, report = wb.check_determinism(
+            wb.load_suites("required"),
+            start_child=lambda: wb.ChildRun(wb.child_command(args), popen=_spy_popen(started), timeout=300),
+            cases=["distinct-accounts"], probe=False)
+        self.assertTrue(same)
+        self.assertEqual(started["env"]["PYTHONHASHSEED"], wb.child_hash_seed())
+        self.assertNotEqual(started["env"]["PYTHONHASHSEED"], os.environ.get("PYTHONHASHSEED"))
+        traces = report["suites"]["required"]["cases"]["distinct-accounts"]["traces"]
+        self.assertEqual(sorted(traces), [f"alpha-held@{seed}" for seed in REQUIRED["seeds"]])
+        self.assertTrue(all(trace["pass"] for trace in traces.values()), traces)
+
+    def test_repeat_in_process_runs_give_identical_behavior_digests(self):
+        for case_id, scenario_id in (("overlapping-dispatch", "threads"),
+                                     ("persisted-intent-restart", "crash-after-send")):
+            with self.subTest(scenario=f"{case_id}/{scenario_id}"):
+                entry = scenario(case_id, scenario_id)
+                runs = [wb.run_scenario("required", case_id, entry, REQUIRED["catalog"], REQUIRED["seeds"][0], CODES)
+                        for _ in range(2)]
+                self.assertTrue(runs[0].behavior)
+                self.assertEqual(runs[0].behavior, runs[1].behavior)
 
 
 if __name__ == "__main__":

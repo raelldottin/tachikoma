@@ -6,6 +6,8 @@ Every training call the executor makes goes through a recording client. The clie
 
 A second mode, qa-eval, mutates the planner and the strategy and measures how many mutants the benchmark and the unit tests catch.
 
+The SPEC-14 workflow benchmark and its seeded-defect evaluation are a separate harness, described in [SPEC-14 workflow evaluation](#spec-14-workflow-evaluation).
+
 The benchmark measures the owner-approved strategy as it is. It never tunes the planner or the strategy to raise a score.
 
 ## Usage
@@ -414,6 +416,142 @@ Round history:
 Between the rounds, the QA loop killed all 25 neither mutants with `PlannerContractTests`. The benchmark channel did not change, because no planner or strategy code changed.
 
 With live research names (2026-11-26), the gates moved to the original courses 101 / 201 / 203 and the catalog to the live lines (`Fitness 101` ... `Education 203`). Every scenario score stayed the same: each old level maps onto the course that opens the same gates (1 to 101, 2 to 201, 3 to 203). One planner mutant moved from both channels to tests only: `planner.py:199:41:constant:0` (a missing research counted as level 1 instead of 0) no longer opens a gate in any scenario, because no default gate is below 101. `test_missing_research_counts_as_level_zero` kills it.
+
+## SPEC-14 workflow evaluation
+
+The SPEC-14 workflow benchmark, `scripts/training_workflow_benchmark.py`, is a separate harness from the simulator benchmark above and is scored separately. It drives the real `run.main()` against a stateful FakePss through frozen, independently written traces: 18 cases and 53 scenarios. The required suite has 9 cases, 43 scenarios and 129 traces at seeds 1401-1403. The holdout has 9 cases, 10 scenarios and 30 traces at seeds 2401-2403. Every case also carries a paired training-v1 control.
+
+The seeded-defect evaluation (`--defects`) checks that the benchmark catches the defects SPEC-14 names (S14-AC7). Each catalogued defect is patched into production at call time, never as a source edit, and replayed against named targets in two channels:
+
+1. **benchmark:** the frozen required, holdout and training-v1 control traces.
+2. **derived:** variants built in code from a frozen scenario (`trigger_after(n)` moves each step trigger to a later roster read). They are never written to a fixture, and each must pass unpatched first.
+
+The test module `tests.test_training_workflow_benchmark` runs the same checks in CI: `WorkflowGateTests` (both suites, every control, and a determinism child), `DeterminismTests` (the real `check_determinism` with a real child interpreter), `SeededDefectRunTests` (one test per critical defect) and `DefectsCliTests` (`--defects` itself).
+
+### Detection rule
+
+- A defect is detected on a trace only when every expected named assertion (`step:assertion`) and every expected hard code appears, the run records no harness error, and no step's exit is an unexpected crash or production exception.
+- Each target must pass on the unpatched revision first. A target that fails clean fails the run.
+- Critical defects must be detected on every trace. Non-critical detection rates are published, not gated.
+- `--gate` never runs with a defect active: it exits 2. The determinism child's argv and environment carry no defect. A defect reaches a processes-mode dispatch child only through that child's spec JSON, while one is active in the parent.
+
+### SPEC-14 workflow evaluation results
+
+Revision: <filled at final gates>
+
+Measured on 2026-11-28 on the `spec14-workflow-eval` working tree (base `1f924e0`), with these commands:
+
+```bash
+.venv/bin/python scripts/training_workflow_benchmark.py --gate --json gate.json
+PYTHONHASHSEED=1   .venv/bin/python scripts/training_workflow_benchmark.py --report-only --json h1.json --quiet
+PYTHONHASHSEED=999 .venv/bin/python scripts/training_workflow_benchmark.py --report-only --json h999.json --quiet
+cmp h1.json h999.json && cmp h1.json gate.json
+.venv/bin/python scripts/training_workflow_benchmark.py --defects --json defects.json
+.venv/bin/python scripts/ci.py test --names tests.test_training_workflow_benchmark
+```
+
+| Command | Exit | Wall time |
+| --- | ---: | ---: |
+| `--gate --json gate.json` | 0 | 108 s |
+| `--report-only` under `PYTHONHASHSEED=1` | 0 | 53 s |
+| `--report-only` under `PYTHONHASHSEED=999` | 0 | 80 s |
+| `cmp` of the three reports | 0 | - |
+| `--defects --json defects.json` | 0 | 104 s |
+| `scripts/ci.py test --names tests.test_training_workflow_benchmark` (207 tests) | 0 | 133 s |
+
+The gate passed: required scored 100.000000 (129 of 129 traces) and holdout 100.000000 (30 of 30), with no hard violation, missing witness or fake error, and every control passed. Its JSON report is byte-identical to the report `--gate` wrote on `1f924e0` before this slice.
+
+**Scenario results:**
+
+| Case | Suite | Scenarios | Traces passed | Control |
+| --- | --- | ---: | ---: | --- |
+| `role-coverage` | required | 1 | 3/3 | pass (3/3) |
+| `preview-prestige` | required | 2 | 6/6 | pass (3/3) |
+| `paid-boundary` | required | 9 | 27/27 | pass (3/3) |
+| `stale-preflight` | required | 7 | 21/21 | pass (3/3) |
+| `reconciliation` | required | 10 | 30/30 | pass (3/3) |
+| `persisted-intent-restart` | required | 5 | 15/15 | pass (3/3) |
+| `overlapping-dispatch` | required | 2 | 6/6 | pass (3/3) |
+| `distinct-accounts` | required | 1 | 3/3 | pass (3/3) |
+| `store-stop-controls` | required | 6 | 18/18 | pass (6/6) |
+| `tie-break-instance-id` | holdout | 1 | 3/3 | pass (3/3) |
+| `observed-zero-stat` | holdout | 1 | 3/3 | pass (3/3) |
+| `gas-priced-course` | holdout | 1 | 3/3 | pass (3/3) |
+| `malformed-price` | holdout | 1 | 3/3 | pass (3/3) |
+| `unclaimed-course` | holdout | 1 | 3/3 | pass (3/3) |
+| `room-level-gate` | holdout | 1 | 3/3 | pass (3/3) |
+| `two-copy-recipe` | holdout | 2 | 6/6 | pass (3/3) |
+| `retry-different-crew` | holdout | 1 | 3/3 | pass (3/3) |
+| `concurrent-two-accounts` | holdout | 1 | 3/3 | pass (3/3) |
+| **total** | | **53** | **159/159** | **all pass** |
+
+**Determinism evidence.** The `--gate` report and the two `--report-only` reports under `PYTHONHASHSEED` 1 and 999 are byte-identical (sha256 `adcd9418d68b9310...`), as is the gate's own determinism child, which runs under another fixed hash seed. In the test module, `WorkflowGateTests` compares a real child interpreter's run of `overlapping-dispatch` and `persisted-intent-restart` with the shared in-process run, and `DeterminismTests` runs the real `check_determinism` with a real child on `distinct-accounts`. Both assert that the child's `PYTHONHASHSEED` differs from the parent's. `--defects` does not change the gate report.
+
+**Detection table.** `AddTraining` stands for `POST /TrainingService/AddTraining`. Crew labels print as `<crew>` and the prestige target as `<target>`. Each defect ran at all three seeds of its suite, and every target passed unpatched at every seed first.
+
+| Defect | Critical | Channel | Caught by (named assertion / hard code) | Detected / traces |
+| --- | --- | --- | --- | ---: |
+| `two-starts` | yes | benchmark | `paid-boundary/exact-500`: `exec:mutations.AddTraining`; hard `exec:duplicate_write`<br>`gas-priced-course/gas-300`: `exec:mutations.AddTraining`; hard `exec:duplicate_write` | 6 / 6 |
+| `guard-latch-off` | no | benchmark | `paid-boundary/exact-500`: `exec:mutations.AddTraining`; hard `exec:duplicate_write`<br>`overlapping-dispatch/threads`: `overlap:dispatches` | 0 / 6 |
+| `lock-skipped` | yes | benchmark | `overlapping-dispatch/threads`: `overlap:dispatches`<br>`distinct-accounts/alpha-held`: `overlap:dispatches`<br>`overlapping-dispatch/processes`: `overlap:dispatches` | 9 / 9 |
+| `intent-not-persisted` | yes | benchmark | `persisted-intent-restart/crash-after-send`: `exec2:mutations.AddTraining`, `exec2:resource_delta.alpha`; hard `exec2:duplicate_write`, `exec2:budget_spend` | 3 / 3 |
+| `intent-after-send` | yes | benchmark | `persisted-intent-restart/crash-after-send`: `exec2:mutations.AddTraining`, `exec2:skips.alpha.unresolved_attempt`; hard `exec2:duplicate_write`, `exec2:budget_spend`<br>`persisted-intent-restart/crash-before-apply`: `exec2:mutations.AddTraining`, `exec2:skips.alpha.unresolved_attempt`; hard `exec2:duplicate_write`, `exec2:budget_spend` | 6 / 6 |
+| `stop-ignored` | yes | benchmark | `store-stop-controls/stop`: `exec:mutations.AddTraining`, `exec:requests.alpha`<br>`store-stop-controls/stop-mid-run`: `exec:mutations.AddTraining`, `exec:skips.alpha.stopped`; hard `exec:budget_spend` | 6 / 6 |
+| `scheduler-stop-ignored` | yes | benchmark | `store-stop-controls/stop-mid-run`: `exec:mutations.AddTraining`, `exec:skips.alpha.stopped`; hard `exec:budget_spend` | 3 / 3 |
+| `missing-store-fresh` | yes | benchmark | `store-stop-controls/missing-state`: `exec2:mutations.AddTraining`, `exec2:skips.alpha.state_missing`, `exec2:store.alpha`; hard `exec2:budget_spend` | 3 / 3 |
+| `unreadable-store-fresh` | yes | benchmark | `store-stop-controls/unreadable-state`: `exec2:mutations.AddTraining`, `exec2:skips.alpha.state_unreadable`; hard `exec2:budget_spend` | 3 / 3 |
+| `settle-loses-pending` | yes | benchmark | `persisted-intent-restart/settle-write-fails`: `exec2:mutations.AddTraining`, `exec2:skips.alpha.unresolved_attempt`; hard `exec2:duplicate_write`, `exec2:budget_spend` | 3 / 3 |
+| `v1-under-v2-path` | yes | benchmark | `paid-boundary/v1-unpriced-start (training-v1 control)`: `exec:mutations.AddTraining`, `exec:applied.AddTraining`, `exec:journal` | 3 / 3 |
+| `v2-down-v1-path` | yes | benchmark | `overlapping-dispatch/threads`: `overlap:dispatches`, `provision:store.alpha`<br>`persisted-intent-restart/crash-after-send`: `exec2:mutations.AddTraining`, `provision:store.alpha`; hard `exec2:duplicate_write` | 6 / 6 |
+| `unresolved-guard-only` | yes | benchmark | `reconciliation/missing-post-read`: `exec2:skips.alpha.unresolved_attempt`<br>`retry-different-crew/lost-reply`: `exec2:skips.alpha.unresolved_attempt` | 6 / 6 |
+| `unresolved-ignored` | yes | benchmark | `retry-different-crew/lost-reply`: `exec2:mutations.AddTraining`, `exec2:skips.alpha.unresolved_attempt`; hard `exec2:duplicate_write`, `exec2:budget_spend`<br>`reconciliation/missing-post-read`: `exec2:mutations.AddTraining`, `exec2:skips.alpha.unresolved_attempt`; hard `exec2:duplicate_write`, `exec2:budget_spend`<br>`persisted-intent-restart/crash-after-send`: `exec2:mutations.AddTraining`, `exec2:skips.alpha.unresolved_attempt`; hard `exec2:duplicate_write`, `exec2:budget_spend` | 9 / 9 |
+| `premium-spend` | yes | benchmark | `paid-boundary/premium`: `exec:mutations.AddTraining`, `exec:skips.alpha.premium_currency.<crew>`; hard `exec:premium_spend` | 3 / 3 |
+| `false-verification` | yes | benchmark | `reconciliation/different-course`: `exec1:journal`; hard `exec1:false_verification`<br>`reconciliation/missing-id`: `exec1:journal`; hard `exec1:false_verification` | 6 / 6 |
+| `funds-plus-one` | yes | benchmark | `paid-boundary/short-499`: `exec:mutations.AddTraining`, `exec:skips.alpha.insufficient_funds.<crew>` | 3 / 3 |
+| `funds-minus-one` | yes | benchmark | `paid-boundary/exact-500`: `exec:mutations.AddTraining`, `exec:applied.AddTraining`, `exec:resource_delta.alpha` | 3 / 3 |
+| `reservation-ignored` | yes | benchmark | `paid-boundary/earlier-reservation`: `dry:journal_planned`, `exec:skips.alpha.insufficient_funds.<crew>`<br>`paid-boundary/spend-cap-after-earlier`: `exec:skips.alpha.cap_exceeded.<crew>` | 6 / 6 |
+| `recheck-off` | yes | derived | `stale-preflight/room-upgrading~nth2`: `exec:mutations.AddTraining`, `exec:skips.alpha.room_not_ready.<crew>`<br>`stale-preflight/crew-moved~nth2`: `exec:mutations.AddTraining`, `exec:skips.alpha.not_in_training_room.<crew>`<br>`stale-preflight/research-removed~nth2`: `exec:mutations.AddTraining`, `exec:skips.alpha.research_missing.<crew>`<br>`stale-preflight/crew-fatigued~nth2`: `exec:mutations.AddTraining`, `exec:skips.alpha.fatigued.<crew>`<br>`stale-preflight/price-raised~nth3`: `exec:mutations.AddTraining`, `exec:skips.alpha.insufficient_funds.<crew>` | 15 / 15 |
+| `recheck-off-frozen` | no | benchmark | `stale-preflight/room-upgrading`: `exec:mutations.AddTraining`<br>`stale-preflight/crew-moved`: `exec:mutations.AddTraining`<br>`stale-preflight/research-removed`: `exec:mutations.AddTraining`<br>`stale-preflight/crew-fatigued`: `exec:mutations.AddTraining`<br>`stale-preflight/price-raised`: `exec:mutations.AddTraining` | 0 / 15 |
+| `price-under` | yes | benchmark | `paid-boundary/short-499`: `exec:mutations.AddTraining`, `exec:skips.alpha.insufficient_funds.<crew>` | 3 / 3 |
+| `price-over` | yes | benchmark | `paid-boundary/exact-500`: `exec:mutations.AddTraining`, `exec:applied.AddTraining` | 3 / 3 |
+| `currency-swapped` | yes | benchmark | `gas-priced-course/gas-300`: `exec:mutations.AddTraining`, `exec:applied.AddTraining`, `exec:resource_delta.alpha` | 3 / 3 |
+| `zero-price-unknown` | yes | benchmark | `paid-boundary/explicit-zero`: `exec:mutations.AddTraining`, `exec:applied.AddTraining` | 3 / 3 |
+| `zero-stat-unknown` | yes | benchmark | `observed-zero-stat/missing-versus-zero`: `plan:crew_plan.<crew>`, `dry:journal_planned` | 3 / 3 |
+| `greedy-roles` | yes | benchmark | `role-coverage/swap`: `plan1:crew_plan.<crew>`, `plan1:crew_plan.<crew>`, `plan2:crew_plan.<crew>`, `plan2:crew_plan.<crew>` | 3 / 3 |
+| `tie-high-id` | yes | benchmark | `tie-break-instance-id/equal-repair`: `plan:crew_plan.<crew>`, `dry:journal_planned` | 3 / 3 |
+| `tie-input-order` | no | benchmark | `tie-break-instance-id/equal-repair`: `plan:crew_plan.<crew>` | 2 / 3 |
+| `two-copy-as-one` | yes | benchmark | `two-copy-recipe/one-training`: `plan:prestige.<target>`<br>`preview-prestige/one-copy`: `plan:prestige.<target>` | 6 / 6 |
+| `wrong-stat-course` | yes | benchmark | `role-coverage/swap`: `plan1:crew_plan.<crew>`, `dry1:journal_planned`<br>`preview-prestige/one-copy`: `plan:crew_plan.<crew>`, `dry:journal_planned` | 6 / 6 |
+
+| Rate | Value | Over |
+| --- | ---: | --- |
+| Critical defects detected on every trace | 28 of 28 | 28 critical defects |
+| Critical traces detected | 135 of 135 | benchmark 120, derived 15 |
+| Benchmark-channel traces detected | 122 of 144 | all defects, critical and non-critical |
+| Derived-channel traces detected | 15 of 15 | `recheck-off` |
+| Targets failing unpatched | 0 | every target at every seed |
+
+**Survivors (non-critical, published only):**
+
+- `guard-latch-off` (0 of 6): masked by the planner's one-start rule. A crew plan never holds two starts, so the guard's latch cannot be reached without also seeding the planner.
+- `recheck-off-frozen` (0 of 15): the frozen stale triggers fire at the identity read, so the plan read already sees the change and refuses. The derived channel (`recheck-off`, 15 of 15) moves each trigger to a later roster read, where only the under-lock recheck can see it.
+- `tie-input-order` (2 of 3): caught only at the seeds whose reply order puts the higher instance id first, because the seed permutes reply order. `tie-high-id` (3 of 3) covers the instance-id tie-break itself.
+
+**Targets left out on purpose** (each named in its defect's `note`):
+
+- `scheduler-stop-ignored` on `store-stop-controls/stop`: run.py refuses before login, so the scheduler is never reached.
+- `missing-store-fresh` on `store-stop-controls/unprovisioned`: the dispatch refuses on a missing store before any load.
+- `price-under` on `paid-boundary/exact-500`: an underestimate still sends, and the fake charges the real price.
+- `intent-not-persisted` on `paid-boundary/exact-500`: only the exit changes, which is not specific enough.
+- `intent-after-send` on `persisted-intent-restart/intent-write-fails`: its armed fault replaces the intent write itself.
+- `two-copy-as-one` on `two-copy-recipe/two-idle`: both copies are present there.
+- Timing-dependent hard codes: without the lock, whether the second dispatch's start lands (`duplicate_write`, `budget_spend`) or its store write is refused depends on timing, in threads and processes mode alike. `lock-skipped` and the threads target of `v2-down-v1-path` therefore expect only the deterministic named assertions (`overlap:dispatches`, plus `provision:store.alpha` for `v2-down-v1-path`). Those were present in 15 of 15 repeated runs, 5 runs at each seed.
+
+**QA-eval rounds:**
+
+| Round | Revision | Workflow gate | Critical detected | Non-critical survivors | Legacy QA detection | Notes |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | pending | pending | pending | pending | pending | pending |
 
 ## Known limitations
 

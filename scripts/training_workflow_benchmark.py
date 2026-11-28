@@ -24,6 +24,16 @@ duplicate or undeclared case, unknown label, skip code or outcome, a fixture who
 FIXTURE_SHA256), an oracle exception or a defect in the fake. Before running the suite the gate checks the fixture
 digests itself and self-checks the fake's strict pricing and refusal rules (``fake_self_check``).
 
+Seeded defects (``--defects``, ``--defect ID`` to select; S14-AC7): each catalogued defect (``SEEDED_DEFECTS``) is
+patched into production at call time and replayed against its named targets at every seed, each target first run
+unpatched. ``benchmark`` targets are frozen required, holdout or control traces; ``derived`` targets are variants built
+in code from a frozen scenario, never written to a fixture. A defect is detected on a trace only when every expected
+named assertion and hard code shows, with no harness error and no unexpected crash. Exit 0 when every target passes
+unpatched and every critical defect is detected on every trace; exit 1 otherwise; exit 2 for a fixture or oracle
+error or a harness error in an unpatched run. ``--gate`` never runs with a defect active (it exits 2), and neither
+the determinism child's argv nor its environment carries one: a defect reaches a processes-mode dispatch child only
+through that child's spec JSON.
+
 Concurrency: ``overlap`` steps run several execute dispatches at once. ``processes`` mode is the S14-AC4 interprocess
 witness: each dispatch is a child process (``--dispatch-child``) running ``run.main``, synchronised by a file barrier
 and a file hold; each child serves its own copy of the world (one world shared across processes would need a socket
@@ -55,7 +65,9 @@ from __future__ import annotations
 import argparse
 import contextlib
 import copy
+import dataclasses
 import datetime
+import fnmatch
 import hashlib
 import importlib
 import io
@@ -1408,7 +1420,7 @@ def run_overlap_processes(ctx: ScenarioRun, step: Mapping) -> dict:
                 "clock": _primary(ctx).clock.now.isoformat(),
                 "argv": _argv(ctx, {"kind": "execute"}, REGISTRY_FILE), "env": ctx.env,
                 "barrier": step["barrier"], "hold": step["hold"], "sync": str(sync),
-                "out": str(sync / f"result-{index}.json")}
+                "out": str(sync / f"result-{index}.json"), **dispatch_defect_field()}
         path = sync / f"spec-{index}.json"
         path.write_text(json.dumps(spec), encoding="utf-8")
         children.append(subprocess.Popen([sys.executable, os.path.abspath(__file__), "--dispatch-child", str(path)],
@@ -1517,8 +1529,12 @@ def dispatch_child(spec_path: str) -> int:
     hold_fake = fakes.get(spec["hold"].get("alias")) or next(iter(fakes.values()))
     barrier_fake.on_reply(spec["barrier"]["route"], barrier, nth=1, times=1, blocking=True)
     hold_fake.on_reply(spec["hold"]["route"], hold, nth=1, times=1, blocking=True)
+    defect_id = spec.get("defect")  # a seeded defect (--defects) reaches a dispatch child only through its spec
+    if defect_id is not None and defect_id not in {item.id for item in SEEDED_DEFECTS}:
+        raise OracleError(f"dispatch child {index}: unknown seeded defect {defect_id!r}")
     try:
-        code, stdout, stderr = call_main(spec["argv"], spec["env"], driver)
+        with defect(defect_id).active() if defect_id else contextlib.nullcontext():
+            code, stdout, stderr = call_main(spec["argv"], spec["env"], driver)
     finally:
         (sync / f"done-{index}").write_text("1", encoding="utf-8")
     result = {"exit": code, "stdout": stdout, "stderr": stderr, "barrier": status["barrier"], "hold": status["hold"],
@@ -2440,12 +2456,757 @@ def check_determinism(suites: Mapping, *, start_child: Callable[[], ChildRun] | 
     return same, first
 
 
+# --- seeded defects (S14-AC7) --------------------------------------------------------------------------------------
+#
+# Each catalogued defect is seeded into production at call time (``unittest.mock.patch`` on the attribute production
+# looks up when it runs, never a source edit) and replayed against named frozen traces. A defect is detected on a
+# trace only when every expected named assertion and hard code shows, with no harness error and no unexpected crash.
+# Two channels: ``benchmark`` targets are the frozen required, holdout and control traces; ``derived`` targets are
+# variants built here in code from a frozen scenario (never written to a fixture), which must pass unpatched first.
+# The gate never runs with a defect active: ``main`` refuses, ``child_command`` and ``ChildRun`` carry none, and a
+# defect reaches a processes-mode ``--dispatch-child`` only through its spec JSON while one is active here.
+
+DEFECTS_SCHEMA = "tachikoma.training-workflow-defects/1"
+HARD_CODES = ("account_crossover", "premium_spend", "budget_spend", "duplicate_write", "false_verification")
+_ACTIVE_DEFECT: str | None = None
+_ADD_MUTATION = f"mutations.{ADD_TRAINING}"
+_ADD_APPLIED = f"applied.{ADD_TRAINING}"
+
+
+@dataclass(frozen=True)
+class DefectTarget:
+    """One trace a seeded defect must change: ``expect`` names ``<step>:<assertion>`` (a trailing ``*`` is an
+    fnmatch glob, used only where the label is an in-game name) and ``hard`` names ``<step>:<hard code>``."""
+
+    suite: str
+    case_id: str
+    scenario_id: str
+    expect: tuple[str, ...] = ()
+    hard: tuple[str, ...] = ()
+    control: bool = False  # the case's training-v1 control scenario (its policy and control skip codes)
+    derive: tuple[str, Callable[[dict], None]] | None = None  # (id suffix, in-place edit of a deep copy)
+
+    @property
+    def channel(self) -> str:
+        return "derived" if self.derive else "benchmark"
+
+    @property
+    def label(self) -> str:
+        suffix = f"~{self.derive[0]}" if self.derive else ""
+        return f"{self.suite}/{self.case_id}/{self.scenario_id}{suffix}"
+
+
+@dataclass(frozen=True)
+class SeededDefect:
+    id: str
+    title: str  # public text: no in-game names
+    critical: bool  # critical defects must be detected on every trace; the others' rates are published only
+    seeding: Callable[[], Any]  # zero-argument factory of a context manager; originals are captured on enter
+    targets: tuple[DefectTarget, ...]
+    note: str = ""
+
+    @contextlib.contextmanager
+    def active(self):
+        global _ACTIVE_DEFECT
+        if _ACTIVE_DEFECT is not None:
+            raise OracleError(f"seeded defect {_ACTIVE_DEFECT} is already active; {self.id} cannot join it")
+        _ACTIVE_DEFECT = self.id
+        try:
+            with self.seeding():
+                yield self
+        finally:
+            _ACTIVE_DEFECT = None
+
+
+def active_defect() -> str | None:
+    return _ACTIVE_DEFECT
+
+
+def dispatch_defect_field() -> dict:
+    """The dispatch-child spec's defect field: empty (so the spec JSON is unchanged) unless a defect is active."""
+    return {} if _ACTIVE_DEFECT is None else {"defect": _ACTIVE_DEFECT}
+
+
+def _module(name: str):
+    """Import ``name`` for seeding; a first import happens in a scratch directory (run.py opens its log file in
+    the working directory) after the sdk pre-import."""
+    if name not in sys.modules:
+        cwd = os.getcwd()
+        with tempfile.TemporaryDirectory(prefix="twb-import-") as scratch:
+            os.chdir(scratch)
+            try:
+                preimport_sdk()
+                importlib.import_module(name)
+            finally:
+                os.chdir(cwd)
+    return sys.modules[name]
+
+
+def _swap(module_name: str, dotted: str, make: Callable[[Any], Any]) -> Callable[[], Any]:
+    """A seeding factory: on enter, replace ``module.Owner.attr`` with ``make(original)``; restore it on exit."""
+    @contextlib.contextmanager
+    def seeding():
+        owner = _module(module_name)
+        *path, attr = dotted.split(".")
+        for part in path:
+            owner = getattr(owner, part)
+        with patch.object(owner, attr, make(getattr(owner, attr))):
+            yield
+
+    return seeding
+
+
+def _set(module_name: str, dotted: str, value: Any) -> Callable[[], Any]:
+    return _swap(module_name, dotted, lambda original: value)
+
+
+def _stack(*factories: Callable[[], Any]) -> Callable[[], Any]:
+    @contextlib.contextmanager
+    def seeding():
+        with contextlib.ExitStack() as stack:
+            for factory in factories:
+                stack.enter_context(factory())
+            yield
+
+    return seeding
+
+
+def _nothing(*args, **kwargs) -> None:
+    return None
+
+
+class _NoLock:
+    def release(self) -> None:
+        pass
+
+
+def _send_twice(original):
+    def add_training(self, *args, **kwargs):
+        original(self, *args, **kwargs)
+        return original(self, *args, **kwargs)
+
+    return add_training
+
+
+@contextlib.contextmanager
+def _intent_after_send():
+    """The intent written only after the send: the write is held back and made just before the settle."""
+    runner = _module("sdk.execution.runner")
+    settle, held = runner.settle_training_intent, {}
+
+    def write_later(store, alias, intent):
+        held[(alias, intent.intent_id)] = intent
+
+    def settle_after_writing(store, alias, intent_id, settlement):
+        intent = held.pop((alias, intent_id), None)
+        if intent is not None:
+            store.write_intent(alias, intent)
+        return settle(store, alias, intent_id, settlement)
+
+    with patch.object(runner, "write_training_intent", write_later), \
+            patch.object(runner, "settle_training_intent", settle_after_writing):
+        yield
+
+
+def _fresh_on(error_name: str) -> Callable[[], Any]:
+    """Missing or unreadable established state treated as a fresh account's store."""
+    def make(original):
+        attempts = _module("sdk.fleet.attempts")
+        caught, seen = getattr(attempts, error_name), {}
+
+        def load(self, alias, identity=None):
+            if identity:
+                seen[alias] = identity
+            try:
+                return original(self, alias, identity)
+            except caught:
+                return attempts.virgin_store(alias, identity or seen.get(alias),
+                                             datetime.datetime.now(datetime.timezone.utc))
+
+        return load
+
+    return _swap("sdk.fleet.attempts", "_StoreBase.load", make)
+
+
+def _lose_pending(original):
+    runner, attempts = _module("sdk.execution.runner"), _module("sdk.fleet.attempts")
+
+    def settle(self, guard, intent, result):
+        try:
+            return original(self, guard, intent, result)
+        except runner.AttemptSettlementError:
+            state = guard.store.load(self.account_alias)
+            kept = tuple(item for item in state.attempts if item.intent_id != intent.intent_id)
+            guard.store._replace(self.account_alias, attempts.dump_store(dataclasses.replace(state, attempts=kept)))
+            raise
+
+    return settle
+
+
+def _guarded(value: bool) -> Callable[[], Any]:
+    return _stack(_set("sdk.fleet.factory", "guarded_training", lambda policy: value),
+                  _set("sdk.fleet.attempts", "guarded_training", lambda policy: value))
+
+
+def _blocker(adjust: Callable) -> Callable[[], Any]:
+    def make(original):
+        return lambda course, room, inputs, policy: adjust(original, course, room, inputs, policy)
+
+    return _swap("sdk.training.planner", "course_blocker", make)
+
+
+def _premium_allowed(original, course, room, inputs, policy):
+    found = original(course, room, inputs, policy)
+    return None if found is not None and found[0] == "premium_currency" else found
+
+
+def _funds(delta: int) -> Callable:
+    def adjust(original, course, room, inputs, policy):
+        funds = {kind: (None if value is None else value + delta) for kind, value in inputs.funds.items()}
+        return original(course, room, dataclasses.replace(inputs, funds=funds), policy)
+
+    return adjust
+
+
+def _always_verified(original):
+    verified = _module("sdk.actions").ReconciliationStatus.VERIFIED
+    return dataclasses.replace(original, postcondition=lambda *args: (verified, "seeded"))
+
+
+def _price(change: Callable) -> Callable[[], Any]:
+    def make(original):
+        model = _module("sdk.training.model")
+        return lambda value: change(model, original(value))
+
+    return _swap("sdk.training.parse", "parse_course_price", make)
+
+
+def _price_shift(delta: int) -> Callable:
+    def change(model, price):
+        if price.status != model.PRICE_OK:
+            return price
+        return model.CoursePrice(model.PRICE_OK, price.currency, max(0, price.amount + delta))
+
+    return change
+
+
+def _price_as_mineral(model, price):
+    return model.CoursePrice(model.PRICE_OK, "mineral", price.amount) if price.status == model.PRICE_OK else price
+
+
+def _zero_price_unknown(model, price):
+    if price.status == model.PRICE_OK and price.amount == 0:
+        return model.CoursePrice(model.PRICE_UNAVAILABLE)
+    return price
+
+
+def _zero_stat_unknown(original):
+    def observe(snapshot, member):
+        found = original(snapshot, member)
+        if found.stats is not None and 0 in found.stats.values():
+            return dataclasses.replace(found, stats=None)
+        return found
+
+    return observe
+
+
+def _role_assignment(planner, crew, roles: Mapping[str, Any], uncovered: Sequence[str]):
+    unknown = tuple(sorted(member.character_id for member in crew if member.stats is None))
+    return planner.RoleAssignment(dict(roles), tuple(uncovered), unknown)
+
+
+def _greedy_roles(original):
+    """Global greedy: the highest (score, then lowest id) crew-role pair first, each role and crew member once."""
+    planner = _module("sdk.training.planner")
+
+    def assign(crew, policy):
+        known = [member for member in crew if member.stats is not None]
+        pairs = sorted(((member.stats[stat], word, member.character_id) for word, stat in policy.roles
+                        for member in known), key=lambda pair: (-pair[0], pair[2]))
+        roles, used = {}, set()
+        for _score, word, character_id in pairs:
+            if word not in roles and character_id not in used:
+                roles[word] = character_id
+                used.add(character_id)
+        return _role_assignment(planner, crew, roles, [word for word, _ in policy.roles if word not in roles])
+
+    return assign
+
+
+def _tie_high_id(original):
+    def key(roles, choice):
+        found = original(roles, choice)
+        return (found[0], found[1], sorted((score, -ident) for score, ident in found[2]), found[3],
+                tuple(-ident for ident in found[4]))
+
+    return key
+
+
+def _tie_input_order(original):
+    """Equal scores tied by the roster reply's order: the planner's choice key without its instance-id parts."""
+    planner = _module("sdk.training.planner")
+
+    def assign(crew, policy):
+        known = [member for member in crew if member.stats is not None]
+        slots = len(policy.roles)
+        candidates = tuple(tuple(sorted(known, key=lambda member, stat=stat: -member.stats[stat])[:slots])
+                           for _, stat in policy.roles)
+
+        def key(choice):
+            found = planner._assignment_key(policy.roles, choice)
+            return (found[0], found[1], [score for score, _ in found[2]], found[3])
+
+        choice = min(planner._assignment_choices(candidates, ()), key=key)
+        pairs = tuple(zip(policy.roles, choice))
+        return _role_assignment(planner, crew, {word: member.character_id for (word, _), member in pairs
+                                                if member is not None},
+                                [word for (word, _), member in pairs if member is None])
+
+    return assign
+
+
+def _one_copy(original):
+    """A recipe needing two copies of one design counted as needing one."""
+    prestige = _module("sdk.training.prestige")
+
+    def match(recipe, roster):
+        ingredients = tuple(sorted((recipe.first_design_id, recipe.second_design_id)))
+        if roster is None:
+            return prestige.PrestigeRoute(recipe.to_design_id, ingredients, None, None)
+        missing = unknown = 0
+        for design_id in sorted(set(ingredients)):
+            ready = sum(1 for entry in roster if entry.design_id == design_id and entry.eligible is True)
+            maybe = sum(1 for entry in roster if entry.design_id == design_id and entry.eligible is None)
+            short = max(0, 1 - ready)
+            missing += short
+            unknown += min(short, maybe)
+        undesigned = sum(1 for entry in roster if entry.design_id is None and entry.eligible is not False)
+        unknown += min(missing - unknown, undesigned)
+        return prestige.PrestigeRoute(recipe.to_design_id, ingredients, missing, unknown)
+
+    return match
+
+
+def _wrong_stat(original):
+    planner = _module("sdk.training.planner")
+
+    def choose(stat, room, inputs, policy):
+        for course in sorted((c for c in inputs.courses or () if c.stat != stat), key=lambda c: c.design_id):
+            if planner.course_blocker(course, room, inputs, policy) is None:
+                return course
+        return original(stat, room, inputs, policy)
+
+    return choose
+
+
+def trigger_after(nth: int) -> Callable[[dict], None]:
+    """A derived variant's edit: every step trigger fires after the ``nth`` reply of its route instead."""
+    def edit(scenario: dict) -> None:
+        triggers = [trigger for step in scenario["steps"] for trigger in step.get("triggers", ())]
+        if not triggers:
+            raise ValueError(f"{scenario['id']}: no step trigger to move")
+        for trigger in triggers:
+            trigger["after_nth"] = nth
+
+    return edit
+
+
+def derived_scenario(scenario: Mapping, derive: tuple[str, Callable[[dict], None]]) -> dict:
+    """A deep copy of a frozen scenario with ``derive``'s edit applied and ``~suffix`` on its id; never on disk."""
+    suffix, edit = derive
+    entry = copy.deepcopy(dict(scenario))
+    edit(entry)
+    entry["id"] = f"{scenario['id']}~{suffix}"
+    return entry
+
+
+def target_scenario(target: DefectTarget, suites: Mapping[str, Mapping]) -> tuple[dict, list[str], str | None]:
+    """(scenario, skip codes, policy override) for a target, exactly as run_suite would score that trace."""
+    data = suites[target.suite]
+    found = next((item for item in data["cases"] if item["id"] == target.case_id), None)
+    if found is None:
+        raise FixtureError(f"defect target {target.label}: no such case")
+    pool = found["control"]["scenarios"] if target.control else found["scenarios"]
+    scenario = next((item for item in pool if item["id"] == target.scenario_id), None)
+    if scenario is None:
+        raise FixtureError(f"defect target {target.label}: no such scenario")
+    codes = list(data["vocabulary"]["skip_codes"])
+    policy = None
+    if target.control:
+        codes = sorted(set(codes) | set(data["vocabulary"]["control_skip_codes"]))
+        policy = found["control"]["policy_id"]
+    if target.derive:
+        scenario = derived_scenario(scenario, target.derive)
+    return scenario, codes, policy
+
+
+def run_target(target: DefectTarget, suites: Mapping[str, Mapping], seed: int) -> TraceResult:
+    """One target at one seed; a harness exception (a dispatch child's OracleError included) is an error, so it
+    never counts as a detection."""
+    try:
+        scenario, codes, policy = target_scenario(target, suites)
+        return run_scenario(target.suite, target.case_id, scenario, suites[target.suite]["catalog"], seed, codes,
+                            policy_override=policy)
+    except Exception as error:  # noqa: BLE001 - recorded, never detected
+        return TraceResult(False, [], [], [], [f"harness raised {type(error).__name__}: {error}"])
+
+
+def _named(result: TraceResult) -> set[str]:
+    return {f"{item['step']}:{item['assertion']}" for item in result.unmet}
+
+
+def _hard(result: TraceResult) -> set[str]:
+    return {":".join(violation.split(": ")[:2]) for violation in result.hard_violations}
+
+
+def detection(target: DefectTarget, result: TraceResult) -> tuple[bool, list[str]]:
+    """(detected, what is missing): every expected assertion and hard code shown, no error and no unexpected crash
+    or production exception at any step's exit."""
+    named, hard = _named(result), _hard(result)
+    missing = [want for want in target.expect
+               if not (any(fnmatch.fnmatchcase(name, want) for name in named) if want.endswith("*") else want in named)]
+    missing += [want for want in target.hard if want not in hard]
+    crashed = any(item["assertion"] == "exit" and (item["actual"] == "crashed" or str(item["actual"]).startswith(
+        "error ")) for item in result.unmet)
+    found = missing + (["errors"] if result.errors else []) + (["crashed"] if crashed else [])
+    return not found, found
+
+
+def defect(defect_id: str) -> SeededDefect:
+    for item in SEEDED_DEFECTS:
+        if item.id == defect_id:
+            return item
+    raise KeyError(defect_id)
+
+
+def _required(*args, **kwargs) -> DefectTarget:
+    return DefectTarget("required", *args, **kwargs)
+
+
+def _holdout(*args, **kwargs) -> DefectTarget:
+    return DefectTarget("holdout", *args, **kwargs)
+
+
+_STALE = (("room-upgrading", "nth2", 2, "room_not_ready"), ("crew-moved", "nth2", 2, "not_in_training_room"),
+          ("research-removed", "nth2", 2, "research_missing"), ("crew-fatigued", "nth2", 2, "fatigued"),
+          ("price-raised", "nth3", 3, "insufficient_funds"))
+_RECHECK_OFF = _set("sdk.fleet.factory", "start_refusal", _nothing)
+_TIE = _holdout("tie-break-instance-id", "equal-repair", expect=("plan:crew_plan.tia", "dry:journal_planned"))
+
+SEEDED_DEFECTS: tuple[SeededDefect, ...] = (
+    SeededDefect("two-starts", "two training starts sent on one account in one run", True,
+                 _swap("sdk.client", "Client.addTraining", _send_twice), (
+                     _required("paid-boundary", "exact-500", expect=(f"exec:{_ADD_MUTATION}",),
+                                  hard=("exec:duplicate_write",)),
+                     _holdout("gas-priced-course", "gas-300", expect=(f"exec:{_ADD_MUTATION}",),
+                                  hard=("exec:duplicate_write",)))),
+    SeededDefect("guard-latch-off", "the guard's one-start latch removed", False,
+                 _set("sdk.fleet.attempts", "TrainingGuard.mark_sent", _nothing), (
+                     _required("paid-boundary", "exact-500", expect=(f"exec:{_ADD_MUTATION}",),
+                                  hard=("exec:duplicate_write",)),
+                     _required("overlapping-dispatch", "threads", expect=("overlap:dispatches",))),
+                 note="masked by the planner's one-start rule: a crew plan never holds two starts, so the latch "
+                      "is unreachable without also seeding the planner"),
+    SeededDefect("lock-skipped", "the account lock skipped (threads and processes)", True,
+                 _set("sdk.fleet.attempts", "FileAccountLock.try_acquire", lambda *args, **kwargs: _NoLock()), (
+                     _required("overlapping-dispatch", "threads", expect=("overlap:dispatches",)),
+                     _required("distinct-accounts", "alpha-held", expect=("overlap:dispatches",)),
+                     _required("overlapping-dispatch", "processes", expect=("overlap:dispatches",))),
+                 note="without the lock, whether the second dispatch's start lands (the duplicate-write and budget "
+                      "hard codes) or its store write is refused depends on timing in both modes, so only the "
+                      "dispatch summary is expected"),
+    SeededDefect("intent-not-persisted", "the intent never written before the send", True,
+                 _set("sdk.execution.runner", "write_training_intent", _nothing), (
+                     _required("persisted-intent-restart", "crash-after-send",
+                                  expect=(f"exec2:{_ADD_MUTATION}", "exec2:resource_delta.alpha"),
+                                  hard=("exec2:duplicate_write", "exec2:budget_spend")),),
+                 note="on paid-boundary/exact-500 only the exit changes (the settle finds no intent): not specific "
+                      "enough to be a target"),
+    SeededDefect("intent-after-send", "the intent written only after the send (reorder)", True, _intent_after_send, (
+        _required("persisted-intent-restart", "crash-after-send",
+                     expect=(f"exec2:{_ADD_MUTATION}", "exec2:skips.alpha.unresolved_attempt"),
+                     hard=("exec2:duplicate_write", "exec2:budget_spend")),
+        _required("persisted-intent-restart", "crash-before-apply",
+                     expect=(f"exec2:{_ADD_MUTATION}", "exec2:skips.alpha.unresolved_attempt"),
+                     hard=("exec2:duplicate_write", "exec2:budget_spend"))),
+                 note="intent-write-fails is not a target: its armed fault replaces the intent write itself"),
+    SeededDefect("stop-ignored", "the stop control ignored (run.py and scheduler)", True,
+                 _set("run", "FLEET_STOP_FILE", "STOP-IGNORED"), (
+                     _required("store-stop-controls", "stop", expect=(f"exec:{_ADD_MUTATION}",
+                                                                            "exec:requests.alpha")),
+                     _required("store-stop-controls", "stop-mid-run",
+                                  expect=(f"exec:{_ADD_MUTATION}", "exec:skips.alpha.stopped"),
+                                  hard=("exec:budget_spend",)))),
+    SeededDefect("scheduler-stop-ignored", "the scheduler's between-actions stop check ignored", True,
+                 _set("sdk.scheduler.daily", "DailyScheduler._stop_requested", lambda self: False), (
+                     _required("store-stop-controls", "stop-mid-run",
+                                  expect=(f"exec:{_ADD_MUTATION}", "exec:skips.alpha.stopped"),
+                                  hard=("exec:budget_spend",)),),
+                 note="store-stop-controls/stop is not a target: run.py refuses before login"),
+    SeededDefect("missing-store-fresh", "missing established state treated as a fresh account", True,
+                 _fresh_on("StoreMissing"), (
+                     _required("store-stop-controls", "missing-state",
+                                  expect=(f"exec2:{_ADD_MUTATION}", "exec2:skips.alpha.state_missing",
+                                          "exec2:store.alpha"),
+                                  hard=("exec2:budget_spend",)),),
+                 note="store-stop-controls/unprovisioned is not a target: the dispatch refuses before any load"),
+    SeededDefect("unreadable-store-fresh", "unreadable state treated as a fresh account", True,
+                 _fresh_on("StoreUnreadable"), (
+                     _required("store-stop-controls", "unreadable-state",
+                                  expect=(f"exec2:{_ADD_MUTATION}", "exec2:skips.alpha.state_unreadable"),
+                                  hard=("exec2:budget_spend",)),)),
+    SeededDefect("settle-loses-pending", "a settlement failure drops the pending record", True,
+                 _swap("sdk.execution.runner", "ActionRunner._settle", _lose_pending), (
+                     _required("persisted-intent-restart", "settle-write-fails",
+                                  expect=(f"exec2:{_ADD_MUTATION}", "exec2:skips.alpha.unresolved_attempt"),
+                                  hard=("exec2:duplicate_write", "exec2:budget_spend")),)),
+    SeededDefect("v1-under-v2-path", "a training-v1 account run under the training-v2 lock and store", True,
+                 _guarded(True), (
+                     _required("paid-boundary", "v1-unpriced-start", control=True,
+                                  expect=(f"exec:{_ADD_MUTATION}", f"exec:{_ADD_APPLIED}", "exec:journal")),)),
+    SeededDefect("v2-down-v1-path", "a training-v2 account sends writes down the unguarded training-v1 path", True,
+                 _guarded(False), (
+                     _required("overlapping-dispatch", "threads",
+                                  expect=("overlap:dispatches", "provision:store.alpha")),
+                     _required("persisted-intent-restart", "crash-after-send",
+                                  expect=(f"exec2:{_ADD_MUTATION}", "provision:store.alpha"),
+                                  hard=("exec2:duplicate_write",))),
+                 note="threads mode: the duplicate-write hard code depends on thread timing, so only the dispatch "
+                      "summary and the store assertion are expected there"),
+    SeededDefect("unresolved-guard-only", "an unresolved attempt ignored by the guard (the store still refuses)", True,
+                 _set("sdk.fleet.attempts", "block_reason", _nothing), (
+                     _required("reconciliation", "missing-post-read",
+                                  expect=("exec2:skips.alpha.unresolved_attempt",)),
+                     _holdout("retry-different-crew", "lost-reply",
+                                  expect=("exec2:skips.alpha.unresolved_attempt",)))),
+    SeededDefect("unresolved-ignored", "an unresolved attempt ignored; a retry goes out for a different crew member "
+                 "after an ambiguous paid call", True, _set("sdk.fleet.attempts", "StoreState.blocking", _nothing), (
+                     _holdout("retry-different-crew", "lost-reply",
+                                  expect=(f"exec2:{_ADD_MUTATION}", "exec2:skips.alpha.unresolved_attempt"),
+                                  hard=("exec2:duplicate_write", "exec2:budget_spend")),
+                     _required("reconciliation", "missing-post-read",
+                                  expect=(f"exec2:{_ADD_MUTATION}", "exec2:skips.alpha.unresolved_attempt"),
+                                  hard=("exec2:duplicate_write", "exec2:budget_spend")),
+                     _required("persisted-intent-restart", "crash-after-send",
+                                  expect=(f"exec2:{_ADD_MUTATION}", "exec2:skips.alpha.unresolved_attempt"),
+                                  hard=("exec2:duplicate_write", "exec2:budget_spend")))),
+    SeededDefect("premium-spend", "a premium-currency course allowed", True, _blocker(_premium_allowed), (
+        _required("paid-boundary", "premium", expect=(f"exec:{_ADD_MUTATION}",
+                                                            "exec:skips.alpha.premium_currency.fixer"),
+                     hard=("exec:premium_spend",)),)),
+    SeededDefect("false-verification", "a start verified without the requested course and timer", True,
+                 _swap("sdk.fleet.factory", "STRICT_ADD_TRAINING", _always_verified), (
+                     _required("reconciliation", "different-course", expect=("exec1:journal",),
+                                  hard=("exec1:false_verification",)),
+                     _required("reconciliation", "missing-id", expect=("exec1:journal",),
+                                  hard=("exec1:false_verification",)))),
+    SeededDefect("funds-plus-one", "499 spendable treated as 500", True, _blocker(_funds(1)), (
+        _required("paid-boundary", "short-499", expect=(f"exec:{_ADD_MUTATION}",
+                                                              "exec:skips.alpha.insufficient_funds.fixer")),)),
+    SeededDefect("funds-minus-one", "exactly 500 spendable refused", True, _blocker(_funds(-1)), (
+        _required("paid-boundary", "exact-500", expect=(f"exec:{_ADD_MUTATION}", f"exec:{_ADD_APPLIED}",
+                                                              "exec:resource_delta.alpha")),)),
+    SeededDefect("reservation-ignored", "an earlier reservation not deducted from the remainder", True,
+                 _swap("sdk.policy.training", "remaining_budget",
+                       lambda original: lambda snapshot, config, requests: original(snapshot, config, ())), (
+                     _required("paid-boundary", "earlier-reservation",
+                                  expect=("dry:journal_planned", "exec:skips.alpha.insufficient_funds.fixer")),
+                     _required("paid-boundary", "spend-cap-after-earlier",
+                                  expect=("exec:skips.alpha.cap_exceeded.fixer",)))),
+    SeededDefect("recheck-off", "the under-lock recheck disabled (stale crew, room, research or price)", True,
+                 _RECHECK_OFF, tuple(
+                     _required("stale-preflight", scenario_id, derive=(suffix, trigger_after(nth)),
+                                  expect=(f"exec:{_ADD_MUTATION}", f"exec:skips.alpha.{code}.fixer"))
+                     for scenario_id, suffix, nth, code in _STALE),
+                 note="derived variants: each frozen trigger moved to a later roster read, after the plan read, so "
+                      "only the under-lock recheck can see the change"),
+    SeededDefect("recheck-off-frozen", "the recheck disabled, measured on the frozen stale fixtures", False,
+                 _RECHECK_OFF, tuple(_required("stale-preflight", scenario_id, expect=(f"exec:{_ADD_MUTATION}",))
+                                     for scenario_id, *_ in _STALE),
+                 note="the frozen triggers fire at the identity read, so the plan read already sees the change and "
+                      "refuses; the derived channel (recheck-off) covers the recheck"),
+    SeededDefect("price-under", "the course price read 100 low", True, _price(_price_shift(-100)), (
+        _required("paid-boundary", "short-499", expect=(f"exec:{_ADD_MUTATION}",
+                                                              "exec:skips.alpha.insufficient_funds.fixer")),),
+                 note="paid-boundary/exact-500 is not a target: an underestimate still sends and is charged the real "
+                      "price"),
+    SeededDefect("price-over", "the course price read 1 high", True, _price(_price_shift(1)), (
+        _required("paid-boundary", "exact-500", expect=(f"exec:{_ADD_MUTATION}", f"exec:{_ADD_APPLIED}")),)),
+    SeededDefect("currency-swapped", "a gas price read as minerals", True, _price(_price_as_mineral), (
+        _holdout("gas-priced-course", "gas-300", expect=(f"exec:{_ADD_MUTATION}", f"exec:{_ADD_APPLIED}",
+                                                                "exec:resource_delta.alpha")),)),
+    SeededDefect("zero-price-unknown", "an observed zero price treated as unknown", True, _price(_zero_price_unknown), (
+        _required("paid-boundary", "explicit-zero", expect=(f"exec:{_ADD_MUTATION}", f"exec:{_ADD_APPLIED}")),)),
+    SeededDefect("zero-stat-unknown", "an observed zero stat treated as unknown", True,
+                 _swap("sdk.policy.training", "_crew_observation", _zero_stat_unknown), (
+                     _holdout("observed-zero-stat", "missing-versus-zero",
+                                  expect=("plan:crew_plan.obi", "dry:journal_planned")),)),
+    SeededDefect("greedy-roles", "greedy role allocation by highest score leaves the repair specialist unassigned",
+                 True, _swap("sdk.training.planner", "assign_roles", _greedy_roles), (
+                     _required("role-coverage", "swap", expect=("plan1:crew_plan.ana", "plan1:crew_plan.ben",
+                                                                      "plan2:crew_plan.ana", "plan2:crew_plan.ben")),)),
+    SeededDefect("tie-high-id", "an equal-score tie broken toward the higher instance id", True,
+                 _swap("sdk.training.planner", "_assignment_key", _tie_high_id), (_TIE,)),
+    SeededDefect("tie-input-order", "an equal-score tie broken by roster reply order", False,
+                 _swap("sdk.training.planner", "assign_roles", _tie_input_order), (
+                     _holdout("tie-break-instance-id", "equal-repair", expect=("plan:crew_plan.tia",)),),
+                 note="caught only at the seeds whose reply order puts the higher instance id first (the seed "
+                      "permutes reply order)"),
+    SeededDefect("two-copy-as-one", "a recipe needing two identical designs counted as needing one", True,
+                 _swap("sdk.training.prestige", "match_recipe", _one_copy), (
+                     _holdout("two-copy-recipe", "one-training", expect=("plan:prestige.*",)),
+                     _required("preview-prestige", "one-copy", expect=("plan:prestige.*",))),
+                 note="two-copy-recipe/two-idle is not a target: both copies are present there"),
+    SeededDefect("wrong-stat-course", "a course training another stat chosen", True,
+                 _swap("sdk.training.planner", "choose_course", _wrong_stat), (
+                     _required("role-coverage", "swap", expect=("plan1:crew_plan.ana", "dry1:journal_planned")),
+                     _required("preview-prestige", "one-copy",
+                                  expect=("plan:crew_plan.cora", "dry:journal_planned")))),
+)
+
+
+@contextlib.contextmanager
+def _scratch_cwd():
+    cwd = os.getcwd()
+    with tempfile.TemporaryDirectory(prefix="twb-defects-") as scratch:
+        os.chdir(scratch)
+        try:
+            yield
+        finally:
+            os.chdir(cwd)
+
+
+def _rate(detected: int, total: int) -> str:
+    return f"{(100.0 * detected / total) if total else 0.0:.6f}"
+
+
+def run_defect(item: SeededDefect, suites: Mapping[str, Mapping]) -> dict:
+    """The clean run of every target at every seed, then the same under the seeded defect."""
+    clean, traces = [], []
+    with _scratch_cwd():
+        _module("run")
+        for target in item.targets:
+            for seed in suites[target.suite]["seeds"]:
+                result = run_target(target, suites, seed)
+                clean.append({"target": target.label, "channel": target.channel, "seed": seed, "pass": result.passed,
+                              "unmet": sorted(_named(result)), "hard": sorted(_hard(result)), "errors": result.errors})
+        with item.active():
+            for target in item.targets:
+                for seed in suites[target.suite]["seeds"]:
+                    result = run_target(target, suites, seed)
+                    detected, missing = detection(target, result)
+                    traces.append({"target": target.label, "channel": target.channel, "seed": seed,
+                                   "detected": detected, "missing": missing, "expect": list(target.expect),
+                                   "hard_expected": list(target.hard), "unmet": sorted(_named(result)),
+                                   "hard": sorted(_hard(result)), "errors": result.errors})
+    detected = sum(trace["detected"] for trace in traces)
+    channels: dict[str, dict] = {}
+    for trace in traces:
+        entry = channels.setdefault(trace["channel"], {"detected": 0, "total": 0})
+        entry["detected"] += trace["detected"]
+        entry["total"] += 1
+    return {"id": item.id, "title": item.title, "critical": item.critical, "note": item.note, "clean": clean,
+            "traces": traces, "detected": detected, "total": len(traces), "rate": _rate(detected, len(traces)),
+            "channels": channels, "survivor": detected < len(traces)}
+
+
+def run_defects(ids: Sequence[str] | None = None) -> dict:
+    """Every selected catalogued defect (all by default), in catalogue order, against the pinned fixtures."""
+    suites = load_suites()
+    verify_fixture_digests(list(suites))
+    results = [run_defect(item, suites) for item in SEEDED_DEFECTS if not ids or item.id in ids]
+    critical = [result for result in results if result["critical"]]
+    survivors = {"critical": [result["id"] for result in critical if result["survivor"]],
+                 "non_critical": [result["id"] for result in results if not result["critical"] and result["survivor"]]}
+    clean_failures = list(dict.fromkeys(f"{entry['target']}@{entry['seed']}" for result in results
+                                        for entry in result["clean"] if not entry["pass"]))
+    return {"schema": DEFECTS_SCHEMA, "seeds": {name: list(suite["seeds"]) for name, suite in suites.items()},
+            "defects": results,
+            "summary": {"critical": {"defects": len(critical),
+                                     "detected_all_traces": sum(not result["survivor"] for result in critical)},
+                        "survivors": survivors, "clean_failures": clean_failures}}
+
+
+def defect_reasons(report: Mapping) -> list[str]:
+    """Why ``--defects`` fails: a target failing unpatched, or a critical defect missed on any trace."""
+    reasons = list(dict.fromkeys(f"clean: {entry['target']} seed={entry['seed']} fails unpatched"
+                                 for result in report["defects"] for entry in result["clean"] if not entry["pass"]))
+    reasons += [f"critical defect {result['id']} detected on {result['detected']} of {result['total']} traces"
+                for result in report["defects"] if result["critical"] and result["survivor"]]
+    return reasons
+
+
+def defect_harness_errors(report: Mapping) -> list[str]:
+    return [f"{entry['target']} seed={entry['seed']}: {entry['errors'][0]}" for result in report["defects"]
+            for entry in result["clean"] if entry["errors"]]
+
+
+def render_defects(report: Mapping, reasons: Sequence[str]) -> str:
+    lines = ["# SPEC-14 seeded defects", ""]
+    for result in report["defects"]:
+        for entry in result["clean"]:
+            if entry["pass"]:
+                lines.append(f"CLEAN PASS {entry['target']} seed={entry['seed']}")
+            else:
+                lines.append(f"CLEAN FAIL {entry['target']} seed={entry['seed']}: "
+                             f"{', '.join(entry['unmet'] + entry['hard'] + entry['errors'][:1])}")
+        for trace in result["traces"]:
+            where = f"{result['id']} {trace['target']} seed={trace['seed']} [{trace['channel']}]"
+            if trace["detected"]:
+                hard = f"; hard {', '.join(trace['hard_expected'])}" if trace["hard_expected"] else ""
+                lines.append(f"DETECTED {where} by {', '.join(trace['expect'])}{hard}")
+            else:
+                lines.append(f"MISSED {where} missing {', '.join(trace['missing'])}")
+    lines.append("")
+    for result in report["defects"]:
+        channels = ", ".join(f"{name} {entry['detected']}/{entry['total']}"
+                             for name, entry in sorted(result["channels"].items()))
+        line = (f"{result['id']} ({'critical' if result['critical'] else 'non-critical'}): detected "
+                f"{result['detected']} of {result['total']} traces ({result['rate']}) [{channels}]")
+        if result["survivor"]:
+            line += " -- survivor" + (f": {result['note']}" if result["note"] else "")
+        lines.append(line)
+    lines += ["", f"Defects: {'FAIL' if reasons else 'PASS'}"]
+    lines += [f"- {reason}" for reason in reasons]
+    return "\n".join(lines) + "\n"
+
+
+def _main_defects(args: argparse.Namespace) -> int:
+    try:
+        if _ACTIVE_DEFECT is not None:
+            raise OracleError(f"a seeded defect is already active ({_ACTIVE_DEFECT})")
+        unknown = sorted(set(args.defect or ()) - {item.id for item in SEEDED_DEFECTS})
+        if unknown:
+            raise FixtureError(f"unknown defect ids: {unknown}")
+        report = run_defects(args.defect)
+    except FixtureError as error:
+        print(f"fixture error: {error}", file=sys.stderr)
+        return EXIT_ERROR
+    except OracleError as error:
+        print(f"oracle error: {error}", file=sys.stderr)
+        return EXIT_ERROR
+    reasons = defect_reasons(report)
+    if args.json == "-":
+        sys.stdout.write(to_json(report))
+    elif args.json:
+        Path(args.json).write_text(to_json(report), encoding="utf-8")
+    if not args.quiet and args.json != "-":
+        sys.stdout.write(render_defects(report, reasons))
+    errors = defect_harness_errors(report)
+    if errors:
+        print("defect harness error: " + "; ".join(errors[:3]), file=sys.stderr)
+        return EXIT_ERROR
+    return EXIT_GATE if reasons else EXIT_OK
+
+
 def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--gate", action="store_true", help="determinism + gate; exit 1 on any failure")
     mode.add_argument("--report-only", action="store_true", help="run once and print the report (exit 0 or 2)")
     mode.add_argument("--dispatch-child", metavar="SPEC", help=argparse.SUPPRESS)
+    mode.add_argument("--defects", action="store_true", help="seed each catalogued defect; exit 1 unless every "
+                      "critical one is caught on every trace")
     parser.add_argument("--json", metavar="PATH", help="write the JSON report to PATH ('-' for stdout)")
     parser.add_argument("--suite", choices=("required", "holdout", "all"), default="all")
     parser.add_argument("--case", action="append", metavar="ID", help="run only this case (repeatable); a subset "
@@ -2453,7 +3214,15 @@ def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     parser.add_argument("--no-probe", action="store_true", help="skip the training-v1 probes")
     parser.add_argument("--control-seeds", type=int, metavar="N", help="run each control at its first N seeds only")
     parser.add_argument("--quiet", action="store_true")
-    return parser.parse_args(argv)
+    parser.add_argument("--defect", action="append", metavar="ID", help="with --defects: seed only this defect "
+                        "(repeatable)")
+    args = parser.parse_args(argv)
+    if args.defect and not args.defects:
+        parser.error("--defect needs --defects")
+    if args.defects and (args.case or args.control_seeds or args.no_probe or args.suite != "all"):
+        parser.error("--defects runs every catalogued target: --suite, --case, --control-seeds and --no-probe do "
+                     "not apply")
+    return args
 
 
 def _emit(args: argparse.Namespace, report: Mapping, reasons: Sequence[str]) -> None:
@@ -2469,7 +3238,11 @@ def main(argv: Sequence[str] | None = None, *, child: Callable[[Sequence[str]], 
     args = parse_args(argv)
     if args.dispatch_child:
         return dispatch_child(args.dispatch_child)
+    if args.defects:
+        return _main_defects(args)
     try:
+        if _ACTIVE_DEFECT is not None:
+            raise OracleError(f"a seeded defect is active ({_ACTIVE_DEFECT}); --gate never runs with one")
         suites = load_suites(args.suite)
         known = {case["id"] for suite in suites.values() for case in suite["cases"]}
         unknown = sorted(set(args.case or ()) - known)
