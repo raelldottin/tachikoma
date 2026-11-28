@@ -2942,6 +2942,32 @@
       ],
       "max_files_changed": 3,
       "notes": "Implements S14-R7 (SPEC-14). Read docs/specs/SPEC-14-automated-crew-training.md (S14-R7, S14-AC6 and S14-AC7) and the hand-off to step 5 in #307. On one candidate revision, run scripts/training_workflow_benchmark.py --gate (required and holdout, including a fresh process with a different PYTHONHASHSEED) and independently seeded behavioral defects, each of which must trigger its named assertion against observed behavior; the existing QA gate (make training-benchmark and the blocking mutation gate) must also pass. Preserve the frozen fixtures, the existing benchmark floors and the QA gate: do not weaken an assertion, lower a floor or edit tests/fixtures/training/*. Publish the exact revision, commands, seeds, scenario results, detection rates and remaining survivors in docs/baseline/training-benchmark.md. No production code changes; a defect the checks cannot detect is reported, not fixed here."
+    },
+
+    {
+      "slice_id": "training-qa-eval-alignment",
+      "title": "Restore the legacy crew-training qa-eval above its 0.9 detection floor",
+      "status": "queued",
+      "priority": 500,
+      "domain": "crew-training",
+      "allowed_paths": [
+        "scripts/training_benchmark.py",
+        "tests/test_training_benchmark.py",
+        "tests/test_training_planner.py",
+        "tests/test_crew_plan.py",
+        "automation/benchmark/training/baseline.json",
+        "docs/baseline/training-benchmark.md"
+      ],
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ],
+      "depends_on": [
+        "spec14-workflow-eval"
+      ],
+      "max_files_changed": 6,
+      "notes": "Fixes the gap reported in #310 (docs/baseline/training-benchmark.md, SPEC-14 workflow evaluation results). On origin/main, `scripts/training_benchmark.py --qa-eval --jobs 12` exits 1: gated detection 0.536 against qa_eval.min_detection_rate 0.9; sdk/training/planner.py scores 0.385 (537 mutants: 207 caught by tests, 158 by the benchmark, 330 drift-only) and sdk/training/strategy.py 0.832. The 2026-11-26 run passed at 1.000 over 415 mutants, before #304 grew the planner. Likely cause: QA_TEST_MODULES still lists only tests.test_training_planner, tests.test_training_parse and tests.test_training_benchmark, while the blocking mutation gate (automation/mutation/config.json) also maps tests.test_crew_plan to planner.py and strategy.py and scores both at 100%. Confirm the cause first with a measured run. Then align QA_TEST_MODULES with the mutation config's test mapping for QA_TARGETS, and add a regression test in tests/test_training_benchmark.py that fails when the two lists diverge again. Kill any remaining neither or drift-only survivors with behaviour tests in tests/test_training_planner.py or tests/test_crew_plan.py; record a mutant in baseline.json qa_eval.equivalent only when it is provably equivalent, with its reason. Do not lower min_detection_rate, count drift as detected, make tests/test_training_benchmark_policy.py a channel, or change production code under sdk/. Keep make training-benchmark and the blocking mutation gate green. Publish the fresh qa-eval run (revision, command, rates and per-target table) in the qa-eval results section of docs/baseline/training-benchmark.md. If reaching 0.9 needs a production change or a file outside these paths, stop and report the evidence."
     }
   ]
 }
