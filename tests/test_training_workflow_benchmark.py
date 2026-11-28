@@ -2659,6 +2659,11 @@ REQUIRED_DEFECT_IDS = (
     "recheck-off-frozen", "price-under", "price-over", "currency-swapped", "zero-price-unknown", "zero-stat-unknown",
     "greedy-roles", "tie-high-id", "tie-input-order", "two-copy-as-one", "wrong-stat-course")
 NON_CRITICAL_DEFECT_IDS = ("guard-latch-off", "recheck-off-frozen", "tie-input-order")
+# QA round 1 (SPEC-14 step 5): each planted production defect the workflow channel now kills, by its catalogue id.
+QA1_DEFECT_IDS = {"D3": "settle-failure-swallowed", "D4": "training-block-dropped", "D5": "runner-cap-window",
+                  "D7": "resolve-ignores-lock", "D8": "malformed-attempt-dropped", "D9": "recheck-spend-frozen",
+                  "D12": "strict-spec-dropped", "D13": "stop-checked-once", "D15": "currency-blind-recheck", "D16": "journal-witness-wrong-key",
+                  "D17": "provision-overwrites-unmarked"}
 ADD_MUTATION = f"exec:mutations.{wb.ADD_TRAINING}"
 SUITES = {"required": REQUIRED, "holdout": HOLDOUT}
 
@@ -2759,6 +2764,49 @@ class SeededDefectCatalogueTests(unittest.TestCase):
         self.assertEqual(wb.detection(glob, synthetic_result([{"step": "plan", "assertion": "prestige.x"}])),
                          (True, []))
         self.assertFalse(wb.detection(glob, synthetic_result([{"step": "dry", "assertion": "prestige.x"}]))[0])
+
+    def test_every_qa_round_1_kill_is_a_critical_catalogue_defect_with_targets(self):
+        """QA round 1: each planted defect killed in the workflow channel is a critical catalogue defect, so
+        ``--defects`` fails unless it is caught on every trace at every seed."""
+        for qa_id, defect_id in sorted(QA1_DEFECT_IDS.items()):
+            with self.subTest(qa=qa_id, defect=defect_id):
+                item = wb.defect(defect_id)
+                self.assertTrue(item.critical)
+                self.assertTrue(item.targets)
+
+    def test_every_seeding_declares_the_production_attributes_it_patches(self):
+        """The seam-liveness check spies on what each seeding declares: a catalogue seeding declares at least one
+        seam, and each names an attribute production has now."""
+        for item in wb.SEEDED_DEFECTS:
+            with self.subTest(defect=item.id):
+                seams = wb.seams(item)
+                self.assertTrue(seams)
+                for module_name, dotted in seams:
+                    owner = wb._module(module_name)
+                    for part in dotted.split("."):
+                        owner = getattr(owner, part)
+
+    def test_derived_only_step_options_are_refused_in_a_fixture(self):
+        """The derived-variant options (store marker removal, a corrupted attempt, a held lock and a timer that runs
+        out) never change a frozen trace: a fixture naming one is refused."""
+        for key in sorted(wb.DERIVED_PRE_KEYS):
+            suite = copy.deepcopy(REQUIRED)
+            scenario = case(suite, "paid-boundary")["scenarios"][0]
+            scenario["steps"][-1].setdefault("pre", {})[key] = True
+            with self.subTest(pre=key), self.assertRaises(wb.FixtureError):
+                wb.validate_suite(suite)
+        suite = copy.deepcopy(REQUIRED)
+        price = next(s for s in case(suite, "stale-preflight")["scenarios"] if s["id"] == "price-raised")
+        price["steps"][-1]["triggers"][0]["apply"] = [{"timer_over": "fixer"}]
+        with self.assertRaises(wb.FixtureError):
+            wb.validate_suite(suite)
+
+    def test_the_scheduler_stop_defect_also_covers_a_stop_between_two_actions(self):
+        """QA round 1 D13: a stop file created after the first action of a two-action plan must stop the second."""
+        labels = {target.label for target in wb.defect("scheduler-stop-ignored").targets}
+        self.assertIn("required/paid-boundary/earlier-reservation~stop-after-upgrade", labels)
+        self.assertEqual({target.label for target in wb.defect("stop-checked-once").targets},
+                         {"required/paid-boundary/earlier-reservation~stop-after-upgrade"})
 
     def test_activating_a_defect_patches_at_call_time_and_restores_on_exit(self):
         import sdk.fleet.attempts as attempts
@@ -2894,6 +2942,82 @@ del _item
 
 
 # Verifies: S14-R7
+class SeamLivenessTests(unittest.TestCase):
+    """QA round 1: every seeded defect patches an attribute production really calls. A refactor that bypasses a
+    seam would turn its defect into a no-op that nothing reports; here it is a named failure."""
+
+    def test_every_seeded_defect_patches_a_seam_a_clean_run_of_its_targets_calls(self):
+        unused = wb.seam_liveness(SUITES)
+        self.assertEqual(wb.unexcused(unused), {})
+        # every exemption is still needed: a seam it names really is uncalled, or the exemption is stale
+        self.assertEqual({(defect_id, seam) for defect_id, seams in unused.items() for seam in seams},
+                         set(wb.SEAMS_NOT_CALLED))
+        for key, why in wb.SEAMS_NOT_CALLED.items():
+            self.assertTrue(why, key)
+
+    def test_a_seam_production_never_calls_is_named(self):
+        bypassed = wb.SeededDefect("bypassed", "patches an attribute file-backed runs never call", True,
+                                   wb._set("sdk.fleet.attempts", "MemoryAccountLock.try_acquire", wb._nothing), (
+                                       wb.DefectTarget("required", "paid-boundary", "exact-500",
+                                                       expect=(ADD_MUTATION,)),))
+        self.assertEqual(wb.seam_liveness(SUITES, (bypassed,)),
+                         {"bypassed": ["sdk.fleet.attempts.MemoryAccountLock.try_acquire"]})
+
+    def test_spies_call_through_count_and_restore(self):
+        import sdk.fleet.attempts as attempts
+
+        original = attempts.journal_witnesses_store
+        pair = ("sdk.fleet.attempts", "journal_witnesses_store")
+        with wb.seam_spies([pair]) as calls:
+            self.assertIsNot(attempts.journal_witnesses_store, original)
+            self.assertFalse(attempts.journal_witnesses_store((), "alpha", "training-v2"))
+        self.assertEqual(calls, {pair: 1})
+        self.assertIs(attempts.journal_witnesses_store, original)
+
+    def test_each_exemption_names_a_catalogue_seam_that_cannot_be_spied_and_says_why(self):
+        used = {pair for item in wb.SEEDED_DEFECTS for pair in wb.seams(item)}
+        for (module_name, dotted), why in wb.SEAM_EXEMPT.items():
+            with self.subTest(seam=f"{module_name}.{dotted}"):
+                self.assertIn((module_name, dotted), used)
+                self.assertTrue(why)
+                owner = wb._module(module_name)
+                for part in dotted.split("."):
+                    owner = getattr(owner, part)
+                self.assertFalse(callable(owner))
+
+
+# Verifies: S14-R7
+class CapLayerTests(unittest.TestCase):
+    """QA round 1 D5 and D9: the spend cap is enforced three times (the crew plan's reservation of earlier requests,
+    the under-lock recheck, the gate runner). With the other two disabled, each layer alone still prevents the
+    overspend on paid-boundary/spend-cap-after-earlier, so a defect in any one of them is detectable (the
+    runner-cap-window and recheck-spend-frozen defects disable the other two layers while they seed theirs)."""
+
+    def test_each_cap_layer_alone_prevents_the_overspend(self):
+        target = wb.DefectTarget("required", "paid-boundary", "spend-cap-after-earlier", expect=(ADD_MUTATION,),
+                                 hard=("exec:budget_spend",))
+        for layer in sorted(wb.CAP_LAYERS_OFF):
+            others = wb._stack(*(seeding for name, seeding in sorted(wb.CAP_LAYERS_OFF.items()) if name != layer))
+            alone = wb.SeededDefect(f"only-{layer}", f"only the {layer} cap layer left", True, others, (target,))
+            with self.subTest(layer=layer), alone.active():
+                result = wb.run_target(target, SUITES, first_seed(target))
+                self.assertEqual((result.errors, result.crashes, result.hard_violations), ([], [], []),
+                                 observed(result))
+                self.assertNotIn(ADD_MUTATION, wb._named(result), observed(result))
+                if layer != "runner":  # the runner refuses after the crew plan: its refusal stops the run (exit 1)
+                    self.assertTrue(result.passed, observed(result))
+
+    def test_all_three_layers_off_overspends(self):
+        target = wb.DefectTarget("required", "paid-boundary", "spend-cap-after-earlier", expect=(ADD_MUTATION,),
+                                 hard=("exec:budget_spend",))
+        none = wb.SeededDefect("no-cap-layer", "every cap layer disabled", True,
+                               wb._stack(*wb.CAP_LAYERS_OFF.values()), (target,))
+        with none.active():
+            result = wb.run_target(target, SUITES, first_seed(target))
+        self.assertEqual(wb.detection(target, result), (True, []), observed(result))
+
+
+# Verifies: S14-R7
 class DefectsCliTests(unittest.TestCase):
     """``--defects``: every catalogued defect seeded in turn, the clean run first; exit 0 only when every critical
     defect is caught on every trace."""
@@ -3018,6 +3142,22 @@ class DefectsCliTests(unittest.TestCase):
             code, out, err = self.run_main("--defects")
         self.assertEqual(code, wb.EXIT_GATE, out + err)
         self.assertIn("CLEAN FAIL required/paid-boundary/exact-500 seed=1401: exec:hold: step never ran", out)
+
+    def test_a_seam_no_clean_run_calls_fails_the_run_by_name(self):
+        """QA round 1: a defect whose patched attribute production no longer calls is a named ``--defects``
+        failure even when its targets still change (here another seam of the same seeding does the work)."""
+        bypassed = wb.SeededDefect("bypassed", "one live seam and one production never calls", True,
+                                   wb._stack(wb._swap("sdk.client", "Client.addTraining", wb._send_twice),
+                                             wb._set("sdk.fleet.attempts", "MemoryAccountLock.try_acquire",
+                                                     wb._nothing)), (
+                                       wb.DefectTarget("required", "paid-boundary", "exact-500",
+                                                       expect=(ADD_MUTATION,), hard=("exec:duplicate_write",)),))
+        with patch.object(wb, "SEEDED_DEFECTS", (bypassed,)):
+            code, out, err = self.run_main("--defects")
+        self.assertEqual(code, wb.EXIT_GATE, out + err)
+        self.assertIn("bypassed (critical): detected 3 of 3 traces", out)
+        self.assertIn("- defect bypassed: seam sdk.fleet.attempts.MemoryAccountLock.try_acquire is never called on a "
+                      "clean run of its targets", out)
 
     def test_defects_flag_errors(self):
         with self.subTest(case="unknown id"):

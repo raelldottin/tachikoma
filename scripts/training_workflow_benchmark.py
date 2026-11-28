@@ -68,9 +68,11 @@ import contextlib
 import copy
 import dataclasses
 import datetime
+import fcntl
 import fnmatch
 import hashlib
 import importlib
+import inspect
 import io
 import itertools
 import json
@@ -546,6 +548,8 @@ def _needed_witnesses(step: Mapping) -> set:
 
 
 def _validate_op(where: str, op: Mapping, labels: Mapping) -> None:
+    if DERIVED_OP_KEYS & set(op):
+        raise FixtureError(f"{where}: operation {op} is for derived variants only (never in a fixture)")
     if op.get("stop_file") is not None and set(op) != {"stop_file"}:
         raise FixtureError(f"{where}: a stop_file operation takes no other keys: {op}")
     if "status" in op and op["status"] not in ROOM_STATUSES:
@@ -1077,6 +1081,84 @@ def _fail_settle_writes(ctx: ScenarioRun, sid: str) -> Callable[[], None]:
                       armed=applied_start, when=" after an applied start")
 
 
+# Derived-variant step options (SPEC-14 step 5, QA round 1). validate_suite refuses each in a fixture (DERIVED_PRE_KEYS
+# are not PRE_KEYS; a DERIVED_OP_KEYS operation is refused by _validate_op), so no frozen trace can change. They read
+# production's store layout beyond INTERFACE ASSUMPTIONS item 2 (the establishment markers, the attempt fields), so
+# each records a witness: an option with nothing to act on fails its variant's clean run by name, never silently.
+DERIVED_PRE_KEYS = frozenset({"remove_marker", "corrupt_attempt", "hold_lock"})
+DERIVED_OP_KEYS = frozenset({"timer_over"})
+MARKER_DIR = "training-provisioned"  # <journal dir>/training-provisioned/<game identity>.json (sdk.fleet.attempts)
+
+
+def _store_payloads(ctx: ScenarioRun, aliases: Sequence[str]) -> list[tuple[Path, dict]]:
+    """(path, decoded JSON) of each store file of ``aliases`` that holds an attempts list."""
+    found = []
+    for path in store_artifacts(ctx.journals, aliases):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else None
+        except (OSError, ValueError):
+            continue
+        if isinstance(payload, dict) and isinstance(payload.get("attempts"), list):
+            found.append((path, payload))
+    return found
+
+
+def _derived_pre(ctx: ScenarioRun, step: Mapping, sid: str) -> None:
+    """remove_marker: delete the establishment markers naming the step's accounts (their store stays);
+    corrupt_attempt: add an unknown field to the first attempt of each store."""
+    pre, aliases = step.get("pre", {}), _step_aliases(ctx, step)
+    if pre.get("remove_marker"):
+        root, removed = ctx.journals / MARKER_DIR, 0
+        for path in sorted(root.glob("*.json")) if root.is_dir() else ():
+            try:
+                owner = json.loads(path.read_text(encoding="utf-8")).get("alias")
+            except (OSError, ValueError, AttributeError):
+                continue
+            if owner in aliases:
+                path.unlink()
+                removed += 1
+        _witness(ctx, f"{sid}:marker_removed", removed > 0,
+                 f"no establishment marker under <journal dir>/{MARKER_DIR}/ names {aliases}")
+    if pre.get("corrupt_attempt"):
+        changed = 0
+        for path, payload in _store_payloads(ctx, aliases):
+            if payload["attempts"] and isinstance(payload["attempts"][0], dict):
+                payload["attempts"][0]["unexpected_field"] = "workflow benchmark"
+                path.write_text(json.dumps(payload), encoding="utf-8")
+                changed += 1
+        _witness(ctx, f"{sid}:attempt_corrupted", changed > 0, f"the store of {aliases} holds no attempt")
+
+
+def _hold_locks(ctx: ScenarioRun, sid: str) -> Callable[[], None]:
+    """hold_lock (derived variants, one-account scenarios): an exclusive flock on every account lock file under
+    <journal dir>/STORE_DIR/ for the step, as a dispatch holding it would; returns the release and witness check."""
+    root, held = ctx.journals / STORE_DIR, []
+    for path in sorted(root.glob("*.lock")) if root.is_dir() else ():
+        fd = os.open(path, os.O_RDWR)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            held.append(fd)
+        except OSError:
+            os.close(fd)
+
+    def release() -> None:
+        for fd in held:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
+        _witness(ctx, f"{sid}:lock_held", bool(held), f"no account lock file under <journal dir>/{STORE_DIR}/ to hold")
+
+    return release
+
+
+def _timer_over(ctx: ScenarioRun, fake: FakePss, crew: str) -> None:
+    """timer_over (a derived trigger operation): ``crew``'s session ends one second on and the fake clock moves five
+    seconds, so the post-read sees the timer over (a lenient verdict would still call the start verified)."""
+    crew_id = ctx.idmap.id("crew", crew)
+    member = next(item for item in fake.state.characters if str(item.id) == crew_id)
+    member.session.end = fake.now + datetime.timedelta(seconds=1)
+    fake.advance(seconds=5)
+
+
 def _arm(ctx: ScenarioRun, step: Mapping, sid: str) -> list[Callable[[], None]]:
     """Arm the step's faults, triggers, crash and misapply; returns witness checks to run after the step."""
     checks: list[Callable[[], None]] = []
@@ -1106,6 +1188,8 @@ def _arm(ctx: ScenarioRun, step: Mapping, sid: str) -> list[Callable[[], None]]:
             for op in ops:
                 if op.get("stop_file"):  # the operator's stop control, created while the run is under way
                     (ctx.journals / "STOP").write_text("stop\n", encoding="utf-8")
+                elif op.get("timer_over"):  # derived variants only: the session just started ends before the post-read
+                    _timer_over(ctx, f, op["timer_over"])
                 else:
                     apply_ops(f.state, [op], ctx.idmap, ctx.catalog)
 
@@ -1127,6 +1211,8 @@ def _arm(ctx: ScenarioRun, step: Mapping, sid: str) -> list[Callable[[], None]]:
         checks.append(_fail_intent_writes(ctx, sid))
     if step.get("pre", {}).get("fail_settle_write"):
         checks.append(_fail_settle_writes(ctx, sid))
+    if step.get("pre", {}).get("hold_lock"):
+        checks.append(_hold_locks(ctx, sid))
     return checks
 
 
@@ -1280,6 +1366,7 @@ def run_step(ctx: ScenarioRun, step: Mapping) -> dict | None:
     for alias, fake in ctx.fakes.items():
         apply_ops(fake.state, _ops_for(ctx, alias, pre.get("set", ())), ctx.idmap, ctx.catalog)
     _prepare_store(ctx, step, sid)
+    _derived_pre(ctx, step, sid)
     if step["kind"] == "overlap":
         return run_overlap(ctx, step)
     checks = _arm(ctx, step, sid)
@@ -2554,6 +2641,7 @@ def _swap(module_name: str, dotted: str, make: Callable[[Any], Any]) -> Callable
         with patch.object(owner, attr, make(getattr(owner, attr))):
             yield
 
+    seeding.seams = ((module_name, dotted),)  # what the seam-liveness check spies on (see seam_spies)
     return seeding
 
 
@@ -2569,6 +2657,7 @@ def _stack(*factories: Callable[[], Any]) -> Callable[[], Any]:
                 stack.enter_context(factory())
             yield
 
+    seeding.seams = tuple(dict.fromkeys(pair for factory in factories for pair in getattr(factory, "seams", ())))
     return seeding
 
 
@@ -2607,6 +2696,10 @@ def _intent_after_send():
     with patch.object(runner, "write_training_intent", write_later), \
             patch.object(runner, "settle_training_intent", settle_after_writing):
         yield
+
+
+_intent_after_send.seams = (("sdk.execution.runner", "write_training_intent"),
+                            ("sdk.execution.runner", "settle_training_intent"))
 
 
 def _fresh_on(error_name: str) -> Callable[[], Any]:
@@ -2800,6 +2893,162 @@ def _wrong_stat(original):
     return choose
 
 
+# --- QA round 1 seedings (SPEC-14 step 5): each mirrors one planted production edit, at call time -----------------
+
+
+def _swallow_settle_failure(original):
+    """D3: a failed settle write swallowed in ``_settle`` (the intent stays pending; the run goes on as completed)."""
+    runner = _module("sdk.execution.runner")
+
+    def settle(self, guard, intent, result):
+        try:
+            return original(self, guard, intent, result)
+        except runner.AttemptSettlementError:
+            return result
+
+    return settle
+
+
+def _block_dropped(original):
+    """D4: training-v2's planning block (an unresolved attempt) never reaches the plan: only the runner refuses."""
+    def init(self, *args, **kwargs):
+        kwargs["training_block"] = None
+        return original(self, *args, **kwargs)
+
+    return init
+
+
+def _stop_checked_once(original):
+    """D13: the scheduler reads the stop file once, before its first action, and never again in that run."""
+    first: dict[int, tuple[Any, bool]] = {}
+
+    def stop_requested(self):
+        if id(self) not in first or first[id(self)][0] is not self:
+            first[id(self)] = (self, original(self))
+        return first[id(self)][1]
+
+    return stop_requested
+
+
+def _remaining_ignores_earlier(original):
+    return lambda snapshot, config, requests: original(snapshot, config, ())
+
+
+def _runner_window_now(original):
+    """D5: the gate runner's spend window starts now instead of one period ago (earlier spend is not counted)."""
+    def refusal(self, *args, **kwargs):
+        period = self.period
+        self.period = period - period
+        try:
+            return original(self, *args, **kwargs)
+        finally:
+            self.period = period
+
+    return refusal
+
+
+def _recheck_spend_frozen(original):
+    """D9: the under-lock recheck's spend is read once, when the recheck is built, not at each call."""
+    factory = _module("sdk.fleet.factory")
+
+    def build(self, profile, context, policy):
+        frozen = factory.spent_in_period(context.journal, profile.alias, self.clock() - self.period)
+        recheck = original(self, profile, context, policy)
+
+        def frozen_recheck(*args, **kwargs):
+            with patch.object(factory, "spent_in_period", lambda *a, **k: dict(frozen)):
+                return recheck(*args, **kwargs)
+
+        return frozen_recheck
+
+    return build
+
+
+# The three spend-cap layers, each disabled on its own (D5 and D9 are two of them; the planner's is reservation-ignored).
+CAP_LAYERS_OFF = {"planner": _swap("sdk.policy.training", "remaining_budget", _remaining_ignores_earlier),
+                  "recheck": _swap("sdk.fleet.factory", "_ExecuteGateMixin._training_recheck", _recheck_spend_frozen),
+                  "runner": _swap("sdk.fleet.factory", "GatedActionRunner._refusal", _runner_window_now)}
+
+
+def _overwrite_unmarked(original):
+    """D17: provisioning over an existing store of the same identity whose marker is missing writes a virgin store
+    (its pending attempts lost) instead of only marking it again."""
+    attempts = _module("sdk.fleet.attempts")
+
+    def provision(self, alias, identity, now, journal_witness=lambda: False):
+        raw = self._read(alias)
+        if raw is not None and not self.established(identity):
+            try:
+                same = attempts.parse_store(raw, alias).game_identity == identity
+            except attempts.TrainingStateError:
+                same = False
+            if same:
+                self._replace(alias, attempts.dump_store(attempts.virgin_store(alias, identity, now)))
+                self._mark(alias, identity, now)
+                return True
+        return original(self, alias, identity, now, journal_witness)
+
+    return provision
+
+
+def _witness_wrong_key(original):
+    """D16: the journal witness reads the dry run's policy under the wrong evidence key (it never matches)."""
+    attempts = _module("sdk.fleet.attempts")
+
+    def witness(*args, **kwargs):
+        with patch.object(attempts, "DRY_RUN_POLICY_KEY", "policy_id"):
+            return original(*args, **kwargs)
+
+    return witness
+
+
+class _BestEffortLock:
+    def __init__(self, lock) -> None:
+        self.lock = lock
+
+    def try_acquire(self, identity):
+        return self.lock.try_acquire(identity) or _NoLock()
+
+
+def _resolve_ignores_lock(original):
+    """D7: an operator's resolution goes ahead while a dispatch holds the account lock."""
+    def resolve(self, *args, **kwargs):
+        return original(dataclasses.replace(self, lock=_BestEffortLock(self.lock)), *args, **kwargs)
+
+    return resolve
+
+
+def _drop_malformed_attempts(original):
+    """D8: a stored attempt with other fields than an attempt's is dropped instead of making the store unreadable."""
+    attempts = _module("sdk.fleet.attempts")
+
+    def parse(raw, alias):
+        try:
+            payload = json.loads(raw)
+            payload["attempts"] = [item for item in payload["attempts"]
+                                   if isinstance(item, dict) and set(item) == set(attempts.ATTEMPT_KEYS)]
+            raw = json.dumps(payload).encode("utf-8")
+        except (ValueError, TypeError, KeyError, AttributeError):
+            pass
+        return original(raw, alias)
+
+    return parse
+
+
+def _spec_dropped(original):
+    """D12: the guarded runner built without the strict add_training spec (the lenient verdict verifies)."""
+    def init(self, *args, **kwargs):
+        kwargs.pop("specs", None)
+        return original(self, *args, **kwargs)
+
+    return init
+
+
+def _currency_blind(original):
+    """D15: the recheck compares the planned and observed price totals only (a currency change goes through)."""
+    return lambda cost: {"total": sum(original(cost).values())}
+
+
 def trigger_after(nth: int) -> Callable[[dict], None]:
     """A derived variant's edit: every step trigger fires after the ``nth`` reply of its route instead."""
     def edit(scenario: dict) -> None:
@@ -2808,6 +3057,47 @@ def trigger_after(nth: int) -> Callable[[dict], None]:
             raise ValueError(f"{scenario['id']}: no step trigger to move")
         for trigger in triggers:
             trigger["after_nth"] = nth
+
+    return edit
+
+
+def expecting(step_id: str, *, drop: Sequence[str] = (), **fields: Any) -> Callable[[dict], None]:
+    """A derived variant's edit: freeze more of one step's clean trace. ``fields`` are set on the step's expected
+    entry (a ``skips`` list replaces the frozen one) after the ``drop`` keys are removed."""
+    def edit(scenario: dict) -> None:
+        entry = scenario["expected"].setdefault(step_id, {})
+        for key in drop:
+            entry.pop(key, None)
+        entry.update(copy.deepcopy(fields))
+
+    return edit
+
+
+def inserted(before: str, step: Mapping, expected: Mapping, witnesses: Sequence[str] = ()) -> Callable[[dict], None]:
+    """A derived variant's edit: a new step (and its expected trace and witnesses) just before step ``before``."""
+    def edit(scenario: dict) -> None:
+        index = next(i for i, item in enumerate(scenario["steps"]) if item["id"] == before)
+        scenario["steps"].insert(index, copy.deepcopy(dict(step)))
+        scenario["expected"][step["id"]] = copy.deepcopy(dict(expected))
+        scenario["witnesses"] = [*scenario.get("witnesses", ()), *witnesses]
+
+    return edit
+
+
+def step_pre(step_id: str, witnesses: Sequence[str] = (), **pre: Any) -> Callable[[dict], None]:
+    """A derived variant's edit: more pre-state on an existing step (and the witnesses that pre-state records)."""
+    def edit(scenario: dict) -> None:
+        step = next(item for item in scenario["steps"] if item["id"] == step_id)
+        step.setdefault("pre", {}).update(copy.deepcopy(pre))
+        scenario["witnesses"] = [*scenario.get("witnesses", ()), *witnesses]
+
+    return edit
+
+
+def edits(*parts: Callable[[dict], None]) -> Callable[[dict], None]:
+    def edit(scenario: dict) -> None:
+        for part in parts:
+            part(scenario)
 
     return edit
 
@@ -2921,6 +3211,46 @@ _STALE = (("room-upgrading", "nth2", 2, "room_not_ready"), ("crew-moved", "nth2"
           ("price-raised", "nth3", 3, "insufficient_funds"))
 _RECHECK_OFF = _set("sdk.fleet.factory", "start_refusal", _nothing)
 _TIE = _holdout("tie-break-instance-id", "equal-repair", expect=("plan:crew_plan.tia", "dry:journal_planned"))
+_ALPHA_SKIP = {"alias": "alpha"}
+_SPEND = ("exec2:duplicate_write", "exec2:budget_spend")
+
+
+def _stop_after_upgrade(scenario: dict) -> None:
+    """earlier-reservation with funds and cap for both of its starts (the upgrade, then the course): the stop file
+    appears after the upgrade's reply, between the two actions."""
+    account = scenario["accounts"][0]
+    account["world"]["resources"]["mineral"] = 2000
+    account["authorization"]["caps"]["minerals"] = 2000
+    step = next(item for item in scenario["steps"] if item["id"] == "exec")
+    step["triggers"] = [{"route": "POST /RoomService/UpgradeRoom2", "after_nth": 1, "apply": [{"stop_file": True}]}]
+    scenario["witnesses"] = [*scenario.get("witnesses", ()), "exec:trigger:0"]
+
+
+def _gas_price_after_plan(scenario: dict) -> None:
+    """price-raised~nth3 with the same amount in another currency (gas the account holds) instead of a raise."""
+    trigger_after(3)(scenario)
+    scenario["steps"][-1]["triggers"][0]["apply"] = [{"course": "eng_manual", "price": "gas:500"}]
+    scenario["accounts"][0]["world"]["resources"]["gas"] = 1000
+
+
+def _timer_over_by_post_read(scenario: dict) -> None:
+    step = next(item for item in scenario["steps"] if item["id"] == "exec")
+    step["triggers"] = [{"route": ADD_TRAINING, "after_nth": 1, "apply": [{"timer_over": "fixer"}]}]
+    scenario["witnesses"] = [*scenario.get("witnesses", ()), "exec:trigger:0"]
+
+
+_REPROVISION = {"exit": 0, "mutations": {}, "other_mutations": 0, "store": {"alpha": "present"}}
+_STOP_BETWEEN = _required(
+    "paid-boundary", "earlier-reservation", expect=(f"exec:{_ADD_MUTATION}", "exec:skips.alpha.stopped", "exec:exit"),
+    hard=("exec:budget_spend",),
+    derive=("stop-after-upgrade", edits(
+        _stop_after_upgrade,
+        expecting("dry", journal_planned=[{"alias": "alpha", "action": "add_training", "crew": "fixer",
+                                            "course": "eng_manual"}]),
+        expecting("exec", exit=1, skips=[dict(_ALPHA_SKIP, code="stopped")]))))
+_CAP_TARGET = _required("paid-boundary", "spend-cap-after-earlier",
+                        expect=(f"exec:{_ADD_MUTATION}", "exec:skips.alpha.cap_exceeded.fixer"),
+                        hard=("exec:budget_spend",))
 
 SEEDED_DEFECTS: tuple[SeededDefect, ...] = (
     SeededDefect("two-starts", "two training starts sent on one account in one run", True,
@@ -2970,7 +3300,8 @@ SEEDED_DEFECTS: tuple[SeededDefect, ...] = (
                  _set("sdk.scheduler.daily", "DailyScheduler._stop_requested", lambda self: False), (
                      _required("store-stop-controls", "stop-mid-run",
                                   expect=(f"exec:{_ADD_MUTATION}", "exec:skips.alpha.stopped"),
-                                  hard=("exec:budget_spend",)),),
+                                  hard=("exec:budget_spend",)),
+                     _STOP_BETWEEN),
                  note="store-stop-controls/stop is not a target: run.py refuses before login"),
     SeededDefect("missing-store-fresh", "missing established state treated as a fresh account", True,
                  _fresh_on("StoreMissing"), (
@@ -3091,7 +3422,204 @@ SEEDED_DEFECTS: tuple[SeededDefect, ...] = (
                      _required("role-coverage", "swap", expect=("plan1:crew_plan.ana", "dry1:journal_planned")),
                      _required("preview-prestige", "one-copy",
                                   expect=("plan:crew_plan.cora", "dry:journal_planned")))),
+    # QA round 1 (SPEC-14 step 5): each planted production edit the workflow channel did not catch, mirrored at call
+    # time; derived variants freeze what the clean revision does at a step the frozen trace leaves open.
+    SeededDefect("settle-failure-swallowed", "a failed settle write swallowed: the run carries on as completed", True,
+                 _swap("sdk.execution.runner", "ActionRunner._settle", _swallow_settle_failure), (
+                     _required("persisted-intent-restart", "settle-write-fails",
+                                  expect=("exec1:exit", "exec1:skips.alpha.unresolved_attempt"),
+                                  derive=("exit1", expecting("exec1", exit=1, skips=[
+                                      dict(_ALPHA_SKIP, code="unresolved_attempt")]))),),
+                 note="QA1 D3. The frozen trace leaves exec1's exit open and the pending intent still blocks exec2, "
+                      "so only the derived exit and skip of exec1 show the account was not stopped"),
+    SeededDefect("training-block-dropped", "an unresolved attempt no longer blocks training-v2's plan (only the "
+                 "runner refuses)", True, _swap("sdk.fleet.factory", "AuthorizedPolicy.__init__", _block_dropped), (
+                     _required("reconciliation", "missing-post-read", expect=("exec2:exit",),
+                                  derive=("exit2", expecting("exec2", exit=0))),
+                     _required("persisted-intent-restart", "crash-after-send", expect=("exec2:exit",),
+                                  derive=("exit2", expecting("exec2", exit=0)))),
+                 note="QA1 D4. The runner's guard still refuses the start (no request, the same skip code), and "
+                      "its refusal stops the run: only exec2's exit (0 on the clean revision) changes"),
+    SeededDefect("stop-checked-once", "the stop file read once, before the first action", True,
+                 _swap("sdk.scheduler.daily", "DailyScheduler._stop_requested", _stop_checked_once), (_STOP_BETWEEN,),
+                 note="QA1 D13. store-stop-controls/stop-mid-run is not a target: its stop file appears before the "
+                      "first action, so the one read still sees it"),
+    SeededDefect("runner-cap-window", "the gate runner's spend window starts now (earlier spend uncounted), with "
+                 "the plan's and the recheck's cap layers disabled", True,
+                 _stack(CAP_LAYERS_OFF["runner"], CAP_LAYERS_OFF["planner"], CAP_LAYERS_OFF["recheck"]),
+                 (_CAP_TARGET,),
+                 note="QA1 D5. Alone it is masked: the crew plan's reservation and the recheck each refuse the start "
+                      "(CapLayerTests shows each layer alone prevents the overspend)"),
+    SeededDefect("recheck-spend-frozen", "the recheck's spend read once when it is built, with the plan's and the "
+                 "runner's cap layers disabled", True,
+                 _stack(CAP_LAYERS_OFF["recheck"], CAP_LAYERS_OFF["planner"], CAP_LAYERS_OFF["runner"]),
+                 (_CAP_TARGET,),
+                 note="QA1 D9. Alone it is masked by the crew plan's reservation and the gate runner"),
+    SeededDefect("provision-overwrites-unmarked", "provisioning over an unmarked store of the same identity writes a "
+                 "virgin store (its pending attempt lost)", True,
+                 _swap("sdk.fleet.attempts", "_StoreBase.provision", _overwrite_unmarked), tuple(
+                     _required("persisted-intent-restart", scenario_id,
+                                  expect=(f"exec2:{_ADD_MUTATION}", "exec2:skips.alpha.unresolved_attempt"),
+                                  hard=_SPEND,
+                                  derive=("marker-lost", inserted("exec2", {
+                                      "id": "reprovision", "kind": "provision", "pre": {"remove_marker": True}},
+                                      _REPROVISION, ["reprovision:marker_removed"])))
+                     for scenario_id in ("settle-write-fails", "crash-after-send")),
+                 note="QA1 D17. Derived variants: the establishment marker removed (the store kept), then provision "
+                      "again before the next execute"),
+    SeededDefect("journal-witness-wrong-key", "the journal witness of an established store never matches (wrong "
+                 "evidence key)", True, _swap("sdk.fleet.attempts", "journal_witnesses_store", _witness_wrong_key), (
+                     _required("persisted-intent-restart", "settle-write-fails",
+                                  expect=("reprovision:exit", "reprovision:store.alpha", f"exec2:{_ADD_MUTATION}",
+                                          "exec2:skips.alpha.state_missing"), hard=_SPEND,
+                                  derive=("store-lost", edits(
+                                      inserted("exec2", {"id": "reprovision", "kind": "provision",
+                                                         "pre": {"remove_state": True, "remove_marker": True}},
+                                               dict(_REPROVISION, exit=1, store={"alpha": "absent"}),
+                                               ["reprovision:store_artifacts", "reprovision:marker_removed"]),
+                                      expecting("exec2", store={"alpha": "absent"},
+                                                skips=[dict(_ALPHA_SKIP, code="state_missing")])))),),
+                 note="QA1 D16. Derived variant: store and marker removed after a journaled start, then provision "
+                      "again; only the journal witness refuses to recreate it"),
+    SeededDefect("resolve-ignores-lock", "an operator's resolution goes ahead while the account lock is held", True,
+                 _swap("sdk.fleet.attempts", "TrainingAttempts.resolve", _resolve_ignores_lock), (
+                     _required("reconciliation", "resolved-after-reconciliation",
+                                  expect=("resolve:exit", "resolve:skips.alpha.locked", f"exec3:{_ADD_MUTATION}",
+                                          "exec3:skips.alpha.unresolved_attempt"),
+                                  derive=("held", edits(
+                                      step_pre("resolve", ["resolve:lock_held"], hold_lock=True),
+                                      expecting("resolve", exit=1, skips=[dict(_ALPHA_SKIP, code="locked")]),
+                                      expecting("exec3", drop=("applied", "journal"), mutations={ADD_TRAINING: []},
+                                                resource_delta={"alpha": {"mineral": 0, "gas": 0, "starbux": 0}},
+                                                timer={}, skips=[dict(_ALPHA_SKIP, code="unresolved_attempt")])))),),
+                 note="QA1 D7. Derived variant: the harness holds the account's lock file through the resolve step"),
+    SeededDefect("malformed-attempt-dropped", "a stored attempt with an unknown field dropped instead of the store "
+                 "refused as unreadable", True,
+                 _swap("sdk.fleet.attempts", "parse_store", _drop_malformed_attempts), (
+                     _required("persisted-intent-restart", "settle-write-fails",
+                                  expect=(f"exec2:{_ADD_MUTATION}", "exec2:skips.alpha.state_unreadable"), hard=_SPEND,
+                                  derive=("extra-field", edits(
+                                      step_pre("exec2", ["exec2:attempt_corrupted"], corrupt_attempt=True),
+                                      expecting("exec2", skips=[dict(_ALPHA_SKIP, code="state_unreadable")])))),),
+                 note="QA1 D8. Derived variant: the pending attempt gains an unknown field before exec2"),
+    SeededDefect("strict-spec-dropped", "the guarded runner built without the strict add_training verdict", True,
+                 _swap("sdk.fleet.factory", "GatedActionRunner.__init__", _spec_dropped), (
+                     _required("reconciliation", "verified", expect=("exec:exit", "exec:journal"),
+                                  hard=("exec:false_verification",),
+                                  derive=("timer-over", edits(
+                                      _timer_over_by_post_read,
+                                      expecting("exec", exit=1, timer={"fixer": {"course": "eng_manual",
+                                                                                   "duration_s": 1}},
+                                                journal=[{"alias": "alpha", "action": "add_training",
+                                                          "outcome": "unknown", "attempted": True, "crew": "fixer",
+                                                          "course": "eng_manual",
+                                                          "cost": {"minerals": 500, "gas": 0}}])))),),
+                 note="QA1 D12. Derived variant: the started session ends before the post-read (the timer is over), "
+                      "which only the strict verdict calls unknown"),
+    SeededDefect("currency-blind-recheck", "the recheck compares price totals only (a currency change goes through)",
+                 True, _swap("sdk.fleet.attempts", "_cost_key", _currency_blind), (
+                     _required("stale-preflight", "price-raised",
+                                  expect=(f"exec:{_ADD_MUTATION}", "exec:skips.alpha.price_unavailable.fixer"),
+                                  derive=("gas-after-plan", edits(
+                                      _gas_price_after_plan,
+                                      expecting("exec", skips=[dict(_ALPHA_SKIP, crew="fixer",
+                                                                    code="price_unavailable")])))),),
+                 note="QA1 D15. Derived variant: after the plan read the course costs the same amount in gas"),
 )
+
+
+# Seams the liveness check cannot spy on (it counts calls): a value production reads, with why that is enough.
+SEAM_EXEMPT = {
+    ("run", "FLEET_STOP_FILE"): "a path constant run.py reads, not a call: stop-ignored's targets fail unless the "
+                                "stop file at that path is honoured",
+    ("sdk.fleet.factory", "STRICT_ADD_TRAINING"): "a spec value the guarded runner is built with, not a call: "
+                                                  "false-verification's targets need its postcondition's verdict",
+}
+
+
+# Seams a defect patches that no clean run of its targets calls, by design: (defect id, module.attribute) -> why.
+SEAMS_NOT_CALLED = {
+    ("intent-after-send", "sdk.execution.runner.settle_training_intent"):
+        "the reorder's second half: both targets crash at the send, before any settle, so only the intent write (the "
+        "half that moves) is called on their clean runs",
+    ("recheck-off-frozen", "sdk.fleet.factory.start_refusal"):
+        "published only: the frozen stale triggers fire at the identity read, so the plan refuses and the recheck is "
+        "never reached (the derived recheck-off targets call it)",
+}
+
+
+def seams(item: SeededDefect) -> tuple[tuple[str, str], ...]:
+    """The (module, dotted attribute) pairs ``item``'s seeding patches (declared by _swap, _stack or by hand)."""
+    return tuple(getattr(item.seeding, "seams", ()))
+
+
+@contextlib.contextmanager
+def seam_spies(pairs: Sequence[tuple[str, str]]):
+    """Replace each callable seam with a pass-through that counts its calls; yields {pair: calls} (restored on
+    exit). A seam that is not callable is skipped (see SEAM_EXEMPT), and so is one production lacks: it stays at 0
+    calls, and applying its seeding is the oracle error that reports it."""
+    calls = {pair: 0 for pair in pairs}
+    with contextlib.ExitStack() as stack:
+        for pair in pairs:
+            owner = _module(pair[0])
+            *path, attr = pair[1].split(".")
+            try:
+                for part in path:
+                    owner = getattr(owner, part)
+                static, original = inspect.getattr_static(owner, attr), getattr(owner, attr)
+            except AttributeError:
+                continue
+            if not callable(original):
+                continue
+            function = static.__func__ if isinstance(static, (staticmethod, classmethod)) else original
+
+            def spy(*args, _pair=pair, _function=function, **kwargs):
+                calls[_pair] += 1
+                return _function(*args, **kwargs)
+
+            wrapped = staticmethod(spy) if isinstance(static, staticmethod) else (
+                classmethod(spy) if isinstance(static, classmethod) else spy)
+            stack.enter_context(patch.object(owner, attr, wrapped))
+        yield calls
+
+
+def _in_process(target: DefectTarget, suites: Mapping[str, Mapping]) -> bool:
+    """Whether every step of the target runs in this process (a processes overlap's dispatches run in children,
+    where no spy is installed)."""
+    scenario, _, _ = target_scenario(target, suites)
+    return not any(step["kind"] == "overlap" and step.get("mode") == "processes" for step in scenario["steps"])
+
+
+def _live_seams(item: SeededDefect) -> list[tuple[str, str]]:
+    return [pair for pair in seams(item) if pair not in SEAM_EXEMPT]
+
+
+def _unused(item: SeededDefect, called: Mapping[str, set]) -> list[str]:
+    return [f"{module_name}.{dotted}" for module_name, dotted in _live_seams(item)
+            if not any((module_name, dotted) in called.get(target.label, ()) for target in item.targets)]
+
+
+def unexcused(unused: Mapping[str, Sequence[str]]) -> dict[str, list[str]]:
+    """``unused`` (defect id -> uncalled seams) less the SEAMS_NOT_CALLED exemptions."""
+    kept = {defect_id: [seam for seam in seams_ if (defect_id, seam) not in SEAMS_NOT_CALLED]
+            for defect_id, seams_ in unused.items()}
+    return {defect_id: seams_ for defect_id, seams_ in kept.items() if seams_}
+
+
+def seam_liveness(suites: Mapping[str, Mapping], items: Sequence[SeededDefect] | None = None) -> dict[str, list[str]]:
+    """{defect id: each of its seams no clean run of its in-process targets called (first seed)}, exemptions
+    included (see unexcused). Each distinct target runs once, with every seam of ``items`` spied at once."""
+    items = SEEDED_DEFECTS if items is None else items
+    pairs = list(dict.fromkeys(pair for item in items for pair in _live_seams(item)))
+    targets = {target.label: target for item in items for target in item.targets if _in_process(target, suites)}
+    called: dict[str, set] = {}
+    with _scratch_cwd():
+        _module("run")
+        for label, target in targets.items():
+            with seam_spies(pairs) as calls:
+                run_target(target, suites, suites[target.suite]["seeds"][0])
+            called[label] = {pair for pair, count in calls.items() if count}
+    return {item.id: unused for item in items if (unused := _unused(item, called))}
 
 
 @contextlib.contextmanager
@@ -3111,12 +3639,15 @@ def _rate(detected: int, total: int) -> str:
 
 def run_defect(item: SeededDefect, suites: Mapping[str, Mapping]) -> dict:
     """The clean run of every target at every seed, then the same under the seeded defect."""
-    clean, traces = [], []
+    clean, traces, called = [], [], {}
     with _scratch_cwd():
         _module("run")
         for target in item.targets:
             for seed in suites[target.suite]["seeds"]:
-                result = run_target(target, suites, seed)
+                with seam_spies(_live_seams(item)) as calls:  # pass-through: the clean run is unchanged
+                    result = run_target(target, suites, seed)
+                if _in_process(target, suites):
+                    called.setdefault(target.label, set()).update(pair for pair, count in calls.items() if count)
                 clean.append({"target": target.label, "channel": target.channel, "seed": seed, "pass": result.passed,
                               "unmet": sorted(_named(result)), "hard": sorted(_hard(result)),
                               "witnesses_missing": result.witnesses_missing, "errors": result.errors})
@@ -3145,7 +3676,8 @@ def run_defect(item: SeededDefect, suites: Mapping[str, Mapping]) -> dict:
         entry["total"] += 1
     return {"id": item.id, "title": item.title, "critical": item.critical, "note": item.note, "clean": clean,
             "traces": traces, "detected": detected, "total": len(traces), "rate": _rate(detected, len(traces)),
-            "channels": channels, "survivor": not traces or detected < len(traces)}  # 0 of 0 measures nothing
+            "channels": channels, "survivor": not traces or detected < len(traces),  # 0 of 0 measures nothing
+            "seams_unused": _unused(item, called)}
 
 
 def run_defects(ids: Sequence[str] | None = None) -> dict:
@@ -3169,11 +3701,15 @@ def run_defects(ids: Sequence[str] | None = None) -> dict:
 
 
 def defect_reasons(report: Mapping) -> list[str]:
-    """Why ``--defects`` fails: a target failing unpatched, or a critical defect missed on any trace."""
+    """Why ``--defects`` fails: a target failing unpatched, a critical defect missed on any trace, or a patched
+    attribute no clean run of the defect's targets calls (unless SEAMS_NOT_CALLED says why)."""
     reasons = list(dict.fromkeys(f"clean: {entry['target']} seed={entry['seed']} fails unpatched"
                                  for result in report["defects"] for entry in result["clean"] if not entry["pass"]))
     reasons += [f"critical defect {result['id']} detected on {result['detected']} of {result['total']} traces"
                 for result in report["defects"] if result["critical"] and result["survivor"]]
+    reasons += [f"defect {defect_id}: seam {seam} is never called on a clean run of its targets"
+                for defect_id, seams_ in unexcused({result["id"]: result.get("seams_unused", ())
+                                                    for result in report["defects"]}).items() for seam in seams_]
     if not report["defects"]:
         reasons.append("no seeded defect ran")
     return reasons

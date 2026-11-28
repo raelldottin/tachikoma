@@ -424,9 +424,9 @@ The SPEC-14 workflow benchmark, `scripts/training_workflow_benchmark.py`, is a s
 The seeded-defect evaluation (`--defects`) checks that the benchmark catches the defects SPEC-14 names (S14-AC7). Each catalogued defect is patched into production at call time, never as a source edit, and replayed against named targets in two channels:
 
 1. **benchmark:** the frozen required, holdout and training-v1 control traces.
-2. **derived:** variants built in code from a frozen scenario (`trigger_after(n)` moves each step trigger to a later roster read). They are never written to a fixture, and each must pass unpatched first.
+2. **derived:** variants built in code from a frozen scenario. `trigger_after(n)` moves each step trigger to a later roster read; `expecting(step, ...)` freezes more of a step's clean trace (an exit, a skip code, a store state); `inserted(...)` adds a step (a second provision, say); `step_pre(...)` adds pre-state. Four step options exist for derived variants only, and `validate_suite` refuses each in a fixture: `remove_marker` (delete the account's establishment marker, keep its store), `corrupt_attempt` (add an unknown field to the first stored attempt), `hold_lock` (the harness holds the account's lock file through the step) and the trigger operation `timer_over` (the session just started ends before the post-read). Each records a witness, so an option with nothing to act on fails its variant's clean run by name. Variants are never written to a fixture, and each must pass unpatched first.
 
-The test module `tests.test_training_workflow_benchmark` runs the same checks in CI: `WorkflowGateTests` (both suites, every control, and a determinism child), `DeterminismTests` (the real `check_determinism` with a real child interpreter), `SeededDefectRunTests` (one test per critical defect) and `DefectsCliTests` (`--defects` itself).
+The catalogue holds 42 defects, 39 of them critical. The test module `tests.test_training_workflow_benchmark` runs the same checks in CI: `WorkflowGateTests` (both suites, every control, and a determinism child), `DeterminismTests` (the real `check_determinism` with a real child interpreter), `SeededDefectRunTests` (one test per critical defect, and every derived variant clean), `SeamLivenessTests` (every patched attribute is called), `CapLayerTests` (each spend-cap layer alone prevents the overspend) and `DefectsCliTests` (`--defects` itself).
 
 ### Detection rule
 
@@ -434,13 +434,14 @@ The test module `tests.test_training_workflow_benchmark` runs the same checks in
 - Each target must pass on the unpatched revision first. A target that fails clean fails the run.
 - Critical defects must be detected on every trace. A critical defect with no trace, or a run with no defect, fails. Non-critical detection rates are published, not gated.
 - A harness error in any run, clean or patched, a failed fake self-check (the same check `--gate` makes) or a seeding that cannot be applied exits 2: that run measured nothing, so it is never only a miss.
+- Every seeding declares the production attributes it patches (its seams). Each must be called on a clean run of at least one of the defect's in-process targets, or `--defects` fails with `defect <id>: seam <attribute> is never called on a clean run of its targets`: a refactor that bypasses a seam would otherwise turn its defect into a silent no-op. `SeamLivenessTests` checks every catalogue defect at the first seed. Two kinds of seam are exempt, each with its reason in the harness. Values that are read, not called (`SEAM_EXEMPT`): `run.FLEET_STOP_FILE` and `sdk.fleet.factory.STRICT_ADD_TRAINING`. Seams that are uncalled by design (`SEAMS_NOT_CALLED`): `intent-after-send`'s `settle_training_intent` (both of its targets crash at the send, before any settle) and `recheck-off-frozen`'s `start_refusal` (the frozen stale triggers make the plan refuse before the recheck). The test fails if an exemption goes stale.
 - `--gate` never runs with a defect active: it exits 2. The determinism child's argv and environment carry no defect. A defect reaches a processes-mode dispatch child only through that child's spec JSON, while one is active in the parent.
 
 ### SPEC-14 workflow evaluation results
 
 Revision: <filled at final gates>
 
-Measured on 2026-11-28 on the `spec14-workflow-eval` working tree (base `1f924e0`), with these commands:
+Measured on 2026-11-28 on the `spec14-workflow-eval` working tree (base `1f924e0`), after QA fix round 1, with these commands:
 
 ```bash
 .venv/bin/python scripts/training_workflow_benchmark.py --gate --json gate.json
@@ -453,14 +454,14 @@ cmp h1.json h999.json && cmp h1.json gate.json
 
 | Command | Exit | Wall time |
 | --- | ---: | ---: |
-| `--gate --json gate.json` | 0 | 108 s |
-| `--report-only` under `PYTHONHASHSEED=1` | 0 | 53 s |
-| `--report-only` under `PYTHONHASHSEED=999` | 0 | 80 s |
+| `--gate --json gate.json` | 0 | 59 s |
+| `--report-only` under `PYTHONHASHSEED=1` | 0 | 22 s |
+| `--report-only` under `PYTHONHASHSEED=999` | 0 | 29 s |
 | `cmp` of the three reports | 0 | - |
-| `--defects --json defects.json` | 0 | 110 s |
-| `scripts/ci.py test --names tests.test_training_workflow_benchmark` (215 tests) | 0 | 160 s |
+| `--defects --json defects.json` | 0 | 75 s |
+| `scripts/ci.py test --names tests.test_training_workflow_benchmark` (237 tests) | 0 | 79 s |
 
-The gate passed: required scored 100.000000 (129 of 129 traces) and holdout 100.000000 (30 of 30), with no hard violation, missing witness or fake error, and every control passed. Its JSON report is byte-identical to the report `--gate` wrote on `1f924e0` before this slice.
+The gate passed: required scored 100.000000 (129 of 129 traces) and holdout 100.000000 (30 of 30), with no hard violation, missing witness or fake error, and every control passed. Its JSON report is byte-identical to the report `--gate` wrote on `1f924e0` before this slice, and to the one written before QA fix round 1: no derived-only option, trigger operation or seeding changes a frozen trace.
 
 **Scenario results:**
 
@@ -498,7 +499,7 @@ The gate passed: required scored 100.000000 (129 of 129 traces) and holdout 100.
 | `intent-not-persisted` | yes | benchmark | `persisted-intent-restart/crash-after-send`: `exec2:mutations.AddTraining`, `exec2:resource_delta.alpha`; hard `exec2:duplicate_write`, `exec2:budget_spend` | 3 / 3 |
 | `intent-after-send` | yes | benchmark | `persisted-intent-restart/crash-after-send`: `exec2:mutations.AddTraining`, `exec2:skips.alpha.unresolved_attempt`; hard `exec2:duplicate_write`, `exec2:budget_spend`<br>`persisted-intent-restart/crash-before-apply`: `exec2:mutations.AddTraining`, `exec2:skips.alpha.unresolved_attempt`; hard `exec2:duplicate_write`, `exec2:budget_spend` | 6 / 6 |
 | `stop-ignored` | yes | benchmark | `store-stop-controls/stop`: `exec:mutations.AddTraining`, `exec:requests.alpha`<br>`store-stop-controls/stop-mid-run`: `exec:mutations.AddTraining`, `exec:skips.alpha.stopped`; hard `exec:budget_spend` | 6 / 6 |
-| `scheduler-stop-ignored` | yes | benchmark | `store-stop-controls/stop-mid-run`: `exec:mutations.AddTraining`, `exec:skips.alpha.stopped`; hard `exec:budget_spend` | 3 / 3 |
+| `scheduler-stop-ignored` | yes | benchmark, derived | `store-stop-controls/stop-mid-run`: `exec:mutations.AddTraining`, `exec:skips.alpha.stopped`; hard `exec:budget_spend`<br>`paid-boundary/earlier-reservation~stop-after-upgrade`: `exec:mutations.AddTraining`, `exec:skips.alpha.stopped`, `exec:exit`; hard `exec:budget_spend` | 6 / 6 |
 | `missing-store-fresh` | yes | benchmark | `store-stop-controls/missing-state`: `exec2:mutations.AddTraining`, `exec2:skips.alpha.state_missing`, `exec2:store.alpha`; hard `exec2:budget_spend` | 3 / 3 |
 | `unreadable-store-fresh` | yes | benchmark | `store-stop-controls/unreadable-state`: `exec2:mutations.AddTraining`, `exec2:skips.alpha.state_unreadable`; hard `exec2:budget_spend` | 3 / 3 |
 | `settle-loses-pending` | yes | benchmark | `persisted-intent-restart/settle-write-fails`: `exec2:mutations.AddTraining`, `exec2:skips.alpha.unresolved_attempt`; hard `exec2:duplicate_write`, `exec2:budget_spend` | 3 / 3 |
@@ -523,13 +524,24 @@ The gate passed: required scored 100.000000 (129 of 129 traces) and holdout 100.
 | `tie-input-order` | no | benchmark | `tie-break-instance-id/equal-repair`: `plan:crew_plan.<crew>` | 2 / 3 |
 | `two-copy-as-one` | yes | benchmark | `two-copy-recipe/one-training`: `plan:prestige.<target>`<br>`preview-prestige/one-copy`: `plan:prestige.<target>` | 6 / 6 |
 | `wrong-stat-course` | yes | benchmark | `role-coverage/swap`: `plan1:crew_plan.<crew>`, `dry1:journal_planned`<br>`preview-prestige/one-copy`: `plan:crew_plan.<crew>`, `dry:journal_planned` | 6 / 6 |
+| `settle-failure-swallowed` (QA1 D3) | yes | derived | `persisted-intent-restart/settle-write-fails~exit1`: `exec1:exit`, `exec1:skips.alpha.unresolved_attempt` | 3 / 3 |
+| `training-block-dropped` (QA1 D4) | yes | derived | `reconciliation/missing-post-read~exit2`: `exec2:exit`<br>`persisted-intent-restart/crash-after-send~exit2`: `exec2:exit` | 6 / 6 |
+| `stop-checked-once` (QA1 D13) | yes | derived | `paid-boundary/earlier-reservation~stop-after-upgrade`: `exec:mutations.AddTraining`, `exec:skips.alpha.stopped`, `exec:exit`; hard `exec:budget_spend` | 3 / 3 |
+| `runner-cap-window` (QA1 D5) | yes | benchmark | `paid-boundary/spend-cap-after-earlier`: `exec:mutations.AddTraining`, `exec:skips.alpha.cap_exceeded.<crew>`; hard `exec:budget_spend` | 3 / 3 |
+| `recheck-spend-frozen` (QA1 D9) | yes | benchmark | `paid-boundary/spend-cap-after-earlier`: `exec:mutations.AddTraining`, `exec:skips.alpha.cap_exceeded.<crew>`; hard `exec:budget_spend` | 3 / 3 |
+| `provision-overwrites-unmarked` (QA1 D17) | yes | derived | `persisted-intent-restart/settle-write-fails~marker-lost`: `exec2:mutations.AddTraining`, `exec2:skips.alpha.unresolved_attempt`; hard `exec2:duplicate_write`, `exec2:budget_spend`<br>`persisted-intent-restart/crash-after-send~marker-lost`: the same | 6 / 6 |
+| `journal-witness-wrong-key` (QA1 D16) | yes | derived | `persisted-intent-restart/settle-write-fails~store-lost`: `reprovision:exit`, `reprovision:store.alpha`, `exec2:mutations.AddTraining`, `exec2:skips.alpha.state_missing`; hard `exec2:duplicate_write`, `exec2:budget_spend` | 3 / 3 |
+| `resolve-ignores-lock` (QA1 D7) | yes | derived | `reconciliation/resolved-after-reconciliation~held`: `resolve:exit`, `resolve:skips.alpha.locked`, `exec3:mutations.AddTraining`, `exec3:skips.alpha.unresolved_attempt` | 3 / 3 |
+| `malformed-attempt-dropped` (QA1 D8) | yes | derived | `persisted-intent-restart/settle-write-fails~extra-field`: `exec2:mutations.AddTraining`, `exec2:skips.alpha.state_unreadable`; hard `exec2:duplicate_write`, `exec2:budget_spend` | 3 / 3 |
+| `strict-spec-dropped` (QA1 D12) | yes | derived | `reconciliation/verified~timer-over`: `exec:exit`, `exec:journal`; hard `exec:false_verification` | 3 / 3 |
+| `currency-blind-recheck` (QA1 D15) | yes | derived | `stale-preflight/price-raised~gas-after-plan`: `exec:mutations.AddTraining`, `exec:skips.alpha.price_unavailable.<crew>` | 3 / 3 |
 
 | Rate | Value | Over |
 | --- | ---: | --- |
-| Critical defects detected on every trace | 28 of 28 | 28 critical defects |
-| Critical traces detected | 135 of 135 | benchmark 120, derived 15 |
-| Benchmark-channel traces detected | 122 of 144 | all defects, critical and non-critical |
-| Derived-channel traces detected | 15 of 15 | `recheck-off` |
+| Critical defects detected on every trace | 39 of 39 | 39 critical defects |
+| Critical traces detected | 177 of 177 | benchmark 126, derived 51 |
+| Benchmark-channel traces detected | 128 of 150 | all defects, critical and non-critical |
+| Derived-channel traces detected | 51 of 51 | 11 defects (`recheck-off`, `scheduler-stop-ignored` and the nine derived QA1 kills) |
 | Targets failing unpatched | 0 | every target at every seed |
 
 **Survivors (non-critical, published only):**
@@ -537,6 +549,8 @@ The gate passed: required scored 100.000000 (129 of 129 traces) and holdout 100.
 - `guard-latch-off` (0 of 6): masked by the planner's one-start rule. A crew plan never holds two starts, so the guard's latch cannot be reached without also seeding the planner.
 - `recheck-off-frozen` (0 of 15): the frozen stale triggers fire at the identity read, so the plan read already sees the change and refuses. The derived channel (`recheck-off`, 15 of 15) moves each trigger to a later roster read, where only the under-lock recheck can see it.
 - `tie-input-order` (2 of 3): caught only at the seeds whose reply order puts the higher instance id first, because the seed permutes reply order. `tie-high-id` (3 of 3) covers the instance-id tie-break itself.
+
+**Cap layers (QA1 D5, D9).** The spend cap is enforced three times: the crew plan reserves earlier requests of the same plan, the under-lock recheck charges the spend journaled so far, and the gate runner checks the period's spend before each send. A defect in any one layer is masked by the other two, which is how D5 survived every test module. `CapLayerTests` disables two layers at a time on `paid-boundary/spend-cap-after-earlier` and shows each remaining layer alone prevents the overspend. The plan and the recheck each reproduce the frozen trace. The runner alone refuses later, so its refusal stops the run (exit 1), with no start sent and no hard code. With all three disabled, the overspend is a `budget_spend` hard code. `runner-cap-window` and `recheck-spend-frozen` each seed their layer's QA defect with the other two layers disabled.
 
 **Targets left out on purpose** (each named in its defect's `note`):
 
@@ -546,13 +560,39 @@ The gate passed: required scored 100.000000 (129 of 129 traces) and holdout 100.
 - `intent-not-persisted` on `paid-boundary/exact-500`: only the exit changes, which is not specific enough.
 - `intent-after-send` on `persisted-intent-restart/intent-write-fails`: its armed fault replaces the intent write itself.
 - `two-copy-as-one` on `two-copy-recipe/two-idle`: both copies are present there.
+- `stop-checked-once` on `store-stop-controls/stop-mid-run`: the stop file appears before the first action, so a single read still sees it.
+- `settle-failure-swallowed` on the frozen `persisted-intent-restart/settle-write-fails`: that trace leaves exec1's exit open, and the pending intent still blocks exec2. Only the derived exit and skip of exec1 show that the account was not stopped.
+- `training-block-dropped` on the frozen traces: the runner's guard still refuses the start with the same skip code, so only the exec2 exit the derived variants freeze (0 on the clean revision) changes.
 - Timing-dependent hard codes: without the lock, whether the second dispatch's start lands (`duplicate_write`, `budget_spend`) or its store write is refused depends on timing, in threads and processes mode alike. `lock-skipped` and the threads target of `v2-down-v1-path` therefore expect only the deterministic named assertions (`overlap:dispatches`, plus `provision:store.alpha` for `v2-down-v1-path`). Those were present in 15 of 15 repeated runs, 5 runs at each seed.
 
 **QA-eval rounds:**
 
 | Round | Revision | Workflow gate | Critical detected | Non-critical survivors | Legacy QA detection | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
-| 1 | pending | pending | pending | pending | pending | pending |
+| 1 | `08b14b9` (QA), fix round 1 after | pass, report unchanged | 28 of 28 at QA; 39 of 39 after the fix | 3 (published only) | 17 planted: 5 caught by the workflow module, 11 caught only in other test modules, 1 survived everything (D5) | The fix kills 11 of the 12 workflow-channel survivors in the workflow module (11 new critical defects, the seam-liveness check and `CapLayerTests`). D14 is caught only in the test channel. |
+| 2 | pending | pending | pending | pending | pending | pending |
+
+**QA round 1, planted production defects.** Each was planted in a scratch copy only (never in the worktree). "Before" is where QA found it caught; "after" is the workflow-module test that fails when the defect is planted again on the fixed revision.
+
+| QA id | Planted change | Before fix round 1 | After fix round 1 |
+| --- | --- | --- | --- |
+| D1 | settled record treats unknown as verified | workflow module (gate score) | workflow module (unchanged) |
+| D2 | intent-write failure swallowed, start sent | workflow module (`intent-write-fails`) | workflow module (unchanged) |
+| D3 | settle-write failure swallowed in `_settle` | only `test_fleet_execute` (`test_a_settlement_write_failure_keeps_a_pending_record_and_blocks_the_next_run`) | workflow: `settle-write-fails~exit1` clean run (`exec1:exit`, `exec1:skips.alpha.unresolved_attempt`) |
+| D4 | `training_block` condition inverted | only `test_fleet_execute` (`test_a_crash_leaves_a_pending_intent_that_pauses_the_restarted_account`) | workflow: `missing-post-read~exit2` and `crash-after-send~exit2` clean runs (`exec2:exit`) |
+| D5 | gate-runner spend window starts now | survived every module | workflow: `CapLayerTests` (runner layer alone: `budget_spend`) |
+| D6 | dispatch releases the lock before yielding | workflow module (`overlap:dispatches`) | workflow module (unchanged) |
+| D7 | resolve ignores a held lock | only `test_fleet_execute` (`test_resolve_refuses_while_locked_and_on_missing_or_unreadable_state`) | workflow: `resolved-after-reconciliation~held` clean run (`resolve:exit`, `exec3:mutations.AddTraining`) |
+| D8 | store parse drops a malformed attempt | only `test_training_attempts` (`test_an_attempt_with_an_extra_key_is_unreadable_and_never_overwritten`) | workflow: `settle-write-fails~extra-field` clean run (`exec2:skips.alpha.state_unreadable`, `exec2:mutations.AddTraining`) |
+| D9 | recheck spend read when the recheck is built | only `test_training_policy` (`test_the_pre_send_recheck_charges_the_spend_of_earlier_actions_in_this_run`) | workflow: `CapLayerTests` (recheck layer alone: `budget_spend`) |
+| D10 | premium course passes the planner | workflow module (`paid-boundary/premium`) | workflow module (unchanged) |
+| D11 | guarded path chosen by policy-name prefix | workflow module (controls) | workflow module (unchanged) |
+| D12 | strict add_training spec dropped | only `test_fleet_execute` (`test_a_timer_over_by_the_post_read_is_unknown_and_blocks_the_next_start`) | workflow: `verified~timer-over` clean run (`exec:journal`, hard `false_verification`) |
+| D13 | stop file read once before the loop | only `test_fleet_execute` (`test_fleet_stop_file_stops_between_actions_and_accounts`) | workflow: `earlier-reservation~stop-after-upgrade` clean run (`exec:skips.alpha.stopped`, `exec:mutations.AddTraining`) |
+| D14 | resolution freshness `<=` became `<` | only `test_training_attempts` (`test_classify_resolution_needs_a_read_newer_than_the_attempt`) | test channel only (same test). The resolve run's own paced requests move the fake clock before its roster read, so a read at exactly the settlement instant cannot be built without patching production's clock in the middle of a run. |
+| D15 | price recheck ignores the currency | only `test_training_attempts` (`test_a_changed_currency_at_the_same_amount_is_refused`) | workflow: `price-raised~gas-after-plan` clean run (`exec:skips.alpha.price_unavailable.<crew>`, `exec:mutations.AddTraining`) |
+| D16 | journal witness reads the wrong evidence key | only `test_fleet_execute` and `test_training_attempts` (`test_a_journal_with_a_training_v2_start_is_never_provisioned_fresh`) | workflow: `settle-write-fails~store-lost` clean run (`exec2:mutations.AddTraining`, `exec2:skips.alpha.state_missing`) |
+| D17 | provision overwrites an unmarked store | only `test_fleet_execute` and `test_training_attempts` (`test_provision_rewrites_a_missing_marker_only_beside_a_readable_store`) | workflow: `settle-write-fails~marker-lost` and `crash-after-send~marker-lost` clean runs (`exec2:mutations.AddTraining`) |
 
 ## Known limitations
 
