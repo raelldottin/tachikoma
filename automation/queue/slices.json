@@ -2924,7 +2924,7 @@
     {
       "slice_id": "spec14-workflow-eval",
       "title": "Run the SPEC-14 workflow benchmark and semantic mutation checks on one candidate revision and publish the evidence",
-      "status": "queued",
+      "status": "done",
       "priority": 500,
       "domain": "crew-training",
       "allowed_paths": [
