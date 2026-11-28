@@ -118,7 +118,7 @@ No repository settings are changed merely by adding these files.
   `automation/mutation/config.json` to `$RUNNER_TEMP` for `--config`.
 - The `mutation-gate` job (blocking) runs the `sdk/training/` targets. It has
   no `continue-on-error`, and its step runs under `set -euo pipefail` with a
-  25-minute timeout inside the job's 30-minute timeout, so a training target
+  40-minute timeout inside the job's 45-minute timeout, so a training target
   below its `min_score` (exit 1), a config, baseline or harness error (exit 2)
   or a timeout fails the job, the reusable workflow and `CI required`.
   `mutation-config` refuses a config that drops `sdk/training/model.py`,
