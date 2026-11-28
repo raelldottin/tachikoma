@@ -6,6 +6,8 @@ Every training call the executor makes goes through a recording client. The clie
 
 A second mode, qa-eval, mutates the planner and the strategy and measures how many mutants the benchmark and the unit tests catch.
 
+The SPEC-14 workflow benchmark and its seeded-defect evaluation are a separate harness, described in [SPEC-14 workflow evaluation](#spec-14-workflow-evaluation).
+
 The benchmark measures the owner-approved strategy as it is. It never tunes the planner or the strategy to raise a score.
 
 ## Usage
@@ -414,6 +416,239 @@ Round history:
 Between the rounds, the QA loop killed all 25 neither mutants with `PlannerContractTests`. The benchmark channel did not change, because no planner or strategy code changed.
 
 With live research names (2026-11-26), the gates moved to the original courses 101 / 201 / 203 and the catalog to the live lines (`Fitness 101` ... `Education 203`). Every scenario score stayed the same: each old level maps onto the course that opens the same gates (1 to 101, 2 to 201, 3 to 203). One planner mutant moved from both channels to tests only: `planner.py:199:41:constant:0` (a missing research counted as level 1 instead of 0) no longer opens a gate in any scenario, because no default gate is below 101. `test_missing_research_counts_as_level_zero` kills it.
+
+## SPEC-14 workflow evaluation
+
+The SPEC-14 workflow benchmark, `scripts/training_workflow_benchmark.py`, is a separate harness from the simulator benchmark above and is scored separately. It drives the real `run.main()` against a stateful FakePss through frozen, independently written traces: 18 cases and 53 scenarios. The required suite has 9 cases, 43 scenarios and 129 traces at seeds 1401-1403. The holdout has 9 cases, 10 scenarios and 30 traces at seeds 2401-2403. Every case also carries a paired training-v1 control.
+
+The seeded-defect evaluation (`--defects`) checks that the benchmark catches the defects SPEC-14 names (S14-AC7). Each catalogued defect is patched into production at call time, never as a source edit, and replayed against named targets in two channels:
+
+1. **benchmark:** the frozen required, holdout and training-v1 control traces.
+2. **derived:** variants built in code from a frozen scenario. `trigger_after(n)` moves each step trigger to a later roster read; `expecting(step, ...)` freezes more of a step's clean trace (an exit, a skip code, a store state); `inserted(...)` adds a step (a second provision, say); `step_pre(...)` adds pre-state. Ten step options exist for derived variants only, and `validate_suite` refuses each in a fixture:
+
+- `remove_marker`: delete the account's establishment marker, keep its store.
+- `corrupt_attempt`: add an unknown field to the first stored attempt.
+- `hold_lock`: the harness holds `<declared game identity>.lock` of each of the step's accounts through the step (created if production has not created it yet), and no other file.
+- the trigger operation `timer_over`: the session just started ends before the post-read.
+- `policy_id` (QA round 2): the step's registry names this policy, over a training-v1 control's override.
+- `mode` (QA round 2): an execute step in another mode (canary), under an authorization for that mode that also allows the canary's fallback account write.
+- `day_start` and `dry_run_age_s` (QA round 2): the fake clock moves forward to the next UTC midnight, or to the latest stamped dry run's finish plus N seconds. For that step, run.py's dry-run and execute entries read the fake clock (they default to the real one).
+- `fail_replace` (QA round 2): the attempt store's `os.replace` raises for the step. Only `sdk.fleet.attempts` sees the failing `os`; the process-wide module is untouched.
+- `store_as_directory` (QA round 2): a directory replaces the account's store file.
+
+Each option that reads production's layout or state records a witness, so an option with nothing to act on fails its variant's clean run by name. Variants are never written to a fixture, and each must pass unpatched first.
+
+The catalogue holds 51 defects, 48 of them critical. The test module `tests.test_training_workflow_benchmark` runs the same checks in CI: `WorkflowGateTests` (both suites, every control, and a determinism child), `DeterminismTests` (the real `check_determinism` with a real child interpreter), `SeededDefectRunTests` (one test per critical defect, and every derived variant clean), `SeamLivenessTests` (every patched attribute is called), `DerivedOptionTests` (each QA round 2 step option does what its variants rely on), `CapLayerTests` (each spend-cap layer alone prevents the overspend) and `DefectsCliTests` (`--defects` itself).
+
+### Detection rule
+
+- A defect is detected on a trace only when every expected named assertion (`step:assertion`) and every expected hard code appears, the run records no harness error, and no step's exit is an unexpected crash or a production exception. Every step's raw exit is read, including steps that freeze no exit and each dispatch of an overlap step.
+- Each target must pass on the unpatched revision first. A target that fails clean fails the run.
+- Critical defects must be detected on every trace. A critical defect with no trace, or a run with no defect, fails. Non-critical detection rates are published, not gated.
+- A harness error in any run, clean or patched, a failed fake self-check (the same check `--gate` makes) or a seeding that cannot be applied exits 2: that run measured nothing, so it is never only a miss.
+- Every seeding declares the production attributes it patches (its seams). Each must be called on a clean run of at least one of the defect's in-process targets, or `--defects` fails with `defect <id>: seam <attribute> is never called on a clean run of its targets`: a refactor that bypasses a seam would otherwise turn its defect into a silent no-op. `SeamLivenessTests` checks every catalogue defect at the first seed. Two kinds of seam are exempt, each with its reason in the harness. Values that are read, not called (`SEAM_EXEMPT`): `run.FLEET_STOP_FILE` and `sdk.fleet.factory.STRICT_ADD_TRAINING`. Seams that are uncalled by design (`SEAMS_NOT_CALLED`): `intent-after-send`'s `settle_training_intent` (both of its targets crash at the send, before any settle) and `recheck-off-frozen`'s `start_refusal` (the frozen stale triggers make the plan refuse before the recheck). The test fails if an exemption goes stale.
+- `--gate` never runs with a defect active: it exits 2. The determinism child's argv and environment carry no defect. A defect reaches a processes-mode dispatch child only through that child's spec JSON, while one is active in the parent.
+
+### SPEC-14 workflow evaluation results
+
+Revision: `9d8b623` (the slice after QA fix round 2, merged with `origin/main` at `b833a16`). Every number in this section was measured on that revision on 2026-11-28. The commit that adds this line changes only this document.
+
+Commands:
+
+```bash
+.venv/bin/python scripts/training_workflow_benchmark.py --gate --json gate.json
+PYTHONHASHSEED=1   .venv/bin/python scripts/training_workflow_benchmark.py --report-only --json h1.json --quiet
+PYTHONHASHSEED=999 .venv/bin/python scripts/training_workflow_benchmark.py --report-only --json h999.json --quiet
+cmp h1.json h999.json && cmp h1.json gate.json
+.venv/bin/python scripts/training_workflow_benchmark.py --defects --json defects.json
+.venv/bin/python scripts/ci.py test --names tests.test_training_workflow_benchmark
+```
+
+| Command | Exit | Wall time |
+| --- | ---: | ---: |
+| `--gate --json gate.json` | 0 | 70 s |
+| `--report-only` under `PYTHONHASHSEED=1` | 0 | 35 s |
+| `--report-only` under `PYTHONHASHSEED=999` | 0 | 53 s |
+| `cmp` of the three reports | 0 | - |
+| `--defects --json defects.json` | 0 | 193 s |
+| `scripts/ci.py test --names tests.test_training_workflow_benchmark` (253 tests) | 0 | 105 s |
+| `make automation-check syntax-check test test-security lint` (3480 tests, 1 skipped) | 0 | 434 s |
+| `git diff --check origin/main...HEAD` and `scripts/ci.py repository` | 0 | 7 s |
+| `make training-benchmark` (composite 67.261087, floor 67.261087, 0 violations) | 0 | 24 s |
+| `make mutation` (blocking targets 100%; `crew_leveling` 81.9%, `game_formulas` 73.7%, both above their minimums) | 0 | 2784 s |
+
+The gate passed: required scored 100.000000 (129 of 129 traces) and holdout 100.000000 (30 of 30), with no hard violation, missing witness or fake error, and every control passed. Its JSON report is byte-identical to the report `--gate` wrote on `1f924e0` before this slice, and to the ones written before QA fix rounds 1 and 2: no derived-only option, trigger operation or seeding changes a frozen trace.
+
+**Scenario results:**
+
+| Case | Suite | Scenarios | Traces passed | Control |
+| --- | --- | ---: | ---: | --- |
+| `role-coverage` | required | 1 | 3/3 | pass (3/3) |
+| `preview-prestige` | required | 2 | 6/6 | pass (3/3) |
+| `paid-boundary` | required | 9 | 27/27 | pass (3/3) |
+| `stale-preflight` | required | 7 | 21/21 | pass (3/3) |
+| `reconciliation` | required | 10 | 30/30 | pass (3/3) |
+| `persisted-intent-restart` | required | 5 | 15/15 | pass (3/3) |
+| `overlapping-dispatch` | required | 2 | 6/6 | pass (3/3) |
+| `distinct-accounts` | required | 1 | 3/3 | pass (3/3) |
+| `store-stop-controls` | required | 6 | 18/18 | pass (6/6) |
+| `tie-break-instance-id` | holdout | 1 | 3/3 | pass (3/3) |
+| `observed-zero-stat` | holdout | 1 | 3/3 | pass (3/3) |
+| `gas-priced-course` | holdout | 1 | 3/3 | pass (3/3) |
+| `malformed-price` | holdout | 1 | 3/3 | pass (3/3) |
+| `unclaimed-course` | holdout | 1 | 3/3 | pass (3/3) |
+| `room-level-gate` | holdout | 1 | 3/3 | pass (3/3) |
+| `two-copy-recipe` | holdout | 2 | 6/6 | pass (3/3) |
+| `retry-different-crew` | holdout | 1 | 3/3 | pass (3/3) |
+| `concurrent-two-accounts` | holdout | 1 | 3/3 | pass (3/3) |
+| **total** | | **53** | **159/159** | **all pass** |
+
+**Determinism evidence.** The `--gate` report and the two `--report-only` reports under `PYTHONHASHSEED` 1 and 999 are byte-identical (sha256 `adcd9418d68b9310...`), as is the gate's own determinism child, which runs under another fixed hash seed. In the test module, `WorkflowGateTests` compares a real child interpreter's run of `overlapping-dispatch` and `persisted-intent-restart` with the shared in-process run, and `DeterminismTests` runs the real `check_determinism` with a real child on `distinct-accounts`. Both assert that the child's `PYTHONHASHSEED` differs from the parent's. `--defects` does not change the gate report.
+
+**Detection table.** `AddTraining` stands for `POST /TrainingService/AddTraining`. Crew labels print as `<crew>` and the prestige target as `<target>`. Each defect ran at all three seeds of its suite, and every target passed unpatched at every seed first.
+
+| Defect | Critical | Channel | Caught by (named assertion / hard code) | Detected / traces |
+| --- | --- | --- | --- | ---: |
+| `two-starts` | yes | benchmark | `paid-boundary/exact-500`: `exec:mutations.AddTraining`; hard `exec:duplicate_write`<br>`gas-priced-course/gas-300`: `exec:mutations.AddTraining`; hard `exec:duplicate_write` | 6 / 6 |
+| `guard-latch-off` | no | benchmark | `paid-boundary/exact-500`: `exec:mutations.AddTraining`; hard `exec:duplicate_write`<br>`overlapping-dispatch/threads`: `overlap:dispatches` | 0 / 6 |
+| `lock-skipped` | yes | benchmark | `overlapping-dispatch/threads`: `overlap:dispatches`<br>`distinct-accounts/alpha-held`: `overlap:dispatches`<br>`overlapping-dispatch/processes`: `overlap:dispatches` | 9 / 9 |
+| `intent-not-persisted` | yes | benchmark | `persisted-intent-restart/crash-after-send`: `exec2:mutations.AddTraining`, `exec2:resource_delta.alpha`; hard `exec2:duplicate_write`, `exec2:budget_spend` | 3 / 3 |
+| `intent-after-send` | yes | benchmark | `persisted-intent-restart/crash-after-send`: `exec2:mutations.AddTraining`, `exec2:skips.alpha.unresolved_attempt`; hard `exec2:duplicate_write`, `exec2:budget_spend`<br>`persisted-intent-restart/crash-before-apply`: `exec2:mutations.AddTraining`, `exec2:skips.alpha.unresolved_attempt`; hard `exec2:duplicate_write`, `exec2:budget_spend` | 6 / 6 |
+| `stop-ignored` | yes | benchmark | `store-stop-controls/stop`: `exec:mutations.AddTraining`, `exec:requests.alpha`<br>`store-stop-controls/stop-mid-run`: `exec:mutations.AddTraining`, `exec:skips.alpha.stopped`; hard `exec:budget_spend` | 6 / 6 |
+| `scheduler-stop-ignored` | yes | benchmark, derived | `store-stop-controls/stop-mid-run`: `exec:mutations.AddTraining`, `exec:skips.alpha.stopped`; hard `exec:budget_spend`<br>`paid-boundary/earlier-reservation~stop-after-upgrade`: `exec:mutations.AddTraining`, `exec:skips.alpha.stopped`, `exec:exit`; hard `exec:budget_spend` | 6 / 6 |
+| `missing-store-fresh` | yes | benchmark | `store-stop-controls/missing-state`: `exec2:mutations.AddTraining`, `exec2:skips.alpha.state_missing`, `exec2:store.alpha`; hard `exec2:budget_spend` | 3 / 3 |
+| `unreadable-store-fresh` | yes | benchmark | `store-stop-controls/unreadable-state`: `exec2:mutations.AddTraining`, `exec2:skips.alpha.state_unreadable`; hard `exec2:budget_spend` | 3 / 3 |
+| `settle-loses-pending` | yes | benchmark | `persisted-intent-restart/settle-write-fails`: `exec2:mutations.AddTraining`, `exec2:skips.alpha.unresolved_attempt`; hard `exec2:duplicate_write`, `exec2:budget_spend` | 3 / 3 |
+| `v1-under-v2-path` | yes | benchmark | `paid-boundary/v1-unpriced-start (training-v1 control)`: `exec:mutations.AddTraining`, `exec:applied.AddTraining`, `exec:journal` | 3 / 3 |
+| `v2-down-v1-path` | yes | benchmark | `overlapping-dispatch/threads`: `overlap:dispatches`, `provision:store.alpha`<br>`persisted-intent-restart/crash-after-send`: `exec2:mutations.AddTraining`, `provision:store.alpha`; hard `exec2:duplicate_write` | 6 / 6 |
+| `unresolved-guard-only` | yes | benchmark | `reconciliation/missing-post-read`: `exec2:skips.alpha.unresolved_attempt`<br>`retry-different-crew/lost-reply`: `exec2:skips.alpha.unresolved_attempt` | 6 / 6 |
+| `unresolved-ignored` | yes | benchmark | `retry-different-crew/lost-reply`: `exec2:mutations.AddTraining`, `exec2:skips.alpha.unresolved_attempt`; hard `exec2:duplicate_write`, `exec2:budget_spend`<br>`reconciliation/missing-post-read`: `exec2:mutations.AddTraining`, `exec2:skips.alpha.unresolved_attempt`; hard `exec2:duplicate_write`, `exec2:budget_spend`<br>`persisted-intent-restart/crash-after-send`: `exec2:mutations.AddTraining`, `exec2:skips.alpha.unresolved_attempt`; hard `exec2:duplicate_write`, `exec2:budget_spend` | 9 / 9 |
+| `premium-spend` | yes | benchmark | `paid-boundary/premium`: `exec:mutations.AddTraining`, `exec:skips.alpha.premium_currency.<crew>`; hard `exec:premium_spend` | 3 / 3 |
+| `false-verification` | yes | benchmark | `reconciliation/different-course`: `exec1:journal`; hard `exec1:false_verification`<br>`reconciliation/missing-id`: `exec1:journal`; hard `exec1:false_verification` | 6 / 6 |
+| `funds-plus-one` | yes | benchmark | `paid-boundary/short-499`: `exec:mutations.AddTraining`, `exec:skips.alpha.insufficient_funds.<crew>` | 3 / 3 |
+| `funds-minus-one` | yes | benchmark | `paid-boundary/exact-500`: `exec:mutations.AddTraining`, `exec:applied.AddTraining`, `exec:resource_delta.alpha` | 3 / 3 |
+| `reservation-ignored` | yes | benchmark | `paid-boundary/earlier-reservation`: `dry:journal_planned`, `exec:skips.alpha.insufficient_funds.<crew>`<br>`paid-boundary/spend-cap-after-earlier`: `exec:skips.alpha.cap_exceeded.<crew>` | 6 / 6 |
+| `recheck-off` | yes | derived | `stale-preflight/room-upgrading~nth2`: `exec:mutations.AddTraining`, `exec:skips.alpha.room_not_ready.<crew>`<br>`stale-preflight/crew-moved~nth2`: `exec:mutations.AddTraining`, `exec:skips.alpha.not_in_training_room.<crew>`<br>`stale-preflight/research-removed~nth2`: `exec:mutations.AddTraining`, `exec:skips.alpha.research_missing.<crew>`<br>`stale-preflight/crew-fatigued~nth2`: `exec:mutations.AddTraining`, `exec:skips.alpha.fatigued.<crew>`<br>`stale-preflight/price-raised~nth3`: `exec:mutations.AddTraining`, `exec:skips.alpha.insufficient_funds.<crew>` | 15 / 15 |
+| `recheck-off-frozen` | no | benchmark | `stale-preflight/room-upgrading`: `exec:mutations.AddTraining`<br>`stale-preflight/crew-moved`: `exec:mutations.AddTraining`<br>`stale-preflight/research-removed`: `exec:mutations.AddTraining`<br>`stale-preflight/crew-fatigued`: `exec:mutations.AddTraining`<br>`stale-preflight/price-raised`: `exec:mutations.AddTraining` | 0 / 15 |
+| `price-under` | yes | benchmark | `paid-boundary/short-499`: `exec:mutations.AddTraining`, `exec:skips.alpha.insufficient_funds.<crew>` | 3 / 3 |
+| `price-over` | yes | benchmark | `paid-boundary/exact-500`: `exec:mutations.AddTraining`, `exec:applied.AddTraining` | 3 / 3 |
+| `currency-swapped` | yes | benchmark | `gas-priced-course/gas-300`: `exec:mutations.AddTraining`, `exec:applied.AddTraining`, `exec:resource_delta.alpha` | 3 / 3 |
+| `zero-price-unknown` | yes | benchmark | `paid-boundary/explicit-zero`: `exec:mutations.AddTraining`, `exec:applied.AddTraining` | 3 / 3 |
+| `zero-stat-unknown` | yes | benchmark | `observed-zero-stat/missing-versus-zero`: `plan:crew_plan.<crew>`, `dry:journal_planned` | 3 / 3 |
+| `greedy-roles` | yes | benchmark | `role-coverage/swap`: `plan1:crew_plan.<crew>`, `plan1:crew_plan.<crew>`, `plan2:crew_plan.<crew>`, `plan2:crew_plan.<crew>` | 3 / 3 |
+| `tie-high-id` | yes | benchmark | `tie-break-instance-id/equal-repair`: `plan:crew_plan.<crew>`, `dry:journal_planned` | 3 / 3 |
+| `tie-input-order` | no | benchmark | `tie-break-instance-id/equal-repair`: `plan:crew_plan.<crew>` | 2 / 3 |
+| `two-copy-as-one` | yes | benchmark | `two-copy-recipe/one-training`: `plan:prestige.<target>`<br>`preview-prestige/one-copy`: `plan:prestige.<target>` | 6 / 6 |
+| `wrong-stat-course` | yes | benchmark | `role-coverage/swap`: `plan1:crew_plan.<crew>`, `dry1:journal_planned`<br>`preview-prestige/one-copy`: `plan:crew_plan.<crew>`, `dry:journal_planned` | 6 / 6 |
+| `settle-failure-swallowed` (QA1 D3) | yes | derived | `persisted-intent-restart/settle-write-fails~exit1`: `exec1:exit`, `exec1:skips.alpha.unresolved_attempt` | 3 / 3 |
+| `training-block-dropped` (QA1 D4) | yes | derived | `reconciliation/missing-post-read~exit2`: `exec2:exit`<br>`persisted-intent-restart/crash-after-send~exit2`: `exec2:exit` | 6 / 6 |
+| `stop-checked-once` (QA1 D13) | yes | derived | `paid-boundary/earlier-reservation~stop-after-upgrade`: `exec:mutations.AddTraining`, `exec:skips.alpha.stopped`, `exec:exit`; hard `exec:budget_spend` | 3 / 3 |
+| `runner-cap-window` (QA1 D5) | yes | benchmark | `paid-boundary/spend-cap-after-earlier`: `exec:mutations.AddTraining`, `exec:skips.alpha.cap_exceeded.<crew>`; hard `exec:budget_spend` | 3 / 3 |
+| `recheck-spend-frozen` (QA1 D9) | yes | benchmark | `paid-boundary/spend-cap-after-earlier`: `exec:mutations.AddTraining`, `exec:skips.alpha.cap_exceeded.<crew>`; hard `exec:budget_spend` | 3 / 3 |
+| `provision-overwrites-unmarked` (QA1 D17) | yes | derived | `persisted-intent-restart/settle-write-fails~marker-lost`: `exec2:mutations.AddTraining`, `exec2:skips.alpha.unresolved_attempt`; hard `exec2:duplicate_write`, `exec2:budget_spend`<br>`persisted-intent-restart/crash-after-send~marker-lost`: the same | 6 / 6 |
+| `journal-witness-wrong-key` (QA1 D16) | yes | derived | `persisted-intent-restart/settle-write-fails~store-lost`: `reprovision:exit`, `reprovision:store.alpha`, `exec2:mutations.AddTraining`, `exec2:skips.alpha.state_missing`; hard `exec2:duplicate_write`, `exec2:budget_spend` | 3 / 3 |
+| `resolve-ignores-lock` (QA1 D7) | yes | derived | `reconciliation/resolved-after-reconciliation~held`: `resolve:exit`, `resolve:skips.alpha.locked`, `exec3:mutations.AddTraining`, `exec3:skips.alpha.unresolved_attempt` | 3 / 3 |
+| `malformed-attempt-dropped` (QA1 D8) | yes | derived | `persisted-intent-restart/settle-write-fails~extra-field`: `exec2:mutations.AddTraining`, `exec2:skips.alpha.state_unreadable`; hard `exec2:duplicate_write`, `exec2:budget_spend` | 3 / 3 |
+| `strict-spec-dropped` (QA1 D12) | yes | derived | `reconciliation/verified~timer-over`: `exec:exit`, `exec:journal`; hard `exec:false_verification` | 3 / 3 |
+| `currency-blind-recheck` (QA1 D15) | yes | derived | `stale-preflight/price-raised~gas-after-plan`: `exec:mutations.AddTraining`, `exec:skips.alpha.price_unavailable.<crew>` | 3 / 3 |
+| `v1-uncertainty-ignored-under-guard` (QA2 D15) | yes | derived | `retry-different-crew/v1-lost-reply~v2-after-v1 (training-v1 control, then training-v2)`: `exec2:mutations.AddTraining`, `exec2:exit`, `exec2:skips.alpha.stopped`, `exec2:journal`; hard `exec2:duplicate_write`, `exec2:budget_spend` | 3 / 3 |
+| `lock-keyed-by-alias` (QA2 D1) | yes | derived | `paid-boundary/exact-500~held`: `exec:mutations.AddTraining`, `exec:exit`, `exec:skips.alpha.locked`; hard `exec:budget_spend` | 3 / 3 |
+| `lock-full-mode-only` (QA2 D5) | yes | derived | `paid-boundary/exact-500~canary-held`: `exec:exit`, `exec:skips.alpha.locked`, `exec:other_mutations` | 3 / 3 |
+| `dry-run-age-by-day` (QA2 D13) | yes | derived | `reconciliation/verified~dry-run-24h-1s`: `exec:mutations.AddTraining`, `exec:exit`, `exec:skips.alpha.dry_run_stale`; hard `exec:budget_spend` | 3 / 3 |
+| `unobserved-funds-enough` (QA2 D14) | yes | derived | `paid-boundary/exact-500~funds-unobserved`: `exec:mutations.AddTraining`, `exec:skips.alpha.insufficient_funds.<crew>`; hard `exec:budget_spend` | 3 / 3 |
+| `store-write-not-atomic` (QA2 D7) | yes | derived | `persisted-intent-restart/intent-write-fails~replace-fails`: `exec2:mutations.AddTraining`, `exec2:skips.alpha.intent_not_persisted.<crew>`; hard `exec2:budget_spend` | 3 / 3 |
+| `store-unreadable-as-missing` (QA2 D11) | yes | derived | `store-stop-controls/unreadable-state~directory`: `exec2:skips.alpha.state_unreadable` | 3 / 3 |
+| `resolution-links-intent` (QA2 D2) | yes | derived | `reconciliation/resolved-after-reconciliation~idle-retry`: `exec3:mutations.AddTraining`, `exec3:exit`, `exec3:journal` | 3 / 3 |
+| `verified-still-blocks` (QA2 D3) | yes | derived | `persisted-intent-restart/intent-write-fails~second-start`: `exec2:mutations.AddTraining`, `exec2:applied.AddTraining`, `exec2:journal` | 3 / 3 |
+
+| Rate | Value | Over |
+| --- | ---: | --- |
+| Critical defects detected on every trace | 48 of 48 | 48 critical defects |
+| Critical traces detected | 204 of 204 | benchmark 126, derived 78 |
+| Benchmark-channel traces detected | 128 of 150 | all defects, critical and non-critical |
+| Derived-channel traces detected | 78 of 78 | 20 defects (`recheck-off`, `scheduler-stop-ignored`, the nine derived QA1 kills and the nine QA2 kills) |
+| Targets failing unpatched | 0 | every target at every seed |
+
+**Survivors (non-critical, published only):**
+
+- `guard-latch-off` (0 of 6): masked by the planner's one-start rule. A crew plan never holds two starts, so the guard's latch cannot be reached without also seeding the planner.
+- `recheck-off-frozen` (0 of 15): the frozen stale triggers fire at the identity read, so the plan read already sees the change and refuses. The derived channel (`recheck-off`, 15 of 15) moves each trigger to a later roster read, where only the under-lock recheck can see it.
+- `tie-input-order` (2 of 3): caught only at the seeds whose reply order puts the higher instance id first, because the seed permutes reply order. `tie-high-id` (3 of 3) covers the instance-id tie-break itself.
+
+**Cap layers (QA1 D5, D9).** The spend cap is enforced three times: the crew plan reserves earlier requests of the same plan, the under-lock recheck charges the spend journaled so far, and the gate runner checks the period's spend before each send. A defect in any one layer is masked by the other two, which is how D5 survived every test module. `CapLayerTests` disables two layers at a time on `paid-boundary/spend-cap-after-earlier` and shows each remaining layer alone prevents the overspend. The plan and the recheck each reproduce the frozen trace. The runner alone refuses later, so its refusal stops the run (exit 1), with no start sent and no hard code. With all three disabled, the overspend is a `budget_spend` hard code. `runner-cap-window` and `recheck-spend-frozen` each seed their layer's QA defect with the other two layers disabled.
+
+**Targets left out on purpose** (each named in its defect's `note`):
+
+- `scheduler-stop-ignored` on `store-stop-controls/stop`: run.py refuses before login, so the scheduler is never reached.
+- `missing-store-fresh` on `store-stop-controls/unprovisioned`: the dispatch refuses on a missing store before any load.
+- `price-under` on `paid-boundary/exact-500`: an underestimate still sends, and the fake charges the real price.
+- `intent-not-persisted` on `paid-boundary/exact-500`: only the exit changes, which is not specific enough.
+- `intent-after-send` on `persisted-intent-restart/intent-write-fails`: its armed fault replaces the intent write itself.
+- `two-copy-as-one` on `two-copy-recipe/two-idle`: both copies are present there.
+- `stop-checked-once` on `store-stop-controls/stop-mid-run`: the stop file appears before the first action, so a single read still sees it.
+- `settle-failure-swallowed` on the frozen `persisted-intent-restart/settle-write-fails`: that trace leaves exec1's exit open, and the pending intent still blocks exec2. Only the derived exit and skip of exec1 show that the account was not stopped.
+- `training-block-dropped` on the frozen traces: the runner's guard still refuses the start with the same skip code, so only the exec2 exit the derived variants freeze (0 on the clean revision) changes.
+- Timing-dependent hard codes: without the lock, whether the second dispatch's start lands (`duplicate_write`, `budget_spend`) or its store write is refused depends on timing, in threads and processes mode alike. `lock-skipped` and the threads target of `v2-down-v1-path` therefore expect only the deterministic named assertions (`overlap:dispatches`, plus `provision:store.alpha` for `v2-down-v1-path`). Those were present in 15 of 15 repeated runs, 5 runs at each seed.
+
+**QA-eval rounds:**
+
+| Round | Revision | Workflow gate | Critical detected | Non-critical survivors | Planted production defects | Notes |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | `08b14b9` (QA), fix round 1 after | pass, report unchanged | 28 of 28 at QA; 39 of 39 after the fix | 3 (published only) | 17 planted: 5 caught by the workflow module, 11 caught only in other test modules, 1 survived everything (D5) | The fix kills 11 of the 12 workflow-channel survivors in the workflow module (11 new critical defects, the seam-liveness check and `CapLayerTests`). D14 is caught only in the test channel. |
+| 2 | `c171b10` (QA), fix round 2 after | pass, report unchanged | 39 of 39 at QA; 48 of 48 after the fix | 3 (published only) | 15 planted: 5 caught by the workflow module, 9 caught only in other test modules (`test_fleet_execute`, `test_training_attempts`, `test_uncertain_spend`, `test_simulation`, `test_crew_plan`), 1 survived everything (D15). Step 0: the five re-planted round 1 defects (D3, D5, D8, D13, D17) were all caught by the workflow module | The fix kills D15 and seven of the nine elsewhere-only defects (D1, D2, D5, D7, D11, D13, D14), and replaces D3's missing-witness catch with behavioral assertions: nine new critical defects on derived variants and six new derived-only step options. D6 and D9 stay caught only in the test channel. |
+
+**QA round 1, planted production defects.** Each was planted in a scratch copy only (never in the worktree). "Before" is where QA found it caught; "after" is the workflow-module test that fails when the defect is planted again on the fixed revision.
+
+| QA id | Planted change | Before fix round 1 | After fix round 1 |
+| --- | --- | --- | --- |
+| D1 | settled record treats unknown as verified | workflow module (gate score) | workflow module (unchanged) |
+| D2 | intent-write failure swallowed, start sent | workflow module (`intent-write-fails`) | workflow module (unchanged) |
+| D3 | settle-write failure swallowed in `_settle` | only `test_fleet_execute` (`test_a_settlement_write_failure_keeps_a_pending_record_and_blocks_the_next_run`) | workflow: `settle-write-fails~exit1` clean run (`exec1:exit`, `exec1:skips.alpha.unresolved_attempt`) |
+| D4 | `training_block` condition inverted | only `test_fleet_execute` (`test_a_crash_leaves_a_pending_intent_that_pauses_the_restarted_account`) | workflow: `missing-post-read~exit2` and `crash-after-send~exit2` clean runs (`exec2:exit`) |
+| D5 | gate-runner spend window starts now | survived every module | workflow: `CapLayerTests` (runner layer alone: `budget_spend`) |
+| D6 | dispatch releases the lock before yielding | workflow module (`overlap:dispatches`) | workflow module (unchanged) |
+| D7 | resolve ignores a held lock | only `test_fleet_execute` (`test_resolve_refuses_while_locked_and_on_missing_or_unreadable_state`) | workflow: `resolved-after-reconciliation~held` clean run (`resolve:exit`, `exec3:mutations.AddTraining`) |
+| D8 | store parse drops a malformed attempt | only `test_training_attempts` (`test_an_attempt_with_an_extra_key_is_unreadable_and_never_overwritten`) | workflow: `settle-write-fails~extra-field` clean run (`exec2:skips.alpha.state_unreadable`, `exec2:mutations.AddTraining`) |
+| D9 | recheck spend read when the recheck is built | only `test_training_policy` (`test_the_pre_send_recheck_charges_the_spend_of_earlier_actions_in_this_run`) | workflow: `CapLayerTests` (recheck layer alone: `budget_spend`) |
+| D10 | premium course passes the planner | workflow module (`paid-boundary/premium`) | workflow module (unchanged) |
+| D11 | guarded path chosen by policy-name prefix | workflow module (controls) | workflow module (unchanged) |
+| D12 | strict add_training spec dropped | only `test_fleet_execute` (`test_a_timer_over_by_the_post_read_is_unknown_and_blocks_the_next_start`) | workflow: `verified~timer-over` clean run (`exec:journal`, hard `false_verification`) |
+| D13 | stop file read once before the loop | only `test_fleet_execute` (`test_fleet_stop_file_stops_between_actions_and_accounts`) | workflow: `earlier-reservation~stop-after-upgrade` clean run (`exec:skips.alpha.stopped`, `exec:mutations.AddTraining`) |
+| D14 | resolution freshness `<=` became `<` | only `test_training_attempts` (`test_classify_resolution_needs_a_read_newer_than_the_attempt`) | test channel only (same test). The resolve run's own paced requests move the fake clock before its roster read, so a read at exactly the settlement instant cannot be built without patching production's clock in the middle of a run. |
+| D15 | price recheck ignores the currency | only `test_training_attempts` (`test_a_changed_currency_at_the_same_amount_is_refused`) | workflow: `price-raised~gas-after-plan` clean run (`exec:skips.alpha.price_unavailable.<crew>`, `exec:mutations.AddTraining`) |
+| D16 | journal witness reads the wrong evidence key | only `test_fleet_execute` and `test_training_attempts` (`test_a_journal_with_a_training_v2_start_is_never_provisioned_fresh`) | workflow: `settle-write-fails~store-lost` clean run (`exec2:mutations.AddTraining`, `exec2:skips.alpha.state_missing`) |
+| D17 | provision overwrites an unmarked store | only `test_fleet_execute` and `test_training_attempts` (`test_provision_rewrites_a_missing_marker_only_beside_a_readable_store`) | workflow: `settle-write-fails~marker-lost` and `crash-after-send~marker-lost` clean runs (`exec2:mutations.AddTraining`) |
+
+**QA round 2, planted production defects.** QA planted 15 defects on `c171b10`, each in a scratch copy only. Step 0 first re-planted five QA round 1 defects (D3, D5, D8, D13, D17): the workflow module caught all five with behavioral assertions. "Before" is where QA found each round 2 defect caught; "after" is the workflow-module check that fails when the defect is planted again on the fixed revision.
+
+| QA id | Planted change | Before fix round 2 | After fix round 2 |
+| --- | --- | --- | --- |
+| D1 | the dispatch locks `<alias>.lock`, not the game identity's lock | only `test_fleet_execute` (second-account and lock-held tests) and `test_training_attempts` (`DispatchTests`, `FileLockTests`) | workflow: `exact-500~held` clean run (`exec:exit`, `exec:skips.alpha.locked`, `exec:mutations.AddTraining`; hard `budget_spend`) |
+| D2 | a resolution records the intent id as the journal attempt id | only `test_fleet_execute` (not-running resolution tests) and `test_training_attempts` (resolution-link test) | workflow: `resolved-after-reconciliation~idle-retry` clean run (`exec3:exit`, `exec3:mutations.AddTraining`, `exec3:journal`) |
+| D3 | `settled()` reads `settlement["state"]`, so a verified start keeps blocking | workflow module, by a missing witness only | workflow: `intent-write-fails~second-start` clean run (`exec2:mutations.AddTraining`, `exec2:applied.AddTraining`, `exec2:journal`) |
+| D4 | the plan's `max_requests` applied before the authorization filter | workflow module (`paid-boundary`, action cap after an earlier action) | workflow module (unchanged) |
+| D5 | canary, place and upgrade-ship execute take no lock | only `test_fleet_execute` (every execute mode locked) | workflow: `exact-500~canary-held` clean run (`exec:exit`, `exec:skips.alpha.locked`, `exec:other_mutations`) |
+| D6 | audit `charged_spend` never charges an uncertain spend | only `test_uncertain_spend` (`ChargedSpendTests`, `SchedulerAndFleetTests`) and `test_simulation` (`test_uncertain_spend_is_charged_against_budgets`) | test channel only (same tests); see the remaining gaps |
+| D7 | the store's `_replace` writes in place (not atomic) | only `test_training_attempts` (atomic write) | workflow: `intent-write-fails~replace-fails` clean run (`exec2:mutations.AddTraining`, `exec2:skips.alpha.intent_not_persisted.<crew>`; hard `budget_spend`) |
+| D8 | the price recheck refuses only a summed rise | workflow module (`price-raised~gas-after-plan`) | workflow module (unchanged) |
+| D9 | `classify_resolution` drops the complete-roster check | only `test_training_attempts` (`PureCoreTests.test_classify_resolution_table`, roster unread) | test channel only (same test); see the remaining gaps |
+| D10 | the orchestrator's stop file is relative to the working directory | workflow module (`stop-mid-run`) | workflow module (unchanged) |
+| D11 | the store read treats any `OSError` as a missing store | only `test_training_attempts` | workflow: `unreadable-state~directory` clean run (`exec2:skips.alpha.state_unreadable`) |
+| D12 | `training_block` not passed to the plan | workflow module (the `~exit2` variants) | workflow module (unchanged) |
+| D13 | a dry run's age counted in calendar days | only `test_fleet_execute` (dry-run age tests) | workflow: `verified~dry-run-24h-1s` clean run (`exec:exit`, `exec:skips.alpha.dry_run_stale`, `exec:mutations.AddTraining`; hard `budget_spend`) |
+| D14 | unobserved funds count as enough | only `test_crew_plan` | workflow: `exact-500~funds-unobserved` clean run (`exec:mutations.AddTraining`, `exec:skips.alpha.insufficient_funds.<crew>`; hard `budget_spend`) |
+| D15 | with an attempt guard, `_last_attempt_uncertain` returns False | survived every test module | workflow: `v1-lost-reply~v2-after-v1` clean run (`exec2:exit`, `exec2:skips.alpha.stopped`, `exec2:mutations.AddTraining`, `exec2:journal`; hard `duplicate_write`, `budget_spend`) |
+
+**Remaining gaps after fix round 2.** Each is caught only in the test channel, never in the workflow channel:
+
+- QA1 D14 (resolution freshness `<=` became `<`): caught only by `test_training_attempts` (`test_classify_resolution_needs_a_read_newer_than_the_attempt`). The resolve run's own paced requests move the fake clock before its roster read, so a read at exactly the settlement instant cannot be built without patching production's clock in the middle of a run.
+- QA2 D6 (`charged_spend` never charges an uncertain spend): caught only by `test_uncertain_spend` (`ChargedSpendTests.test_audit_counts_uncertain_attempts_toward_budget_exceeded`, `ChargedSpendTests.test_spent_in_period_charges_uncertain_only_when_the_delta_is_unobserved`, `SchedulerAndFleetTests.test_uncertain_attempt_is_charged_against_the_next_runs_budget`) and `test_simulation` (`FaultScenarioTests.test_uncertain_spend_is_charged_against_budgets`). No FakePss workflow tried here journals an uncertain spend. In the `idle-retry` variant the lost start's mineral delta is journaled as observed (0), not uncertain, and a probe with a 900-mineral cap started the retry on both revisions. An unobserved delta would need a fake extension, and `tests/fakes/` is outside this slice's files.
+- QA2 D9 (`classify_resolution` drops the complete-roster check): caught only by `test_training_attempts` (`PureCoreTests.test_classify_resolution_table`, the roster-unread row). FakePss cannot serve a roster that is incomplete while the attempted crew member is still present (one malformed crew record, say). That would also need a fake extension.
+- Non-critical survivors, published only: `guard-latch-off`, `recheck-off-frozen` and `tie-input-order` (see the survivors above).
+
+**Legacy qa-eval (simulator mutants), reported, not fixed here.** `.venv/bin/python scripts/training_benchmark.py --qa-eval --jobs 12` on `9d8b623` exits 1: gated detection 0.536 (minimum 0.9), 0.465 over the 703 importable mutants. `sdk/training/planner.py` scores 0.385 (537 mutants: 207 caught by tests, 158 by the benchmark, 330 drift-only) and `sdk/training/strategy.py` 0.832. The same command on a clean export of `origin/main` at `b833a16` gives byte-for-byte the same overall figures and per-target table, so this slice did not cause it: it predates the slice, and the 2026-11-25 run above (415 eligible mutants) predates the SPEC-14 planner changes. This slice changes neither `scripts/training_benchmark.py`, its qa-eval test list nor `sdk/training/*`, so it cannot repair it within its allowed files. The blocking gates, `make training-benchmark` (composite 67.261087, PASS) and `make mutation` (every blocking target at 100%), pass on `9d8b623`.
+
+**Fix round 2 notes.** D15 needed an account that moves from training-v1 to training-v2. The training-v1 control's lost reply is not applied, so its crew member stays idle. That journals an unknown start but writes no attempt store. The variant then provisions the store and runs a training-v2 dry run while the crew member is out of the training room, so the dry run completes and plans no start. The crew member then moves back, and execute plans the same crew member and course. Only the runner's journal check refuses them. A dry run that planned the start would itself refuse on the journal's uncertainty and leave no stamped plan, and execute would then stop at `dry_run_stale` on both revisions. The `hold_lock` option now holds only the declared identity's lock: holding every lock file present also held a lock keyed by alias, which is how D1 hid from the existing `~held` variant (`resolve-ignores-lock` is unchanged on the clean revision). D13's variant runs the dry run just after a UTC midnight on the fake clock, so 24 hours and one second later is always the next calendar day. `DerivedOptionTests.test_a_dry_run_exactly_24_hours_old_still_qualifies` pins the boundary: exactly 24 hours still starts.
 
 ## Known limitations
 
