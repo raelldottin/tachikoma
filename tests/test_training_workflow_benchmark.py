@@ -2820,6 +2820,64 @@ class SeededDefectRunTests(unittest.TestCase):
                                    and (u["actual"] == "crashed" or str(u["actual"]).startswith("error "))]
                         self.assertEqual(crashed, [], observed(result))
 
+    def test_a_production_exception_at_a_step_with_no_exit_expectation_is_never_a_detection(self):
+        """Review regression: missing-post-read's execute steps freeze no exit, so a seeded change that makes
+        production raise there (exit ``error TypeError``) changed the expected assertions and was counted as
+        detected. Every step's raw exit is now checked, not only the unmet exit assertions."""
+        target = wb.DefectTarget("required", "reconciliation", "missing-post-read",
+                                 expect=("exec2:skips.alpha.unresolved_attempt",))
+        raising = wb.SeededDefect("raises", "production raises at the stop check", True,
+                                  wb._set("run", "FLEET_STOP_FILE", None), (target,))
+        with raising.active():
+            result = wb.run_target(target, SUITES, first_seed(target))
+        self.assertIn("exec2:skips.alpha.unresolved_attempt", wb._named(result), observed(result))
+        self.assertNotIn("exit", {u["assertion"] for u in result.unmet}, observed(result))
+        self.assertIn("exec1:exit error TypeError", result.crashes)
+        self.assertEqual(wb.detection(target, result), (False, ["crashed"]))
+
+    def test_a_dispatch_that_raises_inside_an_overlap_step_is_a_crash(self):
+        """An overlap step's exit is the list of its dispatches' exits: a production exception in any one of them is
+        a crash (overlap steps freeze no exit)."""
+        raw = {"exit": [0, "error RuntimeError"]}
+        self.assertEqual(wb.production_exceptions("overlap", raw), ["overlap:exit error RuntimeError"])
+        self.assertEqual(wb.production_exceptions("exec", {"exit": "error OSError"}), ["exec:exit error OSError"])
+        self.assertEqual(wb.production_exceptions("exec", {"exit": "crashed"}), [])  # an armed crash: compared
+        self.assertEqual(wb.production_exceptions("overlap", {"exit": [0, 1]}), [])
+        target = wb.DefectTarget("required", "overlapping-dispatch", "threads", expect=("overlap:dispatches",))
+        result = wb.TargetResult(False, [{"step": "overlap", "assertion": "dispatches", "expected": None,
+                                          "actual": None, "cause": "x"}], [], [], [],
+                                 crashes=["overlap:exit error RuntimeError"])
+        self.assertEqual(wb.detection(target, result), (False, ["crashed"]))
+
+    def test_a_dispatch_child_spec_carries_the_defect_only_while_one_is_active(self):
+        """Review regression (coverage): the processes-mode dispatch children's spec JSON, as written, has no
+        defect field on an unpatched run and names the active defect under one; neither the argv nor the env
+        carries it."""
+        target = next(t for t in wb.defect("lock-skipped").targets if t.scenario_id == "processes")
+        real = subprocess.Popen
+
+        def run(active):
+            specs = []
+
+            def spy(command, **kwargs):
+                if "--dispatch-child" in command:
+                    specs.append((list(command), dict(kwargs.get("env") or {}),
+                                  json.loads(Path(command[-1]).read_text(encoding="utf-8"))))
+                return real(command, **kwargs)
+
+            with patch.object(wb.subprocess, "Popen", spy), \
+                    (wb.defect("lock-skipped").active() if active else contextlib.nullcontext()):
+                result = wb.run_target(target, SUITES, first_seed(target))
+            self.assertEqual(result.errors, [], observed(result))
+            self.assertEqual(len(specs), 2, specs)
+            for command, env, spec in specs:
+                self.assertFalse([part for part in command if "defect" in part.lower()], command)
+                self.assertFalse([key for key in env if "DEFECT" in key.upper()])
+            return [spec for _, _, spec in specs]
+
+        self.assertEqual([spec.get("defect", "absent") for spec in run(False)], ["absent", "absent"])
+        self.assertEqual([spec.get("defect") for spec in run(True)], ["lock-skipped", "lock-skipped"])
+
 
 def _caught_test(defect_id):
     def test(self):
@@ -2887,6 +2945,79 @@ class DefectsCliTests(unittest.TestCase):
         self.assertEqual(code, wb.EXIT_GATE, out + err)
         self.assertIn("CLEAN FAIL required/paid-boundary/exact-500~broken seed=1401", out)
         self.assertIn("- clean: required/paid-boundary/exact-500~broken seed=1401 fails unpatched", out)
+
+    def test_a_critical_defect_with_no_trace_or_an_empty_catalogue_never_passes(self):
+        """Review regression: 0 of 0 traces was not a survivor, so a critical defect with no target (or a catalogue
+        with no defect) let ``--defects`` exit 0 with nothing measured."""
+        hollow = wb.SeededDefect("hollow", "no target", True, contextlib.nullcontext, ())
+        with patch.object(wb, "SEEDED_DEFECTS", (hollow,)):
+            code, out, err = self.run_main("--defects")
+        self.assertEqual(code, wb.EXIT_GATE, out + err)
+        self.assertIn("- critical defect hollow detected on 0 of 0 traces", out)
+        with patch.object(wb, "SEEDED_DEFECTS", ()):
+            code, out, err = self.run_main("--defects")
+        self.assertEqual(code, wb.EXIT_GATE, out + err)
+        self.assertIn("- no seeded defect ran", out)
+
+    def test_a_seeding_that_fails_to_apply_is_an_oracle_error_and_leaves_nothing_active(self):
+        """Review regression: a seeding whose production attribute is missing escaped ``main`` as a traceback
+        (process exit 1, the gate-failure code); it is a harness error (exit 2), and no defect stays active."""
+        import sdk.fleet.attempts as attempts
+
+        original = attempts.FileAccountLock.try_acquire
+        unapplied = wb.SeededDefect("unapplied", "a seeding naming a missing attribute", True,
+                                    wb._stack(wb._set("sdk.fleet.attempts", "FileAccountLock.try_acquire", None),
+                                              wb._set("sdk.fleet.attempts", "NoSuchOwner.attr", None)), (
+                                        wb.DefectTarget("required", "paid-boundary", "exact-500",
+                                                        expect=(ADD_MUTATION,)),))
+        with patch.object(wb, "SEEDED_DEFECTS", (unapplied,)):
+            code, out, err = self.run_main("--defects")
+        self.assertEqual(code, wb.EXIT_ERROR, out + err)
+        self.assertIn("oracle error: seeded defect unapplied could not be applied: AttributeError", err)
+        self.assertIsNone(wb.active_defect())
+        self.assertIs(attempts.FileAccountLock.try_acquire, original)
+
+    def test_defects_mode_refuses_on_a_failed_fake_self_check(self):
+        """Review regression: ``--gate`` self-checks the fake's strict pricing and refusal rules before scoring;
+        ``--defects`` scored detections against the fake without that check."""
+        with patch.object(wb, "fake_self_check", return_value=["priced: no refusal"]), \
+                patch.object(wb, "run_defect", side_effect=AssertionError("a defect ran")):
+            code, out, err = self.run_main("--defects", "--defect", "premium-spend")
+        self.assertEqual(code, wb.EXIT_ERROR, out + err)
+        self.assertIn("oracle error: fake self-check failed: priced: no refusal", err)
+
+    def test_a_harness_error_under_a_defect_is_a_harness_error_even_for_a_non_critical_defect(self):
+        """Review regression: a harness error in the patched run was only a miss, so under a non-critical defect
+        (rates published, not gated) ``--defects`` exited 0 over a run that measured nothing."""
+        def broken(original):
+            def run(*args, **kwargs):
+                raise wb.OracleError("a dispatch thread did not finish")
+
+            return run
+
+        unmeasured = wb.SeededDefect("unmeasured", "the patched run breaks the harness", False,
+                                     wb._swap(wb.__name__, "run_scenario", broken), (
+                                         wb.DefectTarget("required", "paid-boundary", "exact-500",
+                                                         expect=(ADD_MUTATION,)),))
+        with patch.object(wb, "SEEDED_DEFECTS", (unmeasured,)):
+            code, out, err = self.run_main("--defects")
+        self.assertEqual(code, wb.EXIT_ERROR, out + err)
+        self.assertIn("defect harness error: unmeasured required/paid-boundary/exact-500 seed=1401: harness raised "
+                      "OracleError: a dispatch thread did not finish", err)
+
+    def test_a_clean_failure_from_a_missing_witness_names_the_witness(self):
+        """Review regression: a clean run failing only on a missing witness printed ``CLEAN FAIL ...:`` with no
+        reason, and its JSON entry carried none either."""
+        target = wb.DefectTarget("required", "paid-boundary", "exact-500", expect=(ADD_MUTATION,))
+        silent = wb.SeededDefect("silent", "a witness that never fires", True, contextlib.nullcontext, (target,))
+        result = wb.TargetResult(False, [], ["exec:hold: step never ran"], [], [])
+        with patch.object(wb, "SEEDED_DEFECTS", (silent,)), patch.object(wb, "run_target", return_value=result):
+            code, out, err = self.run_main("--defects", "--json", "-")
+            report = json.loads(out)
+            self.assertEqual(report["defects"][0]["clean"][0]["witnesses_missing"], ["exec:hold: step never ran"])
+            code, out, err = self.run_main("--defects")
+        self.assertEqual(code, wb.EXIT_GATE, out + err)
+        self.assertIn("CLEAN FAIL required/paid-boundary/exact-500 seed=1401: exec:hold: step never ran", out)
 
     def test_defects_flag_errors(self):
         with self.subTest(case="unknown id"):

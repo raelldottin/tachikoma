@@ -430,9 +430,10 @@ The test module `tests.test_training_workflow_benchmark` runs the same checks in
 
 ### Detection rule
 
-- A defect is detected on a trace only when every expected named assertion (`step:assertion`) and every expected hard code appears, the run records no harness error, and no step's exit is an unexpected crash or production exception.
+- A defect is detected on a trace only when every expected named assertion (`step:assertion`) and every expected hard code appears, the run records no harness error, and no step's exit is an unexpected crash or a production exception. Every step's raw exit is read, including steps that freeze no exit and each dispatch of an overlap step.
 - Each target must pass on the unpatched revision first. A target that fails clean fails the run.
-- Critical defects must be detected on every trace. Non-critical detection rates are published, not gated.
+- Critical defects must be detected on every trace. A critical defect with no trace, or a run with no defect, fails. Non-critical detection rates are published, not gated.
+- A harness error in any run, clean or patched, a failed fake self-check (the same check `--gate` makes) or a seeding that cannot be applied exits 2: that run measured nothing, so it is never only a miss.
 - `--gate` never runs with a defect active: it exits 2. The determinism child's argv and environment carry no defect. A defect reaches a processes-mode dispatch child only through that child's spec JSON, while one is active in the parent.
 
 ### SPEC-14 workflow evaluation results
@@ -456,8 +457,8 @@ cmp h1.json h999.json && cmp h1.json gate.json
 | `--report-only` under `PYTHONHASHSEED=1` | 0 | 53 s |
 | `--report-only` under `PYTHONHASHSEED=999` | 0 | 80 s |
 | `cmp` of the three reports | 0 | - |
-| `--defects --json defects.json` | 0 | 104 s |
-| `scripts/ci.py test --names tests.test_training_workflow_benchmark` (207 tests) | 0 | 133 s |
+| `--defects --json defects.json` | 0 | 110 s |
+| `scripts/ci.py test --names tests.test_training_workflow_benchmark` (215 tests) | 0 | 160 s |
 
 The gate passed: required scored 100.000000 (129 of 129 traces) and holdout 100.000000 (30 of 30), with no hard violation, missing witness or fake error, and every control passed. Its JSON report is byte-identical to the report `--gate` wrote on `1f924e0` before this slice.
 

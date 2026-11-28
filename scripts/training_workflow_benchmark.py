@@ -28,9 +28,10 @@ Seeded defects (``--defects``, ``--defect ID`` to select; S14-AC7): each catalog
 patched into production at call time and replayed against its named targets at every seed, each target first run
 unpatched. ``benchmark`` targets are frozen required, holdout or control traces; ``derived`` targets are variants built
 in code from a frozen scenario, never written to a fixture. A defect is detected on a trace only when every expected
-named assertion and hard code shows, with no harness error and no unexpected crash. Exit 0 when every target passes
-unpatched and every critical defect is detected on every trace; exit 1 otherwise; exit 2 for a fixture or oracle
-error or a harness error in an unpatched run. ``--gate`` never runs with a defect active (it exits 2), and neither
+named assertion and hard code shows, with no harness error and no production exception at any step's exit. Exit 0
+when every target passes unpatched and every critical defect is detected on every trace; exit 1 otherwise (a critical
+defect with no trace, or no defect at all, included); exit 2 for a fixture or oracle error, a failed fake self-check,
+a seeding that cannot be applied, or a harness error in any run, clean or patched. ``--gate`` never runs with a defect active (it exits 2), and neither
 the determinism child's argv nor its environment carries one: a defect reaches a processes-mode dispatch child only
 through that child's spec JSON.
 
@@ -2840,15 +2841,43 @@ def target_scenario(target: DefectTarget, suites: Mapping[str, Mapping]) -> tupl
     return scenario, codes, policy
 
 
-def run_target(target: DefectTarget, suites: Mapping[str, Mapping], seed: int) -> TraceResult:
+@dataclass
+class TargetResult(TraceResult):
+    """A defect target's trace result plus ``crashes``: every production exception at any step's raw exit, read
+    whether or not the step freezes an exit (several execute and every overlap step freeze none)."""
+
+    crashes: list[str] = field(default_factory=list)
+
+
+def production_exceptions(step_id: str, raw: Mapping) -> list[str]:
+    """``<step>:exit error <Type>`` for each exit of a raw step record (an overlap step's exit lists its dispatches'
+    exits) that is a production exception. An armed ``crashed`` exit is the scenario's own fault and is compared."""
+    exits = raw.get("exit")
+    return [f"{step_id}:exit {code}" for code in (exits if isinstance(exits, list) else [exits])
+            if isinstance(code, str) and code.startswith("error ")]
+
+
+def run_target(target: DefectTarget, suites: Mapping[str, Mapping], seed: int) -> TargetResult:
     """One target at one seed; a harness exception (a dispatch child's OracleError included) is an error, so it
-    never counts as a detection."""
+    never counts as a detection. Each step's raw record is read for production exceptions on the way through."""
+    crashes: list[str] = []
+    step = run_step
+
+    def observed_step(ctx: ScenarioRun, entry: Mapping) -> dict | None:
+        raw = step(ctx, entry)
+        if raw is not None:
+            crashes.extend(production_exceptions(entry["id"], raw))
+        return raw
+
     try:
         scenario, codes, policy = target_scenario(target, suites)
-        return run_scenario(target.suite, target.case_id, scenario, suites[target.suite]["catalog"], seed, codes,
-                            policy_override=policy)
+        with patch.object(sys.modules[__name__], "run_step", observed_step):  # run_scenario looks it up per step
+            result = run_scenario(target.suite, target.case_id, scenario, suites[target.suite]["catalog"], seed,
+                                  codes, policy_override=policy)
     except Exception as error:  # noqa: BLE001 - recorded, never detected
-        return TraceResult(False, [], [], [], [f"harness raised {type(error).__name__}: {error}"])
+        return TargetResult(False, [], [], [], [f"harness raised {type(error).__name__}: {error}"])
+    fields = {item.name: getattr(result, item.name) for item in dataclasses.fields(result)}
+    return TargetResult(**fields, crashes=crashes)
 
 
 def _named(result: TraceResult) -> set[str]:
@@ -2866,8 +2895,8 @@ def detection(target: DefectTarget, result: TraceResult) -> tuple[bool, list[str
     missing = [want for want in target.expect
                if not (any(fnmatch.fnmatchcase(name, want) for name in named) if want.endswith("*") else want in named)]
     missing += [want for want in target.hard if want not in hard]
-    crashed = any(item["assertion"] == "exit" and (item["actual"] == "crashed" or str(item["actual"]).startswith(
-        "error ")) for item in result.unmet)
+    crashed = bool(getattr(result, "crashes", ())) or any(item["assertion"] == "exit" and (
+        item["actual"] == "crashed" or str(item["actual"]).startswith("error ")) for item in result.unmet)
     found = missing + (["errors"] if result.errors else []) + (["crashed"] if crashed else [])
     return not found, found
 
@@ -3089,8 +3118,16 @@ def run_defect(item: SeededDefect, suites: Mapping[str, Mapping]) -> dict:
             for seed in suites[target.suite]["seeds"]:
                 result = run_target(target, suites, seed)
                 clean.append({"target": target.label, "channel": target.channel, "seed": seed, "pass": result.passed,
-                              "unmet": sorted(_named(result)), "hard": sorted(_hard(result)), "errors": result.errors})
-        with item.active():
+                              "unmet": sorted(_named(result)), "hard": sorted(_hard(result)),
+                              "witnesses_missing": result.witnesses_missing, "errors": result.errors})
+        with contextlib.ExitStack() as stack:
+            try:
+                stack.enter_context(item.active())
+            except OracleError:
+                raise
+            except Exception as error:  # a seeding naming a missing attribute: a harness error, never a run
+                raise OracleError(f"seeded defect {item.id} could not be applied: {type(error).__name__}: "
+                                  f"{error}") from error
             for target in item.targets:
                 for seed in suites[target.suite]["seeds"]:
                     result = run_target(target, suites, seed)
@@ -3098,7 +3135,8 @@ def run_defect(item: SeededDefect, suites: Mapping[str, Mapping]) -> dict:
                     traces.append({"target": target.label, "channel": target.channel, "seed": seed,
                                    "detected": detected, "missing": missing, "expect": list(target.expect),
                                    "hard_expected": list(target.hard), "unmet": sorted(_named(result)),
-                                   "hard": sorted(_hard(result)), "errors": result.errors})
+                                   "hard": sorted(_hard(result)), "errors": result.errors,
+                                   "crashes": result.crashes})
     detected = sum(trace["detected"] for trace in traces)
     channels: dict[str, dict] = {}
     for trace in traces:
@@ -3107,13 +3145,16 @@ def run_defect(item: SeededDefect, suites: Mapping[str, Mapping]) -> dict:
         entry["total"] += 1
     return {"id": item.id, "title": item.title, "critical": item.critical, "note": item.note, "clean": clean,
             "traces": traces, "detected": detected, "total": len(traces), "rate": _rate(detected, len(traces)),
-            "channels": channels, "survivor": detected < len(traces)}
+            "channels": channels, "survivor": not traces or detected < len(traces)}  # 0 of 0 measures nothing
 
 
 def run_defects(ids: Sequence[str] | None = None) -> dict:
     """Every selected catalogued defect (all by default), in catalogue order, against the pinned fixtures."""
     suites = load_suites()
     verify_fixture_digests(list(suites))
+    failures = fake_self_check()  # detections rest on the fake's strict rules, exactly as the gate's scores do
+    if failures:
+        raise OracleError("fake self-check failed: " + "; ".join(failures))
     results = [run_defect(item, suites) for item in SEEDED_DEFECTS if not ids or item.id in ids]
     critical = [result for result in results if result["critical"]]
     survivors = {"critical": [result["id"] for result in critical if result["survivor"]],
@@ -3133,12 +3174,18 @@ def defect_reasons(report: Mapping) -> list[str]:
                                  for result in report["defects"] for entry in result["clean"] if not entry["pass"]))
     reasons += [f"critical defect {result['id']} detected on {result['detected']} of {result['total']} traces"
                 for result in report["defects"] if result["critical"] and result["survivor"]]
+    if not report["defects"]:
+        reasons.append("no seeded defect ran")
     return reasons
 
 
 def defect_harness_errors(report: Mapping) -> list[str]:
-    return [f"{entry['target']} seed={entry['seed']}: {entry['errors'][0]}" for result in report["defects"]
-            for entry in result["clean"] if entry["errors"]]
+    """Every harness error, clean or patched: a run that recorded one measured nothing, so it is never only a miss
+    (a non-critical defect's published rate would otherwise hide it)."""
+    clean = [f"{entry['target']} seed={entry['seed']}: {entry['errors'][0]}" for result in report["defects"]
+             for entry in result["clean"] if entry["errors"]]
+    return clean + [f"{result['id']} {trace['target']} seed={trace['seed']}: {trace['errors'][0]}"
+                    for result in report["defects"] for trace in result["traces"] if trace["errors"]]
 
 
 def render_defects(report: Mapping, reasons: Sequence[str]) -> str:
@@ -3148,8 +3195,8 @@ def render_defects(report: Mapping, reasons: Sequence[str]) -> str:
             if entry["pass"]:
                 lines.append(f"CLEAN PASS {entry['target']} seed={entry['seed']}")
             else:
-                lines.append(f"CLEAN FAIL {entry['target']} seed={entry['seed']}: "
-                             f"{', '.join(entry['unmet'] + entry['hard'] + entry['errors'][:1])}")
+                why = entry["unmet"] + entry["hard"] + entry["witnesses_missing"] + entry["errors"][:1]
+                lines.append(f"CLEAN FAIL {entry['target']} seed={entry['seed']}: {', '.join(why)}")
         for trace in result["traces"]:
             where = f"{result['id']} {trace['target']} seed={trace['seed']} [{trace['channel']}]"
             if trace["detected"]:
