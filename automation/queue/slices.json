@@ -2889,7 +2889,7 @@
     {
       "slice_id": "spec14-training-execution",
       "title": "Execute at most one verified training-v2 start per account under the attempt store and account lock",
-      "status": "queued",
+      "status": "done",
       "priority": 500,
       "domain": "crew-training",
       "allowed_paths": [
@@ -2919,6 +2919,29 @@
       ],
       "max_files_changed": 15,
       "notes": "Implements S14-R4, S14-R5, S14-R6 (SPEC-14). Read docs/specs/SPEC-14-automated-crew-training.md (S14-R4 to R6, design constraints, S14-AC3 and S14-AC4), the frozen harness contract in scripts/training_workflow_benchmark.py and the hand-off section of #304. Replace training_v2_execute_hold in sdk/fleet/factory.py with real execution: at most one training-v2 start per account per run, under an injected attempt store and an account lock keyed to the verified account identity across processes, taken before any budget-affecting write and held for the whole execute dispatch. Write intent atomically before sending; on persistence failure send nothing; keep unresolved intents blocking later starts until --fleet-resolve-training settles them under the same lock. Provision the store explicitly with --fleet-provision-training and refuse missing or unreadable established state. Swap add_training's postcondition to training_start_verified for training-v2 only. Add the pre-login refusal lines of --fleet-execute and the legacy_run_not_skipped refusal (S14-R6). No Starbux spend, no crew relocation, no Prestige ingredient spend. Keep training-v1, baseline-v1 and the legacy daily run unchanged, and keep the training benchmark and blocking mutation gate green."
+    },
+
+    {
+      "slice_id": "spec14-workflow-eval",
+      "title": "Run the SPEC-14 workflow benchmark and semantic mutation checks on one candidate revision and publish the evidence",
+      "status": "queued",
+      "priority": 500,
+      "domain": "crew-training",
+      "allowed_paths": [
+        "scripts/training_workflow_benchmark.py",
+        "tests/test_training_workflow_benchmark.py",
+        "docs/baseline/training-benchmark.md"
+      ],
+      "required_validations": [
+        "make syntax-check",
+        "make test",
+        "git diff --check"
+      ],
+      "depends_on": [
+        "spec14-training-execution"
+      ],
+      "max_files_changed": 3,
+      "notes": "Implements S14-R7 (SPEC-14). Read docs/specs/SPEC-14-automated-crew-training.md (S14-R7, S14-AC6 and S14-AC7) and the hand-off to step 5 in #307. On one candidate revision, run scripts/training_workflow_benchmark.py --gate (required and holdout, including a fresh process with a different PYTHONHASHSEED) and independently seeded behavioral defects, each of which must trigger its named assertion against observed behavior; the existing QA gate (make training-benchmark and the blocking mutation gate) must also pass. Preserve the frozen fixtures, the existing benchmark floors and the QA gate: do not weaken an assertion, lower a floor or edit tests/fixtures/training/*. Publish the exact revision, commands, seeds, scenario results, detection rates and remaining survivors in docs/baseline/training-benchmark.md. No production code changes; a defect the checks cannot detect is reported, not fixed here."
     }
   ]
 }
